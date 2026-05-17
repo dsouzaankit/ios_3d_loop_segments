@@ -2,7 +2,7 @@ import Foundation
 
 /// Downloads the full remote MP4 to temp storage; exposes contiguous progress for timed segment export.
 final class WebDAVTempFileDownload: @unchecked Sendable {
-    private static let downloadChunkBytes: Int64 = 1024 * 1024
+    private static let downloadChunkBytes: Int64 = 2 * 1024 * 1024
     private static let progressStepPercent = 5
 
     let fileURL: URL
@@ -93,18 +93,18 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let avgFromSize = Double(totalLength) / effectiveDuration
         let linearFromSize = Int64(endSeconds * avgFromSize) + slack
 
-        // 3D SBS sources are often 30–80 Mbps; do not start minute 0 on a tiny prefix.
-        let highBitrateFloorMbps = 35.0
+        // 3D SBS can be high bitrate, but cap first-minute floor so export can start before hundreds of MB.
+        let highBitrateFloorMbps = min(35.0, max(8.0, (Double(totalLength) * 8.0) / (effectiveDuration * 1_000_000.0)))
         let floorBytesPerSecond = highBitrateFloorMbps * 1_000_000.0 / 8.0
         let floorRequired = Int64(endSeconds * floorBytesPerSecond) + slack
-
-        var required = max(linearFromSize, floorRequired)
+        let capForFirstMinute = Int64(180 * 1024 * 1024)
+        var required = max(linearFromSize, min(floorRequired, capForFirstMinute + slack))
 
         // Trust reported duration when it is plausible vs file size (avoid 100% trap on bad short probes).
         let sizeImpliedDuration = Double(totalLength) * 8.0 / (2.0 * 1_000_000.0)
         if durationSeconds >= sizeImpliedDuration * 0.35 {
             let fromReported = Int64((endSeconds / durationSeconds) * Double(totalLength)) + slack
-            required = max(required, fromReported)
+            required = max(required, min(fromReported, capForFirstMinute + slack))
         }
 
         return min(required, totalLength)
@@ -218,7 +218,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 return
             } catch {
                 if !self.isCancelled() {
-                    self.log("Download stopped: \(error.localizedDescription)")
+                    self.log("Download stopped: \(error.localizedDescription) — export may continue via pCloud stream if enabled")
                 }
             }
         }

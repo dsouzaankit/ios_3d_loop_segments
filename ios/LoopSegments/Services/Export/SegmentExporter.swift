@@ -129,18 +129,11 @@ final class SegmentExporter {
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
 
-        releaseStreamingProbe(log: logHandler)
+        let fileSize = rangeCache.contentLengthValue() ?? 0
+        let streamFromPCloud = Self.shouldStreamSegments(fileBytes: fileSize)
+        releaseStreamingProbe(streamFromPCloud: streamFromPCloud, log: logHandler)
 
-        let downloader = try WebDAVTempFileDownload(
-            remoteURL: inputURL,
-            rangeCache: rangeCache,
-            authorizationProvider: authorizationProvider,
-            isCancelled: cancelCheck,
-            log: logHandler
-        )
-        tempDownload = downloader
-        downloader.logDownloadStarted()
-        logHandler("Publishing 60s segments as temp download catches up (DLNA can loop latest)")
+        try Self.ensureExportDiskSpace(fileBytes: fileSize, streaming: streamFromPCloud)
 
         let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
@@ -149,87 +142,234 @@ final class SegmentExporter {
 
         logHandler("DLNA: 3d_op_00/01 update at most once per ~60s wall time (staging → slot; safe for players that cannot refresh mid-playback)")
 
-        while true {
-            try checkCancelled()
+        if streamFromPCloud {
+            logHandler(
+                "Large file (\(Self.formatBytes(fileSize))) — each 60s segment reads only that minute from pCloud (no \(Self.formatBytes(fileSize)) temp copy)"
+            )
+            logHandler("Publishing 60s segments as each minute is read from pCloud")
+            while true {
+                try checkCancelled()
+                let windowStartSeconds = seekSeconds + Double(minuteIndex) * Self.segmentDurationSeconds
+                if windowStartSeconds >= durationSeconds - 0.05 {
+                    reachedEnd = true
+                    break
+                }
+                let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
+                let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
+                let rangeDuration = CMTime(
+                    seconds: windowEndSeconds - windowStartSeconds,
+                    preferredTimescale: 600
+                )
+                let slot = minuteIndex % Self.segmentFileCount
+                let stagingURL = ExportPaths.segmentStagingURL(index: slot)
 
-            let windowStartSeconds = seekSeconds + Double(minuteIndex) * Self.segmentDurationSeconds
-            if windowStartSeconds >= durationSeconds - 0.05 {
-                reachedEnd = true
-                break
+                try await exportSegmentFromPCloudStream(
+                    remoteURL: inputURL,
+                    authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
+                    trustedLength: fileSize,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: stagingURL,
+                    log: logHandler
+                )
+                try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
+
+                await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: stagingURL, log: logHandler)
+                logHandler("Ready for PC Photos sync — \(ExportPaths.segmentURL(index: slot).lastPathComponent) (staging)")
+
+                await waitForDLNAPublishSchedule(
+                    minuteIndex: minuteIndex,
+                    wallOrigin: dlnaPublishOrigin,
+                    slot: slot,
+                    log: logHandler
+                )
+                try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
+
+                lastMediaTimeMs = Int64(windowEndSeconds * 1000)
+                logHandler("DLNA slot updated — \(ExportPaths.segmentURL(index: slot).lastPathComponent) (streamed from pCloud)")
+                minuteIndex += 1
             }
-
-            let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
-            try await downloader.waitUntilTimelineEnd(
-                timelineEndSeconds: windowEndSeconds,
-                durationSeconds: durationSeconds
-            )
-            try await downloader.waitUntilLocalExportReady(
-                timelineEndSeconds: windowEndSeconds,
-                durationSeconds: durationSeconds
-            )
-
-            let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
-            let rangeDuration = CMTime(
-                seconds: windowEndSeconds - windowStartSeconds,
-                preferredTimescale: 600
-            )
-            let bytesNeeded = downloader.bytesRequiredThroughTimeline(
-                timelineEndSeconds: windowEndSeconds,
-                durationSeconds: durationSeconds
-            )
-            try await SegmentLocalReadiness.waitUntilReadable(
-                fileURL: downloader.fileURL,
-                rangeStart: rangeStart,
-                rangeDuration: rangeDuration,
-                totalFileBytes: downloader.totalLength,
-                contiguousBytesOnDisk: { downloader.contiguousEndValue() },
-                bytesRequiredOnDisk: bytesNeeded,
-                indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
+        } else {
+            let downloader = try WebDAVTempFileDownload(
+                remoteURL: inputURL,
+                rangeCache: rangeCache,
+                authorizationProvider: authorizationProvider,
                 isCancelled: cancelCheck,
                 log: logHandler
             )
+            tempDownload = downloader
+            downloader.logDownloadStarted()
+            logHandler("Publishing 60s segments as temp download catches up (DLNA can loop latest)")
 
-            let slot = minuteIndex % Self.segmentFileCount
-            let stagingURL = ExportPaths.segmentStagingURL(index: slot)
+            while true {
+                try checkCancelled()
 
-            let readAsset = AVURLAsset(
-                url: downloader.fileURL,
-                options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-            )
+                let windowStartSeconds = seekSeconds + Double(minuteIndex) * Self.segmentDurationSeconds
+                if windowStartSeconds >= durationSeconds - 0.05 {
+                    reachedEnd = true
+                    break
+                }
 
-            try await SegmentPassThroughExporter.exportWindow(
-                asset: readAsset,
-                videoFormat: videoFormat,
-                audioFormat: audioFormat,
-                rangeStart: rangeStart,
-                rangeDuration: rangeDuration,
-                outputURL: stagingURL,
-                sourceLabel: "temp file",
-                log: logHandler
-            )
-            try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
+                let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
+                try await downloader.waitUntilTimelineEnd(
+                    timelineEndSeconds: windowEndSeconds,
+                    durationSeconds: durationSeconds
+                )
+                try await downloader.waitUntilLocalExportReady(
+                    timelineEndSeconds: windowEndSeconds,
+                    durationSeconds: durationSeconds
+                )
 
-            // Photos / MTP: as soon as the 60s clip exists (do not wait for DLNA wall-clock).
-            await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: stagingURL, log: logHandler)
-            logHandler("Ready for PC Photos sync — \(ExportPaths.segmentURL(index: slot).lastPathComponent) (staging)")
+                let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
+                let rangeDuration = CMTime(
+                    seconds: windowEndSeconds - windowStartSeconds,
+                    preferredTimescale: 600
+                )
+                let bytesNeeded = downloader.bytesRequiredThroughTimeline(
+                    timelineEndSeconds: windowEndSeconds,
+                    durationSeconds: durationSeconds
+                )
+                try await SegmentLocalReadiness.waitUntilReadable(
+                    fileURL: downloader.fileURL,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    totalFileBytes: downloader.totalLength,
+                    contiguousBytesOnDisk: { downloader.contiguousEndValue() },
+                    bytesRequiredOnDisk: bytesNeeded,
+                    indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
+                    isCancelled: cancelCheck,
+                    log: logHandler
+                )
 
-            await waitForDLNAPublishSchedule(
-                minuteIndex: minuteIndex,
-                wallOrigin: dlnaPublishOrigin,
-                slot: slot,
-                log: logHandler
-            )
-            try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
+                let slot = minuteIndex % Self.segmentFileCount
+                let stagingURL = ExportPaths.segmentStagingURL(index: slot)
 
-            lastMediaTimeMs = Int64(windowEndSeconds * 1000)
-            logHandler("DLNA slot updated — \(ExportPaths.segmentURL(index: slot).lastPathComponent)")
+                let readAsset = AVURLAsset(
+                    url: downloader.fileURL,
+                    options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+                )
 
-            minuteIndex += 1
+                try await SegmentPassThroughExporter.exportWindow(
+                    asset: readAsset,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: stagingURL,
+                    sourceLabel: "temp file",
+                    log: logHandler
+                )
+                try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
+
+                await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: stagingURL, log: logHandler)
+                logHandler("Ready for PC Photos sync — \(ExportPaths.segmentURL(index: slot).lastPathComponent) (staging)")
+
+                await waitForDLNAPublishSchedule(
+                    minuteIndex: minuteIndex,
+                    wallOrigin: dlnaPublishOrigin,
+                    slot: slot,
+                    log: logHandler
+                )
+                try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
+
+                lastMediaTimeMs = Int64(windowEndSeconds * 1000)
+                logHandler("DLNA slot updated — \(ExportPaths.segmentURL(index: slot).lastPathComponent)")
+
+                minuteIndex += 1
+            }
+
+            try await downloader.waitUntilComplete()
         }
 
-        try await downloader.waitUntilComplete()
         logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
         return SegmentExportResult(lastMediaTimeMs: lastMediaTimeMs, reachedEnd: reachedEnd)
+    }
+
+    /// Files above this or that do not fit on disk are exported by range reads (no full temp copy).
+    private static let streamOnlyThresholdBytes: Int64 = 1_500_000_000
+    private static let diskMarginBytes: Int64 = 384 * 1024 * 1024
+    private static let streamingWorkingSetBytes: Int64 = 700 * 1024 * 1024
+
+    private static func shouldStreamSegments(fileBytes: Int64) -> Bool {
+        guard fileBytes > 0 else { return false }
+        if fileBytes > streamOnlyThresholdBytes { return true }
+        return !hasDiskForFullCopy(fileBytes: fileBytes)
+    }
+
+    private static func hasDiskForFullCopy(fileBytes: Int64) -> Bool {
+        guard let free = freeDiskBytes() else { return true }
+        return free >= fileBytes + diskMarginBytes
+    }
+
+    private static func freeDiskBytes() -> Int64? {
+        let path = ExportPaths.exportsDirectory.path
+        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
+              let freeNumber = attrs[.systemFreeSize] as? NSNumber else {
+            return nil
+        }
+        return freeNumber.int64Value
+    }
+
+    private static func ensureExportDiskSpace(fileBytes: Int64, streaming: Bool) throws {
+        guard let free = freeDiskBytes() else { return }
+        let needed = streaming ? streamingWorkingSetBytes : fileBytes + diskMarginBytes
+        guard free >= needed else {
+            throw SegmentExporterError.insufficientDiskSpace(needed: needed, available: max(0, free))
+        }
+    }
+
+    private func exportSegmentFromPCloudStream(
+        remoteURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        trustedLength: Int64,
+        videoFormat: CMFormatDescription,
+        audioFormat: CMFormatDescription?,
+        rangeStart: CMTime,
+        rangeDuration: CMTime,
+        outputURL: URL,
+        log: @escaping (String) -> Void
+    ) async throws {
+        let loader = WebDAVResourceLoader(
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            trustedContentLength: trustedLength > 0 ? trustedLength : nil,
+            log: log
+        )
+        let asset = AVURLAsset(
+            url: loader.customAssetURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+        defer {
+            asset.resourceLoader.setDelegate(nil, queue: nil)
+            loader.cancelOutstandingWork()
+        }
+
+        try await SegmentPassThroughExporter.exportWindow(
+            asset: asset,
+            videoFormat: videoFormat,
+            audioFormat: audioFormat,
+            rangeStart: rangeStart,
+            rangeDuration: rangeDuration,
+            outputURL: outputURL,
+            sourceLabel: "pCloud stream",
+            log: log
+        )
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        if bytes >= 1024 * 1024 * 1024 {
+            return String(format: "%.2f GB", Double(bytes) / 1_073_741_824.0)
+        }
+        if bytes >= 1024 * 1024 {
+            return String(format: "%.0f MB", Double(bytes) / 1_048_576.0)
+        }
+        return "\(bytes) B"
     }
 
     /// DLNA clients cannot refresh a file during playback — publish each slot only on its wall-clock minute.
@@ -276,13 +416,17 @@ final class SegmentExporter {
         return asset
     }
 
-    private func releaseStreamingProbe(log: (String) -> Void) {
+    private func releaseStreamingProbe(streamFromPCloud: Bool, log: (String) -> Void) {
         guard retainedAsset != nil || retainedWebDAVLoader != nil else { return }
         retainedWebDAVLoader?.cancelOutstandingWork()
         retainedAsset?.resourceLoader.setDelegate(nil, queue: nil)
         retainedWebDAVLoader = nil
         retainedAsset = nil
-        log("Released pCloud stream — export uses local temp file only")
+        if streamFromPCloud {
+            log("Released codec probe — segments will stream from pCloud (no full temp copy)")
+        } else {
+            log("Released codec probe — export uses local temp file")
+        }
     }
 
     private func videoFormatDescription(from track: AVAssetTrack) async throws -> CMFormatDescription {
@@ -482,7 +626,7 @@ enum SegmentExporterError: LocalizedError {
         case .insufficientDiskSpace(let needed, let available):
             let needMB = needed / (1024 * 1024)
             let haveMB = available / (1024 * 1024)
-            return "Need ~\(needMB) MB free to copy this file; only ~\(haveMB) MB available. Free space or pick a smaller file."
+            return "Need ~\(needMB) MB free in Exports (device storage); only ~\(haveMB) MB available. Free space on iPhone, or use a file under ~1.5 GB for full temp copy."
         case .noKeyframeInWindow:
             return "Could not start segment on a keyframe — wait for more download or use seek 0 min."
         case .segmentOutputTooSmall(let bytes):

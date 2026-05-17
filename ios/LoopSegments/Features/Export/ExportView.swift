@@ -65,7 +65,8 @@ struct ExportView: View {
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
-                Text("1. Segments stage in Exports, then 3d_op_00/01 publish once per ~60s wall time (DLNA-safe)")
+                Text("1. Files over ~1.5 GB stream each minute from pCloud (no full copy). Smaller files use a temp copy.")
+                Text("2. Segments stage in Exports, then 3d_op_00/01 publish once per ~60s wall time (DLNA-safe)")
                 Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -75,9 +76,9 @@ struct ExportView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                Text("2. With Photos on: Apple Devices → Photos → show Hidden album for MTP sync")
-                Text("3. Or Apple Devices → Loop Segments → Exports → Save to PC")
-                Text("4. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
+                Text("3. With Photos on: Apple Devices → Photos → show Hidden album for MTP sync")
+                Text("4. Or Apple Devices → Loop Segments → Exports → Save to PC")
+                Text("5. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
