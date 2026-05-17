@@ -35,6 +35,13 @@ final class WebDAVRangeCache: @unchecked Sendable {
         spans.append((offset, end, data))
     }
 
+    func storedSpans() -> [(start: Int64, data: Data)] {
+        lock.lock()
+        let copy = spans.map { (start: $0.start, data: $0.data) }
+        lock.unlock()
+        return copy
+    }
+
     func dataForRequest(offset: Int64, length: Int) -> Data? {
         lock.lock()
         defer { lock.unlock() }

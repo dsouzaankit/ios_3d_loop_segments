@@ -14,7 +14,9 @@ final class SegmentExporter {
 
     private let cancelLock = NSLock()
     private var isCancelled = false
+    private var retainedWebDAVLoader: WebDAVResourceLoader?
     private var retainedAsset: AVURLAsset?
+    private var progressiveBuffer: WebDAVProgressiveBuffer?
 
     func cancel() {
         cancelLock.lock()
@@ -56,6 +58,9 @@ final class SegmentExporter {
         isCancelled = false
         cancelLock.unlock()
         defer {
+            progressiveBuffer?.cancel()
+            progressiveBuffer = nil
+            retainedWebDAVLoader = nil
             retainedAsset = nil
             try? FileManager.default.removeItem(at: ExportPaths.workingSourceURL)
         }
@@ -73,21 +78,31 @@ final class SegmentExporter {
             log: logHandler
         )
 
-        let localURL = try await WebDAVSourceSpooler.spool(
+        let cancelCheck: () -> Bool = { [weak self] in
+            guard let self else { return true }
+            self.cancelLock.lock()
+            let cancelled = self.isCancelled
+            self.cancelLock.unlock()
+            return cancelled
+        }
+
+        let buffer = try WebDAVProgressiveBuffer(
             remoteURL: inputURL,
-            authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
-            isCancelled: { [weak self] in
-                guard let self else { return true }
-                self.cancelLock.lock()
-                let cancelled = self.isCancelled
-                self.cancelLock.unlock()
-                return cancelled
-            },
+            authorizationProvider: authorizationProvider,
+            isCancelled: cancelCheck,
             log: logHandler
         )
+        progressiveBuffer = buffer
+        try await buffer.primeForPlayback()
 
-        let asset = try await openLocalAsset(fileURL: localURL, logHandler: logHandler)
+        let asset = try await openStreamingAsset(
+            inputURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            progressiveBuffer: buffer,
+            logHandler: logHandler
+        )
         let duration = try await asset.load(.duration)
         let durationMs = Int64(CMTimeGetSeconds(duration) * 1000)
 
@@ -146,7 +161,7 @@ final class SegmentExporter {
             throw mapReaderFailure(reader.error) ?? SegmentExporterError.readerSetupFailed
         }
         logHandler("Reader started — exporting at ~1× realtime (60s per segment, keep app open)")
-        logHandler("Reading local copy (no network during segment write)…")
+        logHandler("Streaming from buffer + pCloud (512 KiB chunks)…")
 
         var segmentIndex = 0
         var loggedFirstSample = false
@@ -283,14 +298,30 @@ final class SegmentExporter {
         try ctx.append(sample, track: track)
     }
 
-    private func openLocalAsset(fileURL: URL, logHandler: @escaping (String) -> Void) async throws -> AVURLAsset {
+    private func openStreamingAsset(
+        inputURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        progressiveBuffer: WebDAVProgressiveBuffer,
+        logHandler: @escaping (String) -> Void
+    ) async throws -> AVURLAsset {
+        logHandler("Opening via WebDAV stream (disk buffer + pCloud)…")
+        let loader = WebDAVResourceLoader(
+            remoteURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            progressiveBuffer: progressiveBuffer,
+            log: logHandler
+        )
+        retainedWebDAVLoader = loader
         let asset = AVURLAsset(
-            url: fileURL,
+            url: loader.customAssetURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
         retainedAsset = asset
+        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
         _ = try await asset.load(.isPlayable)
-        logHandler("Opened local file for export")
+        logHandler("Opened for stream export")
         return asset
     }
 
