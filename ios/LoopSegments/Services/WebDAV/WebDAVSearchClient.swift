@@ -5,12 +5,20 @@ enum WebDAVSearchClient {
     private static let maxFoldersToVisit = 1200
     private static let maxResults = 80
 
-    static func search(query: String, credentials: WebDAVCredentials) async throws -> [WebDAVItem] {
+    static func search(
+        query: String,
+        credentials: WebDAVCredentials,
+        extraRoots: [String] = []
+    ) async throws -> [WebDAVItem] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return [] }
 
         let client = WebDAVClient(credentials: credentials)
-        let roots = try await discoverSearchRoots(client: client, credentials: credentials)
+        let roots = try await discoverSearchRoots(
+            client: client,
+            credentials: credentials,
+            extraRoots: extraRoots
+        )
         var results: [WebDAVItem] = []
         var queue = roots
         var visited = Set<String>()
@@ -61,9 +69,10 @@ enum WebDAVSearchClient {
     /// pCloud WebDAV root is often `/remote.php/dav/files/<user>/`, not flat children of `/`.
     private static func discoverSearchRoots(
         client: WebDAVClient,
-        credentials: WebDAVCredentials
+        credentials: WebDAVCredentials,
+        extraRoots: [String]
     ) async throws -> [String] {
-        var roots: [String] = []
+        var roots: [String] = extraRoots.map { WebDAVURLBuilder.directoryListingPath($0) }
         if let stored = credentials.webDAVFilesRoot, !stored.isEmpty {
             roots.append(WebDAVURLBuilder.directoryListingPath(stored))
         }

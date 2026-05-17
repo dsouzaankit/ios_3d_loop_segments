@@ -1,9 +1,10 @@
 import Foundation
 
-/// Filename search by walking the pCloud folder tree via `listfolder` (reliable when `search` returns nothing).
+/// Filename search via pCloud `listfolder` (recursive when possible, else BFS by folder id).
 enum PCloudAPIFolderSearch {
     private static let maxFoldersToVisit = 800
     private static let maxResults = 80
+    static let maxRecursiveEntriesForAPI = 25_000
 
     static func search(
         query: String,
@@ -14,7 +15,40 @@ enum PCloudAPIFolderSearch {
         guard !needle.isEmpty else { return [] }
 
         var matches: [[String: Any]] = []
-        matches.reserveCapacity(maxResults)
+        if let recursive = try? await apiClient.listFolderRecursiveFlat(folderId: 0),
+           !recursive.isEmpty {
+            matches = filterMatches(needle: needle, entries: recursive)
+        }
+        if matches.isEmpty {
+            matches = try await walkFolders(needle: needle, apiClient: apiClient)
+        }
+        guard !matches.isEmpty else { return [] }
+
+        return try await PCloudPathResolver.resolveSearchItems(
+            entries: matches,
+            credentials: credentials,
+            apiClient: apiClient
+        )
+    }
+
+    private static func filterMatches(needle: String, entries: [[String: Any]]) -> [[String: Any]] {
+        var matches: [[String: Any]] = []
+        matches.reserveCapacity(min(maxResults, entries.count))
+        for entry in entries {
+            guard let name = entry["name"] as? String, !name.isEmpty else { continue }
+            if PCloudMetadataParsing.matchesSearchNeedle(needle, metadata: entry, name: name) {
+                let isFolder = PCloudMetadataParsing.boolField(entry["isfolder"])
+                if PCloudMetadataParsing.isBrowsableVideo(name: name, metadata: entry, isFolder: isFolder) {
+                    matches.append(entry)
+                    if matches.count >= maxResults { break }
+                }
+            }
+        }
+        return matches
+    }
+
+    private static func walkFolders(needle: String, apiClient: PCloudAPIClient) async throws -> [[String: Any]] {
+        var matches: [[String: Any]] = []
         var queue: [Int64] = [0]
         var visited = Set<Int64>()
         var foldersVisited = 0
@@ -48,11 +82,6 @@ enum PCloudAPIFolderSearch {
                 }
             }
         }
-
-        return try await PCloudPathResolver.resolveSearchItems(
-            entries: matches,
-            credentials: credentials,
-            apiClient: apiClient
-        )
+        return matches
     }
 }

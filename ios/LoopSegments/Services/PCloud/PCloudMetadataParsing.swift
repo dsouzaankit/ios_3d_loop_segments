@@ -53,11 +53,17 @@ enum PCloudMetadataParsing {
 
     static func matchesSearchNeedle(_ needle: String, metadata: [String: Any], name: String) -> Bool {
         guard !needle.isEmpty else { return false }
+        let path = metadata["path"] as? String ?? ""
         if name.localizedCaseInsensitiveContains(needle) { return true }
-        if let path = metadata["path"] as? String, path.localizedCaseInsensitiveContains(needle) {
-            return true
+        if path.localizedCaseInsensitiveContains(needle) { return true }
+        let tokens = needle.split { $0.isWhitespace }.map(String.init).filter { $0.count >= 2 }
+        guard !tokens.isEmpty else { return false }
+        let nameLower = name.lowercased()
+        let pathLower = path.lowercased()
+        return tokens.contains { token in
+            let t = token.lowercased()
+            return nameLower.contains(t) || pathLower.contains(t)
         }
-        return false
     }
 
     private static func collectMetadataArrays(in json: [String: Any]) -> [[String: Any]]? {

@@ -7,7 +7,8 @@ enum PCloudPathResolver {
         credentials: WebDAVCredentials,
         apiClient: PCloudAPIClient
     ) async throws -> [WebDAVItem] {
-        let webDAVRoot = try await PCloudWebDAVRootResolver.filesRoot(credentials: credentials)
+        let webDAVRoot = (try? await PCloudWebDAVRootResolver.filesRoot(credentials: credentials))
+            ?? credentials.webDAVFilesRoot
         var results: [WebDAVItem] = []
         results.reserveCapacity(entries.count)
 

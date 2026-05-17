@@ -22,10 +22,18 @@ struct BrowserView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if isLoading && displayedItems.isEmpty {
-                    ProgressView(isSearchActive ? "Searching…" : "Loading…")
+                if isLoading && !isSearchActive && displayedItems.isEmpty {
+                    ProgressView("Loading…")
                 } else {
                     List {
+                        if isSearchActive, isSearching {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                Text("Searching pCloud…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         if !isSearchActive, #unavailable(iOS 26.0), currentPath != "/" {
                             Section {
                                 Text(currentPath)
@@ -45,7 +53,11 @@ struct BrowserView: View {
                             ContentUnavailableView(
                                 "No results",
                                 systemImage: "magnifyingglass",
-                                description: Text("Try another name or path fragment.")
+                                description: Text(
+                                    searchModeNote.isEmpty
+                                        ? "Try another name or path fragment."
+                                        : searchModeNote
+                                )
                             )
                         }
                         ForEach(displayedItems) { item in
@@ -211,19 +223,18 @@ struct BrowserView: View {
     private func performSearch(query: String) async {
         guard let credentials = session.credentials else { return }
         isSearching = true
+        searchModeNote = "Searching folders (WebDAV), then pCloud index…"
         defer { isSearching = false }
         do {
-            let result = try await PCloudSearchService.search(query: query, credentials: credentials)
+            let result = try await PCloudSearchService.search(
+                query: query,
+                credentials: credentials,
+                browsePaths: pathStack
+            )
             guard !Task.isCancelled else { return }
             guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             searchResults = result.items
-            if let note = result.statusNote, !note.isEmpty {
-                searchModeNote = note
-            } else if result.usedWebDAVFallback {
-                searchModeNote = "Folder search (WebDAV) — walks folders under your pCloud root (slower than web search)."
-            } else {
-                searchModeNote = ""
-            }
+            searchModeNote = result.statusNote
         } catch is CancellationError {
             return
         } catch {

@@ -42,24 +42,44 @@ final class PCloudAPIClient {
     }
 
     func listFolderContents(folderId: Int64) async throws -> [[String: Any]] {
-        let creds = resolvedCredentials()
-        let token = try await ensureAuthToken(credentials: creds)
-        let host = authAPIHost ?? authRegion?.apiHost ?? creds.region.apiHost
-        let json = try await PCloudAPIRequest.get(
-            host: host,
-            method: "listfolder",
-            parameters: [
-                "auth": token,
-                "folderid": "\(folderId)",
-            ],
-            session: session
-        )
-        try PCloudAPIRequest.throwIfAPIError(json)
+        let json = try await listFolderJSON(folderId: folderId, recursive: false)
         guard let metadata = json["metadata"] as? [String: Any],
               let contents = metadata["contents"] as? [[String: Any]] else {
             return []
         }
         return PCloudMetadataParsing.flattenFolderContents(contents)
+    }
+
+    /// One-shot recursive listing (pCloud `listfolder` + `recursive=1`).
+    func listFolderRecursiveFlat(folderId: Int64 = 0) async throws -> [[String: Any]] {
+        let json = try await listFolderJSON(folderId: folderId, recursive: true)
+        guard let metadata = json["metadata"] as? [String: Any] else { return [] }
+        var rows = PCloudMetadataParsing.flattenFolderContents([metadata])
+        if rows.count > PCloudAPIFolderSearch.maxRecursiveEntriesForAPI {
+            rows = Array(rows.prefix(PCloudAPIFolderSearch.maxRecursiveEntriesForAPI))
+        }
+        return rows
+    }
+
+    private func listFolderJSON(folderId: Int64, recursive: Bool) async throws -> [String: Any] {
+        let creds = resolvedCredentials()
+        let token = try await ensureAuthToken(credentials: creds)
+        let host = authAPIHost ?? authRegion?.apiHost ?? creds.region.apiHost
+        var parameters: [String: String] = [
+            "auth": token,
+            "folderid": "\(folderId)",
+        ]
+        if recursive {
+            parameters["recursive"] = "1"
+        }
+        let json = try await PCloudAPIRequest.get(
+            host: host,
+            method: "listfolder",
+            parameters: parameters,
+            session: session
+        )
+        try PCloudAPIRequest.throwIfAPIError(json)
+        return json
     }
 
     func apiPath(fileId: Int64) async throws -> String? {
