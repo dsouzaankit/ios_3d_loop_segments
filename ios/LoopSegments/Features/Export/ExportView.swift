@@ -8,6 +8,7 @@ struct ExportView: View {
     @State private var seekMs: Int64 = 0
     @State private var status = ""
     @State private var errorMessage: String?
+    @State private var logHint = ""
 
     var body: some View {
         Form {
@@ -40,7 +41,12 @@ struct ExportView: View {
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
-                Text("1. Export creates 3d_op_00.mkv / 3d_op_01.mkv here")
+                Text("1. Export creates 3d_op_00.mp4 / 3d_op_01.mp4 here")
+                Text(logHint.isEmpty ? "Logs: Exports/export_latest.txt" : logHint)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Text("2. Plug iPhone into Windows PC (USB)")
                 Text("3. Run Sync-IphoneSegments.ps1 on PC")
                 Text("4. Play from PC DLNA server on WLAN")
@@ -68,6 +74,7 @@ struct ExportView: View {
         .navigationTitle("Export")
         .onAppear {
             seekMs = ResumeStore.shared.seekMs(for: item)
+            refreshLogHint()
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
@@ -85,6 +92,21 @@ struct ExportView: View {
             errorMessage = error.localizedDescription
             status = "Failed"
         }
+        refreshLogHint()
+    }
+
+    private func refreshLogHint() {
+        let latest = ExportPaths.latestLogTextURL
+        let probe = ExportPaths.exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
+        let latestBytes = fileByteCount(latest)
+        let probeBytes = fileByteCount(probe)
+        logHint = "export_latest.txt \(latestBytes) B · loop_segments_ok.txt \(probeBytes) B (in Exports)"
+    }
+
+    private func fileByteCount(_ url: URL) -> Int64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let n = attrs[.size] as? NSNumber else { return 0 }
+        return n.int64Value
     }
 
     private func formatMs(_ ms: Int64) -> String {

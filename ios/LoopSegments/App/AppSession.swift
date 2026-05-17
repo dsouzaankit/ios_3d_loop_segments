@@ -6,7 +6,7 @@ final class AppSession: ObservableObject {
     @Published var isExportRunning = false
 
     private let credentialStore = CredentialStore()
-    /// Created on first export so ffmpeg-kit frameworks are not loaded at app launch.
+    /// Created on first export (lazy init for export stack).
     private lazy var exportCoordinator = ExportCoordinator()
 
     init() {
@@ -33,12 +33,13 @@ final class AppSession: ObservableObject {
         isExportRunning = true
         defer { isExportRunning = false }
 
-        try await exportCoordinator.run(
+        let result = try await exportCoordinator.run(
             item: item,
             credentials: credentials,
             seekMs: seekMs
         )
-        ResumeStore.shared.saveSeekMs(seekMs, for: item)
+        let resumeMs: Int64 = result.reachedEnd ? 0 : result.lastMediaTimeMs
+        ResumeStore.shared.saveSeekMs(resumeMs, for: item)
     }
 
     func cancelExport() {

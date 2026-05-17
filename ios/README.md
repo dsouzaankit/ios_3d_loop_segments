@@ -1,6 +1,8 @@
 # Loop Segments (iOS)
 
-**Cellular → pCloud WebDAV → segment export → USB → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md). On **iOS 26.x**, build **1.0.5+** launches without embedded FFmpeg; export is stubbed until a compatible library is added.
+**Cellular → pCloud WebDAV → segment export → USB → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
+
+Build **1.0.6+** uses **AVFoundation** stream copy to `3d_op_00.mp4` / `3d_op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
 ## Open in Xcode (requires macOS or cloud CI)
 
@@ -13,30 +15,27 @@ xcodegen generate
 open LoopSegments.xcodeproj
 ```
 
-SPM resolves **ffmpeg-kit-spm** (`FFmpeg-Kit` product) from [project.yml](project.yml).
+No ffmpeg SPM dependency in [project.yml](project.yml).
 
 **Option B — manual**
 
 1. New iOS App (SwiftUI, iOS 17+).
 2. Add all files under `LoopSegments/`.
-3. **File → Add Package Dependencies** → `https://github.com/tylerjonesio/ffmpeg-kit-spm` → product **FFmpeg-Kit**.
-4. Merge [LoopSegments/Resources/Info.plist](LoopSegments/Resources/Info.plist) keys.
+3. Merge [LoopSegments/Resources/Info.plist](LoopSegments/Resources/Info.plist) keys.
 
-## ffmpeg-kit
+## Export (AVFoundation)
 
-`FFmpegRunner.swift` calls:
+- WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
+- Passthrough to MP4 when supported: H.264, HEVC, AV1 + AAC
+- 60s segments, two-file rotate (`3d_op_00` / `3d_op_01`)
+- Real-time read pacing (like ffmpeg `-re`)
+- Runs until end of file or **Stop**
 
-```text
-FFmpegKit.execute(withArgumentsAsync: …)
-```
-
-with the same arguments as `Run-SegmentCopy.ps1` (`-re`, `-c copy`, `-f segment`, `-segment_wrap 2`, `3d_op_%02d.mkv`).
-
-The bundled **min** SPM binaries may omit some muxers. If export fails with “Unknown format” / missing segment muxer, switch to a **full** ffmpeg-kit XCFramework in `project.yml` (see [ffmpeg-kit-spm releases](https://github.com/tylerjonesio/ffmpeg-kit-spm/releases) or a maintained fork).
+Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 ## No Mac on your desk
 
-[BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) — Codemagic / GitHub Actions using [../codemagic.yaml](../codemagic.yaml).
+[BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) — GitHub Actions / Codemagic.
 
 ## Windows sync
 

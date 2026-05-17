@@ -1,6 +1,6 @@
 import Foundation
 
-/// Mirrors `Run-SegmentCopy.ps1` ffmpeg args (stream copy, -re, two-file segment wrap).
+/// Documents the segment contract (legacy PC ffmpeg used MKV; iOS target is MP4 via AVFoundation).
 enum SegmentCopyCommand {
     static let segmentTimeSeconds = 60
     static let segmentWrap = 2

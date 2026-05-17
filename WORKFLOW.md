@@ -1,12 +1,12 @@
 # Workflow: iPhone cellular → USB → PC DLNA (WLAN)
 
-Three separate networks. **No Personal Hotspot** required.
+Three separate networks. **No Personal Hotspot** required. **No PC-side ffmpeg** — export runs only on the iPhone.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  iPhone (cellular LTE/5G only — Wi‑Fi off is OK for export)      │
 │    Loop Segments app → pCloud WebDAV (internet)                 │
-│    FFmpeg writes Documents/Exports/3d_op_00.mkv, 3d_op_01.mkv │
+│    Writes Documents/Exports/3d_op_00.mp4, 3d_op_01.mp4          │
 └────────────────────────────┬────────────────────────────────────┘
                              │ USB cable (file transfer only)
                              ▼
@@ -20,10 +20,10 @@ Three separate networks. **No Personal Hotspot** required.
 | Step | Where | Network |
 |------|--------|---------|
 | 1. Browse pCloud, run export | iPhone | **Cellular** (or Wi‑Fi if you prefer) |
-| 2. Copy segment MKVs | USB | No IP network |
+| 2. Copy segment MP4s | USB | No IP network |
 | 3. LAN playback | PC + TV | **WLAN** (Ethernet to router also fine) |
 
-The PC never pulls from pCloud for this workflow. The phone never serves DLNA.
+The PC never pulls from pCloud and never runs ffmpeg for this workflow. The phone never serves DLNA.
 
 ---
 
@@ -33,8 +33,6 @@ You need an **IPA** built in the cloud (no local Mac). See [ios/BUILD-WITHOUT-MA
 
 Install via **TestFlight** or sideload (AltStore, etc.) with an Apple Developer account.
 
-SPM package **ffmpeg-kit-spm** is declared in [ios/project.yml](ios/project.yml); cloud build runs `xcodegen generate` first.
-
 ---
 
 ## 2. On the iPhone (cellular)
@@ -43,9 +41,9 @@ SPM package **ffmpeg-kit-spm** is declared in [ios/project.yml](ios/project.yml)
 2. Optional: turn **Wi‑Fi off** to force cellular-only pCloud access (no hotspot).
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
-5. Keep the app in the foreground until both `3d_op_00.mkv` and `3d_op_01.mkv` exist (Files → Loop Segments → Exports).
+5. Keep the app in the foreground until both `3d_op_00.mp4` and `3d_op_01.mp4` exist (Files → Loop Segments → Exports).
 
-Large files on cellular: expect long runs; `-re` reads at real-time speed.
+Large files on cellular: expect long runs; export paces reads in real time.
 
 ---
 
@@ -66,7 +64,7 @@ If auto-discovery fails, paste the Exports path:
 .\Sync-IphoneSegments.ps1 -SourceRoot 'D:\Apple iPhone\Internal Storage\Loop Segments\Exports'
 ```
 
-**Wait for device** (polls until both MKVs are visible):
+**Wait for device** (polls until both MP4s are visible):
 
 ```powershell
 .\Sync-IphoneSegments.ps1 -WaitForDevice -WaitMinutes 30
@@ -84,9 +82,7 @@ Optional: register a logon task that runs sync when you sign in (after plugging 
 
 1. PC connected to the same **WLAN** as the TV/player (not via iPhone hotspot).
 2. Windows **media streaming** (or your existing DLNA server) publishes `F:\f1_media\3d_fullsbs_trans`.
-3. Open the library on the TV; play the rotating `3d_op_*.mkv` entries.
-
-For **idle stop** of a *PC-side* ffmpeg job (Wi‑Fi upload heuristic), use [Run-SegmentCopy.ps1](../3d_loop_segments/Run-SegmentCopy.ps1) on Windows — that is separate from the iPhone export path.
+3. Open the library on the TV; play the rotating `3d_op_*.mp4` entries.
 
 ---
 
@@ -96,13 +92,15 @@ For **idle stop** of a *PC-side* ffmpeg job (Wi‑Fi upload heuristic), use [Run
 |-------|-----|
 | PC can’t see iPhone | Trust PC, unlock phone, install Apple Devices / iTunes drivers |
 | Sync can’t find Exports | Use `-SourceRoot` from Explorer address bar |
-| DLNA empty | Confirm `3d_op_00.mkv` and `3d_op_01.mkv` in `F:\f1_media\3d_fullsbs_trans` |
+| DLNA empty | Confirm `3d_op_00.mp4` and `3d_op_01.mp4` in `F:\f1_media\3d_fullsbs_trans` |
 | pCloud fails on phone | Approve WebDAV 2FA email; check cellular permission for app |
-| Export fails immediately | Check ffmpeg-kit build logs; segment muxer needs full FFmpeg-Kit variant if min build lacks it |
+| Export fails on phone | `.\Sync-IphoneSegments.ps1` also copies logs → `%USERPROFILE%\Documents\LoopSegmentsLogs\export_latest.txt` (Windows USB often hides logs on the phone) |
 
 ---
 
 ## Not used in this workflow
 
 - iPhone **Personal Hotspot** (PC does not share phone internet)
+- **PC-side ffmpeg** / `Run-SegmentCopy.ps1` (legacy pipeline in `3d_loop_segments` repo)
 - PotPlayer **RememberFiles** registry resume
+- PC Wi‑Fi **idle stop** while ffmpeg runs on PC (not applicable when export is on the phone)

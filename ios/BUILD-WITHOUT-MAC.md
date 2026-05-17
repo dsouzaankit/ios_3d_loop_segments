@@ -151,11 +151,11 @@ Quick reference:
 
 - **Settings → Cellular → Loop Segments → On** (cellular pCloud export).
 - **Settings → General → VPN & Device Management → Trust** the developer profile if the app won’t open.
-- **iOS 17 or newer** required (app won’t run on iOS 16). **iOS 26.x** (including **26.5**): use IPA **1.0.5+** — older builds embedded FFmpeg and **quit instantly with no UI**.
+- **iOS 17 or newer** required (app won’t run on iOS 16). **iOS 26.x** (including **26.5**): use IPA **1.0.5+** to launch (no embedded FFmpeg). For **export + logs**, sideload **1.1.0** (see version on sign-in screen).
 
-**App opens then closes immediately (no sign-in screen)?** You likely have **1.0.4 or older**. Sideload **1.0.5** — it removes FFmpeg from launch so the app can open. Export is **browse-only** until iOS-26-compatible FFmpeg is integrated; sign-in and WebDAV browsing still work.
+**App opens then closes immediately (no sign-in screen)?** Sideload **1.0.5+** (not 1.0.4 or older with ffmpeg-kit).
 
-**App shows 1.0.5 but export fails?** Expected for now on iOS 26.5. Use the app to verify pCloud login; segment export will return in a later build.
+**Still shows Build 1.0.5?** GitHub IPA was not rebuilt — push latest `main` and run **Actions → ios-build → Run workflow**, then reinstall the new artifact.
 
 Then follow [WORKFLOW.md](../WORKFLOW.md): export → USB → `Sync-IphoneSegments.ps1` → DLNA on WLAN.
 
@@ -212,7 +212,7 @@ Details: Codemagic [iOS code signing](https://docs.codemagic.io/yaml-code-signin
 ### Codemagic
 
 1. [codemagic.io](https://codemagic.io) → connect repo.
-2. [codemagic.yaml](../codemagic.yaml) runs `xcodegen` + **ffmpeg-kit** SPM.
+2. [codemagic.yaml](../codemagic.yaml) runs `xcodegen` (no ffmpeg SPM on iOS 26).
 3. Code signing: **free Apple ID** *or* paid team.
 4. Download IPA (free/sideload) or publish TestFlight (paid).
 
@@ -231,9 +231,9 @@ cd ios && xcodegen generate && open LoopSegments.xcodeproj
 
 ---
 
-## ffmpeg-kit note
+## Export note
 
-The project uses [ffmpeg-kit-spm](https://github.com/tylerjonesio/ffmpeg-kit-spm) (**min** build). If export fails with a missing muxer, switch `ios/project.yml` to a **full** FFmpeg-Kit binary (see [ios/README.md](README.md)).
+Segment export uses **AVFoundation** on the phone, not embedded ffmpeg (ffmpeg-kit does not load on iOS 26). The Windows side only copies finished `3d_op_*.mp4` files — see [../WORKFLOW.md](../WORKFLOW.md).
 
 ---
 

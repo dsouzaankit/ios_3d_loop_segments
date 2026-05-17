@@ -1,19 +1,19 @@
 import Foundation
 
 final class ExportCoordinator {
-    private let ffmpeg = FFmpegRunner()
+    private let exporter = SegmentExporter()
     private let lock = NSLock()
     private var active = false
 
     func cancel() {
-        ffmpeg.cancel()
+        exporter.cancel()
     }
 
     func run(
         item: WebDAVItem,
         credentials: WebDAVCredentials,
         seekMs: Int64
-    ) async throws {
+    ) async throws -> SegmentExportResult {
         lock.lock()
         guard !active else {
             lock.unlock()
@@ -28,38 +28,33 @@ final class ExportCoordinator {
         }
 
         let inputURL = item.mediaURL(credentials: credentials)
-        let logURL = ExportPaths.logsDirectory
-            .appendingPathComponent("export_\(Int(Date().timeIntervalSince1970)).log")
+        let logWriter = try ExportLogWriter(
+            itemName: item.name,
+            seekMs: seekMs,
+            href: item.href
+        )
 
-        var logLines: [String] = []
         let logHandler: (String) -> Void = { line in
-            logLines.append(line)
-            if logLines.count > 500 { logLines.removeFirst(logLines.count - 500) }
+            logWriter.log(line)
         }
 
         BackgroundTaskKeeper.begin()
         defer { BackgroundTaskKeeper.end() }
 
+        logHandler("Export started")
+
         do {
-            try await ffmpeg.run(
+            let result = try await exporter.run(
                 inputURL: inputURL,
                 seekMs: seekMs,
                 authorizationHeader: credentials.authorizationHeaderValue,
                 logHandler: logHandler
             )
+            logWriter.finish(status: result.reachedEnd ? "completed (end of file)" : "stopped")
+            return result
         } catch {
-            try? String(logLines.joined(separator: "\n")).write(
-                to: logURL,
-                atomically: true,
-                encoding: .utf8
-            )
+            logWriter.finish(status: "failed", error: error)
             throw error
         }
-
-        try? String(logLines.joined(separator: "\n")).write(
-            to: logURL,
-            atomically: true,
-            encoding: .utf8
-        )
     }
 }
