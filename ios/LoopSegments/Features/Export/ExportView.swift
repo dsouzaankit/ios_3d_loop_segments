@@ -131,6 +131,9 @@ struct ExportView: View {
             status = "Failed — partial segments kept in Exports for USB sync"
         }
         refreshLogHint()
+        if fileByteCount(ExportPaths.latestLogTextURL) == 0 {
+            logHint += " · log empty — retry export; check sign-in region (US/EU)"
+        }
     }
 
     private func refreshLogHint() {

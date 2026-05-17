@@ -283,7 +283,7 @@ enum WebDAVResourceLoaderError: LocalizedError {
         case .invalidResponse:
             return "Invalid response loading media from pCloud."
         case .httpStatus(let code):
-            return "pCloud media request failed (HTTP \(code))."
+            return WebDAVHTTPMessages.requestFailed(code)
         case .missingContentLength:
             return "Could not determine file size from pCloud."
         case .suspiciousContentLength(let bytes):

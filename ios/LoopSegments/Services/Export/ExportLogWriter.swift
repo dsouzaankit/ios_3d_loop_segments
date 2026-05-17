@@ -36,31 +36,29 @@ final class ExportLogWriter: @unchecked Sendable {
     }
 
     func log(_ message: String) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            let line = "\(self.isoFormatter.string(from: Date())) \(message)\n"
-            do {
-                try self.append(Data(line.utf8), to: self.primaryURL)
-                try self.append(Data(line.utf8), to: self.archiveURL)
-                self.lineCount += 1
-                if self.lineCount == 1 || self.lineCount % 10 == 0 {
-                    try self.mirrorPrimaryToLegacyNames()
-                }
-            } catch {
-                // Keep export running; error will surface in finish byte count
-            }
+        queue.sync { [self] in
+            appendLine(message)
+        }
+    }
+
+    private func appendLine(_ message: String) {
+        let line = "\(isoFormatter.string(from: Date())) \(message)\n"
+        do {
+            try append(Data(line.utf8), to: primaryURL)
+            try append(Data(line.utf8), to: archiveURL)
+            lineCount += 1
+            try mirrorPrimaryToLegacyNames()
+        } catch {
+            // Keep export running; finish() still records status
         }
     }
 
     func finish(status: String, error: Error? = nil) {
         queue.sync {
             if let error {
-                appendSync("ERROR: \(error.localizedDescription)")
+                appendLine("ERROR: \(error.localizedDescription)")
             }
-            appendSync("--- \(status) ---")
-            do {
-                try mirrorPrimaryToLegacyNames()
-            } catch { }
+            appendLine("--- \(status) ---")
         }
     }
 
@@ -72,12 +70,6 @@ final class ExportLogWriter: @unchecked Sendable {
     }
 
     // MARK: - Private
-
-    private func appendSync(_ message: String) {
-        let line = "\(isoFormatter.string(from: Date())) \(message)\n"
-        try? append(Data(line.utf8), to: primaryURL)
-        try? append(Data(line.utf8), to: archiveURL)
-    }
 
     private func append(_ chunk: Data, to url: URL) throws {
         let handle = try FileHandle(forUpdating: url)

@@ -46,7 +46,7 @@ enum WebDAVError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidResponse: return "Invalid WebDAV response."
-        case .httpStatus(let code): return "WebDAV request failed (HTTP \(code))."
+        case .httpStatus(let code): return WebDAVHTTPMessages.requestFailed(code)
         case .parseFailed: return "Could not parse WebDAV listing."
         }
     }

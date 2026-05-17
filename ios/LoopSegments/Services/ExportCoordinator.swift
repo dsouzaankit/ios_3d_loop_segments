@@ -42,6 +42,7 @@ final class ExportCoordinator {
         defer { BackgroundTaskKeeper.end() }
 
         logHandler("Export started")
+        logHandler("pCloud region: \(credentials.region.displayName) (\(credentials.region.webDAVHost))")
         logHandler("Media URL: \(inputURL.absoluteString)")
 
         if PhotosSegmentPublisher.isEnabled {

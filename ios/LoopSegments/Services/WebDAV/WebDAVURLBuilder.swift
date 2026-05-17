@@ -8,23 +8,45 @@ enum WebDAVURLBuilder {
         return set
     }()
 
-    static func fileURL(href: String, baseURL: URL) -> URL {
+    /// Path-only href for browsing (`/folder/`). Strips `https://webdav…` so region + auth stay consistent.
+    static func normalizedHrefPath(_ href: String) -> String {
         let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let absolute = URL(string: trimmed),
-           let scheme = absolute.scheme?.lowercased(),
+        guard !trimmed.isEmpty else { return "/" }
+
+        if let url = URL(string: trimmed),
+           let scheme = url.scheme?.lowercased(),
            scheme == "https" || scheme == "http" {
-            return absolute
+            var path = url.path
+            if path.isEmpty { path = "/" }
+            if let query = url.query, !query.isEmpty {
+                path += "?\(query)"
+            }
+            return path
         }
 
-        var path = trimmed
-        if !path.hasPrefix("/") { path = "/" + path }
+        return trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
+    }
 
-        let decoded = path.removingPercentEncoding ?? path
+    static func fileURL(href: String, baseURL: URL) -> URL {
+        let path = normalizedHrefPath(href)
+        return fileURLForPath(path, baseURL: baseURL)
+    }
+
+    static func displayName(fromHref href: String) -> String {
+        let path = normalizedHrefPath(href).split(separator: "?", maxSplits: 1).first.map(String.init) ?? href
+        let leaf = (path as NSString).lastPathComponent
+        return leaf.removingPercentEncoding ?? leaf
+    }
+
+    private static func fileURLForPath(_ path: String, baseURL: URL) -> URL {
+        let pathOnly = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
+        let decoded = pathOnly.removingPercentEncoding ?? pathOnly
         let segments = decoded.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
             let base = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let encodedPath = segments.map { encodeSegment($0) }.joined(separator: "/")
+            if segments.isEmpty { return baseURL }
             return URL(string: "\(base)/\(encodedPath)")!
         }
 
@@ -38,12 +60,6 @@ enum WebDAVURLBuilder {
             return URL(string: "\(base)/\(encodedPath)")!
         }
         return url
-    }
-
-    static func displayName(fromHref href: String) -> String {
-        let path = href.split(separator: "?", maxSplits: 1).first.map(String.init) ?? href
-        let leaf = (path as NSString).lastPathComponent
-        return leaf.removingPercentEncoding ?? leaf
     }
 
     private static func encodeSegment(_ segment: String) -> String {

@@ -57,6 +57,9 @@ enum WebDAVPrefetch {
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
+        }
         if (200 ... 299).contains(http.statusCode), let len = contentLength(from: http) {
             return len
         }
