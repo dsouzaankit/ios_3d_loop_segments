@@ -90,7 +90,8 @@ Optional: register a logon task that runs sync when you sign in (after plugging 
 
 | Issue | Fix |
 |-------|-----|
-| PC can’t see iPhone | Trust PC, unlock phone, install Apple Devices / iTunes drivers |
+| PC can’t see iPhone | Unlock phone, replug USB, open **Apple Devices** app; if Exports vanished during export, **stop export**, unlock, then browse again. Copy path from Explorer → `-SourceRoot` |
+| Network timed out on export | Strong cellular; keep app foreground; try Wi‑Fi; read `Exports/export_latest.txt` |
 | Sync can’t find Exports | Use `-SourceRoot` from Explorer address bar |
 | DLNA empty | Confirm `3d_op_00.mp4` and `3d_op_01.mp4` in `F:\f1_media\3d_fullsbs_trans` |
 | pCloud fails on phone | Approve WebDAV 2FA email; check cellular permission for app |

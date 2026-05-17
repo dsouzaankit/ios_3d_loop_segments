@@ -38,7 +38,11 @@ final class SegmentExporter {
         isCancelled = false
         cancelLock.unlock()
 
-        let loader = WebDAVResourceLoader(remoteURL: inputURL, authorization: authorizationHeader)
+        let loader = WebDAVResourceLoader(
+            remoteURL: inputURL,
+            authorization: authorizationHeader,
+            log: logHandler
+        )
         let asset = AVURLAsset(
             url: loader.customAssetURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]

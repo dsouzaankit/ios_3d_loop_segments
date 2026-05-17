@@ -15,7 +15,7 @@ struct ExportView: View {
             Section("Network (pCloud)") {
                 Text(network.interfaceLabel)
                 if network.usesCellular {
-                    Text("pCloud uses iPhone cellular. PC is not involved until USB sync.")
+                    Text("pCloud uses cellular — keep app open; timeouts retry automatically. USB to PC only after export.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
