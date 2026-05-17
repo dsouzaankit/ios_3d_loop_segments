@@ -100,6 +100,24 @@ jobs:
             rm -rf Payload
           }
 
+          verify_ipa_bundle_id() {
+            local plist_path
+            plist_path="$(find Payload -path '*/LoopSegments.app/Info.plist' | head -1)"
+            if [[ -z "$plist_path" ]]; then
+              unzip -q LoopSegments.ipa -d ipa-verify
+              plist_path="$(find ipa-verify -path '*/LoopSegments.app/Info.plist' | head -1)"
+            fi
+            BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist_path")"
+            EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist_path")"
+            echo "CFBundleIdentifier=$BUNDLE_ID"
+            echo "CFBundleExecutable=$EXECUTABLE"
+            if [[ -z "$BUNDLE_ID" || "$BUNDLE_ID" == *'$'* ]]; then
+              echo "ERROR: Missing CFBundleIdentifier in IPA (Sideloadly will fail)."
+              exit 1
+            fi
+            rm -rf ipa-verify
+          }
+
           if [[ -n "${APPLE_ID:-}" ]]; then
             if [[ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" || -z "${APPLE_TEAM_ID:-}" ]]; then
               echo "APPLE_ID is set; also set APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID,"
@@ -129,6 +147,8 @@ jobs:
               -allowProvisioningUpdates
 
             cp "$EXPORT_PATH"/*.ipa LoopSegments.ipa
+            unzip -q LoopSegments.ipa -d Payload
+            verify_ipa_bundle_id
           else
             echo "No APPLE_ID secret — building unsigned IPA (re-sign in Sideloadly)."
             xcodebuild -project LoopSegments.xcodeproj \
@@ -142,6 +162,8 @@ jobs:
               DEVELOPMENT_TEAM=
 
             package_unsigned_ipa
+            unzip -q LoopSegments.ipa -d Payload
+            verify_ipa_bundle_id
           fi
 
       - name: Upload IPA artifact

@@ -35,7 +35,8 @@ Pick one:
 
 1. Push this repo to **GitHub** (public repos get **unlimited** macOS runner time; private repos share ~2,000 min/month on the free plan).
 2. Open the repo → **Actions** → **ios-build** → **Run workflow** (manual run builds the IPA; pushes only run the simulator smoke test).
-3. When the run finishes, open the run → **Artifacts** → download **`LoopSegments-ipa`** → unzip → `LoopSegments.ipa`.
+3. When the run finishes, open the run → **Artifacts** → download **`LoopSegments-ipa`** → unzip → `LoopSegments.ipa`.  
+   On this PC you can keep it at `ios\build artifacts\ipa\LoopSegments.ipa` (see [Refresh the IPA later](#refresh-the-ipa-later)).
 4. Install on Windows with [Sideloadly](#2-install-with-sideloadly-simple-on-windows) (it re-signs with **your** free Apple ID).
 
 **Signing on GitHub (optional)**
@@ -72,6 +73,8 @@ Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, s
 
 **Before the app stops opening (~7 days):** run Sideloadly again with the same IPA (or use “Refresh” if the tool offers it). Same steps as install.
 
+**Sideloadly “Guru Meditation” / `CFBundleIdentifier`:** The IPA must contain `CFBundleIdentifier` and `CFBundleExecutable` in the app’s `Info.plist`. Older CI builds before May 2026 omitted these — **rebuild** (Actions → **ios-build** → **Run workflow**) and download a new `LoopSegments.ipa`. If the error persists with a new IPA, in Sideloadly **Advanced → Anisette → Remote** (not Local) and retry.
+
 ### 3. Or: AltStore (Windows)
 
 1. Install [AltServer for Windows](https://altstore.io) (tray app on PC).
@@ -86,6 +89,31 @@ Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, s
 - **Settings → General → VPN & Device Management → Trust** the developer profile if the app won’t open.
 
 Then follow [WORKFLOW.md](../WORKFLOW.md): export → USB → `Sync-IphoneSegments.ps1` → DLNA on WLAN.
+
+---
+
+## Refresh the IPA later
+
+Free Apple ID certificates last **~7 days**. Refresh **before** the app fails to open.
+
+| Goal | What to do |
+|------|------------|
+| **Extend the same install** | Sideloadly → same `LoopSegments.ipa` → install or **Refresh** (no GitHub build needed) |
+| **New build** (app or workflow changed) | GitHub → **Actions** → **ios-build** → **Run workflow** → download **`LoopSegments-ipa`** |
+
+**Local IPA path (this repo on Windows):**
+
+`ios\build artifacts\ipa\LoopSegments.ipa`
+
+**Download latest artifact with GitHub CLI** (after `gh auth login`):
+
+```powershell
+cd P:\all_scripts\ios_3d_loop_segments\ios\build artifacts\ipa
+gh run list --workflow=ios-build.yml --limit 1
+gh run download <RUN_ID> -n LoopSegments-ipa
+```
+
+Use the newest successful **workflow_dispatch** run ID from `gh run list`. Then install with Sideloadly.
 
 ---
 
