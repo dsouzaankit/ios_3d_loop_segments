@@ -217,9 +217,13 @@ struct BrowserView: View {
             guard !Task.isCancelled else { return }
             guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             searchResults = result.items
-            searchModeNote = result.usedWebDAVFallback
-                ? "Folder search (WebDAV) — walks folders under your pCloud root (slower than web search)."
-                : ""
+            if let note = result.statusNote, !note.isEmpty {
+                searchModeNote = note
+            } else if result.usedWebDAVFallback {
+                searchModeNote = "Folder search (WebDAV) — walks folders under your pCloud root (slower than web search)."
+            } else {
+                searchModeNote = ""
+            }
         } catch is CancellationError {
             return
         } catch {

@@ -28,7 +28,9 @@ final class AppSession: ObservableObject {
         let previous = credentials
         WebDAVMediaSession.setActiveCredentials(attempt)
         do {
-            let verified = try await WebDAVSignIn.verify(credentials: attempt)
+            var verified = try await WebDAVSignIn.verify(credentials: attempt)
+            PCloudWebDAVRootResolver.clearCache()
+            verified = try await enrichWithAPIAccess(verified)
             credentialStore.save(verified)
             credentials = verified
             WebDAVMediaSession.setActiveCredentials(verified)
@@ -43,6 +45,25 @@ final class AppSession: ObservableObject {
         credentialStore.clear()
         credentials = nil
         WebDAVMediaSession.setActiveCredentials(nil)
+        PCloudWebDAVRootResolver.clearCache()
+    }
+
+    private func enrichWithAPIAccess(_ credentials: WebDAVCredentials) async throws -> WebDAVCredentials {
+        var updated = credentials
+        if let session = try? await PCloudAuth.fetchAuthSession(
+            email: credentials.email,
+            password: credentials.password,
+            preferredRegion: credentials.region,
+            session: .shared
+        ) {
+            updated.region = session.region
+            updated.apiAuthToken = session.token
+            updated.apiAuthHost = session.apiHost
+        }
+        if let root = try? await PCloudWebDAVRootResolver.filesRoot(credentials: updated) {
+            updated.webDAVFilesRoot = root
+        }
+        return updated
     }
 
     func startExport(item: WebDAVItem, seekMs: Int64) async throws {

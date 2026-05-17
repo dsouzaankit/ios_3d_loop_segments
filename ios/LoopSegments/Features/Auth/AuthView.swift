@@ -28,7 +28,7 @@ struct AuthView: View {
                         .textContentType(.password)
                 }
                 Section {
-                    Text("Use your normal pCloud email and password. Sign-in only checks WebDAV (not the search API). If the wrong region was selected, the app tries the other datacenter automatically.")
+                    Text("Use your normal pCloud email and password. Sign-in verifies WebDAV and pCloud search (same password). If the wrong region was selected, the app tries the other datacenter automatically.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Text("Build \(AuthView.buildLabel) · pCloud WebDAV · AVFoundation segment export")

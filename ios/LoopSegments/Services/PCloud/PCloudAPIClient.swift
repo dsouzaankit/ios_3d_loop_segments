@@ -11,6 +11,11 @@ final class PCloudAPIClient {
     init(credentials: WebDAVCredentials, session: URLSession = .shared) {
         self.credentials = credentials
         self.session = session
+        if let saved = credentials.apiAuthToken, !saved.isEmpty {
+            authToken = saved
+            authAPIHost = credentials.apiAuthHost
+            authRegion = credentials.region
+        }
     }
 
     func search(query: String) async throws -> [WebDAVItem] {
@@ -18,15 +23,55 @@ final class PCloudAPIClient {
         guard !trimmed.isEmpty else { return [] }
 
         let creds = resolvedCredentials()
+        let json = try await performSearch(query: trimmed, credentials: creds)
+        try PCloudAPIRequest.throwIfAPIError(json)
+        return try await PCloudPathResolver.resolveSearchItems(
+            entries: PCloudMetadataParsing.extractEntries(from: json),
+            credentials: creds,
+            apiClient: self
+        )
+    }
+
+    func apiPath(fileId: Int64) async throws -> String? {
+        let creds = resolvedCredentials()
         let token = try await ensureAuthToken(credentials: creds)
-        let apiHost = authAPIHost ?? authRegion?.apiHost ?? creds.region.apiHost
+        let host = authAPIHost ?? authRegion?.apiHost ?? creds.region.apiHost
+        let json = try await PCloudAPIRequest.get(
+            host: host,
+            method: "getpath",
+            parameters: ["auth": token, "fileid": "\(fileId)"],
+            session: session
+        )
+        guard PCloudAPIRequest.resultCode(json) == 0 else { return nil }
+        return normalizedAPIPath(json["path"])
+    }
+
+    func apiPath(folderId: Int64) async throws -> String? {
+        let creds = resolvedCredentials()
+        let token = try await ensureAuthToken(credentials: creds)
+        let host = authAPIHost ?? authRegion?.apiHost ?? creds.region.apiHost
+        let json = try await PCloudAPIRequest.get(
+            host: host,
+            method: "getpath",
+            parameters: ["auth": token, "folderid": "\(folderId)"],
+            session: session
+        )
+        guard PCloudAPIRequest.resultCode(json) == 0 else { return nil }
+        return normalizedAPIPath(json["path"])
+    }
+
+    private func performSearch(query: String, credentials: WebDAVCredentials) async throws -> [String: Any] {
+        let token = try await ensureAuthToken(credentials: credentials)
+        let apiHost = authAPIHost ?? authRegion?.apiHost ?? credentials.region.apiHost
+        var parameters: [String: String] = [
+            "auth": token,
+            "query": query,
+            "searchall": "1",
+        ]
         let json = try await PCloudAPIRequest.get(
             host: apiHost,
             method: "search",
-            parameters: [
-                "auth": token,
-                "query": trimmed,
-            ],
+            parameters: parameters,
             session: session
         )
 
@@ -34,22 +79,16 @@ final class PCloudAPIClient {
         if code == 1000 || code == 2000 {
             authToken = nil
             authAPIHost = nil
-            let retryToken = try await ensureAuthToken(credentials: creds)
-            let retryJSON = try await PCloudAPIRequest.get(
+            let retryToken = try await ensureAuthToken(credentials: credentials)
+            parameters["auth"] = retryToken
+            return try await PCloudAPIRequest.get(
                 host: apiHost,
                 method: "search",
-                parameters: [
-                    "auth": retryToken,
-                    "query": trimmed,
-                ],
+                parameters: parameters,
                 session: session
             )
-            try PCloudAPIRequest.throwIfAPIError(retryJSON)
-            return try parseSearchItems(retryJSON)
         }
-
-        try PCloudAPIRequest.throwIfAPIError(json)
-        return try parseSearchItems(json)
+        return json
     }
 
     private func resolvedCredentials() -> WebDAVCredentials {
@@ -76,21 +115,13 @@ final class PCloudAPIClient {
         return token
     }
 
-    private func parseSearchItems(_ json: [String: Any]) throws -> [WebDAVItem] {
-        let rawItems = PCloudMetadataParsing.extractEntries(from: json)
-        var results: [WebDAVItem] = []
-        results.reserveCapacity(rawItems.count)
-        for entry in rawItems {
-            guard let item = PCloudMetadataParsing.webDAVItem(from: entry) else { continue }
-            let isFolder = item.isDirectory
-            if PCloudMetadataParsing.isBrowsableVideo(name: item.name, metadata: entry, isFolder: isFolder) {
-                results.append(item)
-            }
-        }
-        return results.sorted { lhs, rhs in
-            if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory && !rhs.isDirectory }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
+    private func normalizedAPIPath(_ value: Any?) -> String? {
+        guard let raw = value as? String else { return nil }
+        let normalized = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+        guard !normalized.isEmpty else { return nil }
+        return WebDAVURLBuilder.canonicalBrowsePath(normalized)
     }
 }
 

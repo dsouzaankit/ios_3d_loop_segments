@@ -10,7 +10,7 @@ enum WebDAVSearchClient {
         guard !needle.isEmpty else { return [] }
 
         let client = WebDAVClient(credentials: credentials)
-        let roots = try await discoverSearchRoots(client: client)
+        let roots = try await discoverSearchRoots(client: client, credentials: credentials)
         var results: [WebDAVItem] = []
         var queue = roots
         var visited = Set<String>()
@@ -58,18 +58,33 @@ enum WebDAVSearchClient {
     }
 
     /// pCloud WebDAV root is often `/remote.php/dav/files/<user>/`, not flat children of `/`.
-    private static func discoverSearchRoots(client: WebDAVClient) async throws -> [String] {
-        let rootItems = try await client.list(path: "/")
-        let directories = rootItems.filter(\.isDirectory)
-        if directories.isEmpty {
-            return ["/"]
-        }
-        if directories.count == 1 {
-            return [WebDAVURLBuilder.directoryListingPath(directories[0].href)]
-        }
+    private static func discoverSearchRoots(
+        client: WebDAVClient,
+        credentials: WebDAVCredentials
+    ) async throws -> [String] {
         var roots = ["/"]
-        for dir in directories {
-            roots.append(WebDAVURLBuilder.directoryListingPath(dir.href))
+        let top = try await client.list(path: "/")
+        for dir in top where dir.isDirectory {
+            let path = WebDAVURLBuilder.directoryListingPath(dir.href)
+            roots.append(path)
+            let lower = path.lowercased()
+            if lower.contains("remote.php") || lower.hasSuffix("/dav/") {
+                if let children = try? await client.list(path: path) {
+                    for child in children where child.isDirectory {
+                        roots.append(WebDAVURLBuilder.directoryListingPath(child.href))
+                        if let grandchildren = try? await client.list(
+                            path: WebDAVURLBuilder.directoryListingPath(child.href)
+                        ) {
+                            for grand in grandchildren where grand.isDirectory {
+                                roots.append(WebDAVURLBuilder.directoryListingPath(grand.href))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let userRoot = try? await PCloudWebDAVRootResolver.filesRoot(credentials: credentials) {
+            roots.append(userRoot)
         }
         return uniquePaths(roots)
     }

@@ -3,22 +3,21 @@ import Foundation
 /// Parse pCloud REST metadata (search, listfolder, etc.) into WebDAV browse items.
 enum PCloudMetadataParsing {
     static func extractEntries(from json: [String: Any]) -> [[String: Any]] {
-        if let rows = json["items"] as? [[String: Any]], !rows.isEmpty {
-            return rows
-        }
-        if let anyItems = json["items"] as? [Any] {
-            let rows = anyItems.compactMap { $0 as? [String: Any] }
-            if !rows.isEmpty { return rows }
-        }
-        if let rows = json["matches"] as? [[String: Any]], !rows.isEmpty {
-            return rows
+        for key in ["items", "matches", "results", "entries"] {
+            if let rows = json[key] as? [[String: Any]], !rows.isEmpty {
+                return flattenMetadataRows(rows)
+            }
+            if let anyItems = json[key] as? [Any] {
+                let rows = anyItems.compactMap { metadataDictionary($0) }
+                if !rows.isEmpty { return rows }
+            }
         }
         if let metadata = json["metadata"] as? [[String: Any]], !metadata.isEmpty {
-            return metadata
+            return flattenMetadataRows(metadata)
         }
         if let metadata = json["metadata"] as? [String: Any] {
             if let contents = metadata["contents"] as? [[String: Any]], !contents.isEmpty {
-                return contents
+                return flattenMetadataRows(contents)
             }
             if metadata["name"] != nil {
                 return [metadata]
@@ -27,10 +26,11 @@ enum PCloudMetadataParsing {
         return []
     }
 
-    static func webDAVItem(from metadata: [String: Any]) -> WebDAVItem? {
+    static func webDAVItem(from metadata: [String: Any], webDAVFilesRoot: String? = nil) -> WebDAVItem? {
         guard let name = metadata["name"] as? String, !name.isEmpty else { return nil }
         let isFolder = boolField(metadata["isfolder"])
-        guard let path = browsePath(from: metadata, name: name, isFolder: isFolder) else { return nil }
+        guard let apiPath = browsePath(from: metadata, name: name, isFolder: isFolder) else { return nil }
+        let path = webDAVHref(apiPath: apiPath, webDAVFilesRoot: webDAVFilesRoot, isFolder: isFolder)
 
         let href = isFolder
             ? WebDAVURLBuilder.directoryListingPath(path)
@@ -41,6 +41,32 @@ enum PCloudMetadataParsing {
             isDirectory: isFolder,
             contentLength: int64Field(metadata["size"])
         )
+    }
+
+    private static func flattenMetadataRows(_ rows: [[String: Any]]) -> [[String: Any]] {
+        rows.compactMap { metadataDictionary($0) }
+    }
+
+    private static func metadataDictionary(_ value: Any) -> [String: Any]? {
+        if let row = value as? [String: Any] {
+            if let nested = row["metadata"] as? [String: Any] { return nested }
+            if row["name"] != nil { return row }
+        }
+        return nil
+    }
+
+    /// Map pCloud API `/folder/file` to WebDAV `/remote.php/dav/files/user/folder/file`.
+    private static func webDAVHref(apiPath: String, webDAVFilesRoot: String?, isFolder: Bool) -> String {
+        let normalized = normalizeAPIPath(apiPath)
+        if normalized.lowercased().contains("remote.php") {
+            return normalized
+        }
+        guard let root = webDAVFilesRoot, !root.isEmpty else { return normalized }
+        let rootPath = WebDAVURLBuilder.directoryListingPath(root)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let apiTrimmed = normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let combined = "/\(rootPath)/\(apiTrimmed)"
+        return WebDAVURLBuilder.canonicalBrowsePath(combined)
     }
 
     static func isBrowsableVideo(name: String, metadata: [String: Any], isFolder: Bool) -> Bool {
@@ -86,7 +112,7 @@ enum PCloudMetadataParsing {
         }
     }
 
-    static func int64Field(_ value: Any?) -> Int64? {
+    static func int64Field(_ value: Any?) -> Int64?
         switch value {
         case let n as Int64: return n
         case let n as Int: return Int64(n)
