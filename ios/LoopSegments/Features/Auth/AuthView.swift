@@ -31,7 +31,7 @@ struct AuthView: View {
                     Text("Uses pCloud WebDAV (not PotPlayer resume). If 2FA is enabled, approve the login email from pCloud.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("Build 1.0.4 · iOS 17+ · for iOS 26.x")
+                    Text("Build 1.0.5 · browse pCloud · export pending iOS 26 FFmpeg")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }

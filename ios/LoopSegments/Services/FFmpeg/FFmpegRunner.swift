@@ -1,7 +1,7 @@
 import Foundation
-import ffmpegkit
 
-/// Segment remux via ffmpeg-kit (stream copy, -re, segment wrap 2).
+/// Segment remux via ffmpeg (stream copy, -re, segment wrap 2).
+/// FFmpeg binaries are not linked at launch on iOS 26+ until a compatible build is integrated.
 final class FFmpegRunner {
     private let cancelLock = NSLock()
     private var isCancelled = false
@@ -10,7 +10,6 @@ final class FFmpegRunner {
         cancelLock.lock()
         isCancelled = true
         cancelLock.unlock()
-        FFmpegKit.cancel()
     }
 
     func run(
@@ -23,64 +22,19 @@ final class FFmpegRunner {
         isCancelled = false
         cancelLock.unlock()
 
-        let seekSec = Double(seekMs) / 1000.0
-        let outputPath = ExportPaths.segmentOutputPath
-        let args = SegmentCopyCommand.buildArguments(
-            inputURL: inputURL,
-            seekSeconds: seekSec,
-            outputPath: outputPath,
-            authorizationHeader: authorizationHeader
-        )
+        _ = inputURL
+        _ = seekMs
+        _ = authorizationHeader
+        _ = logHandler
 
-        logHandler(SegmentCopyCommand.commandLine(
-            inputURL: inputURL,
-            seekSeconds: seekSec,
-            outputPath: outputPath,
-            authorizationHeader: authorizationHeader
-        ))
-
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            FFmpegKit.execute(
-                withArgumentsAsync: args,
-                withCompleteCallback: { session in
-                    if self.checkCancelled() {
-                        continuation.resume(throwing: FFmpegRunnerError.cancelled)
-                        return
-                    }
-                    guard let session else {
-                        continuation.resume(throwing: FFmpegRunnerError.executionFailed(code: -1))
-                        return
-                    }
-                    let returnCode = session.getReturnCode()
-                    if ReturnCode.isSuccess(returnCode) {
-                        continuation.resume()
-                    } else if ReturnCode.isCancel(returnCode) {
-                        continuation.resume(throwing: FFmpegRunnerError.cancelled)
-                    } else {
-                        let code = Int(returnCode?.getValue() ?? -1)
-                        continuation.resume(throwing: FFmpegRunnerError.executionFailed(code: code))
-                    }
-                },
-                withLogCallback: { log in
-                    guard let message = log?.getMessage() else { return }
-                    let line = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !line.isEmpty { logHandler(line) }
-                },
-                withStatisticsCallback: { _ in }
-            )
-        }
-    }
-
-    private func checkCancelled() -> Bool {
-        cancelLock.lock()
-        defer { cancelLock.unlock() }
-        return isCancelled
+        throw FFmpegRunnerError.exportUnavailable
     }
 }
 
 enum FFmpegRunnerError: LocalizedError {
     case executionFailed(code: Int)
     case cancelled
+    case exportUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -88,6 +42,12 @@ enum FFmpegRunnerError: LocalizedError {
             return "FFmpeg failed (exit \(code))."
         case .cancelled:
             return "Export cancelled."
+        case .exportUnavailable:
+            return """
+            Segment export is temporarily unavailable on this iOS version. \
+            The app can sign in and browse pCloud; a compatible FFmpeg build for iOS 26 is in progress. \
+            Use a Mac/PC workflow from WORKFLOW.md until the next app update.
+            """
         }
     }
 }

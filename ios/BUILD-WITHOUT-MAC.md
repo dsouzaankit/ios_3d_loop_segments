@@ -1,3 +1,5 @@
+https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
+
 # Build and install without owning a Mac
 
 Apple still requires a **signed IPA** to run on a physical iPhone. You do **not** have to join the **$99/year** Developer Program for personal testing — a **free Apple ID** is enough, with a **~7-day** reinstall cycle.
@@ -149,9 +151,11 @@ Quick reference:
 
 - **Settings → Cellular → Loop Segments → On** (cellular pCloud export).
 - **Settings → General → VPN & Device Management → Trust** the developer profile if the app won’t open.
-- **iOS 17 or newer** required (app won’t run on iOS 16). **iOS 26.x** (including **26.5**) needs IPA **1.0.4+** built with **Xcode 26.5** on GitHub — older IPAs used an iOS 18 SDK and may crash on launch.
+- **iOS 17 or newer** required (app won’t run on iOS 16). **iOS 26.x** (including **26.5**): use IPA **1.0.5+** — older builds embedded FFmpeg and **quit instantly with no UI**.
 
-**App opens then closes immediately?** Install the latest IPA (**1.0.4+** shows under Sign in). Older builds missed launch plist keys, declared background modes AltStore cannot sign, or were not built for your iOS version. Rebuild (**Actions → ios-build → Run workflow**), sideload over the old app (same Apple ID).
+**App opens then closes immediately (no sign-in screen)?** You likely have **1.0.4 or older**. Sideload **1.0.5** — it removes FFmpeg from launch so the app can open. Export is **browse-only** until iOS-26-compatible FFmpeg is integrated; sign-in and WebDAV browsing still work.
+
+**App shows 1.0.5 but export fails?** Expected for now on iOS 26.5. Use the app to verify pCloud login; segment export will return in a later build.
 
 Then follow [WORKFLOW.md](../WORKFLOW.md): export → USB → `Sync-IphoneSegments.ps1` → DLNA on WLAN.
 

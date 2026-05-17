@@ -1,6 +1,6 @@
 # Loop Segments (iOS)
 
-**Cellular → pCloud WebDAV → ffmpeg-kit segment export → USB → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
+**Cellular → pCloud WebDAV → segment export → USB → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md). On **iOS 26.x**, build **1.0.5+** launches without embedded FFmpeg; export is stubbed until a compatible library is added.
 
 ## Open in Xcode (requires macOS or cloud CI)
 

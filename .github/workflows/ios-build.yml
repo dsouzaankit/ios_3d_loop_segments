@@ -120,6 +120,11 @@ jobs:
               echo "ERROR: Missing UIApplicationSceneManifest (app may crash on launch)."
               exit 1
             fi
+            if [[ -d ipa-verify/Payload/LoopSegments.app/Frameworks ]] || [[ -d Payload/LoopSegments.app/Frameworks ]]; then
+              echo "WARNING: FFmpeg Frameworks/ still present (may crash on iOS 26)."
+            else
+              echo "OK: no Frameworks/ embedded (iOS 26 launch-safe)."
+            fi
             rm -rf ipa-verify
           }
 
