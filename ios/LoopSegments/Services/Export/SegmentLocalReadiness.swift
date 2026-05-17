@@ -36,11 +36,15 @@ enum SegmentLocalReadiness {
         var trackLoadStreak = 0
         var probeAttempts = 0
         var indexRefreshCount = 0
+        var lastZeroSampleLog = CFAbsoluteTimeGetCurrent()
+        var preparePassCount = 0
+        let needWindowBytes = needEnd - requiredByteRange.start
 
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
             let filled = filledByteSpan()
-            let rangeReady = filled.start <= requiredByteRange.start && filled.end >= needEnd
+            let denseReady = isWindowDenseFilled()
+            let rangeReady = denseReady || (filled.start <= requiredByteRange.start && filled.end >= needEnd)
             if !rangeReady {
                 try await Task.sleep(nanoseconds: 250_000_000)
                 continue
