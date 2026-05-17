@@ -37,6 +37,11 @@ enum ExportPaths {
         exportsDirectory.appendingPathComponent("export_latest.txt")
     }
 
+    /// Last log line only — useful when PC caches `export_latest.txt`.
+    static var exportProgressURL: URL {
+        exportsDirectory.appendingPathComponent("export_progress.txt")
+    }
+
     /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).
     static func ensureExportDirectories() {
         _ = exportsDirectory

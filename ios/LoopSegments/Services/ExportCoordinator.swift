@@ -42,6 +42,7 @@ final class ExportCoordinator {
         defer { BackgroundTaskKeeper.end() }
 
         logHandler("Export started")
+        logHandler("Logs: export_latest.txt, \(logWriter.sessionLogFileName), export_progress.txt (in Exports)")
         logHandler("pCloud region: \(credentials.region.displayName) (\(credentials.region.webDAVHost))")
         logHandler("Media URL: \(inputURL.absoluteString)")
 

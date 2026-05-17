@@ -9,10 +9,14 @@ enum WebDAVPrefetch {
         remoteURL: URL,
         authorization: String,
         cache: WebDAVRangeCache,
-        log: ((String) -> Void)?
+        log: ((String) -> Void)? = nil
     ) async throws {
         log?("Prefetch: HEAD")
-        let length = try await fetchContentLength(remoteURL: remoteURL, authorization: authorization)
+        let length = try await fetchContentLength(
+            remoteURL: remoteURL,
+            authorization: authorization,
+            log: log
+        )
         cache.storeContentLength(length)
         log?("Prefetch: file size \(length) bytes")
         if length > 0, length < 4096 {
@@ -28,7 +32,8 @@ enum WebDAVPrefetch {
                 remoteURL: remoteURL,
                 authorization: authorization,
                 offset: 0,
-                endInclusive: firstEnd
+                endInclusive: firstEnd,
+                log: log
             )
             cache.storeRange(offset: 0, data: data)
         }
@@ -43,17 +48,22 @@ enum WebDAVPrefetch {
             remoteURL: remoteURL,
             authorization: authorization,
             offset: tailStart,
-            endInclusive: length - 1
+            endInclusive: length - 1,
+            log: log
         )
         cache.storeRange(offset: tailStart, data: tailData)
     }
 
-    private static func fetchContentLength(remoteURL: URL, authorization: String) async throws -> Int64 {
+    private static func fetchContentLength(
+        remoteURL: URL,
+        authorization: String,
+        log: ((String) -> Void)?
+    ) async throws -> Int64 {
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "HEAD"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
 
-        let (_, response) = try await sessionData(for: request)
+        let (_, response) = try await sessionData(for: request, log: log)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
@@ -69,7 +79,7 @@ enum WebDAVPrefetch {
             authorization: authorization,
             offset: 0,
             endInclusive: 0
-        ))
+        ), log: log)
         guard let probeHttp = probeResponse as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
@@ -97,14 +107,15 @@ enum WebDAVPrefetch {
         remoteURL: URL,
         authorization: String,
         offset: Int64,
-        endInclusive: Int64
+        endInclusive: Int64,
+        log: ((String) -> Void)?
     ) async throws -> Data {
         let (data, response) = try await sessionData(for: rangeRequest(
             remoteURL: remoteURL,
             authorization: authorization,
             offset: offset,
             endInclusive: endInclusive
-        ))
+        ), log: log)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
@@ -118,18 +129,11 @@ enum WebDAVPrefetch {
         return data
     }
 
-    private static func sessionData(for request: URLRequest, maxAttempts: Int = 4) async throws -> (Data, URLResponse) {
-        var lastError: Error?
-        for attempt in 1 ... maxAttempts {
-            do {
-                return try await WebDAVMediaSession.shared.data(for: request)
-            } catch {
-                lastError = error
-                guard WebDAVMediaSession.isRetriable(error), attempt < maxAttempts else { throw error }
-                try await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
-            }
-        }
-        throw lastError ?? WebDAVResourceLoaderError.invalidResponse
+    private static func sessionData(
+        for request: URLRequest,
+        log: ((String) -> Void)?
+    ) async throws -> (Data, URLResponse) {
+        try await WebDAVMediaSession.data(for: request, log: log)
     }
 
     private static func contentLength(from response: HTTPURLResponse) -> Int64? {

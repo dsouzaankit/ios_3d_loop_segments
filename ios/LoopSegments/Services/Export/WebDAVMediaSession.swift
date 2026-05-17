@@ -13,6 +13,27 @@ enum WebDAVMediaSession {
         return URLSession(configuration: config)
     }()
 
+    /// Retries transient cellular drops (connection lost, timeout, etc.).
+    static func data(
+        for request: URLRequest,
+        log: ((String) -> Void)? = nil,
+        maxAttempts: Int = 8
+    ) async throws -> (Data, URLResponse) {
+        var lastError: Error?
+        for attempt in 1 ... maxAttempts {
+            do {
+                return try await shared.data(for: request)
+            } catch {
+                lastError = error
+                guard isRetriable(error), attempt < maxAttempts else { throw error }
+                let delaySec = min(30, attempt * 3)
+                log?("pCloud retry \(attempt + 1)/\(maxAttempts) in \(delaySec)s: \(error.localizedDescription)")
+                try await Task.sleep(nanoseconds: UInt64(delaySec) * 1_000_000_000)
+            }
+        }
+        throw lastError ?? URLError(.unknown)
+    }
+
     static func isRetriable(_ error: Error) -> Bool {
         let ns = error as NSError
         guard ns.domain == NSURLErrorDomain else { return false }
@@ -22,7 +43,8 @@ enum WebDAVMediaSession {
              NSURLErrorNotConnectedToInternet,
              NSURLErrorCannotConnectToHost,
              NSURLErrorDNSLookupFailed,
-             NSURLErrorSecureConnectionFailed:
+             NSURLErrorSecureConnectionFailed,
+             NSURLErrorDataNotAllowed:
             return true
         default:
             return false
@@ -31,17 +53,30 @@ enum WebDAVMediaSession {
 
     static func friendlyMessage(for error: Error) -> String {
         let ns = error as NSError
-        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorTimedOut {
-            return """
-            Timed out loading from pCloud (often at 10+ min seek on cellular). Try seek **0 min**, \
-            stronger signal, or Wi‑Fi for export. Keep the app open; see log for pCloud retry lines.
-            """
+        if ns.domain == NSURLErrorDomain {
+            switch ns.code {
+            case NSURLErrorNetworkConnectionLost:
+                return """
+                Network connection lost while reading pCloud (common on cellular). Keep the app open — \
+                retries run automatically. Try seek 0 min, stronger signal, or Wi‑Fi for export.
+                """
+            case NSURLErrorTimedOut:
+                return """
+                Timed out loading from pCloud (often at 10+ min seek on cellular). Try seek 0 min, \
+                stronger signal, or Wi‑Fi. See export log for retry lines.
+                """
+            case NSURLErrorNotConnectedToInternet, NSURLErrorDataNotAllowed:
+                return "No internet for pCloud. Check cellular/Wi‑Fi and Settings → Cellular → Loop Segments."
+            default:
+                break
+            }
+        }
+        if ns.localizedDescription.localizedCaseInsensitiveContains("connection was lost")
+            || ns.localizedDescription.localizedCaseInsensitiveContains("network connection lost") {
+            return friendlyMessage(for: URLError(.networkConnectionLost))
         }
         if ns.localizedDescription.contains("timed out") {
-            return """
-            Timed out opening video from pCloud. Try **Wi‑Fi** for export, wait for stronger cellular, \
-            or use PC Run-SegmentCopy.ps1 (see FEASIBILITY.md). Check log for Prefetch / retry lines.
-            """
+            return friendlyMessage(for: URLError(.timedOut))
         }
         return error.localizedDescription
     }

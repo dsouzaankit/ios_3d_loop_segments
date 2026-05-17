@@ -1,12 +1,14 @@
 import Foundation
 
-/// Append-only export log under `Exports/` (Files + USB).
-/// Important: `FileHandle(forWritingTo:)` **truncates** an existing file to 0 bytes — use `forUpdating` + `seekToEnd()`.
+/// Append-only export log under `Exports/`. Rewrites whole file atomically each line so USB/Files always see a complete snapshot.
 final class ExportLogWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.loopsegments.export-log")
     private let primaryURL: URL
     private let archiveURL: URL
-    private var lineCount = 0
+    private let sessionURL: URL
+    private let progressURL: URL
+    private var text: String
+    private var lastFlushError: String?
     private let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
@@ -18,8 +20,10 @@ final class ExportLogWriter: @unchecked Sendable {
         let stamp = Int(Date().timeIntervalSince1970)
         primaryURL = ExportPaths.latestLogTextURL
         archiveURL = ExportPaths.logsDirectory.appendingPathComponent("export_\(stamp).txt")
+        sessionURL = ExportPaths.exportsDirectory.appendingPathComponent("export_session_\(stamp).txt")
+        progressURL = ExportPaths.exportProgressURL
 
-        let header = """
+        text = """
         Loop Segments export log
         Started: \(isoFormatter.string(from: Date()))
         File: \(itemName)
@@ -28,28 +32,14 @@ final class ExportLogWriter: @unchecked Sendable {
 
         """
 
-        try Self.writeAtomically(Data(header.utf8), to: primaryURL)
-        if FileManager.default.fileExists(atPath: archiveURL.path) {
-            try? FileManager.default.removeItem(at: archiveURL)
+        try queue.sync {
+            try flushLocked()
         }
-        try FileManager.default.copyItem(at: primaryURL, to: archiveURL)
     }
 
     func log(_ message: String) {
-        queue.sync { [self] in
+        queue.sync {
             appendLine(message)
-        }
-    }
-
-    private func appendLine(_ message: String) {
-        let line = "\(isoFormatter.string(from: Date())) \(message)\n"
-        do {
-            try append(Data(line.utf8), to: primaryURL)
-            try append(Data(line.utf8), to: archiveURL)
-            lineCount += 1
-            try mirrorPrimaryToLegacyNames()
-        } catch {
-            // Keep export running; finish() still records status
         }
     }
 
@@ -64,43 +54,56 @@ final class ExportLogWriter: @unchecked Sendable {
 
     var primaryFileByteCount: Int64 {
         queue.sync {
-            (try? FileManager.default.attributesOfItem(atPath: primaryURL.path)[.size] as? NSNumber)?
-                .int64Value ?? 0
+            Int64(text.utf8.count)
         }
+    }
+
+    func tailText(maxLines: Int = 6) -> String {
+        queue.sync {
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+            return lines.suffix(maxLines).joined(separator: "\n")
+        }
+    }
+
+    var sessionLogFileName: String {
+        sessionURL.lastPathComponent
     }
 
     // MARK: - Private
 
-    private func append(_ chunk: Data, to url: URL) throws {
-        let handle = try FileHandle(forUpdating: url)
-        defer {
-            try? handle.synchronize()
-            try? handle.close()
+    private func appendLine(_ message: String) {
+        text += "\(isoFormatter.string(from: Date())) \(message)\n"
+        do {
+            try flushLocked()
+        } catch {
+            lastFlushError = error.localizedDescription
+            text += "\(isoFormatter.string(from: Date())) LOG FLUSH FAILED: \(error.localizedDescription)\n"
+            try? flushLocked()
         }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: chunk)
     }
 
-    private func mirrorPrimaryToLegacyNames() throws {
-        let data = try Data(contentsOf: primaryURL)
+    private func flushLocked() throws {
+        let data = Data(text.utf8)
         guard !data.isEmpty else { return }
+
+        try Self.writeAtomically(data, to: primaryURL)
+        try Self.writeAtomically(data, to: archiveURL)
+        try Self.writeAtomically(data, to: sessionURL)
         try Self.writeAtomically(data, to: ExportPaths.latestLogURL)
+
+        if let lastLine = text.split(separator: "\n", omittingEmptySubsequences: true).last {
+            let progress = String(lastLine) + "\n"
+            try progress.write(to: progressURL, atomically: true, encoding: .utf8)
+        }
+
         let logArchive = archiveURL.deletingPathExtension().appendingPathExtension("log")
         try Self.writeAtomically(data, to: logArchive)
+        lastFlushError = nil
     }
 
     private static func writeAtomically(_ data: Data, to url: URL) throws {
-        try data.write(to: url, options: .atomic)
-    }
-}
-
-enum ExportLogWriterError: LocalizedError {
-    case createFailed(URL)
-
-    var errorDescription: String? {
-        switch self {
-        case .createFailed(let url):
-            return "Could not create log file at \(url.lastPathComponent)."
-        }
+        let dir = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try data.write(to: url, options: [.atomic])
     }
 }

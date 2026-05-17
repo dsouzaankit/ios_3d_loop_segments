@@ -203,21 +203,8 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         return data
     }
 
-    private func sessionData(for request: URLRequest, maxAttempts: Int = 4) async throws -> (Data, URLResponse) {
-        var lastError: Error?
-        for attempt in 1 ... maxAttempts {
-            do {
-                return try await session.data(for: request)
-            } catch {
-                lastError = error
-                guard WebDAVMediaSession.isRetriable(error), attempt < maxAttempts else {
-                    throw error
-                }
-                logLine?("pCloud retry \(attempt + 1)/\(maxAttempts): \(error.localizedDescription)")
-                try await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
-            }
-        }
-        throw lastError ?? WebDAVResourceLoaderError.invalidResponse
+    private func sessionData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await WebDAVMediaSession.data(for: request, log: logLine)
     }
 
     private func finishCancelled(_ loadingRequest: AVAssetResourceLoadingRequest) {

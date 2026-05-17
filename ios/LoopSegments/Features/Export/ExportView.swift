@@ -10,13 +10,14 @@ struct ExportView: View {
     @State private var errorMessage: String?
     @State private var logHint = ""
     @State private var photosAccessNote = ""
+    @State private var liveLogTail = ""
 
     var body: some View {
         Form {
             Section("Network (pCloud)") {
                 Text(network.interfaceLabel)
                 if network.usesCellular {
-                    Text("pCloud uses cellular — keep app open; timeouts retry automatically. USB to PC only after export.")
+                    Text("pCloud uses cellular — connection drops retry automatically (up to ~2 min). Keep the app open. “Network connection lost” usually recovers; try seek 0 min.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -65,6 +66,12 @@ struct ExportView: View {
                 Text(logHint.isEmpty ? "Logs: Exports/export_latest.txt" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if !liveLogTail.isEmpty {
+                    Text(liveLogTail)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
                 Text("2. With Photos on: also check Loop Segments album on PC (Apple Devices → Photos)")
                 Text("3. Or Apple Devices → Loop Segments → Exports → Save to PC")
                 Text("4. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
@@ -92,10 +99,18 @@ struct ExportView: View {
         .navigationTitle("Export")
         .onAppear {
             seekMs = ResumeStore.shared.seekMs(for: item)
-            refreshLogHint()
+            refreshLogFromDisk()
             if PhotosSegmentPublisher.isEnabled {
                 Task { await requestPhotosAccess() }
             }
+        }
+        .task(id: session.isExportRunning) {
+            guard session.isExportRunning else { return }
+            while session.isExportRunning, !Task.isCancelled {
+                refreshLogFromDisk()
+                try? await Task.sleep(for: .seconds(2))
+            }
+            refreshLogFromDisk()
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
@@ -130,18 +145,33 @@ struct ExportView: View {
             errorMessage = error.localizedDescription
             status = "Failed — partial segments kept in Exports for USB sync"
         }
-        refreshLogHint()
+        refreshLogFromDisk()
         if fileByteCount(ExportPaths.latestLogTextURL) == 0 {
-            logHint += " · log empty — retry export; check sign-in region (US/EU)"
+            logHint += " · log empty — open Files → Loop Segments → Exports on phone"
+        }
+    }
+
+    private func refreshLogFromDisk() {
+        refreshLogHint()
+        if let full = try? String(contentsOf: ExportPaths.latestLogTextURL, encoding: .utf8), !full.isEmpty {
+            let lines = full.split(separator: "\n", omittingEmptySubsequences: true)
+            liveLogTail = lines.suffix(6).joined(separator: "\n")
+            return
+        }
+        if let progress = try? String(contentsOf: ExportPaths.exportProgressURL, encoding: .utf8),
+           !progress.isEmpty {
+            liveLogTail = progress.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 
     private func refreshLogHint() {
         let latest = ExportPaths.latestLogTextURL
+        let progress = ExportPaths.exportProgressURL
         let probe = ExportPaths.exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
         let latestBytes = fileByteCount(latest)
+        let progressBytes = fileByteCount(progress)
         let probeBytes = fileByteCount(probe)
-        logHint = "export_latest.txt \(latestBytes) B · loop_segments_ok.txt \(probeBytes) B (in Exports)"
+        logHint = "export_latest.txt \(latestBytes) B · export_progress.txt \(progressBytes) B · ok.txt \(probeBytes) B"
     }
 
     private func fileByteCount(_ url: URL) -> Int64 {
