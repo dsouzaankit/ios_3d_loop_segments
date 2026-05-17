@@ -149,9 +149,9 @@ Quick reference:
 
 - **Settings → Cellular → Loop Segments → On** (cellular pCloud export).
 - **Settings → General → VPN & Device Management → Trust** the developer profile if the app won’t open.
-- **iOS 17 or newer** required (app won’t run on iOS 16).
+- **iOS 17 or newer** required (app won’t run on iOS 16). **iOS 26** needs IPA **1.0.3+** (built with Xcode 26 on GitHub — older IPAs used an iOS 18 SDK and may crash on launch).
 
-**App opens then closes immediately?** Install the latest IPA (**1.0.2+** shows under Sign in). Older builds missed launch plist keys or declared background modes AltStore cannot sign. Rebuild (**Actions → ios-build → Run workflow**), sideload over the old app (same Apple ID).
+**App opens then closes immediately?** Install the latest IPA (**1.0.3+** shows under Sign in). Older builds missed launch plist keys, declared background modes AltStore cannot sign, or were not built for iOS 26. Rebuild (**Actions → ios-build → Run workflow**), sideload over the old app (same Apple ID).
 
 Then follow [WORKFLOW.md](../WORKFLOW.md): export → USB → `Sync-IphoneSegments.ps1` → DLNA on WLAN.
 
