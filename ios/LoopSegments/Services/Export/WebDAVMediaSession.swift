@@ -33,8 +33,14 @@ enum WebDAVMediaSession {
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorTimedOut {
             return """
-            Network timed out loading from pCloud. Stay on cellular with a strong signal, \
-            keep the app open, and try again. Large files use many range requests — Wi‑Fi may help.
+            Timed out loading from pCloud (often at 10+ min seek on cellular). Try seek **0 min**, \
+            stronger signal, or Wi‑Fi for export. Keep the app open; see log for pCloud retry lines.
+            """
+        }
+        if ns.domain == "WebDAVResourceLoader" || ns.localizedDescription.contains("timed out") {
+            return """
+            Timed out opening video from pCloud. Use **0 min** seek first, or Wi‑Fi. \
+            Deep seeks pull more data from cloud before export starts.
             """
         }
         return error.localizedDescription

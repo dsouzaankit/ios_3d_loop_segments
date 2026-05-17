@@ -3,9 +3,11 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// Serves HTTPS WebDAV media to `AVURLAsset` with Basic auth and byte-range reads.
+/// Uses async HTTP + incremental `respond(with:)` so AVFoundation's ~30s loader deadline is not hit.
 final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     static let customScheme = "loopsegments-webdav"
-    private static let maxRangeChunkBytes: Int64 = 2 * 1024 * 1024
+    /// Keep each network round-trip payload small on cellular.
+    private static let maxRangeChunkBytes: Int64 = 512 * 1024
 
     let remoteURL: URL
     let authorization: String
@@ -14,6 +16,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private let session: URLSession
     private var cachedContentLength: Int64?
     private let lengthLock = NSLock()
+    private var lengthResolveTask: Task<Int64, Error>?
     private let log: ((String) -> Void)?
 
     init(
@@ -39,31 +42,45 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         _ resourceLoader: AVAssetResourceLoader,
         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
     ) -> Bool {
-        queue.async { [weak self] in
-            self?.fill(loadingRequest)
+        Task {
+            await self.fill(loadingRequest)
         }
         return true
     }
 
-    private func fill(_ loadingRequest: AVAssetResourceLoadingRequest) {
+    func resourceLoader(
+        _ resourceLoader: AVAssetResourceLoader,
+        didCancel loadingRequest: AVAssetResourceLoadingRequest
+    ) {
+        log?("pCloud read cancelled")
+    }
+
+    private func fill(_ loadingRequest: AVAssetResourceLoadingRequest) async {
+        if loadingRequest.isCancelled {
+            finishCancelled(loadingRequest)
+            return
+        }
+
         do {
             if let info = loadingRequest.contentInformationRequest {
-                let length = try resolveContentLength()
+                let length = try await resolveContentLength()
                 info.contentLength = length
                 info.isByteRangeAccessSupported = true
                 info.contentType = mimeType(for: remoteURL)
             }
 
             if let dataRequest = loadingRequest.dataRequest {
-                let offset = dataRequest.requestedOffset
-                let length = Int64(dataRequest.requestedLength)
-                let end = offset + length - 1
-                let data = try fetchRange(offset: offset, length: length, endInclusive: end)
-                dataRequest.respond(with: data)
+                try await fulfill(dataRequest, loadingRequest: loadingRequest)
             }
 
-            loadingRequest.finishLoading()
+            if !loadingRequest.isCancelled {
+                loadingRequest.finishLoading()
+            }
         } catch {
+            guard !loadingRequest.isCancelled else {
+                finishCancelled(loadingRequest)
+                return
+            }
             let wrapped = NSError(
                 domain: "WebDAVResourceLoader",
                 code: 1,
@@ -76,60 +93,85 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         }
     }
 
-    private func resolveContentLength() throws -> Int64 {
+    private func fulfill(
+        _ dataRequest: AVAssetResourceLoadingRequestDataRequest,
+        loadingRequest: AVAssetResourceLoadingRequest
+    ) async throws {
+        let offset = dataRequest.requestedOffset
+        let totalLength = Int64(dataRequest.requestedLength)
+        guard totalLength > 0 else { return }
+
+        var cursor = offset
+        let end = offset + totalLength - 1
+        log?("pCloud range \(offset)-\(end) (\(totalLength) B)")
+
+        while cursor <= end {
+            if loadingRequest.isCancelled {
+                throw CancellationError()
+            }
+            let chunkEnd = min(cursor + Self.maxRangeChunkBytes - 1, end)
+            let chunk = try await fetchRangeChunk(offset: cursor, endInclusive: chunkEnd)
+            dataRequest.respond(with: chunk)
+            cursor = chunkEnd + 1
+        }
+    }
+
+    private func resolveContentLength() async throws -> Int64 {
         lengthLock.lock()
         if let cachedContentLength {
             lengthLock.unlock()
             return cachedContentLength
         }
+        if let lengthResolveTask {
+            lengthLock.unlock()
+            return try await lengthResolveTask.value
+        }
+
+        let task = Task<Int64, Error> {
+            try await self.loadContentLengthFromServer()
+        }
+        lengthResolveTask = task
         lengthLock.unlock()
 
+        defer {
+            lengthLock.lock()
+            if lengthResolveTask != nil { lengthResolveTask = nil }
+            lengthLock.unlock()
+        }
+        let length = try await task.value
+        storeLength(length)
+        return length
+    }
+
+    private func loadContentLengthFromServer() async throws -> Int64 {
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "HEAD"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
 
-        let (_, response) = try sessionSyncData(for: request)
+        let (_, response) = try await sessionData(for: request)
         if let http = response as? HTTPURLResponse,
            let length = contentLength(from: http) {
-            storeLength(length)
             log?("Content-Length \(length) bytes (HEAD)")
             return length
         }
 
-        _ = try fetchRangeChunk(offset: 0, endInclusive: 0)
+        _ = try await fetchRangeChunk(offset: 0, endInclusive: 0)
         lengthLock.lock()
         defer { lengthLock.unlock() }
         guard let cachedContentLength else {
             throw WebDAVResourceLoaderError.missingContentLength
         }
+        log?("Content-Length \(cachedContentLength) bytes (probe)")
         return cachedContentLength
     }
 
-    private func fetchRange(offset: Int64, length: Int64, endInclusive: Int64) throws -> Data {
-        if length <= Self.maxRangeChunkBytes {
-            return try fetchRangeChunk(offset: offset, endInclusive: endInclusive)
-        }
-
-        log?("Range \(offset)-\(endInclusive) (\(length) B) — reading in chunks")
-        var combined = Data()
-        combined.reserveCapacity(Int(min(length, Int64(32 * 1024 * 1024))))
-        var cursor = offset
-        while cursor <= endInclusive {
-            let chunkEnd = min(cursor + Self.maxRangeChunkBytes - 1, endInclusive)
-            let chunk = try fetchRangeChunk(offset: cursor, endInclusive: chunkEnd)
-            combined.append(chunk)
-            cursor = chunkEnd + 1
-        }
-        return combined
-    }
-
-    private func fetchRangeChunk(offset: Int64, endInclusive: Int64) throws -> Data {
+    private func fetchRangeChunk(offset: Int64, endInclusive: Int64) async throws -> Data {
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "GET"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
         request.setValue("bytes=\(offset)-\(endInclusive)", forHTTPHeaderField: "Range")
 
-        let (data, response) = try sessionSyncData(for: request)
+        let (data, response) = try await sessionData(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
@@ -148,40 +190,29 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         return data
     }
 
-    private func sessionSyncData(for request: URLRequest, maxAttempts: Int = 4) throws -> (Data, URLResponse) {
+    private func sessionData(for request: URLRequest, maxAttempts: Int = 4) async throws -> (Data, URLResponse) {
         var lastError: Error?
         for attempt in 1 ... maxAttempts {
             do {
-                return try sessionSyncDataOnce(for: request)
+                return try await session.data(for: request)
             } catch {
                 lastError = error
                 guard WebDAVMediaSession.isRetriable(error), attempt < maxAttempts else {
                     throw error
                 }
-                let delay = UInt64(attempt) * 2_000_000_000
-                log?("pCloud read retry \(attempt + 1)/\(maxAttempts): \(error.localizedDescription)")
-                Thread.sleep(forTimeInterval: Double(delay) / 1_000_000_000)
+                log?("pCloud retry \(attempt + 1)/\(maxAttempts): \(error.localizedDescription)")
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
             }
         }
         throw lastError ?? WebDAVResourceLoaderError.invalidResponse
     }
 
-    private func sessionSyncDataOnce(for request: URLRequest) throws -> (Data, URLResponse) {
-        var result: Result<(Data, URLResponse), Error>?
-        let sem = DispatchSemaphore(value: 0)
-        let task = session.dataTask(with: request) { data, response, error in
-            if let error {
-                result = .failure(error)
-            } else if let data, let response {
-                result = .success((data, response))
-            } else {
-                result = .failure(WebDAVResourceLoaderError.invalidResponse)
-            }
-            sem.signal()
-        }
-        task.resume()
-        sem.wait()
-        return try result!.get()
+    private func finishCancelled(_ loadingRequest: AVAssetResourceLoadingRequest) {
+        loadingRequest.finishLoading(with: NSError(
+            domain: NSCocoaErrorDomain,
+            code: NSUserCancelledError,
+            userInfo: nil
+        ))
     }
 
     private func contentLength(from response: HTTPURLResponse) -> Int64? {

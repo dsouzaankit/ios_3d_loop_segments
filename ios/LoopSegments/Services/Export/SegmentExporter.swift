@@ -45,11 +45,14 @@ final class SegmentExporter {
         )
         let asset = AVURLAsset(
             url: loader.customAssetURL,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
 
-        logHandler("Loading asset…")
+        if seekMs >= 10 * 60 * 1000 {
+            logHandler("Deep seek (\(seekMs / 60_000) min) — pCloud may need extra reads; try 0 min first on cellular")
+        }
+        logHandler("Loading asset from pCloud…")
         _ = try await asset.load(.isPlayable)
         let duration = try await asset.load(.duration)
         let durationMs = Int64(CMTimeGetSeconds(duration) * 1000)
