@@ -70,7 +70,8 @@ struct StreamReadPolicy {
 /// Serves HTTPS WebDAV media to `AVURLAsset` with Basic auth and byte-range reads.
 final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     static let customScheme = "loopsegments-webdav"
-    private static let maxRangeChunkBytes: Int64 = 512 * 1024
+    private static let maxRangeChunkBytes: Int64 = 2 * 1024 * 1024
+    private static let hotCacheMaxBytes = 4 * 1024 * 1024
 
     let remoteURL: URL
     private let authorizationProvider: WebDAVAuthorizationProvider
@@ -87,6 +88,8 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private var lengthResolveTask: Task<Int64, Error>?
     /// AVFoundation often issues several loading requests at once (content info + ranges). Cancelling the previous request caused multi‑GB reads to abort and export failed with “Could not start reading”.
     private var activeFillTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var hotCacheStart: Int64 = -1
+    private var hotCacheData = Data()
     private let stateLock = NSLock()
 
     convenience init(
@@ -301,13 +304,35 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         }
     }
 
-    /// Read prefetch cache only; do not store streamed bytes (multi-GB files would jetsam).
+    /// Read prefetch cache, then a small hot cache for AVFoundation's sequential 64 KiB sample reads.
     private func fetchRangeChunk(offset: Int64, endInclusive: Int64) async throws -> Data {
         let length = Int(endInclusive - offset + 1)
-        if length > 0, let cached = rangeCache?.dataForRequest(offset: offset, length: length) {
+        guard length > 0 else { return Data() }
+        if let cached = rangeCache?.dataForRequest(offset: offset, length: length) {
             return cached
         }
+        if let slice = hotCacheSlice(offset: offset, length: length) {
+            return slice
+        }
 
+        var lastError: Error?
+        for attempt in 1 ... 4 {
+            if Task.isCancelled { throw CancellationError() }
+            do {
+                let data = try await performRangeGETOnce(offset: offset, endInclusive: endInclusive)
+                storeHotCache(offset: offset, data: data)
+                return data
+            } catch {
+                lastError = error
+                guard WebDAVMediaSession.isRetriable(error), attempt < 4 else { throw error }
+                logLine?("pCloud range retry \(attempt + 1)/4: \(error.localizedDescription)")
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 1_500_000_000)
+            }
+        }
+        throw lastError ?? WebDAVResourceLoaderError.invalidResponse
+    }
+
+    private func performRangeGETOnce(offset: Int64, endInclusive: Int64) async throws -> Data {
         let (data, response) = try await performRangeGET(offset: offset, endInclusive: endInclusive, retriedAuth: false)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
@@ -316,6 +341,38 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
         }
         return data
+    }
+
+    private func hotCacheSlice(offset: Int64, length: Int) -> Data? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard hotCacheStart >= 0, !hotCacheData.isEmpty else { return nil }
+        let cacheEnd = hotCacheStart + Int64(hotCacheData.count)
+        let reqEnd = offset + Int64(length)
+        guard offset >= hotCacheStart, reqEnd <= cacheEnd else { return nil }
+        let start = Int(offset - hotCacheStart)
+        return hotCacheData.subdata(in: start ..< start + length)
+    }
+
+    private func storeHotCache(offset: Int64, data: Data) {
+        guard !data.isEmpty else { return }
+        stateLock.lock()
+        if hotCacheStart >= 0,
+           offset == hotCacheStart + Int64(hotCacheData.count) {
+            hotCacheData.append(data)
+        } else if hotCacheStart < 0 || offset < hotCacheStart {
+            hotCacheStart = offset
+            hotCacheData = data
+        } else {
+            hotCacheStart = offset
+            hotCacheData = data
+        }
+        if hotCacheData.count > Self.hotCacheMaxBytes {
+            let trim = hotCacheData.count - Int(Self.hotCacheMaxBytes)
+            hotCacheStart += Int64(trim)
+            hotCacheData = hotCacheData.subdata(in: trim ..< hotCacheData.count)
+        }
+        stateLock.unlock()
     }
 
     private func performRangeGET(

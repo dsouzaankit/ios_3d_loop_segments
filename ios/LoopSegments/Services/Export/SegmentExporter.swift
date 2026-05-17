@@ -364,6 +364,13 @@ final class SegmentExporter {
             url: tempURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
+        if byteRange.start >= Self.midFilePrefetchThresholdBytes {
+            log(
+                "Mid-file segment — preloading \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)) to temp (avoids fragile pCloud stream at 10+ min)"
+            )
+            downloader.pauseBackgroundDownload()
+            try await downloader.ensureContiguousRange(byteRange)
+        }
         do {
             try await SegmentPassThroughExporter.exportWindow(
                 asset: readAsset,
@@ -417,10 +424,10 @@ final class SegmentExporter {
                     outputURL: outputURL,
                     log: log
                 )
-            } catch SegmentExporterError.noKeyframeInWindow {
+            } catch SegmentExporterError.noKeyframeInWindow, SegmentExporterError.readerInterrupted {
                 try? FileManager.default.removeItem(at: outputURL)
                 log(
-                    "pCloud stream found no keyframe — downloading \(Self.formatBytes(byteRange.length)) to temp and retrying locally"
+                    "pCloud stream failed — downloading \(Self.formatBytes(byteRange.length)) to temp and retrying locally"
                 )
                 try await downloader.ensureContiguousRange(byteRange)
                 try await SegmentPassThroughExporter.exportWindow(
@@ -430,12 +437,14 @@ final class SegmentExporter {
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     outputURL: outputURL,
-                    sourceLabel: "temp file (after stream keyframe miss)",
+                    sourceLabel: "temp file (after stream failure)",
                     log: log
                 )
             }
         }
     }
+
+    private static let midFilePrefetchThresholdBytes: Int64 = 32 * 1024 * 1024
 
     private static func shouldStreamFallback(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {

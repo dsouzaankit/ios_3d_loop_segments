@@ -65,19 +65,25 @@ enum WebDAVMediaSession {
 
     static func isRetriable(_ error: Error) -> Bool {
         let ns = error as NSError
-        guard ns.domain == NSURLErrorDomain else { return false }
-        switch ns.code {
-        case NSURLErrorTimedOut,
-             NSURLErrorNetworkConnectionLost,
-             NSURLErrorNotConnectedToInternet,
-             NSURLErrorCannotConnectToHost,
-             NSURLErrorDNSLookupFailed,
-             NSURLErrorSecureConnectionFailed,
-             NSURLErrorDataNotAllowed:
-            return true
-        default:
-            return false
+        if ns.domain == NSURLErrorDomain {
+            switch ns.code {
+            case NSURLErrorTimedOut,
+                 NSURLErrorNetworkConnectionLost,
+                 NSURLErrorNotConnectedToInternet,
+                 NSURLErrorCannotConnectToHost,
+                 NSURLErrorDNSLookupFailed,
+                 NSURLErrorSecureConnectionFailed,
+                 NSURLErrorDataNotAllowed,
+                 NSURLErrorCancelled:
+                return true
+            default:
+                break
+            }
         }
+        let text = error.localizedDescription.lowercased()
+        return text.contains("interrupted")
+            || text.contains("connection was lost")
+            || text.contains("network connection lost")
     }
 
     static func friendlyMessage(for error: Error) -> String {
