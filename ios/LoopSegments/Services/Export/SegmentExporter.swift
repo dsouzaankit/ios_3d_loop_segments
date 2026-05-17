@@ -129,6 +129,8 @@ final class SegmentExporter {
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
 
+        releaseStreamingProbe(log: logHandler)
+
         let downloader = try WebDAVTempFileDownload(
             remoteURL: inputURL,
             rangeCache: rangeCache,
@@ -191,7 +193,7 @@ final class SegmentExporter {
 
             let readAsset = AVURLAsset(
                 url: downloader.fileURL,
-                options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+                options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
             )
 
             try await SegmentPassThroughExporter.exportWindow(
@@ -268,8 +270,16 @@ final class SegmentExporter {
         guard try await asset.load(.isPlayable) else {
             throw SegmentExporterError.readerSetupFailed
         }
-        logHandler("Opened for export (pCloud + temp buffer)")
+        logHandler("Opened for export (pCloud probe)")
         return asset
+    }
+
+    private func releaseStreamingProbe(log: (String) -> Void) {
+        guard retainedAsset != nil || retainedWebDAVLoader != nil else { return }
+        retainedAsset?.resourceLoader.setDelegate(nil, queue: nil)
+        retainedWebDAVLoader = nil
+        retainedAsset = nil
+        log("Released pCloud stream — export uses local temp file only")
     }
 
     private func videoFormatDescription(from track: AVAssetTrack) async throws -> CMFormatDescription {

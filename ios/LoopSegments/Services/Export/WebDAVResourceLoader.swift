@@ -143,14 +143,23 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         loadingRequest: AVAssetResourceLoadingRequest
     ) async throws {
         let offset = dataRequest.requestedOffset
-        let totalLength = Int64(dataRequest.requestedLength)
+        let fileLength = try await resolveContentLength()
+        guard fileLength > 0, offset < fileLength else { return }
+
+        let bytesRemaining = fileLength - offset
+        let totalLength: Int64
+        if dataRequest.requestsAllDataToEndOfResource {
+            totalLength = bytesRemaining
+        } else {
+            totalLength = min(Int64(dataRequest.requestedLength), bytesRemaining)
+        }
         guard totalLength > 0 else { return }
 
         var cursor = offset
         let end = offset + totalLength - 1
         if totalLength > Self.maxRangeChunkBytes {
             logLine?(
-                "pCloud read \(offset)-\(end) (\(totalLength) bytes requested, \(Self.maxRangeChunkBytes / 1024) KiB chunks, stream-only)"
+                "pCloud read \(offset)-\(end) (\(formatBytes(totalLength)) of \(formatBytes(fileLength)), \(Self.maxRangeChunkBytes / 1024) KiB chunks)"
             )
         } else {
             logLine?("pCloud range \(offset)-\(end) (\(totalLength) bytes)")
@@ -190,7 +199,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
         }
         if let length = contentLength(from: http) {
-            storeLength(length)
+            storeLengthIfPlausible(length)
         }
         return data
     }
@@ -285,10 +294,35 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func storeLength(_ length: Int64) {
+        storeLengthIfPlausible(length)
+    }
+
+    /// Ignore bogus totals from a bad MP4 parse (prevents multi‑GB stream reads).
+    private func storeLengthIfPlausible(_ length: Int64) {
+        guard length > 0, length <= Self.maxPlausibleFileBytes else { return }
         stateLock.lock()
+        if let existing = cachedContentLength, existing > 0 {
+            let ratio = Double(length) / Double(existing)
+            if ratio > 4.0 || ratio < 0.25 {
+                stateLock.unlock()
+                return
+            }
+        }
         cachedContentLength = length
         stateLock.unlock()
         rangeCache?.storeContentLength(length)
+    }
+
+    private static let maxPlausibleFileBytes: Int64 = 32 * 1024 * 1024 * 1024
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        if bytes >= 1024 * 1024 * 1024 {
+            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824.0)
+        }
+        if bytes >= 1024 * 1024 {
+            return String(format: "%.0f MB", Double(bytes) / 1_048_576.0)
+        }
+        return "\(bytes) B"
     }
 
     private func mimeType(for url: URL) -> String {

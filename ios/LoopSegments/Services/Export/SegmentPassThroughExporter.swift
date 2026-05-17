@@ -42,8 +42,11 @@ enum SegmentPassThroughExporter {
         }
 
         guard reader.startReading() else {
-            throw reader.error.map { SegmentExporterError.readerFailed($0) }
-                ?? SegmentExporterError.readerSetupFailed
+            if let reader.error {
+                log("Local reader failed: \(reader.error.localizedDescription)")
+                throw SegmentExporterError.readerFailed(reader.error)
+            }
+            throw SegmentExporterError.readerSetupFailed
         }
 
         try? FileManager.default.removeItem(at: outputURL)
