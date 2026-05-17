@@ -93,6 +93,7 @@ jobs:
               find build/DerivedData -maxdepth 6 -type d -name '*.app' || true
               exit 1
             fi
+            codesign --force --sign - --timestamp=none --deep "$APP_PATH"
             rm -rf Payload LoopSegments.ipa
             mkdir -p Payload
             cp -R "$APP_PATH" Payload/

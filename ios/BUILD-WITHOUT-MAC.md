@@ -151,7 +151,7 @@ Quick reference:
 - **Settings → General → VPN & Device Management → Trust** the developer profile if the app won’t open.
 - **iOS 17 or newer** required (app won’t run on iOS 16).
 
-**App opens then closes immediately?** Older IPAs missed launch plist keys and loaded FFmpeg at startup. Rebuild (**Actions → ios-build → Run workflow**), sideload the new `LoopSegments.ipa` over the old one (same Apple ID in AltStore / Sideloadly).
+**App opens then closes immediately?** Install the latest IPA (**1.0.2+** shows under Sign in). Older builds missed launch plist keys or declared background modes AltStore cannot sign. Rebuild (**Actions → ios-build → Run workflow**), sideload over the old app (same Apple ID).
 
 Then follow [WORKFLOW.md](../WORKFLOW.md): export → USB → `Sync-IphoneSegments.ps1` → DLNA on WLAN.
 

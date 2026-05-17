@@ -31,6 +31,9 @@ struct AuthView: View {
                     Text("Uses pCloud WebDAV (not PotPlayer resume). If 2FA is enabled, approve the login email from pCloud.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    Text("Build 1.0.2 · iOS 17+")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
                 if let errorMessage {
                     Section {
