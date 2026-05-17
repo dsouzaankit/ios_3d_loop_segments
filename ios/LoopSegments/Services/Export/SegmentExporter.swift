@@ -244,6 +244,7 @@ final class SegmentExporter {
                     requiredByteRange: byteRange,
                     filledByteSpan: { downloader.filledSpan() },
                     indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
+                    refreshMP4Index: { try await downloader.ensureIndexTailOnDisk(force: true) },
                     isCancelled: cancelCheck,
                     log: logHandler
                 )

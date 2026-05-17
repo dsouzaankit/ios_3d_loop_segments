@@ -18,6 +18,7 @@ enum SegmentLocalReadiness {
         requiredByteRange: TimelineByteRange,
         filledByteSpan: () -> TimelineByteRange,
         indexTailOnDisk: () -> Bool,
+        refreshMP4Index: () async throws -> Void,
         isCancelled: () -> Bool,
         log: (String) -> Void
     ) async throws {
@@ -29,7 +30,9 @@ enum SegmentLocalReadiness {
         let probeTimeout = totalFileBytes > 1_000_000_000 ? probeTimeoutLargeFile : probeTimeoutDefault
         var lastLog = CFAbsoluteTimeGetCurrent()
         var zeroSampleStreak = 0
+        var trackLoadStreak = 0
         var probeAttempts = 0
+        var indexRefreshCount = 0
 
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
@@ -76,6 +79,16 @@ enum SegmentLocalReadiness {
                 } else {
                     zeroSampleStreak = 0
                 }
+                if reason.contains("cannot load tracks") || reason.contains("no video track visible") {
+                    trackLoadStreak += 1
+                    if trackLoadStreak == 1 || trackLoadStreak == 4, indexRefreshCount < 3 {
+                        indexRefreshCount += 1
+                        log("Fetching larger MP4 index from pCloud (needed before AVFoundation can open tracks)…")
+                        try await refreshMP4Index()
+                    }
+                } else {
+                    trackLoadStreak = 0
+                }
                 let now = CFAbsoluteTimeGetCurrent()
                 if now - lastLog >= 15 {
                     lastLog = now
@@ -83,9 +96,16 @@ enum SegmentLocalReadiness {
                         0,
                         min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
                     )
+                    let indexNote = indexTailOnDisk() ? "" : ", MP4 index still loading"
                     log(
-                        "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needEnd - requiredByteRange.start)) in window)"
+                        "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needEnd - requiredByteRange.start)) in window\(indexNote))"
                     )
+                }
+                if trackLoadStreak >= 8, rangeReady, probeAttempts >= 4 {
+                    log(
+                        "Readiness: \(formatBytes(filled.end - filled.start)) on disk but tracks still not visible — exporting anyway (will retry reader during passthrough)"
+                    )
+                    return
                 }
                 if zeroSampleStreak >= 6, rangeReady, indexTailOnDisk(), probeAttempts >= 4 {
                     log(

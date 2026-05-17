@@ -85,15 +85,22 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
-    func ensureIndexTailOnDisk() async throws {
+    /// Bytes at EOF that must be on disk before AVFoundation can load tracks (moov is often multi‑MB on large HEVC).
+    static func indexTailFetchBytes(totalLength: Int64) -> Int64 {
+        guard totalLength > 0 else { return 4 * 1024 * 1024 }
+        let scaled = totalLength / 80
+        return min(48 * 1024 * 1024, max(4 * 1024 * 1024, scaled))
+    }
+
+    func ensureIndexTailOnDisk(force: Bool = false) async throws {
         lock.lock()
         let hasTail = tailOnDisk
         lock.unlock()
-        guard !hasTail else { return }
+        guard force || !hasTail else { return }
 
-        let tailLen = min(2 * 1024 * 1024, totalLength)
+        let tailLen = Self.indexTailFetchBytes(totalLength: totalLength)
         let tailStart = max(0, totalLength - tailLen)
-        log("Fetching MP4 index tail from pCloud (\(formatBytes(totalLength - tailStart)))…")
+        log("Fetching MP4 index from pCloud (\(formatBytes(tailLen)) at EOF)…")
         let auth = authorizationProvider()
         let data = try await Self.fetchRange(
             remoteURL: remoteURL,
@@ -302,9 +309,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         if regionFilledEnd == 0, regionStart == 0, offset == 0 {
             regionStart = 0
             regionFilledEnd = end
-            return
-        }
-        if offset == regionFilledEnd {
+        } else if offset == regionFilledEnd {
             regionFilledEnd = end
         } else if end <= regionStart {
             regionStart = offset
@@ -317,6 +322,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         } else if offset < regionStart, end >= regionStart {
             regionStart = offset
             if end > regionFilledEnd { regionFilledEnd = end }
+        }
+        markIndexTailIfComplete(writeEnd: end)
+    }
+
+    private func markIndexTailIfComplete(writeEnd: Int64) {
+        let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
+        if writeEnd >= totalLength || (regionStart <= tailStart && regionFilledEnd >= totalLength) {
+            tailOnDisk = true
         }
     }
 
