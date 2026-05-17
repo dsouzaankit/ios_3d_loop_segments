@@ -33,6 +33,8 @@
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Loop Segments saves 60s segment videos to Photos so you can access them from a PC (e.g. Apple Devices photo import). Videos stay in the Loop Segments album.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Loop Segments needs Photos access to save segment videos to the Loop Segments album and remove them when export ends or the app closes.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

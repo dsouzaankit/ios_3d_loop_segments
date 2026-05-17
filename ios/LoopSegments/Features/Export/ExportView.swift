@@ -9,6 +9,7 @@ struct ExportView: View {
     @State private var status = ""
     @State private var errorMessage: String?
     @State private var logHint = ""
+    @State private var photosAccessNote = ""
 
     var body: some View {
         Form {
@@ -41,9 +42,19 @@ struct ExportView: View {
             Section("Photos (optional — PC camera roll)") {
                 Toggle("Save segments to Photos", isOn: Binding(
                     get: { PhotosSegmentPublisher.isEnabled },
-                    set: { PhotosSegmentPublisher.isEnabled = $0 }
+                    set: { newValue in
+                        PhotosSegmentPublisher.isEnabled = newValue
+                        if newValue {
+                            Task { await requestPhotosAccess() }
+                        }
+                    }
                 ))
-                Text("Each finished 60s segment is copied to the “Loop Segments” album (replaces the previous slot 0 or 1). Windows may show these under iPhone photo folders in Apple Devices — not the app Exports folder. Apps cannot write to DCIM directly.")
+                if !photosAccessNote.isEmpty {
+                    Text(photosAccessNote)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Text("iOS will ask for Photos access when you turn this on or start export. After a normal finish (including EOF), segments stay on the phone until you copy to PC, tap Stop, or leave the app.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -82,6 +93,9 @@ struct ExportView: View {
         .onAppear {
             seekMs = ResumeStore.shared.seekMs(for: item)
             refreshLogHint()
+            if PhotosSegmentPublisher.isEnabled {
+                Task { await requestPhotosAccess() }
+            }
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
@@ -90,14 +104,31 @@ struct ExportView: View {
         }
     }
 
+    private func requestPhotosAccess() async {
+        guard PhotosSegmentPublisher.isEnabled else {
+            photosAccessNote = ""
+            return
+        }
+        if await PhotosSegmentPublisher.ensureAccess() {
+            photosAccessNote = "Photos access OK — clips go to the Loop Segments album."
+        } else {
+            photosAccessNote = "Photos access needed: Settings → Loop Segments → Photos → allow access."
+        }
+    }
+
     private func startExport() async {
+        if PhotosSegmentPublisher.isEnabled {
+            await requestPhotosAccess()
+        }
         status = "Reading from pCloud over \(network.usesCellular ? "cellular" : "network"); writing segments…"
         do {
             try await session.startExport(item: item, seekMs: seekMs)
-            status = "Done. USB sync to PC, then DLNA on WLAN."
+            status = "Done — 3d_op_00/01 kept in Exports (and Photos if enabled). Copy to PC, then leave the app to clear."
+        } catch SegmentExporterError.cancelled {
+            status = "Stopped — segment files removed from device"
         } catch {
             errorMessage = error.localizedDescription
-            status = "Failed"
+            status = "Failed — partial segments kept in Exports for USB sync"
         }
         refreshLogHint()
     }

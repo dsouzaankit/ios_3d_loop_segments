@@ -44,6 +44,15 @@ final class ExportCoordinator {
         logHandler("Export started")
         logHandler("Media URL: \(inputURL.absoluteString)")
 
+        if PhotosSegmentPublisher.isEnabled {
+            logHandler("Requesting Photos access…")
+            if await PhotosSegmentPublisher.ensureAccess(log: logHandler) {
+                logHandler("Photos access granted")
+            } else {
+                logHandler("Photos: export will write to Exports only until access is allowed")
+            }
+        }
+
         do {
             let result = try await exporter.run(
                 inputURL: inputURL,
@@ -51,9 +60,16 @@ final class ExportCoordinator {
                 authorizationHeader: credentials.authorizationHeaderValue,
                 logHandler: logHandler
             )
+            logHandler("Export finished — segment files kept for USB/Photos sync (removed on Stop or when app backgrounds)")
             logWriter.finish(status: result.reachedEnd ? "completed (end of file)" : "stopped")
             return result
+        } catch SegmentExporterError.cancelled {
+            await SegmentCleanup.removeAllSegments(log: logHandler)
+            logHandler("Cleanup: removed segment files after Stop")
+            logWriter.finish(status: "cancelled")
+            throw SegmentExporterError.cancelled
         } catch {
+            logHandler("Export failed — partial segment files kept for USB/Photos sync")
             logWriter.finish(status: "failed", error: error)
             throw error
         }

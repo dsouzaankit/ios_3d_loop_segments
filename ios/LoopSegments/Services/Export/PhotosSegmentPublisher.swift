@@ -1,8 +1,7 @@
 import Foundation
 import Photos
 
-/// Publishes finished segment MP4s to the Photos library (Camera Roll).
-/// Windows may then see them under iPhone photo folders — not direct DCIM access.
+/// Publishes finished segment MP4s to the Photos library (Loop Segments album).
 enum PhotosSegmentPublisher {
     static let albumTitle = "Loop Segments"
     private static let enabledKey = "publishSegmentsToPhotos"
@@ -18,15 +17,28 @@ enum PhotosSegmentPublisher {
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 
+    /// Request read/write access (required to add and delete segment clips).
+    @discardableResult
+    static func ensureAccess(log: ((String) -> Void)? = nil) async -> Bool {
+        let status = await requestAuthorizationIfNeeded()
+        switch status {
+        case .authorized, .limited:
+            return true
+        case .denied, .restricted:
+            log?("Photos: access denied — open Settings → Loop Segments → Photos and allow access.")
+            return false
+        case .notDetermined:
+            log?("Photos: permission not granted.")
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
     static func publish(segmentSlot: Int, videoURL: URL, log: @escaping (String) -> Void) async {
         guard isEnabled else { return }
         guard FileManager.default.fileExists(atPath: videoURL.path) else { return }
-
-        let status = await requestAddAuthorization()
-        guard status == .authorized || status == .limited else {
-            log("Photos: permission denied (\(status.rawValue)) — enable in Settings → Loop Segments → Photos")
-            return
-        }
+        guard await ensureAccess(log: log) else { return }
 
         do {
             try await deletePreviousAsset(slot: segmentSlot)
@@ -39,10 +51,48 @@ enum PhotosSegmentPublisher {
         }
     }
 
-    private static func requestAddAuthorization() async -> PHAuthorizationStatus {
-        await withCheckedContinuation { continuation in
-            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-                continuation.resume(returning: status)
+    static func removeAllPublished(log: ((String) -> Void)? = nil) async {
+        let ids = loadAssetIds()
+        guard !ids.isEmpty else { return }
+
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else {
+            clearStoredAssetIds()
+            log?("Photos: skipped delete (no library access)")
+            return
+        }
+
+        let nonEmpty = ids.filter { !$0.isEmpty }
+        guard !nonEmpty.isEmpty else {
+            clearStoredAssetIds()
+            return
+        }
+
+        do {
+            let fetch = PHAsset.fetchAssets(withLocalIdentifiers: nonEmpty, options: nil)
+            if fetch.count > 0 {
+                try await performChanges {
+                    PHAssetChangeRequest.deleteAssets(fetch)
+                }
+                log?("Photos: removed \(fetch.count) segment clip(s) from library")
+            }
+            clearStoredAssetIds()
+        } catch {
+            log?("Photos: could not remove clips — \(error.localizedDescription)")
+            clearStoredAssetIds()
+        }
+    }
+
+    private static func requestAuthorizationIfNeeded() async -> PHAuthorizationStatus {
+        let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        if current != .notDetermined {
+            return current
+        }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+                    continuation.resume(returning: status)
+                }
             }
         }
     }
@@ -138,6 +188,10 @@ enum PhotosSegmentPublisher {
         }
         ids[slot] = id
         UserDefaults.standard.set(ids, forKey: assetIdsKey)
+    }
+
+    private static func clearStoredAssetIds() {
+        UserDefaults.standard.removeObject(forKey: assetIdsKey)
     }
 }
 
