@@ -64,7 +64,7 @@ enum PhotosSegmentPublisher {
         try await performChanges {
             let request = PHAssetCreationRequest.forAsset()
             request.addResource(with: .video, fileURL: url, options: nil)
-            createdId = request.placeholderForCreatedAsset.localIdentifier
+            createdId = request.placeholderForCreatedAsset?.localIdentifier
         }
         guard let createdId else {
             throw PhotosPublishError.noAssetCreated
