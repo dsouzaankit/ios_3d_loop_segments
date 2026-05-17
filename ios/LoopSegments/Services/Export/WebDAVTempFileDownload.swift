@@ -30,6 +30,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private var downloadTask: Task<Void, Error>?
     private var writeHandle: FileHandle?
     private var downloadCursor: Int64 = 0
+    private let throughput = DownloadThroughput()
 
     init(
         remoteURL: URL,
@@ -61,6 +62,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
     /// Position download at seek (or 0) and start background range fetches.
     func beginExport(seekSeconds: Double, durationSeconds: Double) {
+        throughput.reset()
         applyInitialPosition(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
         startBackgroundDownload()
     }
@@ -99,6 +101,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             offset: tailStart,
             endInclusive: totalLength - 1
         )
+        throughput.recordNetworkBytes(data.count)
         try write(data, at: tailStart)
         lock.lock()
         tailOnDisk = true
@@ -206,7 +209,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 let endMin = Int(timelineEndSeconds) / 60
                 let endSec = Int(timelineEndSeconds) % 60
                 log(
-                    "Download window \(pct)% — \(formatBytes(filledInWindow)) / \(formatBytes(needLen)) for \(endMin):\(String(format: "%02d", endSec)) (file \(formatBytes(range.start))–\(formatBytes(range.end)))"
+                    "Download window \(pct)% — \(formatBytes(filledInWindow)) / \(formatBytes(needLen)) for \(endMin):\(String(format: "%02d", endSec)) (file \(formatBytes(range.start))–\(formatBytes(range.end)))\(speedLogSuffix())"
                 )
             }
             try await Task.sleep(nanoseconds: 250_000_000)
@@ -243,7 +246,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             let atEOF = regionFilledEnd >= totalLength
             lock.unlock()
             if atEOF {
-                log("Temp copy complete — \(formatBytes(totalLength))")
+                log("Temp copy complete — \(formatBytes(totalLength))\(averageSpeedLogSuffix())")
                 return
             }
             try await Task.sleep(nanoseconds: 500_000_000)
@@ -377,6 +380,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             guard data.count == length else {
                 throw WebDAVResourceLoaderError.invalidResponse
             }
+            throughput.recordNetworkBytes(data.count)
             try write(data, at: start)
 
             lock.lock()
@@ -387,7 +391,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             let pct = totalLength > 0 ? Int(cursor * 100 / totalLength) : 0
             if pct >= lastLoggedPercent + Self.progressStepPercent || cursor >= totalLength {
                 lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
-                log("Download \(pct)% — \(formatBytes(cursor)) / \(formatBytes(totalLength))")
+                log("Download \(pct)% — \(formatBytes(cursor)) / \(formatBytes(totalLength))\(speedLogSuffix())")
             }
             await Task.yield()
         }
@@ -444,5 +448,66 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             return String(format: "%.0f MB", Double(bytes) / 1_048_576.0)
         }
         return "\(bytes) B"
+    }
+
+    private func speedLogSuffix() -> String {
+        guard let mbps = throughput.intervalMbps() else { return "" }
+        return String(format: " @ %.1f Mbps", mbps)
+    }
+
+    private func averageSpeedLogSuffix() -> String {
+        guard let mbps = throughput.averageMbps() else { return "" }
+        return String(format: " — avg %.1f Mbps", mbps)
+    }
+}
+
+/// Network throughput for pCloud range downloads (megabits per second).
+private final class DownloadThroughput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var totalBytes: Int64 = 0
+    private var startedAt = CFAbsoluteTimeGetCurrent()
+    private var lastSampleBytes: Int64 = 0
+    private var lastSampleAt = CFAbsoluteTimeGetCurrent()
+
+    func reset() {
+        lock.lock()
+        totalBytes = 0
+        startedAt = CFAbsoluteTimeGetCurrent()
+        lastSampleBytes = 0
+        lastSampleAt = startedAt
+        lock.unlock()
+    }
+
+    func recordNetworkBytes(_ bytes: Int) {
+        guard bytes > 0 else { return }
+        lock.lock()
+        totalBytes += Int64(bytes)
+        lock.unlock()
+    }
+
+    /// Mbps since the previous progress log sample.
+    func intervalMbps() -> Double? {
+        lock.lock()
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = now - lastSampleAt
+        let deltaBytes = totalBytes - lastSampleBytes
+        lastSampleAt = now
+        lastSampleBytes = totalBytes
+        lock.unlock()
+        guard elapsed >= 0.25, deltaBytes > 0 else { return nil }
+        return Self.mbps(bytes: deltaBytes, seconds: elapsed)
+    }
+
+    func averageMbps() -> Double? {
+        lock.lock()
+        let elapsed = CFAbsoluteTimeGetCurrent() - startedAt
+        let bytes = totalBytes
+        lock.unlock()
+        guard elapsed >= 0.5, bytes > 0 else { return nil }
+        return Self.mbps(bytes: bytes, seconds: elapsed)
+    }
+
+    private static func mbps(bytes: Int64, seconds: Double) -> Double {
+        (Double(bytes) * 8.0) / (seconds * 1_000_000.0)
     }
 }
