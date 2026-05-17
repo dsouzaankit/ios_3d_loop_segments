@@ -20,7 +20,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private var lengthResolveTask: Task<Int64, Error>?
     private let logLine: ((String) -> Void)?
 
-    init(
+    convenience init(
         remoteURL: URL,
         authorization: String,
         session: URLSession = WebDAVMediaSession.shared,
