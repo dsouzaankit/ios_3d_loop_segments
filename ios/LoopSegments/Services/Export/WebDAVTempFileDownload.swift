@@ -87,7 +87,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let fraction = endSeconds / durationSeconds
         let slack: Int64 = 12 * 1024 * 1024
         let required = min(totalLength, Int64(Double(totalLength) * fraction) + slack)
-        var lastLoggedPercent = -progressStepPercent
+        var lastLoggedPercent = -Self.progressStepPercent
 
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
@@ -95,8 +95,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             if contiguous >= required || contiguous >= totalLength { return }
 
             let dlPct = totalLength > 0 ? Int(contiguous * 100 / totalLength) : 0
-            if dlPct >= lastLoggedPercent + progressStepPercent {
-                lastLoggedPercent = (dlPct / progressStepPercent) * progressStepPercent
+            if dlPct >= lastLoggedPercent + Self.progressStepPercent {
+                lastLoggedPercent = (dlPct / Self.progressStepPercent) * Self.progressStepPercent
                 let mediaMin = Int(endSeconds) / 60
                 let mediaSec = Int(endSeconds) % 60
                 log("Download \(dlPct)% — waiting for media through \(mediaMin):\(String(format: "%02d", mediaSec)) (\(formatBytes(contiguous)) on disk)")
@@ -155,7 +155,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     private func runDownloadLoop() async throws {
-        var lastLoggedPercent = -progressStepPercent
+        var lastLoggedPercent = -Self.progressStepPercent
         while true {
             if isCancelled() || Task.isCancelled { throw CancellationError() }
 
@@ -177,8 +177,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             try write(data, at: start)
 
             let pct = Int((end + 1) * 100 / totalLength)
-            if pct >= lastLoggedPercent + progressStepPercent || end + 1 >= totalLength {
-                lastLoggedPercent = (pct / progressStepPercent) * progressStepPercent
+            if pct >= lastLoggedPercent + Self.progressStepPercent || end + 1 >= totalLength {
+                lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
                 log("Download \(pct)% — \(formatBytes(end + 1)) / \(formatBytes(totalLength))")
             }
             await Task.yield()

@@ -138,7 +138,6 @@ final class SegmentExporter {
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
 
-        let segmentDuration = CMTime(seconds: Self.segmentDurationSeconds, preferredTimescale: 600)
         let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
         var lastMediaTimeMs = seekMs
