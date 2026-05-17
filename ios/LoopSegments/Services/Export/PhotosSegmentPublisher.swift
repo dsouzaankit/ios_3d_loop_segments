@@ -6,6 +6,7 @@ enum PhotosSegmentPublisher {
     static let albumTitle = "Loop Segments"
     private static let enabledKey = "publishSegmentsToPhotos"
     private static let assetIdsKey = "photos_segment_asset_local_ids"
+    private static let albumIdKey = "photos_loop_segments_album_local_id"
 
     static var isEnabled: Bool {
         get {
@@ -22,7 +23,10 @@ enum PhotosSegmentPublisher {
     static func ensureAccess(log: ((String) -> Void)? = nil) async -> Bool {
         let status = await requestAuthorizationIfNeeded()
         switch status {
-        case .authorized, .limited:
+        case .authorized:
+            return true
+        case .limited:
+            log?("Photos: Limited access — clips save to Recents; use Settings → Loop Segments → Photos → Full Access for the album.")
             return true
         case .denied, .restricted:
             log?("Photos: access denied — open Settings → Loop Segments → Photos and allow access.")
@@ -37,17 +41,36 @@ enum PhotosSegmentPublisher {
 
     static func publish(segmentSlot: Int, videoURL: URL, log: @escaping (String) -> Void) async {
         guard isEnabled else { return }
-        guard FileManager.default.fileExists(atPath: videoURL.path) else { return }
         guard await ensureAccess(log: log) else { return }
+
+        let bytes = fileByteCount(videoURL)
+        guard FileManager.default.fileExists(atPath: videoURL.path) else {
+            log("Photos: skipped slot \(segmentSlot) — file missing at \(videoURL.lastPathComponent)")
+            return
+        }
+        guard bytes > 8192 else {
+            log("Photos: skipped \(videoURL.lastPathComponent) — file too small (\(bytes) B); wait for segment to finish writing")
+            return
+        }
 
         do {
             try await deletePreviousAsset(slot: segmentSlot)
-            let assetId = try await createVideoAsset(from: videoURL)
-            try await addToAlbum(assetLocalIdentifier: assetId)
+            let assetId = try await importVideoIntoAlbum(url: videoURL)
             storeAssetId(assetId, slot: segmentSlot)
-            log("Photos: updated slot \(segmentSlot) (\(videoURL.lastPathComponent)) in album \(albumTitle)")
+            log("Photos: saved \(videoURL.lastPathComponent) (\(bytes / 1024) KB) → Albums → \(albumTitle) and Recents")
         } catch {
-            log("Photos: \(error.localizedDescription)")
+            log("Photos: failed \(videoURL.lastPathComponent) — \(error.localizedDescription)")
+        }
+    }
+
+    /// Re-publish any segment files on disk (covers a failed per-slot publish).
+    static func publishAllSegmentsFromExports(log: @escaping (String) -> Void) async {
+        guard isEnabled else { return }
+        guard await ensureAccess(log: log) else { return }
+        for slot in 0 ..< ExportPaths.segmentFileCount {
+            let url = ExportPaths.segmentURL(index: slot)
+            guard fileByteCount(url) > 8192 else { continue }
+            await publish(segmentSlot: slot, videoURL: url, log: log)
         }
     }
 
@@ -83,6 +106,8 @@ enum PhotosSegmentPublisher {
         }
     }
 
+    // MARK: - Private
+
     private static func requestAuthorizationIfNeeded() async -> PHAuthorizationStatus {
         let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         if current != .notDetermined {
@@ -97,6 +122,72 @@ enum PhotosSegmentPublisher {
         }
     }
 
+    private static func importVideoIntoAlbum(url: URL) async throws -> String {
+        let existingAlbum = resolveAlbumCollection()
+        if let existingAlbum {
+            rememberAlbum(existingAlbum)
+        }
+
+        var createdId: String?
+
+        try await performChanges {
+            let resourceOptions = PHAssetResourceCreationOptions()
+            resourceOptions.shouldMoveFile = false
+            resourceOptions.uniformTypeIdentifier = "public.mpeg-4"
+
+            let create = PHAssetCreationRequest.forAsset()
+            create.addResource(with: .video, fileURL: url, options: resourceOptions)
+            guard let assetPlaceholder = create.placeholderForCreatedAsset else { return }
+            createdId = assetPlaceholder.localIdentifier
+
+            if let album = existingAlbum {
+                PHAssetCollectionChangeRequest(for: album)?.addAssets([assetPlaceholder] as NSArray)
+            } else {
+                let albumRequest = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(
+                    withTitle: albumTitle
+                )
+                guard let albumPlaceholder = albumRequest.placeholderForCreatedAssetCollection else { return }
+                rememberAlbum(localIdentifier: albumPlaceholder.localIdentifier)
+                PHAssetCollectionChangeRequest(for: albumPlaceholder)?
+                    .addAssets([assetPlaceholder] as NSArray)
+            }
+        }
+
+        guard let createdId else {
+            throw PhotosPublishError.noAssetCreated
+        }
+        return createdId
+    }
+
+    private static func resolveAlbumCollection() -> PHAssetCollection? {
+        if let id = UserDefaults.standard.string(forKey: albumIdKey), !id.isEmpty {
+            let byId = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil)
+            if let album = byId.firstObject {
+                return album
+            }
+        }
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "title = %@", albumTitle)
+        let byTitle = PHAssetCollection.fetchAssetCollections(
+            with: .album,
+            subtype: .albumRegular,
+            options: options
+        )
+        if let album = byTitle.firstObject {
+            rememberAlbum(album)
+            return album
+        }
+        return nil
+    }
+
+    private static func rememberAlbum(_ collection: PHAssetCollection) {
+        rememberAlbum(localIdentifier: collection.localIdentifier)
+    }
+
+    private static func rememberAlbum(localIdentifier: String) {
+        UserDefaults.standard.set(localIdentifier, forKey: albumIdKey)
+    }
+
     private static func deletePreviousAsset(slot: Int) async throws {
         let ids = loadAssetIds()
         guard slot < ids.count else { return }
@@ -109,72 +200,28 @@ enum PhotosSegmentPublisher {
         }
     }
 
-    private static func createVideoAsset(from url: URL) async throws -> String {
-        var createdId: String?
-        try await performChanges {
-            let request = PHAssetCreationRequest.forAsset()
-            request.addResource(with: .video, fileURL: url, options: nil)
-            createdId = request.placeholderForCreatedAsset?.localIdentifier
-        }
-        guard let createdId else {
-            throw PhotosPublishError.noAssetCreated
-        }
-        return createdId
-    }
-
-    private static func addToAlbum(assetLocalIdentifier: String) async throws {
-        let album = try await fetchOrCreateAlbum()
-        let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetLocalIdentifier], options: nil)
-        guard asset.count > 0 else { return }
-        try await performChanges {
-            let change = PHAssetCollectionChangeRequest(for: album)
-            change?.addAssets(asset as NSFastEnumeration)
-        }
-    }
-
-    private static func fetchOrCreateAlbum() async throws -> PHAssetCollection {
-        let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "title = %@", albumTitle)
-        let existing = PHAssetCollection.fetchAssetCollections(
-            with: .album,
-            subtype: .albumRegular,
-            options: options
-        )
-        if let album = existing.firstObject {
-            return album
-        }
-
-        var albumId: String?
-        try await performChanges {
-            albumId = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(
-                withTitle: albumTitle
-            ).placeholderForCreatedAssetCollection.localIdentifier
-        }
-        guard let albumId else { throw PhotosPublishError.noAlbumCreated }
-        let created = PHAssetCollection.fetchAssetCollections(
-            withLocalIdentifiers: [albumId],
-            options: nil
-        )
-        guard let album = created.firstObject else {
-            throw PhotosPublishError.noAlbumCreated
-        }
-        return album
-    }
-
     private static func performChanges(_ block: @escaping () -> Void) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHPhotoLibrary.shared().performChanges({
-                block()
-            }, completionHandler: { success, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if success {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: PhotosPublishError.changeFailed)
-                }
-            })
+            DispatchQueue.main.async {
+                PHPhotoLibrary.shared().performChanges({
+                    block()
+                }, completionHandler: { success, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if success {
+                        continuation.resume()
+                    } else {
+                        continuation.resume(throwing: PhotosPublishError.changeFailed)
+                    }
+                })
+            }
         }
+    }
+
+    private static func fileByteCount(_ url: URL) -> Int64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let n = attrs[.size] as? NSNumber else { return 0 }
+        return n.int64Value
     }
 
     private static func loadAssetIds() -> [String] {

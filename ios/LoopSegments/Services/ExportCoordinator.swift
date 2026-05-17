@@ -54,7 +54,7 @@ final class ExportCoordinator {
         if PhotosSegmentPublisher.isEnabled {
             logHandler("Requesting Photos access…")
             if await PhotosSegmentPublisher.ensureAccess(log: logHandler) {
-                logHandler("Photos access granted")
+                logHandler("Photos access granted — clips publish after each 60s segment (Albums → Loop Segments)")
             } else {
                 logHandler("Photos: export will write to Exports only until access is allowed")
             }
@@ -71,6 +71,10 @@ final class ExportCoordinator {
                 )
             }.value
             logHandler("Export finished — segment files kept for USB/Photos sync (removed on Stop or when app backgrounds)")
+            if PhotosSegmentPublisher.isEnabled {
+                logHandler("Photos: syncing finished segments to library…")
+                await PhotosSegmentPublisher.publishAllSegmentsFromExports(log: logHandler)
+            }
             logWriter.finish(status: result.reachedEnd ? "completed (end of file)" : "stopped")
             return result
         } catch SegmentExporterError.cancelled {

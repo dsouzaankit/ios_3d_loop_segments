@@ -55,7 +55,10 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("iOS will ask for Photos access when you turn this on or start export. After a normal finish (including EOF), segments stay on the phone until you copy to PC, tap Stop, or leave the app.")
+                Text("Clips appear in Photos after each 60s segment finishes (not at export start). Check Albums → Loop Segments or Recents. With Limited Photos access, use Recents or grant Full Access in Settings.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("Segments also stay in app Exports until you copy to PC, tap Stop, or leave the app.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
