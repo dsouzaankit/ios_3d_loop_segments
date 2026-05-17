@@ -161,6 +161,10 @@ final class SegmentExporter {
                 timelineEndSeconds: windowEndSeconds,
                 durationSeconds: durationSeconds
             )
+            try await downloader.waitUntilLocalExportReady(
+                timelineEndSeconds: windowEndSeconds,
+                durationSeconds: durationSeconds
+            )
 
             await waitForDLNAPublishSchedule(minuteIndex: minuteIndex, wallOrigin: dlnaPublishOrigin)
 
@@ -171,22 +175,10 @@ final class SegmentExporter {
             )
             let slot = minuteIndex % Self.segmentFileCount
 
-            let useLocal = downloader.isReadyForLocalExport(
-                timelineEndSeconds: windowEndSeconds,
-                durationSeconds: durationSeconds
+            let readAsset = AVURLAsset(
+                url: downloader.fileURL,
+                options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
             )
-            let readAsset: AVURLAsset
-            let sourceLabel: String
-            if useLocal {
-                readAsset = AVURLAsset(
-                    url: downloader.fileURL,
-                    options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-                )
-                sourceLabel = "temp file"
-            } else {
-                readAsset = streamingAsset
-                sourceLabel = "pCloud stream"
-            }
 
             try await SegmentPassThroughExporter.exportWindow(
                 asset: readAsset,
@@ -195,7 +187,7 @@ final class SegmentExporter {
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
                 outputSlot: slot,
-                sourceLabel: sourceLabel,
+                sourceLabel: "temp file",
                 log: logHandler
             )
 
@@ -332,7 +324,7 @@ final class SegmentWriterContext {
         var attempts = 0
         while !input.isReadyForMoreMediaData {
             attempts += 1
-            if attempts > 50_000 {
+            if attempts > 600_000 {
                 throw SegmentExporterError.writerBackpressure
             }
             Thread.sleep(forTimeInterval: 0.001)
