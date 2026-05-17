@@ -242,6 +242,7 @@ final class SegmentExporter {
                 )
                 try await SegmentLocalReadiness.waitUntilReadable(
                     fileURL: downloader.fileURL,
+                    videoFormat: videoFormat,
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     totalFileBytes: downloader.totalLength,
@@ -527,6 +528,7 @@ final class SegmentExporter {
             }
             audioFormat = fmt
         }
+        try CodecSupport.validateWriterPassthrough(videoFormat: videoFormat, audioFormat: audioFormat)
         let duration = try await asset.load(.duration)
         var durationSeconds = CMTimeGetSeconds(duration)
         if !durationSeconds.isFinite || durationSeconds <= 0 {
@@ -670,6 +672,17 @@ enum CodecSupport {
         codec == kCMVideoCodecType_HEVC || codec == hev1Subtype
     }
 
+    static func isAV1Video(_ codec: FourCharCode) -> Bool {
+        if #available(iOS 16.0, *) {
+            if codec == kCMVideoCodecType_AV1 { return true }
+        }
+        return codec == fourCC("av01") || codec == fourCC("dav1")
+    }
+
+    static func isAV1Video(_ format: CMFormatDescription) -> Bool {
+        isAV1Video(CMFormatDescriptionGetMediaSubType(format))
+    }
+
     /// Re-tag `hev1` → `hvc1` so `AVAssetWriter` accepts the same bitstream/hvcc extradata.
     static func normalizedForMP4Writer(_ format: CMFormatDescription) -> CMFormatDescription {
         let codec = CMFormatDescriptionGetMediaSubType(format)
@@ -689,19 +702,43 @@ enum CodecSupport {
         return out
     }
 
+    /// Segment export uses AVFoundation stream copy to MP4 — H.264 and HEVC only (not AV1).
     static func canPassthroughToMP4(_ format: CMFormatDescription) -> Bool {
         let codec = CMFormatDescriptionGetMediaSubType(format)
-        if codec == kCMVideoCodecType_H264 || isHEVCVideo(codec) {
-            return true
+        return codec == kCMVideoCodecType_H264 || isHEVCVideo(codec)
+    }
+
+    /// Confirms `AVAssetWriter` will accept passthrough inputs (catches AV1 that probes as a video track).
+    static func validateWriterPassthrough(
+        videoFormat: CMFormatDescription,
+        audioFormat: CMFormatDescription?
+    ) throws {
+        if isAV1Video(videoFormat) {
+            throw SegmentExporterError.unsupportedCodec(fourCCString(videoFormat))
         }
-        if #available(iOS 16.0, *) {
-            if codec == kCMVideoCodecType_AV1 {
-                return true
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codec-writer-probe-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let writer = try AVAssetWriter(outputURL: tempURL, fileType: .mp4)
+        let videoInput = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: nil,
+            sourceFormatHint: videoFormat
+        )
+        guard writer.canAdd(videoInput) else {
+            throw SegmentExporterError.unsupportedCodec(fourCCString(videoFormat))
+        }
+        if let audioFormat {
+            let audioInput = AVAssetWriterInput(
+                mediaType: .audio,
+                outputSettings: nil,
+                sourceFormatHint: audioFormat
+            )
+            guard writer.canAdd(audioInput) else {
+                throw SegmentExporterError.unsupportedCodec(fourCCString(audioFormat))
             }
         }
-        let av1 = fourCC("av01")
-        let av1Alt = fourCC("dav1")
-        return codec == av1 || codec == av1Alt
     }
 
     static func canPassthroughAudio(_ format: CMFormatDescription) -> Bool {
@@ -756,6 +793,9 @@ enum SegmentExporterError: LocalizedError {
         case .noVideoTrack:
             return "No video track found in this file."
         case .unsupportedCodec(let fourCC):
+            if fourCC == "av01" || fourCC == "dav1" {
+                return "AV1 (\(fourCC)) cannot be exported as MP4 segments on iOS. Re-encode the source to HEVC (hvc1/hev1) or H.264 with AAC."
+            }
             return "Codec ‘\(fourCC)’ cannot be stream-copied to MP4 on this device. Use H.264 or HEVC (hvc1/hev1) with AAC."
         case .missingFormatDescription:
             return "Could not read track format from the file."
