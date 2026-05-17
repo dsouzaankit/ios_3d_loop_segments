@@ -139,9 +139,12 @@ final class SegmentExporter {
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
 
         let segmentDuration = CMTime(seconds: Self.segmentDurationSeconds, preferredTimescale: 600)
+        let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
         var lastMediaTimeMs = seekMs
         var reachedEnd = false
+
+        logHandler("DLNA chunks publish on 1× wall clock when download is ahead; as soon as ready when download is behind")
 
         while true {
             try checkCancelled()
@@ -157,6 +160,8 @@ final class SegmentExporter {
                 timelineEndSeconds: windowEndSeconds,
                 durationSeconds: durationSeconds
             )
+
+            await waitForDLNAPublishSchedule(minuteIndex: minuteIndex, wallOrigin: dlnaPublishOrigin)
 
             let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
             let rangeDuration = CMTime(
@@ -186,6 +191,15 @@ final class SegmentExporter {
         try await downloader.waitUntilComplete()
         logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
         return SegmentExportResult(lastMediaTimeMs: lastMediaTimeMs, reachedEnd: reachedEnd)
+    }
+
+    /// DLNA clients need stable files ~60s each; do not replace slots faster than realtime when download is ahead.
+    private func waitForDLNAPublishSchedule(minuteIndex: Int, wallOrigin: CFAbsoluteTime) async {
+        let publishAt = wallOrigin + Double(minuteIndex) * Self.segmentDurationSeconds
+        let delay = publishAt - CFAbsoluteTimeGetCurrent()
+        if delay > 0.05 {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
     }
 
     private func videoFormatDescription(from track: AVAssetTrack) async throws -> CMFormatDescription {
