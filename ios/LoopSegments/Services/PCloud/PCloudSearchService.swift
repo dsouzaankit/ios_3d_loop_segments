@@ -10,7 +10,11 @@ enum PCloudSearchService {
     static func search(query: String, credentials: WebDAVCredentials) async throws -> Result {
         do {
             let items = try await PCloudAPIClient(credentials: credentials).search(query: query)
-            return Result(items: items, usedWebDAVFallback: false)
+            if !items.isEmpty {
+                return Result(items: items, usedWebDAVFallback: false)
+            }
+            let walked = try await WebDAVSearchClient.search(query: query, credentials: credentials)
+            return Result(items: walked, usedWebDAVFallback: true)
         } catch let error as PCloudAPIError {
             guard shouldUseWebDAVFallback(error) else { throw error }
             let items = try await WebDAVSearchClient.search(query: query, credentials: credentials)

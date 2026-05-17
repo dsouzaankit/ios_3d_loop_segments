@@ -218,7 +218,7 @@ struct BrowserView: View {
             guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             searchResults = result.items
             searchModeNote = result.usedWebDAVFallback
-                ? "Folder search (WebDAV) — pCloud API search was unavailable; browsing folders instead."
+                ? "Folder search (WebDAV) — walks folders under your pCloud root (slower than web search)."
                 : ""
         } catch is CancellationError {
             return

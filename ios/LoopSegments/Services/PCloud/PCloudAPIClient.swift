@@ -77,47 +77,19 @@ final class PCloudAPIClient {
     }
 
     private func parseSearchItems(_ json: [String: Any]) throws -> [WebDAVItem] {
-        let rawItems: [[String: Any]]
-        if let items = json["items"] as? [[String: Any]] {
-            rawItems = items
-        } else if let metadata = json["metadata"] as? [[String: Any]] {
-            rawItems = metadata
-        } else {
-            rawItems = []
-        }
-
+        let rawItems = PCloudMetadataParsing.extractEntries(from: json)
         var results: [WebDAVItem] = []
         results.reserveCapacity(rawItems.count)
         for entry in rawItems {
-            guard let item = Self.webDAVItem(from: entry) else { continue }
-            if item.isDirectory || item.isVideo {
+            guard let item = PCloudMetadataParsing.webDAVItem(from: entry) else { continue }
+            let isFolder = item.isDirectory
+            if PCloudMetadataParsing.isBrowsableVideo(name: item.name, metadata: entry, isFolder: isFolder) {
                 results.append(item)
             }
         }
         return results.sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory && !rhs.isDirectory }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
-    }
-
-    private static func webDAVItem(from metadata: [String: Any]) -> WebDAVItem? {
-        guard let name = metadata["name"] as? String, !name.isEmpty else { return nil }
-        let isFolder = metadata["isfolder"] as? Bool ?? false
-        guard let path = metadata["path"] as? String, !path.isEmpty else { return nil }
-
-        let href = isFolder
-            ? WebDAVURLBuilder.directoryListingPath(path)
-            : WebDAVURLBuilder.canonicalBrowsePath(path)
-        let size = int64Field(metadata["size"])
-        return WebDAVItem(href: href, name: name, isDirectory: isFolder, contentLength: size)
-    }
-
-    private static func int64Field(_ value: Any?) -> Int64? {
-        switch value {
-        case let n as Int64: return n
-        case let n as Int: return Int64(n)
-        case let n as NSNumber: return n.int64Value
-        default: return nil
         }
     }
 }
