@@ -54,7 +54,7 @@ final class ExportCoordinator {
         if PhotosSegmentPublisher.isEnabled {
             logHandler("Requesting Photos access…")
             if await PhotosSegmentPublisher.ensureAccess(log: logHandler) {
-                logHandler("Photos access granted — each 60s chunk publishes when downloaded (Albums → Loop Segments)")
+                logHandler("Photos access granted — each 60s chunk saves to Hidden (not Recents)")
             } else {
                 logHandler("Photos: export will write to Exports only until access is allowed")
             }

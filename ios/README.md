@@ -1,3 +1,9 @@
+https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
+
+PS P:\all_scripts\ios_3d_loop_segments\windows> .\Set-LoopSegmentsDestination.ps1 'C:\Users\dsouzaankit\Downloads\ios_3d_out'
+PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromIPhonePhotos.ps1
+
+
 # Loop Segments (iOS)
 
 **Cellular → pCloud WebDAV → segment export → USB → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).

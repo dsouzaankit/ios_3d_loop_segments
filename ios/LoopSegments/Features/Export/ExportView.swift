@@ -40,8 +40,8 @@ struct ExportView: View {
                     }
                 }
             }
-            Section("Photos (optional — PC camera roll)") {
-                Toggle("Save segments to Photos", isOn: Binding(
+            Section("Photos (optional — PC sync)") {
+                Toggle("Save segments to Photos (Hidden)", isOn: Binding(
                     get: { PhotosSegmentPublisher.isEnabled },
                     set: { newValue in
                         PhotosSegmentPublisher.isEnabled = newValue
@@ -55,7 +55,7 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Each 60s chunk is published when that minute is on disk (slow link: PC/DLNA can loop the latest chunk while the rest downloads). Check Albums → Loop Segments or Recents.")
+                Text("Each 60s chunk goes to Photos → Hidden (not Recents). On PC use Apple Devices and include Hidden, or sync from Exports via USB.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("3d_op_*.mp4 stay in Exports until Stop or leaving the app; temp _export_source_working.mp4 is removed when export ends or on cleanup.")
@@ -75,7 +75,7 @@ struct ExportView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                Text("2. With Photos on: also check Loop Segments album on PC (Apple Devices → Photos)")
+                Text("2. With Photos on: Apple Devices → Photos → show Hidden album for MTP sync")
                 Text("3. Or Apple Devices → Loop Segments → Exports → Save to PC")
                 Text("4. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
                     .font(.footnote)
@@ -128,7 +128,7 @@ struct ExportView: View {
             return
         }
         if await PhotosSegmentPublisher.ensureAccess() {
-            photosAccessNote = "Photos access OK — clips go to the Loop Segments album."
+            photosAccessNote = "Photos access OK — clips go to the Hidden album only."
         } else {
             photosAccessNote = "Photos access needed: Settings → Loop Segments → Photos → allow access."
         }
