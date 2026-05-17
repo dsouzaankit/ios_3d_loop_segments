@@ -23,4 +23,16 @@ enum PCloudRegion: String, CaseIterable, Identifiable, Codable {
     var baseURL: URL {
         URL(string: "https://\(webDAVHost)/")!
     }
+
+    /// JSON API host for search and other REST calls (same region as WebDAV).
+    var apiHost: String {
+        switch self {
+        case .us: return "api.pcloud.com"
+        case .eu: return "eapi.pcloud.com"
+        }
+    }
+
+    var apiBaseURL: URL {
+        URL(string: "https://\(apiHost)/")!
+    }
 }

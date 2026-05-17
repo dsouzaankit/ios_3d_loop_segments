@@ -70,13 +70,46 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         log("Downloading to temp — \(formatBytes(totalLength)) (segments publish per 60s as data arrives)…")
     }
 
+    /// Bytes that must be contiguous from offset 0 before exporting through `timelineEndSeconds`.
+    func bytesRequiredThroughTimeline(
+        timelineEndSeconds: Double,
+        durationSeconds: Double
+    ) -> Int64 {
+        guard durationSeconds > 0, totalLength > 0 else { return totalLength }
+        let endSeconds = min(max(0, timelineEndSeconds), durationSeconds)
+        let slack: Int64 = 24 * 1024 * 1024
+
+        let effectiveDuration = Self.effectiveDurationSeconds(
+            reported: durationSeconds,
+            totalBytes: totalLength
+        )
+        let avgFromSize = Double(totalLength) / effectiveDuration
+        let linearFromSize = Int64(endSeconds * avgFromSize) + slack
+
+        // 3D SBS sources are often 30–80 Mbps; do not start minute 0 on a tiny prefix.
+        let highBitrateFloorMbps = 35.0
+        let floorBytesPerSecond = highBitrateFloorMbps * 1_000_000.0 / 8.0
+        let floorRequired = Int64(endSeconds * floorBytesPerSecond) + slack
+
+        var required = max(linearFromSize, floorRequired)
+
+        // Trust reported duration when it is plausible vs file size (avoid 100% trap on bad short probes).
+        let sizeImpliedDuration = Double(totalLength) * 8.0 / (2.0 * 1_000_000.0)
+        if durationSeconds >= sizeImpliedDuration * 0.35 {
+            let fromReported = Int64((endSeconds / durationSeconds) * Double(totalLength)) + slack
+            required = max(required, fromReported)
+        }
+
+        return min(required, totalLength)
+    }
+
     /// Sequential bytes from file start through this point in the timeline (MP4 index tail is written at EOF at init).
     func isReadyForLocalExport(timelineEndSeconds: Double, durationSeconds: Double) -> Bool {
         guard durationSeconds > 0, tailOnDisk else { return false }
-        let endSeconds = min(timelineEndSeconds, durationSeconds)
-        let fraction = endSeconds / durationSeconds
-        let slack: Int64 = 12 * 1024 * 1024
-        let required = min(totalLength, Int64(Double(totalLength) * fraction) + slack)
+        let required = bytesRequiredThroughTimeline(
+            timelineEndSeconds: timelineEndSeconds,
+            durationSeconds: durationSeconds
+        )
         return contiguousEndValue() >= required
     }
 
@@ -106,22 +139,29 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     ) async throws {
         guard durationSeconds > 0 else { return }
         let endSeconds = min(timelineEndSeconds, durationSeconds)
-        let fraction = endSeconds / durationSeconds
-        let slack: Int64 = 12 * 1024 * 1024
-        let required = min(totalLength, Int64(Double(totalLength) * fraction) + slack)
+        let required = bytesRequiredThroughTimeline(
+            timelineEndSeconds: timelineEndSeconds,
+            durationSeconds: durationSeconds
+        )
         var lastLoggedPercent = -Self.progressStepPercent
+        var lastStallLog = CFAbsoluteTimeGetCurrent()
 
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
             let contiguous = contiguousEndValue()
             if contiguous >= required || contiguous >= totalLength { return }
 
+            let now = CFAbsoluteTimeGetCurrent()
             let dlPct = totalLength > 0 ? Int(contiguous * 100 / totalLength) : 0
-            if dlPct >= lastLoggedPercent + Self.progressStepPercent {
+            let needPct = totalLength > 0 ? Int(required * 100 / totalLength) : 0
+            if dlPct >= lastLoggedPercent + Self.progressStepPercent || now - lastStallLog >= 20 {
+                lastStallLog = now
                 lastLoggedPercent = (dlPct / Self.progressStepPercent) * Self.progressStepPercent
                 let mediaMin = Int(endSeconds) / 60
                 let mediaSec = Int(endSeconds) % 60
-                log("Download \(dlPct)% — waiting for media through \(mediaMin):\(String(format: "%02d", mediaSec)) (\(formatBytes(contiguous)) on disk)")
+                log(
+                    "Download \(dlPct)% (\(formatBytes(contiguous))) — need ~\(needPct)% (\(formatBytes(required))) for media through \(mediaMin):\(String(format: "%02d", mediaSec))"
+                )
             }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
@@ -206,6 +246,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             }
             await Task.yield()
         }
+    }
+
+    /// Multi-GB files with a too-short probed duration used to require ~100% download before minute 0.
+    private static func effectiveDurationSeconds(reported: Double, totalBytes: Int64) -> Double {
+        guard reported > 0, totalBytes > 0 else { return reported }
+        let floorMbps = 2.0
+        let minFromSize = Double(totalBytes) * 8.0 / (floorMbps * 1_000_000.0)
+        return max(reported, minFromSize)
     }
 
     private static func ensureFreeDiskSpace(forBytes needed: Int64) throws {

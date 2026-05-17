@@ -171,12 +171,26 @@ final class SegmentExporter {
                 seconds: windowEndSeconds - windowStartSeconds,
                 preferredTimescale: 600
             )
+            let bytesNeeded = downloader.bytesRequiredThroughTimeline(
+                timelineEndSeconds: windowEndSeconds,
+                durationSeconds: durationSeconds
+            )
+            try await SegmentLocalReadiness.waitUntilReadable(
+                fileURL: downloader.fileURL,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                contiguousBytesOnDisk: { downloader.contiguousEndValue() },
+                bytesRequiredOnDisk: bytesNeeded,
+                isCancelled: cancelCheck,
+                log: logHandler
+            )
+
             let slot = minuteIndex % Self.segmentFileCount
             let stagingURL = ExportPaths.segmentStagingURL(index: slot)
 
             let readAsset = AVURLAsset(
                 url: downloader.fileURL,
-                options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+                options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
             )
 
             try await SegmentPassThroughExporter.exportWindow(
@@ -189,6 +203,11 @@ final class SegmentExporter {
                 sourceLabel: "temp file",
                 log: logHandler
             )
+            try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
+
+            // Photos / MTP: as soon as the 60s clip exists (do not wait for DLNA wall-clock).
+            await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: stagingURL, log: logHandler)
+            logHandler("Ready for PC Photos sync — \(ExportPaths.segmentURL(index: slot).lastPathComponent) (staging)")
 
             await waitForDLNAPublishSchedule(
                 minuteIndex: minuteIndex,
@@ -199,9 +218,7 @@ final class SegmentExporter {
             try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
 
             lastMediaTimeMs = Int64(windowEndSeconds * 1000)
-            let url = ExportPaths.segmentURL(index: slot)
-            await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: url, log: logHandler)
-            logHandler("Ready for PC sync — \(url.lastPathComponent)")
+            logHandler("DLNA slot updated — \(ExportPaths.segmentURL(index: slot).lastPathComponent)")
 
             minuteIndex += 1
         }
@@ -421,6 +438,8 @@ enum SegmentExporterError: LocalizedError {
     case writerFailed(Error)
     case writerBackpressure
     case insufficientDiskSpace(needed: Int64, available: Int64)
+    case noKeyframeInWindow
+    case segmentOutputTooSmall(Int64)
 
     var errorDescription: String? {
         switch self {
@@ -450,6 +469,10 @@ enum SegmentExporterError: LocalizedError {
             let needMB = needed / (1024 * 1024)
             let haveMB = available / (1024 * 1024)
             return "Need ~\(needMB) MB free to copy this file; only ~\(haveMB) MB available. Free space or pick a smaller file."
+        case .noKeyframeInWindow:
+            return "Could not start segment on a keyframe — wait for more download or use seek 0 min."
+        case .segmentOutputTooSmall(let bytes):
+            return "Segment file too small (\(bytes) B) — source window was incomplete; try again after more temp download."
         }
     }
 }

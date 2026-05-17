@@ -8,29 +8,48 @@ struct BrowserView: View {
     @State private var errorMessage: String?
     @State private var listToken = 0
 
+    @State private var searchText = ""
+    @State private var searchResults: [WebDAVItem] = []
+    @State private var isSearching = false
+    @State private var searchToken = 0
+
     private var currentPath: String { pathStack.last ?? "/" }
+    private var isSearchActive: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         NavigationStack {
             Group {
-                if isLoading && items.isEmpty {
-                    ProgressView("Loading…")
+                if isLoading && displayedItems.isEmpty {
+                    ProgressView(isSearchActive ? "Searching…" : "Loading…")
                 } else {
                     List {
-                        if #unavailable(iOS 26.0), currentPath != "/" {
+                        if !isSearchActive, #unavailable(iOS 26.0), currentPath != "/" {
                             Section {
                                 Text(currentPath)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        if pathStack.count > 1 {
+                        if !isSearchActive, pathStack.count > 1 {
                             Button("↑ Up") { goUp() }
                         }
-                        ForEach(items) { item in
+                        if isSearchActive, searchResults.isEmpty, !isSearching {
+                            ContentUnavailableView(
+                                "No results",
+                                systemImage: "magnifyingglass",
+                                description: Text("Try another name or path fragment.")
+                            )
+                        }
+                        ForEach(displayedItems) { item in
                             if item.isDirectory {
                                 Button {
-                                    enter(item)
+                                    if isSearchActive {
+                                        openFolderFromSearch(item)
+                                    } else {
+                                        enter(item)
+                                    }
                                 } label: {
                                     Label(item.name, systemImage: "folder")
                                 }
@@ -45,18 +64,39 @@ struct BrowserView: View {
                     }
                 }
             }
-            .navigationTitle(pathTitle)
+            .navigationTitle(navigationTitle)
             .navigationSubtitleIfAvailable(navigationSubtitle)
+            .searchable(text: $searchText, prompt: "Search pCloud")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Sign out") { session.signOut() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Refresh") { Task { await reload() } }
+                    Button("Refresh") {
+                        if isSearchActive {
+                            searchToken += 1
+                        } else {
+                            Task { await reload() }
+                        }
+                    }
                 }
             }
             .task(id: listToken) {
+                guard !isSearchActive else { return }
                 await reload()
+            }
+            .task(id: searchToken) {
+                await runSearchDebounced()
+            }
+            .onChange(of: searchText) { _, newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    searchResults = []
+                    isSearching = false
+                    return
+                }
+                isSearching = true
+                searchToken += 1
             }
             .alert("Error", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -69,11 +109,20 @@ struct BrowserView: View {
         }
     }
 
-    private var pathTitle: String {
-        currentPath == "/" ? "pCloud" : (currentPath as NSString).lastPathComponent
+    private var displayedItems: [WebDAVItem] {
+        isSearchActive ? searchResults : items
+    }
+
+    private var navigationTitle: String {
+        if isSearchActive { return "Search" }
+        return currentPath == "/" ? "pCloud" : (currentPath as NSString).lastPathComponent
     }
 
     private var navigationSubtitle: String {
+        if isSearchActive {
+            let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return q.isEmpty ? "pCloud" : "“\(q)”"
+        }
         if currentPath == "/" { return "/" }
         return currentPath
     }
@@ -86,6 +135,30 @@ struct BrowserView: View {
         items = []
         isLoading = true
         listToken += 1
+    }
+
+    private func openFolderFromSearch(_ item: WebDAVItem) {
+        guard item.isDirectory else { return }
+        searchText = ""
+        searchResults = []
+        isSearching = false
+        pathStack = pathStack(forFolderListingPath: item.href)
+        items = []
+        isLoading = true
+        listToken += 1
+    }
+
+    private func pathStack(forFolderListingPath listingPath: String) -> [String] {
+        let dir = WebDAVURLBuilder.directoryListingPath(listingPath)
+        guard dir != "/" else { return ["/"] }
+        var stack = ["/"]
+        let trimmed = dir.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var accumulated = ""
+        for part in trimmed.split(separator: "/") {
+            accumulated += "/\(part)"
+            stack.append(WebDAVURLBuilder.directoryListingPath(accumulated))
+        }
+        return stack
     }
 
     private func goUp() {
@@ -111,6 +184,38 @@ struct BrowserView: View {
         } catch {
             guard !Task.isCancelled else { return }
             guard WebDAVURLBuilder.pathsEqual(path, currentPath) else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func runSearchDebounced() async {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            isSearching = false
+            return
+        }
+        let tokenAtStart = searchToken
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        guard !Task.isCancelled, searchToken == tokenAtStart else { return }
+        guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+        await performSearch(query: query)
+    }
+
+    private func performSearch(query: String) async {
+        guard let credentials = session.credentials else { return }
+        isSearching = true
+        defer { isSearching = false }
+        do {
+            let client = PCloudAPIClient(credentials: credentials)
+            let results = try await client.search(query: query)
+            guard !Task.isCancelled else { return }
+            guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            searchResults = results
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             errorMessage = error.localizedDescription
         }
     }

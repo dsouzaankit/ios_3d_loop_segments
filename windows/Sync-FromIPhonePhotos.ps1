@@ -10,6 +10,10 @@
   Uses Shell.Application + CopyHere (MTP-safe). Do NOT use Copy-Item on COM .Path values;
   that pattern from generic snippets often fails silently.
 
+  After a successful Photos export, iOS usually writes clips into the **newest** monthly
+  folder under Internal Storage (e.g. 202605_a). By default this script searches DCIM plus
+  only that latest YYYYMM_x folder (not every old month), then picks the newest videos there.
+
   This is NOT a live mirror: run on a schedule or after export. For stable names in app
   storage, use Sync-IphoneSegments.ps1 when Exports is visible, or Apple Devices save +
   Copy-FromIncoming.ps1.
@@ -26,30 +30,44 @@
 .PARAMETER PollSeconds
   Interval between syncs when -Watch is set (default 60).
 
+.PARAMETER AllMonthFolders
+  Search every YYYYMM_x folder (old behavior). Default: only DCIM + the latest month folder.
+
 .EXAMPLE
   .\Sync-FromIPhonePhotos.ps1 -Discover
 
 .EXAMPLE
-  .\Sync-FromIPhonePhotos.ps1 -DestinationDirectory 'F:\f1_media\3d_fullsbs_trans'
+  .\Set-LoopSegmentsDestination.ps1 'D:\media\3d_fullsbs_trans'
+  .\Sync-FromIPhonePhotos.ps1
+
+.EXAMPLE
+  .\Sync-FromIPhonePhotos.ps1 -DestinationDirectory 'D:\media\3d_fullsbs_trans'
 
 .EXAMPLE
   .\Sync-FromIPhonePhotos.ps1 -Watch
 #>
 [CmdletBinding()]
 param(
-    [string] $DestinationDirectory = 'F:\f1_media\3d_fullsbs_trans',
+    [string] $DestinationDirectory = '',
     [string] $DeviceNameMatch = 'iPhone|Apple',
     [int] $NewestCount = 2,
     [string] $StagingDirectory = '',
     [int] $PollSeconds = 60,
     [switch] $Discover,
     [switch] $Watch,
+    [switch] $AllMonthFolders,
     [switch] $DryRun
 )
 
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\LoopSegments-Config.ps1"
+if ([string]::IsNullOrWhiteSpace($DestinationDirectory)) {
+    $DestinationDirectory = Get-LoopSegmentsDestinationDirectory
+}
+
 $VideoExtensions = @('.mp4', '.mov', '.m4v')
 $SegmentNames = @('3d_op_00.mp4', '3d_op_01.mp4')
+$SegmentExportNamePattern = '^3d_op_\d{2}\.mp4$'
 
 # Shell FileOperation flags (FOF_*)
 $CopyHereFlags = 0x14  # FOF_NOCONFIRMATION | FOF_NOERRORUI
@@ -94,8 +112,25 @@ function Get-ChildFolderByName {
     return $null
 }
 
+function Get-MonthlyFolderItems {
+    param($InternalFolder)
+    return @($InternalFolder.Items() | Where-Object {
+        $_.IsFolder -and [string]$_.Name -match '^\d{6}_[a-z]$'
+    })
+}
+
+function Get-LatestMonthlyFolderItem {
+    param($InternalFolder)
+    $monthly = Get-MonthlyFolderItems -InternalFolder $InternalFolder
+    if ($monthly.Count -eq 0) { return $null }
+    return $monthly | Sort-Object { [string]$_.Name } -Descending | Select-Object -First 1
+}
+
 function Get-PhotoMediaFolders {
-    param($PhoneFolder)
+    param(
+        $PhoneFolder,
+        [switch] $AllMonthFolders
+    )
     $internal = Get-ChildFolderByName -ParentFolder $PhoneFolder -Names @('Internal Storage')
     if (-not $internal) {
         return @(), @('Internal Storage not found under iPhone')
@@ -110,16 +145,29 @@ function Get-PhotoMediaFolders {
         [void]$notes.Add('Using Internal Storage\DCIM')
     }
 
-    foreach ($child in @($internal.Items())) {
-        if (-not $child.IsFolder) { continue }
-        $name = [string]$child.Name
-        if ($name -eq 'DCIM') { continue }
-        if ($name -match '^\d{6}_[a-z]$' -or $name -match 'APPLE$') {
-            $sub = $child.GetFolder()
+    if ($AllMonthFolders) {
+        foreach ($child in @($internal.Items())) {
+            if (-not $child.IsFolder) { continue }
+            $name = [string]$child.Name
+            if ($name -eq 'DCIM') { continue }
+            if ($name -match '^\d{6}_[a-z]$' -or $name -match 'APPLE$') {
+                $sub = $child.GetFolder()
+                if ($sub) {
+                    [void]$mediaRoots.Add($sub)
+                    [void]$notes.Add("Using Internal Storage\$name")
+                }
+            }
+        }
+    } else {
+        $latestMonth = Get-LatestMonthlyFolderItem -InternalFolder $internal
+        if ($latestMonth) {
+            $sub = $latestMonth.GetFolder()
             if ($sub) {
                 [void]$mediaRoots.Add($sub)
-                [void]$notes.Add("Using Internal Storage\$name")
+                [void]$notes.Add("Using latest month folder Internal Storage\$($latestMonth.Name) (Photos export target)")
             }
+        } else {
+            [void]$notes.Add('No YYYYMM_x month folder found — only DCIM will be scanned')
         }
     }
 
@@ -147,6 +195,24 @@ function Get-VideoItemsRecursive {
         }
     }
     return $videos
+}
+
+function Select-NewestVideosForSegments {
+    param(
+        [System.Collections.Generic.List[object]] $AllVideos,
+        [int] $Count
+    )
+    $segmentExports = @($AllVideos | Where-Object {
+        [string]$_.Name -match $script:SegmentExportNamePattern
+    })
+    if ($segmentExports.Count -gt 0) {
+        return @($segmentExports |
+            Sort-Object { Get-ShellFolderItemDate $_ } -Descending |
+            Select-Object -First $Count)
+    }
+    return @($AllVideos |
+        Sort-Object { Get-ShellFolderItemDate $_ } -Descending |
+        Select-Object -First $Count)
 }
 
 function Invoke-MtpCopyHere {
@@ -181,7 +247,10 @@ function Wait-ForStagedFile {
 }
 
 function Show-DiscoverReport {
-    param([string] $NameMatch)
+    param(
+        [string] $NameMatch,
+        [switch] $AllMonthFolders
+    )
     Write-Host ''
     Write-Host '=== Sync-FromIPhonePhotos -Discover ===' -ForegroundColor Cyan
     $phoneFolder, $shell = Get-IPhoneRootFolder -NameMatch $NameMatch
@@ -190,7 +259,7 @@ function Show-DiscoverReport {
         return
     }
     Write-Host "Device: $($phoneFolder.Title)"
-    $roots, $notes = Get-PhotoMediaFolders -PhoneFolder $phoneFolder
+    $roots, $notes = Get-PhotoMediaFolders -PhoneFolder $phoneFolder -AllMonthFolders:$AllMonthFolders
     foreach ($n in $notes) { Write-Host $n }
     if ($roots.Count -eq 0) { return }
 
@@ -207,8 +276,15 @@ function Show-DiscoverReport {
         Write-Host ("  {0:yyyy-MM-dd HH:mm}  {1,-28}  {2}" -f $d, $_.Name, $size)
     }
     Write-Host ''
-    Write-Host 'Newest two would map to 3d_op_00.mp4 and 3d_op_01.mp4 on the DLNA folder.'
-    Write-Host 'If your camera roll has other recent videos, they may be picked instead.'
+    $segmentLike = @($all | Where-Object { [string]$_.Name -match $SegmentExportNamePattern })
+    if ($segmentLike.Count -gt 0) {
+        Write-Host "Loop Segments exports (3d_op_*.mp4) in scan: $($segmentLike.Count)"
+    }
+    Write-Host 'Sync picks 3d_op_*.mp4 when present; otherwise newest videos in scan.'
+    Write-Host 'Maps to 3d_op_00.mp4 / 3d_op_01.mp4 on the PC DLNA folder.'
+    Write-Host 'Use -AllMonthFolders to scan every YYYYMM_x folder (older behavior).'
+    $dest = Get-LoopSegmentsDestinationDirectory -Override $DestinationDirectory
+    Write-Host "DLNA destination: $dest"
     [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
 }
 
@@ -234,6 +310,7 @@ function Invoke-PhotoSegmentSync {
         [string] $DeviceNameMatch,
         [int] $NewestCount,
         [string] $StagingDirectory,
+        [switch] $AllMonthFolders,
         [switch] $DryRun,
         [switch] $VerboseNotes
     )
@@ -248,7 +325,7 @@ function Invoke-PhotoSegmentSync {
     }
 
     try {
-        $roots, $notes = Get-PhotoMediaFolders -PhoneFolder $phoneFolder
+        $roots, $notes = Get-PhotoMediaFolders -PhoneFolder $phoneFolder -AllMonthFolders:$AllMonthFolders
         if ($VerboseNotes) {
             foreach ($n in $notes) { Write-Host $n }
         }
@@ -264,15 +341,16 @@ function Invoke-PhotoSegmentSync {
             throw 'No .mp4/.mov files found. Enable Save segments to Photos and finish at least one 60s segment.'
         }
 
-        $pick = $allVideos |
-            Sort-Object { Get-ShellFolderItemDate $_ } -Descending |
-            Select-Object -First $NewestCount
+        $pick = Select-NewestVideosForSegments -AllVideos $allVideos -Count $NewestCount
 
         if ($pick.Count -lt $NewestCount) {
             Write-Warning "Only $($pick.Count) video(s) found; expected $NewestCount."
+            Write-Warning 'Finish another 60s segment on the phone (Photos export) or run again after both exist.'
         }
 
-        $destRoot = [System.IO.Path]::GetFullPath($DestinationDirectory)
+        $destRoot = Get-LoopSegmentsDestinationDirectory -Override $DestinationDirectory
+        Test-LoopSegmentsDestinationReady -Directory $destRoot
+        Write-Host "DLNA destination: $destRoot"
         if (-not $DryRun -and -not (Test-Path -LiteralPath $destRoot -PathType Container)) {
             New-Item -ItemType Directory -Path $destRoot -Force | Out-Null
         }
@@ -315,7 +393,7 @@ function Invoke-PhotoSegmentSync {
 }
 
 if ($Discover) {
-    Show-DiscoverReport -NameMatch $DeviceNameMatch
+    Show-DiscoverReport -NameMatch $DeviceNameMatch -AllMonthFolders:$AllMonthFolders
     return
 }
 
@@ -336,6 +414,7 @@ if ($Watch) {
                 -DeviceNameMatch $DeviceNameMatch `
                 -NewestCount $NewestCount `
                 -StagingDirectory $StagingDirectory `
+                -AllMonthFolders:$AllMonthFolders `
                 -DryRun:$DryRun `
                 -VerboseNotes:($iteration -eq 1)
         } catch {
@@ -356,6 +435,7 @@ Invoke-PhotoSegmentSync `
     -DeviceNameMatch $DeviceNameMatch `
     -NewestCount $NewestCount `
     -StagingDirectory $StagingDirectory `
+    -AllMonthFolders:$AllMonthFolders `
     -DryRun:$DryRun `
     -VerboseNotes
 Write-Host 'Done.'

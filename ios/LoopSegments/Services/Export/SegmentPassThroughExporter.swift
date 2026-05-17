@@ -51,6 +51,8 @@ enum SegmentPassThroughExporter {
 
         var writerContext: SegmentWriterContext?
         var heldAudio: CMSampleBuffer?
+        var startedWriter = false
+        var skippedBeforeKeyframe = 0
 
         while true {
             if reader.status == .failed {
@@ -79,15 +81,27 @@ enum SegmentPassThroughExporter {
             }
 
             let pts = CMSampleBufferGetPresentationTimeStamp(next.sample)
-            if writerContext == nil {
+            if !startedWriter {
+                if next.track == .audio {
+                    heldAudio = nil
+                    continue
+                }
+                if CMTimeCompare(pts, rangeStart) < 0 || !isSyncVideoSample(next.sample) {
+                    skippedBeforeKeyframe += 1
+                    continue
+                }
                 let ctx = try SegmentWriterContext(
                     outputURL: outputURL,
                     videoFormat: videoFormat,
                     audioFormat: audioFormat,
                     realTime: false
                 )
-                ctx.start(at: pts)
+                ctx.start(at: .zero)
                 writerContext = ctx
+                startedWriter = true
+                if skippedBeforeKeyframe > 0 {
+                    log("Skipped \(skippedBeforeKeyframe) frame(s) before first keyframe")
+                }
             }
 
             try writerContext?.append(next.sample, track: next.track)
@@ -96,9 +110,24 @@ enum SegmentPassThroughExporter {
             }
         }
 
+        guard startedWriter else {
+            throw SegmentExporterError.noKeyframeInWindow
+        }
+
         if let writerContext {
             try await writerContext.finish()
         }
+    }
+
+    private static func isSyncVideoSample(_ sample: CMSampleBuffer) -> Bool {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[AnyHashable: Any]],
+              let first = attachments.first else {
+            return true
+        }
+        if let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool {
+            return !notSync
+        }
+        return true
     }
 
     private static func formatMediaTime(_ time: CMTime) -> String {
