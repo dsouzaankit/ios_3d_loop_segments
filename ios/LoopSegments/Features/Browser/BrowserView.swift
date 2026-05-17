@@ -17,6 +17,13 @@ struct BrowserView: View {
                     ProgressView("Loading…")
                 } else {
                     List {
+                        if #unavailable(iOS 26.0), currentPath != "/" {
+                            Section {
+                                Text(currentPath)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         if pathStack.count > 1 {
                             Button("↑ Up") { goUp() }
                         }
@@ -39,7 +46,7 @@ struct BrowserView: View {
                 }
             }
             .navigationTitle(pathTitle)
-            .navigationSubtitle(navigationSubtitle)
+            .navigationSubtitleIfAvailable(navigationSubtitle)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Sign out") { session.signOut() }
@@ -105,6 +112,17 @@ struct BrowserView: View {
             guard !Task.isCancelled else { return }
             guard WebDAVURLBuilder.pathsEqual(path, currentPath) else { return }
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func navigationSubtitleIfAvailable(_ subtitle: String) -> some View {
+        if #available(iOS 26.0, *) {
+            navigationSubtitle(subtitle)
+        } else {
+            self
         }
     }
 }
