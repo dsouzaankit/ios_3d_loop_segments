@@ -451,10 +451,7 @@ final class SegmentExporter {
     ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
         let asset = AVURLAsset(
             url: fileURL,
-            options: [
-                AVURLAssetPreferPreciseDurationAndTimingKey: false,
-                AVURLAssetOutOfBandMIMETypeKey: "video/mp4",
-            ]
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
         var lastLog = CFAbsoluteTimeGetCurrent()
         for attempt in 1 ... 60 {
