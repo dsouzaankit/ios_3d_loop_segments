@@ -19,17 +19,10 @@ final class AppSession: ObservableObject {
         let creds = WebDAVCredentials(region: region, email: email, password: password)
         let client = WebDAVClient(credentials: creds)
         _ = try await client.list(path: "/")
-        let apiRegion = try await PCloudAuth.verifyAPIAccess(credentials: creds)
-        var signedIn = creds
-        if apiRegion != creds.region {
-            signedIn.region = apiRegion
-            let recheck = WebDAVClient(credentials: signedIn)
-            _ = try await recheck.list(path: "/")
-        }
-        credentialStore.save(signedIn)
-        credentials = signedIn
-        WebDAVMediaSession.setActiveCredentials(signedIn)
-        UserDefaults.standard.set(signedIn.region.rawValue, forKey: "pcloud_region_last_sign_in")
+        credentialStore.save(creds)
+        credentials = creds
+        WebDAVMediaSession.setActiveCredentials(creds)
+        UserDefaults.standard.set(creds.region.rawValue, forKey: "pcloud_region_last_sign_in")
     }
 
     func signOut() {

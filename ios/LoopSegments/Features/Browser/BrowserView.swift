@@ -12,6 +12,7 @@ struct BrowserView: View {
     @State private var searchResults: [WebDAVItem] = []
     @State private var isSearching = false
     @State private var searchToken = 0
+    @State private var searchModeNote = ""
 
     private var currentPath: String { pathStack.last ?? "/" }
     private var isSearchActive: Bool {
@@ -34,6 +35,11 @@ struct BrowserView: View {
                         }
                         if !isSearchActive, pathStack.count > 1 {
                             Button("↑ Up") { goUp() }
+                        }
+                        if isSearchActive, !searchModeNote.isEmpty {
+                            Text(searchModeNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         if isSearchActive, searchResults.isEmpty, !isSearching {
                             ContentUnavailableView(
@@ -92,6 +98,7 @@ struct BrowserView: View {
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
                     searchResults = []
+                    searchModeNote = ""
                     isSearching = false
                     return
                 }
@@ -206,11 +213,13 @@ struct BrowserView: View {
         isSearching = true
         defer { isSearching = false }
         do {
-            let client = PCloudAPIClient(credentials: credentials)
-            let results = try await client.search(query: query)
+            let result = try await PCloudSearchService.search(query: query, credentials: credentials)
             guard !Task.isCancelled else { return }
             guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
-            searchResults = results
+            searchResults = result.items
+            searchModeNote = result.usedWebDAVFallback
+                ? "Folder search (WebDAV) — app passwords often cannot use pCloud API search."
+                : ""
         } catch is CancellationError {
             return
         } catch {
