@@ -228,6 +228,23 @@ final class SegmentExporter {
                     timelineEndSeconds: windowEndSeconds,
                     durationSeconds: durationSeconds
                 )
+                let effectiveDuration = WebDAVTempFileDownload.effectiveDurationSeconds(
+                    reported: durationSeconds,
+                    totalBytes: fileSize
+                )
+                if abs(effectiveDuration - durationSeconds) > 1 {
+                    logHandler(
+                        String(
+                            format: "Timeline bytes use %.0f s duration (index %.0f s) for %d:%02d–%d:%02d",
+                            effectiveDuration,
+                            durationSeconds,
+                            Int(windowStartSeconds / 60),
+                            Int(windowStartSeconds) % 60,
+                            Int(windowEndSeconds / 60),
+                            Int(windowEndSeconds) % 60
+                        )
+                    )
+                }
                 logHandler(
                     "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
                 )
@@ -253,6 +270,8 @@ final class SegmentExporter {
                     rangeDuration: rangeDuration,
                     totalFileBytes: downloader.totalLength,
                     requiredByteRange: byteRange,
+                    isWindowDenseFilled: { downloader.isRangeFilled(byteRange) },
+                    windowFilledBytes: { downloader.exportWindowFilledBytes(for: byteRange) },
                     filledByteSpan: { downloader.filledSpan() },
                     indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
                     refreshMP4Index: { try await downloader.ensureIndexTailOnDisk(force: true) },

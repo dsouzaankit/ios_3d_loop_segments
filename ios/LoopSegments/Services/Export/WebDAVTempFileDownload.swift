@@ -565,11 +565,23 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
-    private static func effectiveDurationSeconds(reported: Double, totalBytes: Int64) -> Double {
+    /// Use reported duration from the MP4 index when bitrate is plausible; only inflate when metadata duration is impossibly short for file size.
+    static func effectiveDurationSeconds(reported: Double, totalBytes: Int64) -> Double {
         guard reported > 0, totalBytes > 0 else { return reported }
+        let impliedMbps = (Double(totalBytes) * 8.0) / (reported * 1_000_000.0)
+        if impliedMbps <= 80 {
+            return reported
+        }
         let floorMbps = 2.0
         let minFromSize = Double(totalBytes) * 8.0 / (floorMbps * 1_000_000.0)
         return max(reported, minFromSize)
+    }
+
+    func exportWindowFilledBytes(for range: TimelineByteRange) -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard exportWindowStart == range.start else { return 0 }
+        return max(0, exportWindowContiguousEnd - range.start)
     }
 
     private static func ensureFreeDiskSpace(forBytes needed: Int64) throws {

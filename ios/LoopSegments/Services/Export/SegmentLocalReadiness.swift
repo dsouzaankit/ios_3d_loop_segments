@@ -16,6 +16,8 @@ enum SegmentLocalReadiness {
         rangeDuration: CMTime,
         totalFileBytes: Int64,
         requiredByteRange: TimelineByteRange,
+        isWindowDenseFilled: () -> Bool,
+        windowFilledBytes: () -> Int64,
         filledByteSpan: () -> TimelineByteRange,
         indexTailOnDisk: () -> Bool,
         refreshMP4Index: () async throws -> Void,
@@ -90,6 +92,7 @@ enum SegmentLocalReadiness {
                     if trackLoadStreak == 2, let prepare = prepareSparseFileForReader {
                         log("Sparse temp: ensuring file header + dense window before reader…")
                         try await prepare()
+                        preparePassCount += 1
                     }
                 } else {
                     trackLoadStreak = 0
@@ -97,19 +100,23 @@ enum SegmentLocalReadiness {
                 let now = CFAbsoluteTimeGetCurrent()
                 if now - lastLog >= 15 {
                     lastLog = now
-                    let filledInWindow = max(
-                        0,
-                        min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
-                    )
+                    let filledInWindow = denseReady
+                        ? windowFilledBytes()
+                        : max(
+                            0,
+                            min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
+                        )
                     let indexNote = indexTailOnDisk() ? "" : ", MP4 index still loading"
                     log(
-                        "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needEnd - requiredByteRange.start)) in window\(indexNote))"
+                        "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needWindowBytes)) in window\(indexNote))"
                     )
                 }
-                let windowBytesReady = max(
-                    0,
-                    min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
-                ) >= (needEnd - requiredByteRange.start)
+                let windowBytesReady = denseReady
+                    ? windowFilledBytes() >= needWindowBytes
+                    : max(
+                        0,
+                        min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
+                    ) >= needWindowBytes
                 if trackLoadStreak >= 3, rangeReady, windowBytesReady, indexTailOnDisk(), probeAttempts >= 2,
                    !reason.contains("only 0 video samples") {
                     log(
@@ -125,9 +132,20 @@ enum SegmentLocalReadiness {
                     return
                 }
                 if zeroSampleStreak >= 4, rangeReady {
+                    let nowZero = CFAbsoluteTimeGetCurrent()
+                    if nowZero - lastZeroSampleLog >= 15 {
+                        lastZeroSampleLog = nowZero
+                        log(
+                            "Readiness: 0 video samples at timeline — dense window \(formatBytes(windowFilledBytes())) / \(formatBytes(needWindowBytes)) (checking index / byte map)"
+                        )
+                    }
+                }
+                if windowBytesReady, indexTailOnDisk(), preparePassCount >= 1,
+                   reason.contains("only 0 video samples"), probeAttempts >= 8 {
                     log(
-                        "Readiness: 0 video samples in window — need dense download of this minute (not exporting empty segment)"
+                        "Readiness: dense window on disk but probe still 0 samples — proceeding to export (reader may find frames passthrough missed)"
                     )
+                    return
                 }
             case .failed(let error):
                 throw error
