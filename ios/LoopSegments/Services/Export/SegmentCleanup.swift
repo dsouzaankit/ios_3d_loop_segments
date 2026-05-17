@@ -10,6 +10,11 @@ enum SegmentCleanup {
     static func removeExportFiles(log: ((String) -> Void)? = nil) {
         ExportPaths.removeWorkingSourceCopy(log: log)
         for index in 0 ..< ExportPaths.segmentFileCount {
+            let staging = ExportPaths.segmentStagingURL(index: index)
+            if FileManager.default.fileExists(atPath: staging.path) {
+                try? FileManager.default.removeItem(at: staging)
+                log?("Removed \(staging.lastPathComponent) from Exports")
+            }
             let url = ExportPaths.segmentURL(index: index)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             do {

@@ -65,7 +65,7 @@ struct ExportView: View {
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
-                Text("1. Full file saves to temp; 3d_op_00/01 update each minute (wall clock if download is fast)")
+                Text("1. Segments stage in Exports, then 3d_op_00/01 publish once per ~60s wall time (DLNA-safe)")
                 Text(logHint.isEmpty ? "Logs: Exports/export_latest.txt" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)

@@ -10,7 +10,7 @@ enum SegmentPassThroughExporter {
         audioFormat: CMFormatDescription?,
         rangeStart: CMTime,
         rangeDuration: CMTime,
-        outputSlot: Int,
+        outputURL: URL,
         sourceLabel: String,
         log: (String) -> Void
     ) async throws {
@@ -46,9 +46,8 @@ enum SegmentPassThroughExporter {
                 ?? SegmentExporterError.readerSetupFailed
         }
 
-        let url = ExportPaths.segmentURL(index: outputSlot)
-        try? FileManager.default.removeItem(at: url)
-        log("Writing \(url.lastPathComponent) via \(sourceLabel) (media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)))")
+        try? FileManager.default.removeItem(at: outputURL)
+        log("Staging \(outputURL.lastPathComponent) via \(sourceLabel) (media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)))")
 
         var writerContext: SegmentWriterContext?
         var heldAudio: CMSampleBuffer?
@@ -82,7 +81,7 @@ enum SegmentPassThroughExporter {
             let pts = CMSampleBufferGetPresentationTimeStamp(next.sample)
             if writerContext == nil {
                 let ctx = try SegmentWriterContext(
-                    outputURL: url,
+                    outputURL: outputURL,
                     videoFormat: videoFormat,
                     audioFormat: audioFormat,
                     realTime: false

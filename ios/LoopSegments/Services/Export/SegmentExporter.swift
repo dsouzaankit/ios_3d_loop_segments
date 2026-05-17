@@ -145,7 +145,7 @@ final class SegmentExporter {
         var lastMediaTimeMs = seekMs
         var reachedEnd = false
 
-        logHandler("DLNA chunks publish on 1× wall clock when download is ahead; as soon as ready when download is behind")
+        logHandler("DLNA: 3d_op_00/01 update at most once per ~60s wall time (staging → slot; safe for players that cannot refresh mid-playback)")
 
         while true {
             try checkCancelled()
@@ -166,14 +166,13 @@ final class SegmentExporter {
                 durationSeconds: durationSeconds
             )
 
-            await waitForDLNAPublishSchedule(minuteIndex: minuteIndex, wallOrigin: dlnaPublishOrigin)
-
             let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
             let rangeDuration = CMTime(
                 seconds: windowEndSeconds - windowStartSeconds,
                 preferredTimescale: 600
             )
             let slot = minuteIndex % Self.segmentFileCount
+            let stagingURL = ExportPaths.segmentStagingURL(index: slot)
 
             let readAsset = AVURLAsset(
                 url: downloader.fileURL,
@@ -186,15 +185,23 @@ final class SegmentExporter {
                 audioFormat: audioFormat,
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
-                outputSlot: slot,
+                outputURL: stagingURL,
                 sourceLabel: "temp file",
                 log: logHandler
             )
 
+            await waitForDLNAPublishSchedule(
+                minuteIndex: minuteIndex,
+                wallOrigin: dlnaPublishOrigin,
+                slot: slot,
+                log: logHandler
+            )
+            try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
+
             lastMediaTimeMs = Int64(windowEndSeconds * 1000)
             let url = ExportPaths.segmentURL(index: slot)
             await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: url, log: logHandler)
-            logHandler("DLNA slot \(url.lastPathComponent) ready — sync to PC; loops while download continues")
+            logHandler("Ready for PC sync — \(url.lastPathComponent)")
 
             minuteIndex += 1
         }
@@ -204,13 +211,20 @@ final class SegmentExporter {
         return SegmentExportResult(lastMediaTimeMs: lastMediaTimeMs, reachedEnd: reachedEnd)
     }
 
-    /// DLNA clients need stable files ~60s each; do not replace slots faster than realtime when download is ahead.
-    private func waitForDLNAPublishSchedule(minuteIndex: Int, wallOrigin: CFAbsoluteTime) async {
+    /// DLNA clients cannot refresh a file during playback — publish each slot only on its wall-clock minute.
+    private func waitForDLNAPublishSchedule(
+        minuteIndex: Int,
+        wallOrigin: CFAbsoluteTime,
+        slot: Int,
+        log: (String) -> Void
+    ) async {
         let publishAt = wallOrigin + Double(minuteIndex) * Self.segmentDurationSeconds
         let delay = publishAt - CFAbsoluteTimeGetCurrent()
-        if delay > 0.05 {
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-        }
+        guard delay > 0.05 else { return }
+
+        let slotName = ExportPaths.segmentURL(index: slot).lastPathComponent
+        log("Holding \(slotName) — \(Int(delay))s until wall-clock minute \(minuteIndex) (download may be ahead)")
+        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
     }
 
     private func openStreamingAsset(

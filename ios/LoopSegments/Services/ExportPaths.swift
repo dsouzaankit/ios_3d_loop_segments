@@ -10,6 +10,26 @@ enum ExportPaths {
         return exportsDirectory.appendingPathComponent(name)
     }
 
+    /// Finished segment before wall-clock publish to `3d_op_*.mp4` (DLNA must not see partial slot files).
+    static func segmentStagingURL(index: Int) -> URL {
+        let name = String(format: "3d_op_%02d.staging.mp4", index % segmentFileCount)
+        return exportsDirectory.appendingPathComponent(name)
+    }
+
+    /// Replace DLNA slot atomically after staging + wall-clock schedule (one update per ~60s).
+    static func publishSegmentToDLNA(slot: Int, log: ((String) -> Void)? = nil) throws {
+        let staging = segmentStagingURL(index: slot)
+        let final = segmentURL(index: slot)
+        guard FileManager.default.fileExists(atPath: staging.path) else {
+            throw SegmentExporterError.writerSetupFailed
+        }
+        if FileManager.default.fileExists(atPath: final.path) {
+            try FileManager.default.removeItem(at: final)
+        }
+        try FileManager.default.moveItem(at: staging, to: final)
+        log?("DLNA slot \(final.lastPathComponent) published (~60s wall-clock cadence)")
+    }
+
     static var exportsDirectory: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let dir = docs.appendingPathComponent("Exports", isDirectory: true)
