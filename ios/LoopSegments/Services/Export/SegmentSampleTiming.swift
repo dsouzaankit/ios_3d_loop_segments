@@ -12,7 +12,7 @@ enum SegmentSampleTiming {
             sample,
             entryCount: 0,
             arrayToFill: nil,
-            entryCountOut: &entryCount
+            entriesNeededOut: &entryCount
         )
         guard status == noErr, entryCount > 0 else { return sample }
 
@@ -21,7 +21,7 @@ enum SegmentSampleTiming {
             sample,
             entryCount: entryCount,
             arrayToFill: &timing,
-            entryCountOut: &entryCount
+            entriesNeededOut: &entryCount
         )
         guard status == noErr else { return sample }
 
