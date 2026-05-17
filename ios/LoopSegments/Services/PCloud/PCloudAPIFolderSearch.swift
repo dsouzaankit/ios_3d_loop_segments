@@ -1,8 +1,8 @@
 import Foundation
 
-/// Filename search via pCloud `listfolder` (recursive when possible, else BFS by folder id).
+/// Filename search via shallow pCloud `listfolder` BFS (no full-tree recursive — that can hang).
 enum PCloudAPIFolderSearch {
-    private static let maxFoldersToVisit = 800
+    private static let maxFoldersToVisit = 120
     private static let maxResults = 80
     static let maxRecursiveEntriesForAPI = 25_000
 
@@ -14,14 +14,7 @@ enum PCloudAPIFolderSearch {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return [] }
 
-        var matches: [[String: Any]] = []
-        if let recursive = try? await apiClient.listFolderRecursiveFlat(folderId: 0),
-           !recursive.isEmpty {
-            matches = filterMatches(needle: needle, entries: recursive)
-        }
-        if matches.isEmpty {
-            matches = try await walkFolders(needle: needle, apiClient: apiClient)
-        }
+        let matches = try await walkFolders(needle: needle, apiClient: apiClient)
         guard !matches.isEmpty else { return [] }
 
         return try await PCloudPathResolver.resolveSearchItems(

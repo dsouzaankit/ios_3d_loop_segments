@@ -2,13 +2,15 @@ import Foundation
 
 /// Filename search by walking WebDAV folders (slower than REST search).
 enum WebDAVSearchClient {
-    private static let maxFoldersToVisit = 1200
+    private static let maxFoldersToVisitDefault = 1200
     private static let maxResults = 80
 
     static func search(
         query: String,
         credentials: WebDAVCredentials,
-        extraRoots: [String] = []
+        extraRoots: [String] = [],
+        maxFoldersToVisit: Int = maxFoldersToVisitDefault,
+        quickRootDiscovery: Bool = false
     ) async throws -> [WebDAVItem] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return [] }
@@ -17,8 +19,10 @@ enum WebDAVSearchClient {
         let roots = try await discoverSearchRoots(
             client: client,
             credentials: credentials,
-            extraRoots: extraRoots
+            extraRoots: extraRoots,
+            quick: quickRootDiscovery
         )
+        let folderLimit = max(1, maxFoldersToVisit)
         var results: [WebDAVItem] = []
         var queue = roots
         var visited = Set<String>()
@@ -70,7 +74,8 @@ enum WebDAVSearchClient {
     private static func discoverSearchRoots(
         client: WebDAVClient,
         credentials: WebDAVCredentials,
-        extraRoots: [String]
+        extraRoots: [String],
+        quick: Bool
     ) async throws -> [String] {
         var roots: [String] = extraRoots.map { WebDAVURLBuilder.directoryListingPath($0) }
         if let stored = credentials.webDAVFilesRoot, !stored.isEmpty {
@@ -78,6 +83,9 @@ enum WebDAVSearchClient {
         }
         if let userRoot = try? await PCloudWebDAVRootResolver.filesRoot(credentials: credentials) {
             roots.append(userRoot)
+        }
+        guard !quick else {
+            return prioritizeUserRoot(roots)
         }
         roots.append("/")
         let top = try await client.list(path: "/")
@@ -89,13 +97,6 @@ enum WebDAVSearchClient {
                 if let children = try? await client.list(path: path) {
                     for child in children where child.isDirectory {
                         roots.append(WebDAVURLBuilder.directoryListingPath(child.href))
-                        if let grandchildren = try? await client.list(
-                            path: WebDAVURLBuilder.directoryListingPath(child.href)
-                        ) {
-                            for grand in grandchildren where grand.isDirectory {
-                                roots.append(WebDAVURLBuilder.directoryListingPath(grand.href))
-                            }
-                        }
                     }
                 }
             }

@@ -223,13 +223,21 @@ struct BrowserView: View {
     private func performSearch(query: String) async {
         guard let credentials = session.credentials else { return }
         isSearching = true
-        searchModeNote = "Searching folders (WebDAV), then pCloud index…"
+        searchModeNote = "pCloud web search…"
         defer { isSearching = false }
         do {
             let result = try await PCloudSearchService.search(
                 query: query,
                 credentials: credentials,
-                browsePaths: pathStack
+                browsePaths: pathStack,
+                status: { note in
+                    Task { @MainActor in
+                        guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
+                            return
+                        }
+                        searchModeNote = note
+                    }
+                }
             )
             guard !Task.isCancelled else { return }
             guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
