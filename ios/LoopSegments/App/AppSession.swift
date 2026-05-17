@@ -19,6 +19,7 @@ final class AppSession: ObservableObject {
         _ = try await client.list(path: "/")
         credentialStore.save(creds)
         credentials = creds
+        UserDefaults.standard.set(creds.region.rawValue, forKey: "pcloud_region_last_sign_in")
     }
 
     func signOut() {

@@ -31,9 +31,10 @@ final class SegmentExporter {
     func run(
         inputURL: URL,
         seekMs: Int64,
-        authorizationHeader: String,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
         logHandler: @escaping (String) -> Void
     ) async throws -> SegmentExportResult {
+        let authorizationHeader = authorizationProvider()
         cancelLock.lock()
         isCancelled = false
         cancelLock.unlock()
@@ -46,14 +47,14 @@ final class SegmentExporter {
         logHandler("Prefetching from pCloud (size + MP4 index)…")
         try await WebDAVPrefetch.warmUp(
             remoteURL: inputURL,
-            authorization: authorizationHeader,
+            authorization: authorizationProvider(),
             cache: rangeCache,
             log: logHandler
         )
 
         let asset = try await openPlayableAsset(
             inputURL: inputURL,
-            authorizationHeader: authorizationHeader,
+            authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
             logHandler: logHandler
         )
@@ -236,28 +237,15 @@ final class SegmentExporter {
 
     private func openPlayableAsset(
         inputURL: URL,
-        authorizationHeader: String,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
         logHandler: @escaping (String) -> Void
     ) async throws -> AVURLAsset {
-        let headerOptions: [String: Any] = [
-            "AVURLAssetHTTPHeaderFieldsKey": ["Authorization": authorizationHeader],
-            AVURLAssetPreferPreciseDurationAndTimingKey: false,
-        ]
-        let directAsset = AVURLAsset(url: inputURL, options: headerOptions)
-        logHandler("Opening via system HTTP…")
-        do {
-            _ = try await directAsset.load(.isPlayable)
-            logHandler("Opened via system HTTP")
-            return directAsset
-        } catch {
-            logHandler("System HTTP: \(error.localizedDescription)")
-        }
-
-        logHandler("Opening via WebDAV loader…")
+        // Always use our WebDAV loader — system HTTP drops Authorization on later reads (~30s / seek).
+        logHandler("Opening via WebDAV loader (auth on every byte range)…")
         let loader = WebDAVResourceLoader(
             remoteURL: inputURL,
-            authorization: authorizationHeader,
+            authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
             log: logHandler
         )

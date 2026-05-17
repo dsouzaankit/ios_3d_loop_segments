@@ -10,7 +10,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private static let maxRangeChunkBytes: Int64 = 512 * 1024
 
     let remoteURL: URL
-    let authorization: String
+    private let authorizationProvider: WebDAVAuthorizationProvider
     let queue = DispatchQueue(label: "com.loopsegments.webdav-resource-loader")
 
     private let session: URLSession
@@ -27,8 +27,24 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         rangeCache: WebDAVRangeCache? = nil,
         log: ((String) -> Void)? = nil
     ) {
+        self.init(
+            remoteURL: remoteURL,
+            authorizationProvider: { authorization },
+            session: session,
+            rangeCache: rangeCache,
+            log: log
+        )
+    }
+
+    init(
+        remoteURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        session: URLSession = WebDAVMediaSession.shared,
+        rangeCache: WebDAVRangeCache? = nil,
+        log: ((String) -> Void)? = nil
+    ) {
         self.remoteURL = remoteURL
-        self.authorization = authorization
+        self.authorizationProvider = authorizationProvider
         self.session = session
         self.rangeCache = rangeCache
         self.logLine = log
@@ -151,10 +167,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func loadContentLengthFromServer() async throws -> Int64 {
-        var request = URLRequest(url: remoteURL)
-        request.httpMethod = "HEAD"
-        request.setValue(authorization, forHTTPHeaderField: "Authorization")
-
+        let request = authorizedRequest(method: "HEAD")
         let (_, response) = try await sessionData(for: request)
         if let http = response as? HTTPURLResponse,
            let length = contentLength(from: http) {
@@ -178,12 +191,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             return cached
         }
 
-        var request = URLRequest(url: remoteURL)
-        request.httpMethod = "GET"
-        request.setValue(authorization, forHTTPHeaderField: "Authorization")
-        request.setValue("bytes=\(offset)-\(endInclusive)", forHTTPHeaderField: "Range")
-
-        let (data, response) = try await sessionData(for: request)
+        let (data, response) = try await performRangeGET(offset: offset, endInclusive: endInclusive, retriedAuth: false)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
@@ -201,6 +209,33 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
         rangeCache?.storeRange(offset: offset, data: data)
         return data
+    }
+
+    private func performRangeGET(
+        offset: Int64,
+        endInclusive: Int64,
+        retriedAuth: Bool
+    ) async throws -> (Data, URLResponse) {
+        var request = URLRequest(url: remoteURL)
+        request.httpMethod = "GET"
+        request.setValue(authorizationProvider(), forHTTPHeaderField: "Authorization")
+        request.setValue("bytes=\(offset)-\(endInclusive)", forHTTPHeaderField: "Range")
+
+        let result = try await sessionData(for: request)
+        if let http = result.1 as? HTTPURLResponse,
+           http.statusCode == 401,
+           !retriedAuth {
+            logLine?("HTTP 401 on range read — retrying with fresh credentials")
+            return try await performRangeGET(offset: offset, endInclusive: endInclusive, retriedAuth: true)
+        }
+        return result
+    }
+
+    private func authorizedRequest(method: String) -> URLRequest {
+        var request = URLRequest(url: remoteURL)
+        request.httpMethod = method
+        request.setValue(authorizationProvider(), forHTTPHeaderField: "Authorization")
+        return request
     }
 
     private func sessionData(for request: URLRequest) async throws -> (Data, URLResponse) {

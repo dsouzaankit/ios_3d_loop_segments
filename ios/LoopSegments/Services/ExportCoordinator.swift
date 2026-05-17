@@ -46,6 +46,10 @@ final class ExportCoordinator {
         logHandler("pCloud region: \(credentials.region.displayName) (\(credentials.region.webDAVHost))")
         logHandler("Media URL: \(inputURL.absoluteString)")
 
+        let authProvider = WebDAVAuth.provider(fallback: credentials)
+        logHandler("Verifying file access (HEAD)…")
+        try await WebDAVAccessProbe.verifyMediaURL(inputURL, authorization: authProvider, log: logHandler)
+
         if PhotosSegmentPublisher.isEnabled {
             logHandler("Requesting Photos access…")
             if await PhotosSegmentPublisher.ensureAccess(log: logHandler) {
@@ -59,7 +63,7 @@ final class ExportCoordinator {
             let result = try await exporter.run(
                 inputURL: inputURL,
                 seekMs: seekMs,
-                authorizationHeader: credentials.authorizationHeaderValue,
+                authorizationProvider: authProvider,
                 logHandler: logHandler
             )
             logHandler("Export finished — segment files kept for USB/Photos sync (removed on Stop or when app backgrounds)")

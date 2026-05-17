@@ -2,11 +2,9 @@ import Foundation
 
 final class WebDAVClient {
     private let credentials: WebDAVCredentials
-    private let session: URLSession
 
-    init(credentials: WebDAVCredentials, session: URLSession = .shared) {
+    init(credentials: WebDAVCredentials) {
         self.credentials = credentials
-        self.session = session
     }
 
     func list(path: String) async throws -> [WebDAVItem] {
@@ -17,7 +15,7 @@ final class WebDAVClient {
         request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
         request.setValue(credentials.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await WebDAVMediaSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVError.invalidResponse
         }

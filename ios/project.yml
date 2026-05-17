@@ -22,6 +22,6 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.loopsegments.app
-        MARKETING_VERSION: "1.2.4"
-        CURRENT_PROJECT_VERSION: "11"
+        MARKETING_VERSION: "1.2.5"
+        CURRENT_PROJECT_VERSION: "12"
         TARGETED_DEVICE_FAMILY: "1,2"

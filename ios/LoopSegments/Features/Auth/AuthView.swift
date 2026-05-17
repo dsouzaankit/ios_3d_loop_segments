@@ -31,7 +31,7 @@ struct AuthView: View {
                     Text("Use the same US/Europe region as your pCloud account. With 2FA, create an app password at my.pcloud.com (Settings → Security) — not your normal login password.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("Build 1.2.4 · pCloud WebDAV · AVFoundation segment export")
+                    Text("Build 1.2.5 · pCloud WebDAV · AVFoundation segment export")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
