@@ -66,6 +66,13 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return contiguousEnd
     }
 
+    /// True when prefetched/downloaded MP4 `moov` is at the end of the temp file (allows export before 100% download).
+    func hasIndexTailOnDisk() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return tailOnDisk
+    }
+
     func logDownloadStarted() {
         log("Downloading to temp — \(formatBytes(totalLength)) (segments publish per 60s as data arrives)…")
     }

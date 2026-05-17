@@ -184,6 +184,7 @@ final class SegmentExporter {
                 totalFileBytes: downloader.totalLength,
                 contiguousBytesOnDisk: { downloader.contiguousEndValue() },
                 bytesRequiredOnDisk: bytesNeeded,
+                indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
                 isCancelled: cancelCheck,
                 log: logHandler
             )

@@ -14,6 +14,7 @@ enum SegmentLocalReadiness {
     totalFileBytes: Int64,
     contiguousBytesOnDisk: () -> Int64,
     bytesRequiredOnDisk: Int64,
+    indexTailOnDisk: () -> Bool,
     isCancelled: () -> Bool,
     log: (String) -> Void
   ) async throws {
@@ -28,6 +29,12 @@ enum SegmentLocalReadiness {
 
       if totalFileBytes > 0, contiguous >= totalFileBytes {
         log("Readiness OK — full temp file on disk (\(formatBytes(contiguous)))")
+        return
+      }
+
+      // Sparse temp file: index at EOF, mdat growing from 0. AVAssetReader pre-probes often see 0 samples until more is contiguous.
+      if indexTailOnDisk() {
+        log("Readiness OK — \(formatBytes(contiguous)) contiguous from start (MP4 index at end of file)")
         return
       }
 
@@ -70,7 +77,7 @@ enum SegmentLocalReadiness {
   ) -> ProbeResult {
     let asset = AVURLAsset(
       url: fileURL,
-      options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+      options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
     )
     guard let videoTrack = asset.tracks(withMediaType: .video).first else {
       return .needsMoreData("no video track visible yet")
