@@ -364,9 +364,10 @@ final class SegmentExporter {
             url: tempURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
-        if byteRange.start >= Self.midFilePrefetchThresholdBytes {
+        let midFileDenseOnly = byteRange.start >= Self.midFilePrefetchThresholdBytes
+        if midFileDenseOnly {
             log(
-                "Mid-file segment — preloading \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)) to temp (avoids fragile pCloud stream at 10+ min)"
+                "Mid-file segment — dense-download \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)) (no pCloud stream for 10+ min)"
             )
             downloader.pauseBackgroundDownload()
             try await downloader.ensureContiguousRange(byteRange)
@@ -383,7 +384,7 @@ final class SegmentExporter {
                 log: log
             )
         } catch {
-            guard Self.shouldStreamFallback(after: error) else { throw error }
+            guard Self.shouldStreamFallback(after: error, midFileDenseOnly: midFileDenseOnly) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
             log(
                 "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
@@ -403,7 +404,10 @@ final class SegmentExporter {
                 )
                 return
             } catch {
-                guard Self.shouldStreamFallback(after: error) else { throw error }
+                guard Self.shouldStreamFallback(after: error, midFileDenseOnly: midFileDenseOnly) else { throw error }
+                if midFileDenseOnly {
+                    throw SegmentExporterError.readerSetupFailed
+                }
                 try? FileManager.default.removeItem(at: outputURL)
                 log(
                     "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
@@ -424,7 +428,8 @@ final class SegmentExporter {
                     outputURL: outputURL,
                     log: log
                 )
-            } catch SegmentExporterError.noKeyframeInWindow, SegmentExporterError.readerInterrupted {
+            } catch SegmentExporterError.noKeyframeInWindow, SegmentExporterError.readerInterrupted,
+                SegmentExporterError.writerFailed {
                 try? FileManager.default.removeItem(at: outputURL)
                 log(
                     "pCloud stream failed — downloading \(Self.formatBytes(byteRange.length)) to temp and retrying locally"
@@ -446,7 +451,8 @@ final class SegmentExporter {
 
     private static let midFilePrefetchThresholdBytes: Int64 = 32 * 1024 * 1024
 
-    private static func shouldStreamFallback(after error: Error) -> Bool {
+    private static func shouldStreamFallback(after error: Error, midFileDenseOnly: Bool = false) -> Bool {
+        if midFileDenseOnly { return true }
         if let exportError = error as? SegmentExporterError {
             switch exportError {
             case .readerSetupFailed, .noKeyframeInWindow, .segmentOutputTooSmall:
@@ -790,8 +796,8 @@ final class SegmentWriterContext {
         }
 
         guard input.append(sample) else {
-            throw writer.error.map { SegmentExporterError.writerFailed($0) }
-                ?? SegmentExporterError.writerSetupFailed
+            let err = writer.error ?? NSError(domain: "SegmentWriter", code: -1)
+            throw SegmentExporterError.writerFailed(err)
         }
     }
 
@@ -918,7 +924,7 @@ enum SegmentExporterError: LocalizedError {
         case .missingFormatDescription:
             return "Could not read track format from the file."
         case .readerSetupFailed:
-            return "Could not start reading the media file."
+            return "Could not read or export this minute from the temp copy. Keep the app open on Wi‑Fi until “Window on disk” appears, or try seek 0 min."
         case .readerFailed(let error):
             if isSparseContainerOpenFailure(error) {
                 return """
@@ -930,6 +936,10 @@ enum SegmentExporterError: LocalizedError {
         case .writerSetupFailed:
             return "Could not start writing segment MP4."
         case .writerFailed(let error):
+            let ns = error as NSError
+            if ns.domain == AVFoundationErrorDomain {
+                return "Write failed (AVFoundation \(ns.code)): \(error.localizedDescription)"
+            }
             return "Write failed: \(error.localizedDescription)"
         case .writerBackpressure:
             return "Segment writer timed out waiting for data."

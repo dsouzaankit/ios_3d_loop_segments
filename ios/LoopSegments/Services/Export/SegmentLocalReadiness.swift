@@ -110,13 +110,15 @@ enum SegmentLocalReadiness {
                     0,
                     min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
                 ) >= (needEnd - requiredByteRange.start)
-                if trackLoadStreak >= 3, rangeReady, windowBytesReady, indexTailOnDisk(), probeAttempts >= 2 {
+                if trackLoadStreak >= 3, rangeReady, windowBytesReady, indexTailOnDisk(), probeAttempts >= 2,
+                   !reason.contains("only 0 video samples") {
                     log(
                         "Readiness: window + index on disk but tracks still not visible — exporting anyway (temp/stream fallback during passthrough)"
                     )
                     return
                 }
-                if trackLoadStreak >= 8, rangeReady, probeAttempts >= 4 {
+                if trackLoadStreak >= 8, rangeReady, probeAttempts >= 4,
+                   !reason.contains("only 0 video samples") {
                     log(
                         "Readiness: \(formatBytes(filled.end - filled.start)) on disk but tracks still not visible — exporting anyway (will retry reader during passthrough)"
                     )

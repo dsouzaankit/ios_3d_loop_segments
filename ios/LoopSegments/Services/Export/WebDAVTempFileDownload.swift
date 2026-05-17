@@ -35,6 +35,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     /// When set, background download stops at this byte (avoids pulling the rest of a multi‑GB file).
     private var downloadHighWaterMark: Int64 = 0
     private var backgroundPausedForStream = false
+    /// Contiguous bytes downloaded from the active export window start (no holes — `regionFilledEnd` can lie).
+    private var exportWindowStart: Int64 = 0
+    private var exportWindowContiguousEnd: Int64 = 0
     private let throughput = DownloadThroughput()
 
     init(
@@ -215,8 +218,12 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             try await ensureIndexTailOnDisk()
         }
         try writeHandle?.synchronize()
+        lock.lock()
+        exportWindowStart = range.start
+        exportWindowContiguousEnd = max(exportWindowContiguousEnd, rangeEnd)
+        lock.unlock()
         log(
-            "Window on disk — contiguous \(formatBytes(filledSpan().start))–\(formatBytes(filledSpan().end))\(averageSpeedLogSuffix())"
+            "Window on disk — contiguous \(formatBytes(range.start))–\(formatBytes(exportWindowContiguousEnd))\(averageSpeedLogSuffix())"
         )
     }
 
@@ -278,7 +285,19 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     func isRangeFilled(_ range: TimelineByteRange) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return regionStart <= range.start && regionFilledEnd >= range.end
+        guard exportWindowStart == range.start else { return false }
+        return exportWindowContiguousEnd >= range.end
+    }
+
+    private func beginTrackingExportWindow(_ range: TimelineByteRange) {
+        exportWindowStart = range.start
+        if regionStart <= range.start, regionFilledEnd > range.start {
+            exportWindowContiguousEnd = regionFilledEnd
+        } else if regionStart == range.start {
+            exportWindowContiguousEnd = regionFilledEnd
+        } else {
+            exportWindowContiguousEnd = range.start
+        }
     }
 
     func waitUntilWindowReady(
@@ -295,14 +314,17 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         var lastLoggedPercent = -Self.progressStepPercent
         var lastStallLog = CFAbsoluteTimeGetCurrent()
 
+        lock.lock()
+        beginTrackingExportWindow(range)
+        lock.unlock()
+
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
             if isRangeFilled(range) {
-                let span = filledSpanLocked()
                 let endMin = Int(timelineEndSeconds) / 60
                 let endSec = Int(timelineEndSeconds) % 60
                 log(
-                    "Download ready for \(endMin):\(String(format: "%02d", endSec)) — \(formatBytes(span.start))–\(formatBytes(span.end)) on disk\(speedLogSuffix())"
+                    "Download ready for \(endMin):\(String(format: "%02d", endSec)) — contiguous \(formatBytes(exportWindowStart))–\(formatBytes(exportWindowContiguousEnd)) on disk\(speedLogSuffix())"
                 )
                 return
             }
@@ -368,8 +390,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             if headOnDisk {
                 regionStart = 0
             }
-            regionFilledEnd = max(regionFilledEnd, range.start)
-            downloadCursor = max(regionFilledEnd, range.start)
+            exportWindowStart = range.start
+            exportWindowContiguousEnd = range.start
+            downloadCursor = range.start
             lock.unlock()
             let seekMin = Int(seekSeconds) / 60
             let seekSec = Int(seekSeconds) % 60
@@ -430,7 +453,22 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             regionStart = offset
             if end > regionFilledEnd { regionFilledEnd = end }
         }
+        extendExportWindowContiguous(offset: offset, end: end)
         markIndexTailIfComplete(writeEnd: end)
+    }
+
+    private func extendExportWindowContiguous(offset: Int64, end: Int64) {
+        if offset == exportWindowContiguousEnd {
+            exportWindowContiguousEnd = max(exportWindowContiguousEnd, end)
+            return
+        }
+        if offset >= exportWindowStart, offset <= exportWindowContiguousEnd {
+            exportWindowContiguousEnd = max(exportWindowContiguousEnd, end)
+            return
+        }
+        if offset >= exportWindowStart, exportWindowContiguousEnd <= exportWindowStart, offset == exportWindowStart {
+            exportWindowContiguousEnd = end
+        }
     }
 
     private func markIndexTailIfComplete(writeEnd: Int64) {
