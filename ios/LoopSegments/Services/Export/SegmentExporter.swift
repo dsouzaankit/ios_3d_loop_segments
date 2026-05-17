@@ -268,7 +268,7 @@ private final class SegmentWriterContext {
         videoInput = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: nil,
-            sourceFormatDescription: videoFormat
+            sourceFormatHint: videoFormat
         )
         videoInput.expectsMediaDataInRealTime = true
 
@@ -276,7 +276,7 @@ private final class SegmentWriterContext {
             audioInput = AVAssetWriterInput(
                 mediaType: .audio,
                 outputSettings: nil,
-                sourceFormatDescription: audioFormat
+                sourceFormatHint: audioFormat
             )
             audioInput?.expectsMediaDataInRealTime = true
         } else {
