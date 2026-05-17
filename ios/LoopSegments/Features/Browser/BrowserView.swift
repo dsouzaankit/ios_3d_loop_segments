@@ -6,6 +6,7 @@ struct BrowserView: View {
     @State private var items: [WebDAVItem] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var listToken = 0
 
     private var currentPath: String { pathStack.last ?? "/" }
 
@@ -21,10 +22,16 @@ struct BrowserView: View {
                         }
                         ForEach(items) { item in
                             if item.isDirectory {
-                                Button(item.name) { enter(item) }
+                                Button {
+                                    enter(item)
+                                } label: {
+                                    Label(item.name, systemImage: "folder")
+                                }
                             } else if item.isVideo {
-                                NavigationLink(item.name) {
+                                NavigationLink {
                                     ExportView(item: item)
+                                } label: {
+                                    Label(item.name, systemImage: "film")
                                 }
                             }
                         }
@@ -32,6 +39,7 @@ struct BrowserView: View {
                 }
             }
             .navigationTitle(pathTitle)
+            .navigationSubtitle(navigationSubtitle)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Sign out") { session.signOut() }
@@ -40,10 +48,13 @@ struct BrowserView: View {
                     Button("Refresh") { Task { await reload() } }
                 }
             }
-            .task(id: currentPath) {
+            .task(id: listToken) {
                 await reload()
             }
-            .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            .alert("Error", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
                 Button("OK") { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "")
@@ -55,23 +66,44 @@ struct BrowserView: View {
         currentPath == "/" ? "pCloud" : (currentPath as NSString).lastPathComponent
     }
 
+    private var navigationSubtitle: String {
+        if currentPath == "/" { return "/" }
+        return currentPath
+    }
+
     private func enter(_ item: WebDAVItem) {
-        pathStack.append(item.href.hasSuffix("/") ? item.href : item.href + "/")
+        guard item.isDirectory else { return }
+        let next = WebDAVURLBuilder.directoryListingPath(item.href)
+        guard !WebDAVURLBuilder.pathsEqual(next, currentPath) else { return }
+        pathStack.append(next)
+        items = []
+        isLoading = true
+        listToken += 1
     }
 
     private func goUp() {
         guard pathStack.count > 1 else { return }
         pathStack.removeLast()
+        items = []
+        isLoading = true
+        listToken += 1
     }
 
     private func reload() async {
         guard let credentials = session.credentials else { return }
+        let path = currentPath
         isLoading = true
         defer { isLoading = false }
         do {
             let client = WebDAVClient(credentials: credentials)
-            items = try await client.list(path: currentPath)
+            let loaded = try await client.list(path: path)
+            guard !Task.isCancelled, WebDAVURLBuilder.pathsEqual(path, currentPath) else { return }
+            items = loaded
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
+            guard WebDAVURLBuilder.pathsEqual(path, currentPath) else { return }
             errorMessage = error.localizedDescription
         }
     }

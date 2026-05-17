@@ -6,6 +6,7 @@ final class AppSession: ObservableObject {
     @Published var isExportRunning = false
 
     private let credentialStore = CredentialStore()
+    private(set) var userRequestedExportCancel = false
     /// Created on first export (lazy init for export stack).
     private lazy var exportCoordinator = ExportCoordinator()
 
@@ -31,6 +32,8 @@ final class AppSession: ObservableObject {
         guard let credentials else { throw ExportError.notSignedIn }
         guard !isExportRunning else { throw ExportError.jobAlreadyActive }
 
+        userRequestedExportCancel = false
+        exportCoordinator.userRequestedCancel = false
         isExportRunning = true
         defer { isExportRunning = false }
 
@@ -44,6 +47,8 @@ final class AppSession: ObservableObject {
     }
 
     func cancelExport() {
+        userRequestedExportCancel = true
+        exportCoordinator.userRequestedCancel = true
         exportCoordinator.cancel()
     }
 }

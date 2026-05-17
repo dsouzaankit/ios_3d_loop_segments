@@ -38,6 +38,39 @@ enum WebDAVURLBuilder {
         return leaf.removingPercentEncoding ?? leaf
     }
 
+    /// Combine PROPFIND `href` with the directory that was listed (fixes relative `subdir/` entries).
+    static func resolveHref(_ href: String, relativeTo listingPath: String) -> String {
+        let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains("://") {
+            return normalizedHrefPath(trimmed)
+        }
+
+        if trimmed.hasPrefix("/") {
+            return normalizedHrefPath(trimmed)
+        }
+
+        var base = normalizedHrefPath(listingPath)
+        if base == "/" {
+            return normalizedHrefPath("/\(trimmed)")
+        }
+        if !base.hasSuffix("/") {
+            base += "/"
+        }
+        return normalizedHrefPath(base + trimmed)
+    }
+
+    static func directoryListingPath(_ path: String) -> String {
+        let normalized = normalizedHrefPath(path)
+        if normalized == "/" { return "/" }
+        return normalized.hasSuffix("/") ? normalized : normalized + "/"
+    }
+
+    static func pathsEqual(_ a: String, _ b: String) -> Bool {
+        let lhs = directoryListingPath(a).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let rhs = directoryListingPath(b).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return lhs == rhs
+    }
+
     private static func fileURLForPath(_ path: String, baseURL: URL) -> URL {
         let pathOnly = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
         let decoded = pathOnly.removingPercentEncoding ?? pathOnly

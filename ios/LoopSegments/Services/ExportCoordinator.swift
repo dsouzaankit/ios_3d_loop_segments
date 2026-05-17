@@ -4,6 +4,7 @@ final class ExportCoordinator {
     private let exporter = SegmentExporter()
     private let lock = NSLock()
     private var active = false
+    var userRequestedCancel = false
 
     func cancel() {
         exporter.cancel()
@@ -70,10 +71,15 @@ final class ExportCoordinator {
             logWriter.finish(status: result.reachedEnd ? "completed (end of file)" : "stopped")
             return result
         } catch SegmentExporterError.cancelled {
-            await SegmentCleanup.removeAllSegments(log: logHandler)
-            logHandler("Cleanup: removed segment files after Stop")
-            logWriter.finish(status: "cancelled")
-            throw SegmentExporterError.cancelled
+            if userRequestedCancel {
+                await SegmentCleanup.removeAllSegments(log: logHandler)
+                logHandler("Cleanup: removed segment files after Stop")
+                logWriter.finish(status: "cancelled")
+                throw SegmentExporterError.cancelled
+            }
+            logHandler("Export interrupted by media reader (not Stop) — try seek 0 min or Wi‑Fi")
+            logWriter.finish(status: "interrupted", error: SegmentExporterError.cancelled)
+            throw SegmentExporterError.readerInterrupted
         } catch {
             logHandler("Export failed — partial segment files kept for USB/Photos sync")
             logWriter.finish(status: "failed", error: error)

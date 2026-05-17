@@ -28,6 +28,23 @@ final class SegmentExporter {
         if cancelled { throw SegmentExporterError.cancelled }
     }
 
+    private func mapReaderFailure(_ error: Error?) -> SegmentExporterError? {
+        guard let error else { return nil }
+        if isCancelled { return .cancelled }
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain, ns.code == NSUserCancelledError {
+            return .readerInterrupted
+        }
+        if error is CancellationError {
+            return .readerInterrupted
+        }
+        let text = error.localizedDescription.lowercased()
+        if text.contains("cancel") {
+            return .readerInterrupted
+        }
+        return .readerFailed(error)
+    }
+
     func run(
         inputURL: URL,
         seekMs: Int64,
@@ -146,7 +163,7 @@ final class SegmentExporter {
         while true {
             try checkCancelled()
             if reader.status == .failed {
-                throw reader.error.map { SegmentExporterError.readerFailed($0) } ?? SegmentExporterError.readerSetupFailed
+                throw mapReaderFailure(reader.error) ?? SegmentExporterError.readerSetupFailed
             }
 
             let videoSample = videoOutput.copyNextSampleBuffer()
@@ -422,6 +439,7 @@ private enum CodecSupport {
 
 enum SegmentExporterError: LocalizedError {
     case cancelled
+    case readerInterrupted
     case seekPastEnd
     case noVideoTrack
     case unsupportedCodec(String)
@@ -436,6 +454,8 @@ enum SegmentExporterError: LocalizedError {
         switch self {
         case .cancelled:
             return "Export cancelled."
+        case .readerInterrupted:
+            return "pCloud read was interrupted (app did not stop). Try seek 0 min, keep app open, or use Wi‑Fi."
         case .seekPastEnd:
             return "Start position is at or past the end of the file."
         case .noVideoTrack:

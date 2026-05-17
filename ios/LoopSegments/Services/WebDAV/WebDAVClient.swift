@@ -13,7 +13,8 @@ final class WebDAVClient {
         request.httpMethod = "PROPFIND"
         request.setValue("1", forHTTPHeaderField: "Depth")
         request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
-        request.setValue(credentials.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
+        let auth = WebDAVAuth.provider(fallback: credentials)
+        request.setValue(auth(), forHTTPHeaderField: "Authorization")
 
         let (data, response) = try await WebDAVMediaSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -23,12 +24,27 @@ final class WebDAVClient {
             throw WebDAVError.httpStatus(http.statusCode)
         }
 
-        return try WebDAVResponseParser.parse(data: data, baseHost: credentials.region.webDAVHost)
+        let listingPath = WebDAVURLBuilder.directoryListingPath(path)
+        let parsed = try WebDAVResponseParser.parse(data: data, baseHost: credentials.region.webDAVHost)
+        return parsed.compactMap { item in
+            let resolved = WebDAVURLBuilder.resolveHref(item.href, relativeTo: listingPath)
+            if WebDAVURLBuilder.pathsEqual(resolved, listingPath) {
+                return nil
+            }
+            let dirPath = item.isDirectory
+                ? WebDAVURLBuilder.directoryListingPath(resolved)
+                : resolved
+            return WebDAVItem(
+                href: dirPath,
+                name: item.name,
+                isDirectory: item.isDirectory,
+                contentLength: item.contentLength
+            )
+        }
     }
 
     private func resolveURL(for path: String) -> URL {
-        var normalized = path
-        if !normalized.hasPrefix("/") { normalized = "/" + normalized }
+        let normalized = WebDAVURLBuilder.directoryListingPath(path)
         if normalized == "/" {
             return credentials.region.baseURL
         }

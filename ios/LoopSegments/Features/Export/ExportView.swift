@@ -141,6 +141,9 @@ struct ExportView: View {
             status = "Done — 3d_op_00/01 kept in Exports (and Photos if enabled). Copy to PC, then leave the app to clear."
         } catch SegmentExporterError.cancelled {
             status = "Stopped — segment files removed from device"
+        } catch SegmentExporterError.readerInterrupted {
+            errorMessage = "pCloud read was interrupted (not Stop). Try seek 0 min or Wi‑Fi."
+            status = "Interrupted — partial segments may be in Exports"
         } catch {
             errorMessage = error.localizedDescription
             status = "Failed — partial segments kept in Exports for USB sync"
