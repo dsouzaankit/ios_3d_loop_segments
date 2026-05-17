@@ -139,6 +139,12 @@ enum PCloudAuth {
         if code == 0, let auth = json["auth"] as? String, !auth.isEmpty {
             return auth
         }
+        if code == 0 {
+            throw PCloudAPIError.authenticationFailed(
+                PCloudAPIRequest.errorMessage(json)
+                    ?? "pCloud accepted login but returned no API token."
+            )
+        }
         throw PCloudAPIError.api(code: code, message: PCloudAPIRequest.errorMessage(json))
     }
 

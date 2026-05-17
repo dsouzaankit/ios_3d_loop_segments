@@ -92,33 +92,73 @@ final class PCloudAPIClient {
 
     private func performSearch(query: String, credentials: WebDAVCredentials) async throws -> [String: Any] {
         let token = try await ensureAuthToken(credentials: credentials)
-        let apiHost = authAPIHost ?? authRegion?.apiHost ?? credentials.region.apiHost
-        var parameters: [String: String] = [
-            "auth": token,
-            "query": query,
-            "searchall": "1",
-        ]
-        let json = try await PCloudAPIRequest.get(
-            host: apiHost,
-            method: "search",
-            parameters: parameters,
-            session: session
-        )
+        let hosts = await searchHostsToTry(credentials: credentials)
+        var lastJSON: [String: Any]?
+        var lastCode = -1
 
-        let code = PCloudAPIRequest.resultCode(json)
-        if code == 1000 || code == 2000 {
-            authToken = nil
-            authAPIHost = nil
-            let retryToken = try await ensureAuthToken(credentials: credentials)
-            parameters["auth"] = retryToken
-            return try await PCloudAPIRequest.get(
-                host: apiHost,
-                method: "search",
-                parameters: parameters,
-                session: session
-            )
+        for host in hosts {
+            for includeSearchAll in [true, false] {
+                var parameters: [String: String] = [
+                    "auth": token,
+                    "query": query,
+                ]
+                if includeSearchAll {
+                    parameters["searchall"] = "1"
+                }
+                let json = try await PCloudAPIRequest.get(
+                    host: host,
+                    method: "search",
+                    parameters: parameters,
+                    session: session
+                )
+                let code = PCloudAPIRequest.resultCode(json)
+                if code == 1000 || code == 2000 {
+                    authToken = nil
+                    authAPIHost = nil
+                    let retryToken = try await ensureAuthToken(credentials: credentials)
+                    parameters["auth"] = retryToken
+                    let retryJSON = try await PCloudAPIRequest.get(
+                        host: host,
+                        method: "search",
+                        parameters: parameters,
+                        session: session
+                    )
+                    let retryCode = PCloudAPIRequest.resultCode(retryJSON)
+                    if retryCode == 0 {
+                        authAPIHost = host
+                        return retryJSON
+                    }
+                    lastJSON = retryJSON
+                    lastCode = retryCode
+                    break
+                }
+                if code == 0 {
+                    authAPIHost = host
+                    return json
+                }
+                lastJSON = json
+                lastCode = code
+            }
         }
-        return json
+
+        if let lastJSON {
+            return lastJSON
+        }
+        throw PCloudAPIError.api(code: lastCode, message: nil)
+    }
+
+    private func searchHostsToTry(credentials: WebDAVCredentials) async -> [String] {
+        var hosts: [String] = []
+        if let saved = credentials.apiAuthHost, !saved.isEmpty {
+            hosts.append(saved)
+        }
+        if let authAPIHost, !authAPIHost.isEmpty {
+            hosts.append(authAPIHost)
+        }
+        let resolved = await PCloudAPIHostResolver.hostsToTry(for: credentials.region, session: session)
+        hosts.append(contentsOf: resolved)
+        var seen = Set<String>()
+        return hosts.filter { seen.insert($0).inserted }
     }
 
     private func resolvedCredentials() -> WebDAVCredentials {
@@ -203,9 +243,14 @@ enum PCloudAPIError: LocalizedError {
             """
         case 1000:
             return "pCloud search requires login — sign out and sign in again."
+        case 0:
+            return "pCloud API returned an unexpected success response without data. Sign out and sign in again."
         default:
             if !detail.isEmpty {
                 return "pCloud error \(code): \(detail)"
+            }
+            if code < 0 {
+                return "Unexpected pCloud API response — folder browse may still work."
             }
             return "pCloud error \(code)."
         }

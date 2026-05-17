@@ -39,13 +39,28 @@ enum PCloudAPIRequest {
     }
 
     static func resultCode(_ json: [String: Any]) -> Int {
-        if let code = json["result"] as? Int { return code }
-        if let code = json["result"] as? NSNumber { return code.intValue }
-        return -1
+        switch json["result"] {
+        case let code as Int:
+            return code
+        case let code as NSNumber:
+            return code.intValue
+        case let code as String:
+            return Int(code.trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
+        default:
+            return -1
+        }
+    }
+
+    static func isSuccess(_ json: [String: Any]) -> Bool {
+        resultCode(json) == 0
     }
 
     static func errorMessage(_ json: [String: Any]) -> String? {
-        json["error"] as? String
+        if let message = json["error"] as? String {
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
     }
 
     static func throwIfAPIError(_ json: [String: Any]) throws {
