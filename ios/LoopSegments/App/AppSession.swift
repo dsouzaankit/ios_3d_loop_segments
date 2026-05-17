@@ -6,7 +6,8 @@ final class AppSession: ObservableObject {
     @Published var isExportRunning = false
 
     private let credentialStore = CredentialStore()
-    private let exportCoordinator = ExportCoordinator()
+    /// Created on first export so ffmpeg-kit frameworks are not loaded at app launch.
+    private lazy var exportCoordinator = ExportCoordinator()
 
     init() {
         credentials = credentialStore.load()

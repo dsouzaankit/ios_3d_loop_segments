@@ -115,6 +115,10 @@ jobs:
               echo "ERROR: Missing CFBundleIdentifier in IPA (Sideloadly will fail)."
               exit 1
             fi
+            if ! /usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest' "$plist_path" &>/dev/null; then
+              echo "ERROR: Missing UIApplicationSceneManifest (app may crash on launch)."
+              exit 1
+            fi
             rm -rf ipa-verify
           }
 
