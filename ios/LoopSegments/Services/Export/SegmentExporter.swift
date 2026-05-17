@@ -216,12 +216,15 @@ final class SegmentExporter {
                 }
 
                 let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
-                try await downloader.waitUntilWindowReady(
+                let byteRange = downloader.byteRangeForTimeline(
                     timelineStartSeconds: windowStartSeconds,
                     timelineEndSeconds: windowEndSeconds,
                     durationSeconds: durationSeconds
                 )
-                try await downloader.waitUntilLocalExportReady(
+                logHandler(
+                    "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
+                )
+                try await downloader.waitUntilWindowReady(
                     timelineStartSeconds: windowStartSeconds,
                     timelineEndSeconds: windowEndSeconds,
                     durationSeconds: durationSeconds
@@ -232,14 +235,7 @@ final class SegmentExporter {
                     seconds: windowEndSeconds - windowStartSeconds,
                     preferredTimescale: 600
                 )
-                let byteRange = downloader.byteRangeForTimeline(
-                    timelineStartSeconds: windowStartSeconds,
-                    timelineEndSeconds: windowEndSeconds,
-                    durationSeconds: durationSeconds
-                )
-                logHandler(
-                    "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
-                )
+                logHandler("Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…")
                 try await SegmentLocalReadiness.waitUntilReadable(
                     fileURL: downloader.fileURL,
                     rangeStart: rangeStart,

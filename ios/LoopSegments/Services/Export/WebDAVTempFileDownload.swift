@@ -163,10 +163,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             Int64((endSec / effectiveDuration) * Double(totalLength)) + Self.timelineSlackBytes
         )
         let windowSeconds = endSec - startSec
-        if totalLength > 900_000_000, windowSeconds <= 60.5, startSec <= 0.5 {
-            endByte = max(endByte, min(Int64(300 * 1024 * 1024) + Self.timelineSlackBytes, totalLength))
-        } else if totalLength > 500_000_000, windowSeconds <= 60.5, startSec <= 0.5 {
-            endByte = max(endByte, min(Int64(180 * 1024 * 1024) + Self.timelineSlackBytes, totalLength))
+        if windowSeconds <= 60.5, startSec <= 0.5 {
+            let oneMinuteFromSize = Int64((60.0 / effectiveDuration) * Double(totalLength)) + Self.timelineSlackBytes
+            var floor = oneMinuteFromSize
+            if totalLength > 900_000_000 {
+                floor = max(floor, Int64(300 * 1024 * 1024) + Self.timelineSlackBytes)
+            } else if totalLength > 500_000_000 {
+                floor = max(floor, Int64(180 * 1024 * 1024) + Self.timelineSlackBytes)
+            }
+            endByte = max(endByte, min(floor, totalLength))
         }
         if endByte <= startByte {
             endByte = min(totalLength, startByte + Self.downloadChunkBytes)
@@ -196,7 +201,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
-            if isRangeFilled(range) || filledSpanLocked().end >= totalLength { return }
+            if isRangeFilled(range) || filledSpanLocked().end >= totalLength {
+                let span = filledSpanLocked()
+                let endMin = Int(timelineEndSeconds) / 60
+                let endSec = Int(timelineEndSeconds) % 60
+                log(
+                    "Download ready for \(endMin):\(String(format: "%02d", endSec)) — \(formatBytes(span.start))–\(formatBytes(span.end)) on disk\(speedLogSuffix())"
+                )
+                return
+            }
 
             let now = CFAbsoluteTimeGetCurrent()
             let span = filledSpanLocked()
@@ -214,29 +227,6 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
-    }
-
-    func waitUntilLocalExportReady(
-        timelineStartSeconds: Double,
-        timelineEndSeconds: Double,
-        durationSeconds: Double
-    ) async throws {
-        guard durationSeconds > 0, tailOnDisk else { return }
-        let range = byteRangeForTimeline(
-            timelineStartSeconds: timelineStartSeconds,
-            timelineEndSeconds: timelineEndSeconds,
-            durationSeconds: durationSeconds
-        )
-        while !isRangeFilled(range) {
-            if isCancelled() { throw SegmentExporterError.cancelled }
-            try await Task.sleep(nanoseconds: 250_000_000)
-        }
-        let endMin = Int(timelineEndSeconds) / 60
-        let endSec = Int(timelineEndSeconds) % 60
-        let span = filledSpan()
-        log(
-            "Local temp ready for \(endMin):\(String(format: "%02d", endSec)) — \(formatBytes(span.start))–\(formatBytes(span.end)) on disk"
-        )
     }
 
     func waitUntilComplete() async throws {
