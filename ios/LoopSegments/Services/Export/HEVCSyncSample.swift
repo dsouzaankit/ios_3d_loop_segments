@@ -8,7 +8,7 @@ enum HEVCSyncSample {
       return true
     }
     let codec = CMFormatDescriptionGetMediaSubType(videoFormat)
-    guard codec == kCMVideoCodecType_HEVC else {
+    guard CodecSupport.isHEVCVideo(codec) else {
       return true
     }
     return containsRandomAccessPointNAL(sample)

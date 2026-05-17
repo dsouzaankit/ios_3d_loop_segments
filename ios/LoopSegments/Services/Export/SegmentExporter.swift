@@ -509,9 +509,15 @@ final class SegmentExporter {
         log: @escaping (String) -> Void
     ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
         let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
-        let videoFormat = try await videoFormatDescription(from: videoTrack)
-        guard CodecSupport.canPassthroughToMP4(videoFormat) else {
-            throw SegmentExporterError.unsupportedCodec(CodecSupport.fourCCString(videoFormat))
+        let rawVideoFormat = try await videoFormatDescription(from: videoTrack)
+        guard CodecSupport.canPassthroughToMP4(rawVideoFormat) else {
+            throw SegmentExporterError.unsupportedCodec(CodecSupport.fourCCString(rawVideoFormat))
+        }
+        let videoFormat = CodecSupport.normalizedForMP4Writer(rawVideoFormat)
+        if CMFormatDescriptionGetMediaSubType(rawVideoFormat) != CMFormatDescriptionGetMediaSubType(videoFormat) {
+            log(
+                "MP4 passthrough: writer uses \(CodecSupport.fourCCString(videoFormat)) (source track \(CodecSupport.fourCCString(rawVideoFormat)))"
+            )
         }
         var audioFormat: CMFormatDescription?
         if let audioTrack {
@@ -656,10 +662,36 @@ final class SegmentWriterContext {
 
 // MARK: - Codec support
 
-private enum CodecSupport {
+enum CodecSupport {
+    /// MP4 brands for HEVC; AVFoundation writer expects `hvc1`, sources often report `hev1`.
+    private static let hev1Subtype: FourCharCode = fourCC("hev1")
+
+    static func isHEVCVideo(_ codec: FourCharCode) -> Bool {
+        codec == kCMVideoCodecType_HEVC || codec == hev1Subtype
+    }
+
+    /// Re-tag `hev1` → `hvc1` so `AVAssetWriter` accepts the same bitstream/hvcc extradata.
+    static func normalizedForMP4Writer(_ format: CMFormatDescription) -> CMFormatDescription {
+        let codec = CMFormatDescriptionGetMediaSubType(format)
+        guard codec == hev1Subtype else { return format }
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format)
+        let extensions = CMFormatDescriptionGetExtensions(format) as CFDictionary?
+        var out: CMFormatDescription?
+        let status = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: kCMVideoCodecType_HEVC,
+            width: dimensions.width,
+            height: dimensions.height,
+            extensions: extensions,
+            formatDescriptionOut: &out
+        )
+        guard status == noErr, let out else { return format }
+        return out
+    }
+
     static func canPassthroughToMP4(_ format: CMFormatDescription) -> Bool {
         let codec = CMFormatDescriptionGetMediaSubType(format)
-        if codec == kCMVideoCodecType_H264 || codec == kCMVideoCodecType_HEVC {
+        if codec == kCMVideoCodecType_H264 || isHEVCVideo(codec) {
             return true
         }
         if #available(iOS 16.0, *) {
@@ -724,7 +756,7 @@ enum SegmentExporterError: LocalizedError {
         case .noVideoTrack:
             return "No video track found in this file."
         case .unsupportedCodec(let fourCC):
-            return "Codec ‘\(fourCC)’ cannot be stream-copied to MP4 on this device. Try an H.264/AAC MP4 source."
+            return "Codec ‘\(fourCC)’ cannot be stream-copied to MP4 on this device. Use H.264 or HEVC (hvc1/hev1) with AAC."
         case .missingFormatDescription:
             return "Could not read track format from the file."
         case .readerSetupFailed:
