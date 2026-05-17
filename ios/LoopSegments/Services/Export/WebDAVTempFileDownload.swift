@@ -1,10 +1,9 @@
 import Foundation
 
-/// Background download to a growing local file; export starts after ~1 min buffer, reads use disk then pCloud.
-final class WebDAVProgressiveBuffer: @unchecked Sendable {
-    static let primeWallSeconds: TimeInterval = 60
-    static let primeMinimumBytes: Int64 = 1024 * 1024
+/// Downloads the full remote MP4 to temp storage; exposes contiguous progress for timed segment export.
+final class WebDAVTempFileDownload: @unchecked Sendable {
     private static let downloadChunkBytes: Int64 = 1024 * 1024
+    private static let progressStepPercent = 5
 
     let fileURL: URL
     let totalLength: Int64
@@ -16,9 +15,9 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
 
     private let lock = NSLock()
     private var contiguousEnd: Int64 = 0
+    private var tailOnDisk = false
     private var downloadTask: Task<Void, Error>?
     private var writeHandle: FileHandle?
-    private var readHandle: FileHandle?
 
     init(
         remoteURL: URL,
@@ -30,6 +29,8 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
         guard let total = rangeCache.contentLengthValue(), total > 0 else {
             throw WebDAVResourceLoaderError.missingContentLength
         }
+        try Self.ensureFreeDiskSpace(forBytes: total)
+
         self.remoteURL = remoteURL
         self.authorizationProvider = authorizationProvider
         self.isCancelled = isCancelled
@@ -42,8 +43,6 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
             throw SegmentExporterError.writerSetupFailed
         }
         writeHandle = try FileHandle(forWritingTo: fileURL)
-        readHandle = try FileHandle(forReadingFrom: fileURL)
-
         try applyCachedSpans(rangeCache)
         startBackgroundDownload()
     }
@@ -51,74 +50,11 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
     deinit {
         downloadTask?.cancel()
         try? writeHandle?.close()
-        try? readHandle?.close()
     }
 
     func cancel() {
         downloadTask?.cancel()
         downloadTask = nil
-    }
-
-    /// Wait ~60s and at least 1 MiB contiguous from start, then export may begin while download continues.
-    func primeForPlayback() async throws {
-        log("Buffering from pCloud — export starts after ~\(Int(Self.primeWallSeconds))s (download continues in background)…")
-        let started = CFAbsoluteTimeGetCurrent()
-        var lastLogSecond = -10
-
-        while true {
-            if isCancelled() { throw SegmentExporterError.cancelled }
-
-            let contiguous = contiguousEndValue()
-            let elapsed = CFAbsoluteTimeGetCurrent() - started
-            let elapsedInt = Int(elapsed)
-
-            if elapsed >= Self.primeWallSeconds, contiguous >= Self.primeMinimumBytes {
-                log("Buffer ready — \(formatBytes(contiguous)) after \(elapsedInt)s; starting stream export")
-                return
-            }
-
-            if elapsedInt - lastLogSecond >= 10 {
-                lastLogSecond = elapsedInt
-                let pct = totalLength > 0 ? Int(contiguous * 100 / totalLength) : 0
-                log("Buffering… \(formatBytes(contiguous)) (\(elapsedInt)s / \(Int(Self.primeWallSeconds))s, \(pct)% of file on disk)")
-            }
-
-            try await Task.sleep(nanoseconds: 250_000_000)
-        }
-    }
-
-    func hasContiguousBytes(until endInclusive: Int64) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return contiguousEnd > endInclusive
-    }
-
-    func read(offset: Int64, length: Int) throws -> Data? {
-        lock.lock()
-        let endNeeded = offset + Int64(length)
-        guard endNeeded <= contiguousEnd else {
-            lock.unlock()
-            return nil
-        }
-        lock.unlock()
-
-        guard let readHandle else { return nil }
-        try readHandle.seek(toOffset: UInt64(offset))
-        guard let data = try readHandle.read(upToCount: length), data.count == length else {
-            return nil
-        }
-        return data
-    }
-
-    /// Brief wait for sequential download to reach `endInclusive` before hitting pCloud directly.
-    func waitForContiguous(until endInclusive: Int64, timeoutSeconds: TimeInterval) async -> Bool {
-        let deadline = CFAbsoluteTimeGetCurrent() + timeoutSeconds
-        while CFAbsoluteTimeGetCurrent() < deadline {
-            if hasContiguousBytes(until: endInclusive) { return true }
-            if isCancelled() { return false }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        return hasContiguousBytes(until: endInclusive)
     }
 
     func contiguousEndValue() -> Int64 {
@@ -127,9 +63,68 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
         return contiguousEnd
     }
 
+    /// MP4 index (tail) + head on disk so `AVURLAsset` can open the growing file.
+    func waitUntilPlayable() async throws {
+        log("Downloading to temp — \(formatBytes(totalLength)) (segments publish per 60s as data arrives)…")
+        while true {
+            if isCancelled() { throw SegmentExporterError.cancelled }
+            lock.lock()
+            let head = contiguousEnd
+            let hasTail = tailOnDisk
+            lock.unlock()
+            if head >= min(256 * 1024, totalLength) && hasTail { return }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    /// Wait until sequential download likely covers media through `timelineEndSeconds` (seek 0 recommended).
+    func waitUntilTimelineEnd(
+        timelineEndSeconds: Double,
+        durationSeconds: Double
+    ) async throws {
+        guard durationSeconds > 0 else { return }
+        let endSeconds = min(timelineEndSeconds, durationSeconds)
+        let fraction = endSeconds / durationSeconds
+        let slack: Int64 = 12 * 1024 * 1024
+        let required = min(totalLength, Int64(Double(totalLength) * fraction) + slack)
+        var lastLoggedPercent = -progressStepPercent
+
+        while true {
+            if isCancelled() { throw SegmentExporterError.cancelled }
+            let contiguous = contiguousEndValue()
+            if contiguous >= required || contiguous >= totalLength { return }
+
+            let dlPct = totalLength > 0 ? Int(contiguous * 100 / totalLength) : 0
+            if dlPct >= lastLoggedPercent + progressStepPercent {
+                lastLoggedPercent = (dlPct / progressStepPercent) * progressStepPercent
+                let mediaMin = Int(endSeconds) / 60
+                let mediaSec = Int(endSeconds) % 60
+                log("Download \(dlPct)% — waiting for media through \(mediaMin):\(String(format: "%02d", mediaSec)) (\(formatBytes(contiguous)) on disk)")
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    func waitUntilComplete() async throws {
+        while true {
+            if isCancelled() { throw SegmentExporterError.cancelled }
+            if contiguousEndValue() >= totalLength {
+                log("Temp copy complete — \(formatBytes(totalLength))")
+                return
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+    }
+
     private func applyCachedSpans(_ cache: WebDAVRangeCache) throws {
+        let tailThreshold = max(0, totalLength - 3 * 1024 * 1024)
         for span in cache.storedSpans() {
             try write(span.data, at: span.start)
+            if span.start >= tailThreshold {
+                lock.lock()
+                tailOnDisk = true
+                lock.unlock()
+            }
         }
     }
 
@@ -137,7 +132,6 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
         guard let writeHandle else { return }
         try writeHandle.seek(toOffset: UInt64(offset))
         try writeHandle.write(contentsOf: data)
-
         lock.lock()
         if offset == contiguousEnd {
             contiguousEnd += Int64(data.count)
@@ -146,7 +140,7 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
     }
 
     private func startBackgroundDownload() {
-        downloadTask = Task.detached(priority: .utility) { [weak self] in
+        downloadTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
                 try await self.runDownloadLoop()
@@ -154,13 +148,14 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
                 return
             } catch {
                 if !self.isCancelled() {
-                    self.log("Background download stopped: \(error.localizedDescription)")
+                    self.log("Download stopped: \(error.localizedDescription)")
                 }
             }
         }
     }
 
     private func runDownloadLoop() async throws {
+        var lastLoggedPercent = -progressStepPercent
         while true {
             if isCancelled() || Task.isCancelled { throw CancellationError() }
 
@@ -169,7 +164,6 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
 
             let end = min(start + Self.downloadChunkBytes - 1, totalLength - 1)
             let length = Int(end - start + 1)
-
             let auth = authorizationProvider()
             let data = try await Self.fetchRange(
                 remoteURL: remoteURL,
@@ -180,9 +174,27 @@ final class WebDAVProgressiveBuffer: @unchecked Sendable {
             guard data.count == length else {
                 throw WebDAVResourceLoaderError.invalidResponse
             }
-
             try write(data, at: start)
+
+            let pct = Int((end + 1) * 100 / totalLength)
+            if pct >= lastLoggedPercent + progressStepPercent || end + 1 >= totalLength {
+                lastLoggedPercent = (pct / progressStepPercent) * progressStepPercent
+                log("Download \(pct)% — \(formatBytes(end + 1)) / \(formatBytes(totalLength))")
+            }
             await Task.yield()
+        }
+    }
+
+    private static func ensureFreeDiskSpace(forBytes needed: Int64) throws {
+        let path = ExportPaths.exportsDirectory.path
+        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
+              let freeNumber = attrs[.systemFreeSize] as? NSNumber else {
+            return
+        }
+        let free = freeNumber.int64Value
+        let margin: Int64 = 128 * 1024 * 1024
+        if free < needed + margin {
+            throw SegmentExporterError.insufficientDiskSpace(needed: needed, available: max(0, free))
         }
     }
 

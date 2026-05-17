@@ -14,9 +14,8 @@ final class SegmentExporter {
 
     private let cancelLock = NSLock()
     private var isCancelled = false
-    private var retainedWebDAVLoader: WebDAVResourceLoader?
     private var retainedAsset: AVURLAsset?
-    private var progressiveBuffer: WebDAVProgressiveBuffer?
+    private var tempDownload: WebDAVTempFileDownload?
 
     func cancel() {
         cancelLock.lock()
@@ -58,9 +57,8 @@ final class SegmentExporter {
         isCancelled = false
         cancelLock.unlock()
         defer {
-            progressiveBuffer?.cancel()
-            progressiveBuffer = nil
-            retainedWebDAVLoader = nil
+            tempDownload?.cancel()
+            tempDownload = nil
             retainedAsset = nil
             try? FileManager.default.removeItem(at: ExportPaths.workingSourceURL)
         }
@@ -86,29 +84,34 @@ final class SegmentExporter {
             return cancelled
         }
 
-        let buffer = try WebDAVProgressiveBuffer(
+        let downloader = try WebDAVTempFileDownload(
             remoteURL: inputURL,
             rangeCache: rangeCache,
             authorizationProvider: authorizationProvider,
             isCancelled: cancelCheck,
             log: logHandler
         )
-        progressiveBuffer = buffer
-        try await buffer.primeForPlayback()
+        tempDownload = downloader
+        try await downloader.waitUntilPlayable()
 
-        let asset = try await openStreamingAsset(
-            inputURL: inputURL,
-            authorizationProvider: authorizationProvider,
-            rangeCache: rangeCache,
-            progressiveBuffer: buffer,
-            logHandler: logHandler
+        let asset = AVURLAsset(
+            url: downloader.fileURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
+        retainedAsset = asset
+        _ = try await asset.load(.isPlayable)
+        logHandler("Opened temp file — publishing 60s segments as download catches up (DLNA can loop latest)")
+
         let duration = try await asset.load(.duration)
-        let durationMs = Int64(CMTimeGetSeconds(duration) * 1000)
+        let durationSeconds = CMTimeGetSeconds(duration)
+        let durationMs = Int64(durationSeconds * 1000)
 
         let seekSeconds = Double(seekMs) / 1000.0
         if durationMs > 0, seekMs >= durationMs - 250 {
             throw SegmentExporterError.seekPastEnd
+        }
+        if seekMs > 0 {
+            logHandler("Seek \(seekMs / 60_000) min — download is from file start; first segments need more data on disk")
         }
 
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
@@ -135,202 +138,54 @@ final class SegmentExporter {
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
 
-        let reader = try AVAssetReader(asset: asset)
-        let startTime = CMTime(seconds: seekSeconds, preferredTimescale: 600)
-        reader.timeRange = CMTimeRange(start: startTime, end: duration)
-
-        let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
-        videoOutput.alwaysCopiesSampleData = true
-        guard reader.canAdd(videoOutput) else {
-            throw SegmentExporterError.readerSetupFailed
-        }
-        reader.add(videoOutput)
-
-        var audioOutput: AVAssetReaderTrackOutput?
-        if let audioTrack {
-            let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
-            output.alwaysCopiesSampleData = true
-            guard reader.canAdd(output) else {
-                throw SegmentExporterError.readerSetupFailed
-            }
-            reader.add(output)
-            audioOutput = output
-        }
-
-        guard reader.startReading() else {
-            throw mapReaderFailure(reader.error) ?? SegmentExporterError.readerSetupFailed
-        }
-        logHandler("Reader started — exporting at ~1× realtime (60s per segment, keep app open)")
-        logHandler("Streaming from buffer + pCloud (512 KiB chunks)…")
-
-        var segmentIndex = 0
-        var loggedFirstSample = false
-        var lastProgressLogMs = seekMs
-        var writerContext: SegmentWriterContext?
-        var segmentAnchor: CMTime?
-        var heldAudio: CMSampleBuffer?
+        let segmentDuration = CMTime(seconds: Self.segmentDurationSeconds, preferredTimescale: 600)
+        var minuteIndex = 0
         var lastMediaTimeMs = seekMs
-        let wallClockOrigin = CFAbsoluteTimeGetCurrent()
         var reachedEnd = false
-
-        func beginSegment(at pts: CMTime) throws -> SegmentWriterContext {
-            let url = ExportPaths.segmentURL(index: segmentIndex)
-            try? FileManager.default.removeItem(at: url)
-            logHandler("Writing \(url.lastPathComponent)")
-            let ctx = try SegmentWriterContext(
-                outputURL: url,
-                videoFormat: videoFormat,
-                audioFormat: audioFormat
-            )
-            ctx.start(at: pts)
-            return ctx
-        }
-
-        func finishSegment(_ ctx: SegmentWriterContext, slot: Int) async throws {
-            try await ctx.finish()
-            let url = ExportPaths.segmentURL(index: slot)
-            await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: url, log: logHandler)
-        }
 
         while true {
             try checkCancelled()
-            if reader.status == .failed {
-                throw mapReaderFailure(reader.error) ?? SegmentExporterError.readerSetupFailed
-            }
 
-            let videoSample = videoOutput.copyNextSampleBuffer()
-            if heldAudio == nil {
-                heldAudio = audioOutput?.copyNextSampleBuffer()
-            }
-
-            var candidates: [(track: TrackKind, sample: CMSampleBuffer)] = []
-            if let videoSample { candidates.append((.video, videoSample)) }
-            if let heldAudio { candidates.append((.audio, heldAudio)) }
-
-            if candidates.isEmpty {
-                reachedEnd = reader.status == .completed
+            let windowStartSeconds = seekSeconds + Double(minuteIndex) * Self.segmentDurationSeconds
+            if windowStartSeconds >= durationSeconds - 0.05 {
+                reachedEnd = true
                 break
             }
 
-            guard let next = candidates.min(by: {
-                CMSampleBufferGetPresentationTimeStamp($0.sample) <
-                    CMSampleBufferGetPresentationTimeStamp($1.sample)
-            }) else {
-                break
-            }
-
-            if !loggedFirstSample {
-                loggedFirstSample = true
-                logHandler("First media sample received — writing segments")
-            }
-
-            try await processSample(
-                next.sample,
-                track: next.track,
-                startTime: startTime,
-                wallClockOrigin: wallClockOrigin,
-                segmentIndex: &segmentIndex,
-                writerContext: &writerContext,
-                segmentAnchor: &segmentAnchor,
-                lastMediaTimeMs: &lastMediaTimeMs,
-                beginSegment: beginSegment,
-                finishSegment: finishSegment
+            let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
+            try await downloader.waitUntilTimelineEnd(
+                timelineEndSeconds: windowEndSeconds,
+                durationSeconds: durationSeconds
             )
 
-            if lastMediaTimeMs - lastProgressLogMs >= 30_000 {
-                lastProgressLogMs = lastMediaTimeMs
-                let min = lastMediaTimeMs / 60_000
-                let sec = (lastMediaTimeMs / 1000) % 60
-                logHandler(String(format: "Export progress: %d:%02d media time", min, sec))
-            }
+            let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
+            let rangeDuration = CMTime(
+                seconds: windowEndSeconds - windowStartSeconds,
+                preferredTimescale: 600
+            )
+            let slot = minuteIndex % Self.segmentFileCount
 
-            if next.track == .audio {
-                heldAudio = nil
-            }
+            try await SegmentPassThroughExporter.exportWindow(
+                sourceFile: downloader.fileURL,
+                videoFormat: videoFormat,
+                audioFormat: audioFormat,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputSlot: slot,
+                log: logHandler
+            )
+
+            lastMediaTimeMs = Int64(windowEndSeconds * 1000)
+            let url = ExportPaths.segmentURL(index: slot)
+            await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: url, log: logHandler)
+            logHandler("DLNA slot \(url.lastPathComponent) ready — sync to PC; loops while download continues")
+
+            minuteIndex += 1
         }
 
-        if let ctx = writerContext {
-            try await finishSegment(ctx, slot: segmentIndex)
-        }
-
-        logHandler(reachedEnd ? "Reached end of file." : "Export stopped.")
+        try await downloader.waitUntilComplete()
+        logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
         return SegmentExportResult(lastMediaTimeMs: lastMediaTimeMs, reachedEnd: reachedEnd)
-    }
-
-    private func processSample(
-        _ sample: CMSampleBuffer,
-        track: TrackKind,
-        startTime: CMTime,
-        wallClockOrigin: CFAbsoluteTime,
-        segmentIndex: inout Int,
-        writerContext: inout SegmentWriterContext?,
-        segmentAnchor: inout CMTime?,
-        lastMediaTimeMs: inout Int64,
-        beginSegment: (CMTime) throws -> SegmentWriterContext,
-        finishSegment: (SegmentWriterContext, Int) async throws -> Void
-    ) async throws {
-        let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-        lastMediaTimeMs = Int64(CMTimeGetSeconds(pts) * 1000)
-
-        try await applyRealTimePacing(
-            mediaSeconds: CMTimeGetSeconds(CMTimeSubtract(pts, startTime)),
-            wallOrigin: wallClockOrigin
-        )
-
-        if writerContext == nil {
-            writerContext = try beginSegment(pts)
-            segmentAnchor = pts
-        }
-
-        if let anchor = segmentAnchor {
-            let segmentElapsed = CMTimeGetSeconds(CMTimeSubtract(pts, anchor))
-            if segmentElapsed >= Self.segmentDurationSeconds {
-                if let ctx = writerContext {
-                    try await finishSegment(ctx, segmentIndex)
-                }
-                segmentIndex = (segmentIndex + 1) % Self.segmentFileCount
-                writerContext = try beginSegment(pts)
-                segmentAnchor = pts
-            }
-        }
-
-        guard let ctx = writerContext else { return }
-        try ctx.append(sample, track: track)
-    }
-
-    private func openStreamingAsset(
-        inputURL: URL,
-        authorizationProvider: @escaping WebDAVAuthorizationProvider,
-        rangeCache: WebDAVRangeCache,
-        progressiveBuffer: WebDAVProgressiveBuffer,
-        logHandler: @escaping (String) -> Void
-    ) async throws -> AVURLAsset {
-        logHandler("Opening via WebDAV stream (disk buffer + pCloud)…")
-        let loader = WebDAVResourceLoader(
-            remoteURL: inputURL,
-            authorizationProvider: authorizationProvider,
-            rangeCache: rangeCache,
-            progressiveBuffer: progressiveBuffer,
-            log: logHandler
-        )
-        retainedWebDAVLoader = loader
-        let asset = AVURLAsset(
-            url: loader.customAssetURL,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-        )
-        retainedAsset = asset
-        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
-        _ = try await asset.load(.isPlayable)
-        logHandler("Opened for stream export")
-        return asset
-    }
-
-    private func applyRealTimePacing(mediaSeconds: Double, wallOrigin: CFAbsoluteTime) async throws {
-        let wallElapsed = CFAbsoluteTimeGetCurrent() - wallOrigin
-        let delay = mediaSeconds - wallElapsed
-        if delay > 0.05 {
-            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-        }
     }
 
     private func videoFormatDescription(from track: AVAssetTrack) async throws -> CMFormatDescription {
@@ -352,12 +207,12 @@ final class SegmentExporter {
 
 // MARK: - Writer context
 
-private enum TrackKind {
+enum SegmentTrackKind {
     case video
     case audio
 }
 
-private final class SegmentWriterContext {
+final class SegmentWriterContext {
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput
     private let audioInput: AVAssetWriterInput?
@@ -365,7 +220,8 @@ private final class SegmentWriterContext {
     init(
         outputURL: URL,
         videoFormat: CMFormatDescription,
-        audioFormat: CMFormatDescription?
+        audioFormat: CMFormatDescription?,
+        realTime: Bool = true
     ) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         videoInput = AVAssetWriterInput(
@@ -373,7 +229,7 @@ private final class SegmentWriterContext {
             outputSettings: nil,
             sourceFormatHint: videoFormat
         )
-        videoInput.expectsMediaDataInRealTime = true
+        videoInput.expectsMediaDataInRealTime = realTime
 
         if let audioFormat {
             audioInput = AVAssetWriterInput(
@@ -381,7 +237,7 @@ private final class SegmentWriterContext {
                 outputSettings: nil,
                 sourceFormatHint: audioFormat
             )
-            audioInput?.expectsMediaDataInRealTime = true
+            audioInput?.expectsMediaDataInRealTime = realTime
         } else {
             audioInput = nil
         }
@@ -404,7 +260,7 @@ private final class SegmentWriterContext {
         writer.startSession(atSourceTime: sourceTime)
     }
 
-    func append(_ sample: CMSampleBuffer, track: TrackKind) throws {
+    func append(_ sample: CMSampleBuffer, track: SegmentTrackKind) throws {
         let input: AVAssetWriterInput
         switch track {
         case .video: input = videoInput

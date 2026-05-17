@@ -13,7 +13,6 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
     private let session: URLSession
     private let rangeCache: WebDAVRangeCache?
-    private let progressiveBuffer: WebDAVProgressiveBuffer?
     private let logLine: ((String) -> Void)?
 
     private var cachedContentLength: Int64?
@@ -26,7 +25,6 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         authorization: String,
         session: URLSession = WebDAVMediaSession.shared,
         rangeCache: WebDAVRangeCache? = nil,
-        progressiveBuffer: WebDAVProgressiveBuffer? = nil,
         log: ((String) -> Void)? = nil
     ) {
         self.init(
@@ -34,7 +32,6 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             authorizationProvider: { authorization },
             session: session,
             rangeCache: rangeCache,
-            progressiveBuffer: progressiveBuffer,
             log: log
         )
     }
@@ -44,14 +41,12 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         session: URLSession = WebDAVMediaSession.shared,
         rangeCache: WebDAVRangeCache? = nil,
-        progressiveBuffer: WebDAVProgressiveBuffer? = nil,
         log: ((String) -> Void)? = nil
     ) {
         self.remoteURL = remoteURL
         self.authorizationProvider = authorizationProvider
         self.session = session
         self.rangeCache = rangeCache
-        self.progressiveBuffer = progressiveBuffer
         self.logLine = log
         super.init()
     }
@@ -180,23 +175,11 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         }
     }
 
-    /// Prefetch cache, then on-disk progressive buffer, then pCloud (512 KiB chunks only).
+    /// Read prefetch cache only; do not store streamed bytes (multi-GB files would jetsam).
     private func fetchRangeChunk(offset: Int64, endInclusive: Int64) async throws -> Data {
         let length = Int(endInclusive - offset + 1)
-        guard length > 0 else { return Data() }
-
-        if let cached = rangeCache?.dataForRequest(offset: offset, length: length) {
+        if length > 0, let cached = rangeCache?.dataForRequest(offset: offset, length: length) {
             return cached
-        }
-
-        if let progressiveBuffer {
-            if let disk = try progressiveBuffer.read(offset: offset, length: length) {
-                return disk
-            }
-            _ = await progressiveBuffer.waitForContiguous(until: endInclusive, timeoutSeconds: 2)
-            if let disk = try progressiveBuffer.read(offset: offset, length: length) {
-                return disk
-            }
         }
 
         let (data, response) = try await performRangeGET(offset: offset, endInclusive: endInclusive, retriedAuth: false)

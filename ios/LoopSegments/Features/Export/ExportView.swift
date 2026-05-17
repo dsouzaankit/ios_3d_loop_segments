@@ -55,7 +55,7 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Clips appear in Photos after each 60s segment finishes (not at export start). Check Albums → Loop Segments or Recents. With Limited Photos access, use Recents or grant Full Access in Settings.")
+                Text("Each 60s chunk is published when that minute is on disk (slow link: PC/DLNA can loop the latest chunk while the rest downloads). Check Albums → Loop Segments or Recents.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("Segments also stay in app Exports until you copy to PC, tap Stop, or leave the app.")
@@ -65,7 +65,7 @@ struct ExportView: View {
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
-                Text("1. Export creates 3d_op_00.mp4 / 3d_op_01.mp4 in app storage")
+                Text("1. Full file saves to temp; 3d_op_00/01 update every 60s of timeline as data arrives")
                 Text(logHint.isEmpty ? "Logs: Exports/export_latest.txt" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -138,7 +138,7 @@ struct ExportView: View {
         if PhotosSegmentPublisher.isEnabled {
             await requestPhotosAccess()
         }
-        status = "Reading from pCloud over \(network.usesCellular ? "cellular" : "network"); writing segments…"
+        status = "Downloading to temp; publishing 60s chunks for DLNA as each minute is on disk…"
         do {
             try await session.startExport(item: item, seekMs: seekMs)
             status = "Done — 3d_op_00/01 kept in Exports (and Photos if enabled). Copy to PC, then leave the app to clear."
