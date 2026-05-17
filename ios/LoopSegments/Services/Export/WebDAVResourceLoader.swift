@@ -18,6 +18,8 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private var cachedContentLength: Int64?
     private let lengthLock = NSLock()
     private var lengthResolveTask: Task<Int64, Error>?
+    private var inflightFills: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private let inflightLock = NSLock()
     private let logLine: ((String) -> Void)?
 
     convenience init(
@@ -61,9 +63,14 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         _ resourceLoader: AVAssetResourceLoader,
         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
     ) -> Bool {
-        Task {
+        let id = ObjectIdentifier(loadingRequest)
+        let task = Task {
             await self.fill(loadingRequest)
+            self.removeInflight(id)
         }
+        inflightLock.lock()
+        inflightFills[id] = task
+        inflightLock.unlock()
         return true
     }
 
@@ -71,18 +78,29 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         _ resourceLoader: AVAssetResourceLoader,
         didCancel loadingRequest: AVAssetResourceLoadingRequest
     ) {
-        logLine?("pCloud read cancelled")
+        let id = ObjectIdentifier(loadingRequest)
+        inflightLock.lock()
+        let task = inflightFills.removeValue(forKey: id)
+        inflightLock.unlock()
+        task?.cancel()
+        // AVFoundation often cancels a whole-file probe after prefetch; not a user Stop.
+    }
+
+    private func removeInflight(_ id: ObjectIdentifier) {
+        inflightLock.lock()
+        inflightFills.removeValue(forKey: id)
+        inflightLock.unlock()
     }
 
     private func fill(_ loadingRequest: AVAssetResourceLoadingRequest) async {
-        if loadingRequest.isCancelled {
-            finishCancelled(loadingRequest)
+        if loadingRequest.isCancelled || Task.isCancelled {
             return
         }
 
         do {
             if let info = loadingRequest.contentInformationRequest {
                 let length = try await resolveContentLength()
+                guard !loadingRequest.isCancelled, !Task.isCancelled else { return }
                 info.contentLength = length
                 info.isByteRangeAccessSupported = true
                 info.contentType = mimeType(for: remoteURL)
@@ -92,14 +110,13 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                 try await fulfill(dataRequest, loadingRequest: loadingRequest)
             }
 
-            if !loadingRequest.isCancelled {
+            if !loadingRequest.isCancelled, !Task.isCancelled {
                 loadingRequest.finishLoading()
             }
+        } catch is CancellationError {
+            return
         } catch {
-            guard !loadingRequest.isCancelled else {
-                finishCancelled(loadingRequest)
-                return
-            }
+            guard !loadingRequest.isCancelled, !Task.isCancelled else { return }
             let wrapped = NSError(
                 domain: "WebDAVResourceLoader",
                 code: 1,
@@ -122,11 +139,17 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
         var cursor = offset
         let end = offset + totalLength - 1
-        logLine?("pCloud range \(offset)-\(end) (\(totalLength) bytes)")
+        if totalLength > Self.maxRangeChunkBytes {
+            logLine?(
+                "pCloud read \(offset)-\(end) (\(totalLength) bytes requested, \(Self.maxRangeChunkBytes / 1024) KiB HTTP chunks)"
+            )
+        } else {
+            logLine?("pCloud range \(offset)-\(end) (\(totalLength) bytes)")
+        }
 
         while cursor <= end {
-            if loadingRequest.isCancelled {
-                throw CancellationError()
+            if loadingRequest.isCancelled || Task.isCancelled {
+                return
             }
             let chunkEnd = min(cursor + Self.maxRangeChunkBytes - 1, end)
             let chunk = try await fetchRangeChunk(offset: cursor, endInclusive: chunkEnd)
@@ -240,14 +263,6 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
     private func sessionData(for request: URLRequest) async throws -> (Data, URLResponse) {
         try await WebDAVMediaSession.data(for: request, log: logLine)
-    }
-
-    private func finishCancelled(_ loadingRequest: AVAssetResourceLoadingRequest) {
-        loadingRequest.finishLoading(with: NSError(
-            domain: NSCocoaErrorDomain,
-            code: NSUserCancelledError,
-            userInfo: nil
-        ))
     }
 
     private func contentLength(from response: HTTPURLResponse) -> Int64? {

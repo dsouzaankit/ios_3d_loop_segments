@@ -51,7 +51,6 @@ final class SegmentExporter {
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         logHandler: @escaping (String) -> Void
     ) async throws -> SegmentExportResult {
-        let authorizationHeader = authorizationProvider()
         cancelLock.lock()
         isCancelled = false
         cancelLock.unlock()
@@ -130,10 +129,12 @@ final class SegmentExporter {
         }
 
         guard reader.startReading() else {
-            throw reader.error.map { SegmentExporterError.readerFailed($0) } ?? SegmentExporterError.readerSetupFailed
+            throw mapReaderFailure(reader.error) ?? SegmentExporterError.readerSetupFailed
         }
+        logHandler("Reader started — exporting at ~1× realtime (60s per segment, keep app open)")
 
         var segmentIndex = 0
+        var lastProgressLogMs = seekMs
         var writerContext: SegmentWriterContext?
         var segmentAnchor: CMTime?
         var heldAudio: CMSampleBuffer?
@@ -197,6 +198,13 @@ final class SegmentExporter {
                 beginSegment: beginSegment,
                 finishSegment: finishSegment
             )
+
+            if lastMediaTimeMs - lastProgressLogMs >= 30_000 {
+                lastProgressLogMs = lastMediaTimeMs
+                let min = lastMediaTimeMs / 60_000
+                let sec = (lastMediaTimeMs / 1000) % 60
+                logHandler(String(format: "Export progress: %d:%02d media time", min, sec))
+            }
 
             if next.track == .audio {
                 heldAudio = nil
