@@ -63,6 +63,10 @@ enum SegmentPassThroughExporter {
         var lastInRangePTS = rangeStart
         let maxKeyframeScan = 480
         let minInRangeVideoSamples = 24
+        var lastProgressLog = CFAbsoluteTimeGetCurrent()
+        var lastSampleAt = CFAbsoluteTimeGetCurrent()
+        let stallBeforeFirstSample: Double = 120
+        let stallAfterStart: Double = 180
 
         while true {
             if reader.status == .failed {
@@ -70,7 +74,32 @@ enum SegmentPassThroughExporter {
                     ?? SegmentExporterError.readerSetupFailed
             }
 
+            let now = CFAbsoluteTimeGetCurrent()
+            if !startedWriter, now - lastSampleAt > stallBeforeFirstSample {
+                log(
+                    "Export stalled \(Int(stallBeforeFirstSample))s waiting for first video sample — download more temp data or try seek 0 min on Wi‑Fi"
+                )
+                throw SegmentExporterError.readerSetupFailed
+            }
+            if startedWriter, now - lastSampleAt > stallAfterStart {
+                log("Export stalled \(Int(stallAfterStart))s — ending segment with \(inRangeVideoSamples) samples")
+                break
+            }
+            if now - lastProgressLog >= 30 {
+                lastProgressLog = now
+                log(
+                    String(
+                        format: "Export in progress — %d video samples in window, reader active…",
+                        inRangeVideoSamples
+                    )
+                )
+            }
+
+            await Task.yield()
             let videoSample = videoOutput.copyNextSampleBuffer()
+            if videoSample != nil {
+                lastSampleAt = CFAbsoluteTimeGetCurrent()
+            }
             if heldAudio == nil {
                 heldAudio = audioOutput?.copyNextSampleBuffer()
             }

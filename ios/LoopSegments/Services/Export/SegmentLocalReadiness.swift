@@ -6,6 +6,9 @@ import Foundation
 enum SegmentLocalReadiness {
     private static let minVideoSamplesFor60s = 24
     private static let minOutputBytes: Int64 = 512 * 1024
+    private static let maxProbeSamples = 120
+    private static let probeTimeoutLargeFile: Double = 90
+    private static let probeTimeoutDefault: Double = 45
 
     static func waitUntilReadable(
         fileURL: URL,
@@ -23,8 +26,11 @@ enum SegmentLocalReadiness {
             rangeDuration: rangeDuration
         )
         let needEnd = requiredByteRange.end + max(0, probeFloor - requiredByteRange.length)
+        let probeTimeout = totalFileBytes > 1_000_000_000 ? probeTimeoutLargeFile : probeTimeoutDefault
         var lastLog = CFAbsoluteTimeGetCurrent()
         var zeroSampleStreak = 0
+        var probeAttempts = 0
+
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
             let filled = filledByteSpan()
@@ -34,11 +40,27 @@ enum SegmentLocalReadiness {
                 continue
             }
 
-            switch await probeWindow(
-                fileURL: fileURL,
-                rangeStart: rangeStart,
-                rangeDuration: rangeDuration
-            ) {
+            probeAttempts += 1
+            let probeResult: ProbeResult
+            do {
+                probeResult = try await ExportAsyncTimeout.run(
+                    seconds: probeTimeout,
+                    operation: "Readiness probe"
+                ) {
+                    await probeWindow(
+                        fileURL: fileURL,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration
+                    )
+                }
+            } catch is ExportAsyncTimeout.TimedOut {
+                log(
+                    "Readiness probe timed out after \(Int(probeTimeout))s — proceeding to export with \(formatBytes(filled.end - filled.start)) on disk (AVAssetReader was slow on sparse temp)"
+                )
+                return
+            }
+
+            switch probeResult {
             case .ok(let videoSamples):
                 if totalFileBytes > 0, filled.end >= totalFileBytes {
                     log("Readiness OK — full temp file on disk (\(formatBytes(filled.end))), \(videoSamples) video samples in window")
@@ -65,8 +87,14 @@ enum SegmentLocalReadiness {
                         "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needEnd - requiredByteRange.start)) in window)"
                     )
                 }
+                if zeroSampleStreak >= 6, rangeReady, indexTailOnDisk(), probeAttempts >= 4 {
+                    log(
+                        "Readiness: \(formatBytes(filled.end - filled.start)) on disk but reader still sees no samples — exporting anyway (sparse moov-at-EOF)"
+                    )
+                    return
+                }
                 if zeroSampleStreak >= 8, rangeReady {
-                    log("Readiness: byte range on disk but reader still sees 0 samples — waiting for more download")
+                    log("Readiness: enough bytes on disk but reader still sees 0 samples — waiting for more contiguous download")
                 }
             case .failed(let error):
                 throw error
@@ -84,7 +112,6 @@ enum SegmentLocalReadiness {
         log("Segment size OK — \(bytes / 1024) KB")
     }
 
-    /// Extra contiguous bytes before trusting AVAssetReader on sparse moov-at-EOF temp files.
     private static func probeMinContiguousBytes(
         windowBytes: Int64,
         rangeDuration: CMTime
@@ -144,14 +171,20 @@ enum SegmentLocalReadiness {
         var videoCount = 0
         var inRangeCount = 0
         var lastPTS = rangeStart
+        let needSeconds = CMTimeGetSeconds(rangeDuration) * 0.85
 
-        while reader.status == .reading {
+        while reader.status == .reading, videoCount < maxProbeSamples {
+            await Task.yield()
             guard let sample = output.copyNextSampleBuffer() else { break }
             videoCount += 1
             let pts = CMSampleBufferGetPresentationTimeStamp(sample)
             if CMTimeCompare(pts, rangeStart) >= 0 {
                 inRangeCount += 1
                 lastPTS = pts
+            }
+            let coveredSeconds = CMTimeGetSeconds(CMTimeSubtract(lastPTS, rangeStart))
+            if inRangeCount >= minVideoSamplesFor60s, coveredSeconds >= needSeconds {
+                return .ok(videoSamples: inRangeCount)
             }
         }
 
@@ -165,7 +198,6 @@ enum SegmentLocalReadiness {
         }
 
         let coveredSeconds = CMTimeGetSeconds(CMTimeSubtract(lastPTS, rangeStart))
-        let needSeconds = CMTimeGetSeconds(rangeDuration) * 0.85
 
         if inRangeCount < minVideoSamplesFor60s {
             return .needsMoreData("only \(inRangeCount) video samples in window (incomplete)")
