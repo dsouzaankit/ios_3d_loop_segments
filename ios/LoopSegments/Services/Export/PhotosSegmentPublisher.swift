@@ -48,7 +48,10 @@ enum PhotosSegmentPublisher {
     }
 
     private static func deletePreviousAsset(slot: Int) async throws {
-        guard let oldId = loadAssetIds()[slot] else { return }
+        let ids = loadAssetIds()
+        guard slot < ids.count else { return }
+        let oldId = ids[slot]
+        guard !oldId.isEmpty else { return }
         let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [oldId], options: nil)
         guard fetch.count > 0 else { return }
         try await performChanges {
@@ -61,7 +64,7 @@ enum PhotosSegmentPublisher {
         try await performChanges {
             let request = PHAssetCreationRequest.forAsset()
             request.addResource(with: .video, fileURL: url, options: nil)
-            createdId = request.placeholderForCreatedAsset?.localIdentifier
+            createdId = request.placeholderForCreatedAsset.localIdentifier
         }
         guard let createdId else {
             throw PhotosPublishError.noAssetCreated
@@ -95,7 +98,7 @@ enum PhotosSegmentPublisher {
         try await performChanges {
             albumId = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(
                 withTitle: albumTitle
-            ).placeholderForCreatedAssetCollection?.localIdentifier
+            ).placeholderForCreatedAssetCollection.localIdentifier
         }
         guard let albumId else { throw PhotosPublishError.noAlbumCreated }
         let created = PHAssetCollection.fetchAssetCollections(

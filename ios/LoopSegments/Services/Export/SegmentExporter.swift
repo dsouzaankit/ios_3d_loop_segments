@@ -222,7 +222,7 @@ final class SegmentExporter {
             let segmentElapsed = CMTimeGetSeconds(CMTimeSubtract(pts, anchor))
             if segmentElapsed >= Self.segmentDurationSeconds {
                 if let ctx = writerContext {
-                    try await finishSegment(ctx, slot: segmentIndex)
+                    try await finishSegment(ctx, segmentIndex)
                 }
                 segmentIndex = (segmentIndex + 1) % Self.segmentFileCount
                 writerContext = try beginSegment(pts)
