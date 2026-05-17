@@ -24,7 +24,8 @@ enum WebDAVURLBuilder {
             return path
         }
 
-        return trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
+        // Do not prefix "/" here — relative PROPFIND hrefs must stay relative until resolveHref.
+        return trimmed
     }
 
     static func fileURL(href: String, baseURL: URL) -> URL {

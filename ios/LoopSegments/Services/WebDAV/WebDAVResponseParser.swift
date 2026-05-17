@@ -90,7 +90,7 @@ enum WebDAVResponseParser {
             let displayName = WebDAVURLBuilder.displayName(fromHref: currentHref)
             guard !displayName.isEmpty, displayName != "/" else { return }
             items.append(WebDAVItem(
-                href: WebDAVURLBuilder.normalizedHrefPath(currentHref),
+                href: currentHref.trimmingCharacters(in: .whitespacesAndNewlines),
                 name: displayName,
                 isDirectory: isCollection,
                 contentLength: contentLength
