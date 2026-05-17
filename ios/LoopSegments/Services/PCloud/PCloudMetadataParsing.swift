@@ -30,7 +30,7 @@ enum PCloudMetadataParsing {
         guard let name = metadata["name"] as? String, !name.isEmpty else { return nil }
         let isFolder = boolField(metadata["isfolder"])
         guard let apiPath = browsePath(from: metadata, name: name, isFolder: isFolder) else { return nil }
-        let path = webDAVHref(apiPath: apiPath, webDAVFilesRoot: webDAVFilesRoot, isFolder: isFolder)
+        let path = webDAVHref(apiPath: apiPath, webDAVFilesRoot: webDAVFilesRoot)
 
         let href = isFolder
             ? WebDAVURLBuilder.directoryListingPath(path)
@@ -56,7 +56,7 @@ enum PCloudMetadataParsing {
     }
 
     /// Map pCloud API `/folder/file` to WebDAV `/remote.php/dav/files/user/folder/file`.
-    private static func webDAVHref(apiPath: String, webDAVFilesRoot: String?, isFolder: Bool) -> String {
+    private static func webDAVHref(apiPath: String, webDAVFilesRoot: String?) -> String {
         let normalized = normalizeAPIPath(apiPath)
         if normalized.lowercased().contains("remote.php") {
             return normalized
@@ -112,7 +112,7 @@ enum PCloudMetadataParsing {
         }
     }
 
-    static func int64Field(_ value: Any?) -> Int64?
+    static func int64Field(_ value: Any?) -> Int64? {
         switch value {
         case let n as Int64: return n
         case let n as Int: return Int64(n)
