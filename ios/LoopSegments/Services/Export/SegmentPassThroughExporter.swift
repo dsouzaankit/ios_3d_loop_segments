@@ -52,7 +52,9 @@ enum SegmentPassThroughExporter {
         var writerContext: SegmentWriterContext?
         var heldAudio: CMSampleBuffer?
         var startedWriter = false
-        var skippedBeforeKeyframe = 0
+        var skippedBeforeRange = 0
+        var skippedNonKeyframe = 0
+        let maxKeyframeScan = 240
 
         while true {
             if reader.status == .failed {
@@ -86,8 +88,13 @@ enum SegmentPassThroughExporter {
                     heldAudio = nil
                     continue
                 }
-                if CMTimeCompare(pts, rangeStart) < 0 || !isSyncVideoSample(next.sample) {
-                    skippedBeforeKeyframe += 1
+                if CMTimeCompare(pts, rangeStart) < 0 {
+                    skippedBeforeRange += 1
+                    continue
+                }
+                let preferKeyframe = skippedNonKeyframe < maxKeyframeScan
+                if preferKeyframe, !isSyncVideoSample(next.sample) {
+                    skippedNonKeyframe += 1
                     continue
                 }
                 let ctx = try SegmentWriterContext(
@@ -99,8 +106,8 @@ enum SegmentPassThroughExporter {
                 ctx.start(at: .zero)
                 writerContext = ctx
                 startedWriter = true
-                if skippedBeforeKeyframe > 0 {
-                    log("Skipped \(skippedBeforeKeyframe) frame(s) before first keyframe")
+                if skippedNonKeyframe > 0 {
+                    log("Started on frame \(skippedNonKeyframe + 1) in window (HEVC may not flag keyframes)")
                 }
             }
 
@@ -120,12 +127,16 @@ enum SegmentPassThroughExporter {
     }
 
     private static func isSyncVideoSample(_ sample: CMSampleBuffer) -> Bool {
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[AnyHashable: Any]],
-              let first = attachments.first else {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[AnyHashable: Any]] else {
             return true
         }
-        if let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool {
-            return !notSync
+        for dict in attachments {
+            if let notSync = dict[AnyHashable(kCMSampleAttachmentKey_NotSync)] as? Bool, notSync {
+                return false
+            }
+            if let notSync = dict[AnyHashable(kCMSampleAttachmentKey_NotSync)] as? NSNumber, notSync.boolValue {
+                return false
+            }
         }
         return true
     }

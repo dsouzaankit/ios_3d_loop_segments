@@ -179,6 +179,7 @@ final class SegmentExporter {
                 fileURL: downloader.fileURL,
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
+                totalFileBytes: downloader.totalLength,
                 contiguousBytesOnDisk: { downloader.contiguousEndValue() },
                 bytesRequiredOnDisk: bytesNeeded,
                 isCancelled: cancelCheck,

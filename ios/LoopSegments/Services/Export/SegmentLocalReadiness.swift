@@ -11,6 +11,7 @@ enum SegmentLocalReadiness {
     fileURL: URL,
     rangeStart: CMTime,
     rangeDuration: CMTime,
+    totalFileBytes: Int64,
     contiguousBytesOnDisk: () -> Int64,
     bytesRequiredOnDisk: Int64,
     isCancelled: () -> Bool,
@@ -23,6 +24,11 @@ enum SegmentLocalReadiness {
       if contiguous < bytesRequiredOnDisk {
         try await Task.sleep(nanoseconds: 250_000_000)
         continue
+      }
+
+      if totalFileBytes > 0, contiguous >= totalFileBytes {
+        log("Readiness OK — full temp file on disk (\(formatBytes(contiguous)))")
+        return
       }
 
       switch probeWindow(fileURL: fileURL, rangeStart: rangeStart, rangeDuration: rangeDuration) {
@@ -83,17 +89,15 @@ enum SegmentLocalReadiness {
     }
 
     var videoCount = 0
-    var sawKeyframe = false
+    var inRangeCount = 0
     var lastPTS = rangeStart
 
     while reader.status == .reading {
       guard let sample = output.copyNextSampleBuffer() else { break }
       videoCount += 1
       let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-      if CMTimeCompare(pts, rangeStart) >= 0, isSyncVideoSample(sample) {
-        sawKeyframe = true
-      }
       if CMTimeCompare(pts, rangeStart) >= 0 {
+        inRangeCount += 1
         lastPTS = pts
       }
     }
@@ -105,27 +109,13 @@ enum SegmentLocalReadiness {
     let coveredSeconds = CMTimeGetSeconds(CMTimeSubtract(lastPTS, rangeStart))
     let needSeconds = CMTimeGetSeconds(rangeDuration) * 0.85
 
-    if !sawKeyframe {
-      return .needsMoreData("no keyframe in window yet")
-    }
-    if videoCount < minVideoSamplesFor60s {
-      return .needsMoreData("only \(videoCount) video samples (incomplete)")
+    if inRangeCount < minVideoSamplesFor60s {
+      return .needsMoreData("only \(inRangeCount) video samples in window (incomplete)")
     }
     if coveredSeconds < needSeconds {
       return .needsMoreData(String(format: "timeline covers %.0fs, need ~%.0fs", coveredSeconds, needSeconds))
     }
-    return .ok(videoSamples: videoCount)
-  }
-
-  private static func isSyncVideoSample(_ sample: CMSampleBuffer) -> Bool {
-    guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[AnyHashable: Any]],
-          let first = attachments.first else {
-      return true
-    }
-    if let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool {
-      return !notSync
-    }
-    return true
+    return .ok(videoSamples: inRangeCount)
   }
 
   private static func formatBytes(_ bytes: Int64) -> String {
