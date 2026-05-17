@@ -354,21 +354,22 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         )
         lock.lock()
         if seekSeconds <= 0.5 {
+            let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
+            let hadFalseSpan = regionStart >= tailStart || regionFilledEnd > range.end
             regionStart = 0
+            if hadFalseSpan {
+                regionFilledEnd = headOnDisk ? Int64(512 * 1024) : 0
+            }
             downloadCursor = regionFilledEnd
             lock.unlock()
             log("Download from file start — need ~\(formatBytes(range.end)) for first minute")
         } else {
-            // Keep prefetch head + index tail in span tracking (do not wipe to a single byte).
-            if headOnDisk {
-                regionStart = min(regionStart, 0)
-            }
             regionStart = min(regionStart, range.start)
-            regionFilledEnd = max(regionFilledEnd, range.start)
-            if tailOnDisk {
-                regionFilledEnd = max(regionFilledEnd, totalLength)
+            if headOnDisk {
+                regionStart = 0
             }
-            downloadCursor = range.start
+            regionFilledEnd = max(regionFilledEnd, range.start)
+            downloadCursor = max(regionFilledEnd, range.start)
             lock.unlock()
             let seekMin = Int(seekSeconds) / 60
             let seekSec = Int(seekSeconds) % 60
