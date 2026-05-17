@@ -152,7 +152,7 @@ enum PhotosSegmentPublisher {
         var albumId: String?
         try await performChanges {
             let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumTitle)
-            albumId = request.placeholderForCreatedAssetCollection?.localIdentifier
+            albumId = request.placeholderForCreatedAssetCollection.localIdentifier
         }
         guard let albumId else { throw PhotosPublishError.noAlbumCreated }
         rememberAlbum(localIdentifier: albumId)
