@@ -56,11 +56,12 @@ enum SegmentPassThroughExporter {
         var writerContext: SegmentWriterContext?
         var heldAudio: CMSampleBuffer?
         var startedWriter = false
+        var timelineOrigin: CMTime?
         var skippedBeforeRange = 0
         var skippedNonKeyframe = 0
         var inRangeVideoSamples = 0
         var lastInRangePTS = rangeStart
-        let maxKeyframeScan = 240
+        let maxKeyframeScan = 480
         let minInRangeVideoSamples = 24
 
         while true {
@@ -100,10 +101,11 @@ enum SegmentPassThroughExporter {
                     continue
                 }
                 let preferKeyframe = skippedNonKeyframe < maxKeyframeScan
-                if preferKeyframe, !isSyncVideoSample(next.sample) {
+                if preferKeyframe, !HEVCSyncSample.isReliableSyncPoint(next.sample, videoFormat: videoFormat) {
                     skippedNonKeyframe += 1
                     continue
                 }
+                timelineOrigin = pts
                 let ctx = try SegmentWriterContext(
                     outputURL: outputURL,
                     videoFormat: videoFormat,
@@ -114,11 +116,14 @@ enum SegmentPassThroughExporter {
                 writerContext = ctx
                 startedWriter = true
                 if skippedNonKeyframe > 0 {
-                    log("Started on frame \(skippedNonKeyframe + 1) in window (HEVC may not flag keyframes)")
+                    log("Started on frame \(skippedNonKeyframe + 1) in window (HEVC sync scan)")
                 }
+                log("Segment timestamps reset to 0 (source PTS \(formatMediaTime(pts)))")
             }
 
-            try writerContext?.append(next.sample, track: next.track)
+            let origin = timelineOrigin ?? rangeStart
+            let timedSample = try SegmentSampleTiming.retimeToSegmentStart(next.sample, subtract: origin)
+            try writerContext?.append(timedSample, track: next.track)
             if next.track == .video, CMTimeCompare(pts, rangeStart) >= 0 {
                 inRangeVideoSamples += 1
                 lastInRangePTS = pts
@@ -151,21 +156,6 @@ enum SegmentPassThroughExporter {
         if let writerContext {
             try await writerContext.finish()
         }
-    }
-
-    private static func isSyncVideoSample(_ sample: CMSampleBuffer) -> Bool {
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[AnyHashable: Any]] else {
-            return true
-        }
-        for dict in attachments {
-            if let notSync = dict[AnyHashable(kCMSampleAttachmentKey_NotSync)] as? Bool, notSync {
-                return false
-            }
-            if let notSync = dict[AnyHashable(kCMSampleAttachmentKey_NotSync)] as? NSNumber, notSync.boolValue {
-                return false
-            }
-        }
-        return true
     }
 
     private static func formatMediaTime(_ time: CMTime) -> String {
