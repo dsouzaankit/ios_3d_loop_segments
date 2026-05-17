@@ -17,7 +17,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private var cachedContentLength: Int64?
     private let lengthLock = NSLock()
     private var lengthResolveTask: Task<Int64, Error>?
-    private let log: ((String) -> Void)?
+    private let logLine: ((String) -> Void)?
 
     init(
         remoteURL: URL,
@@ -28,7 +28,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         self.remoteURL = remoteURL
         self.authorization = authorization
         self.session = session
-        self.log = log
+        self.logLine = log
         super.init()
     }
 
@@ -52,7 +52,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         _ resourceLoader: AVAssetResourceLoader,
         didCancel loadingRequest: AVAssetResourceLoadingRequest
     ) {
-        log?("pCloud read cancelled")
+        logLine?("pCloud read cancelled")
     }
 
     private func fill(_ loadingRequest: AVAssetResourceLoadingRequest) async {
@@ -94,7 +94,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func fulfill(
-        _ dataRequest: AVAssetResourceLoadingRequestDataRequest,
+        _ dataRequest: AVAssetResourceLoadingDataRequest,
         loadingRequest: AVAssetResourceLoadingRequest
     ) async throws {
         let offset = dataRequest.requestedOffset
@@ -103,7 +103,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
         var cursor = offset
         let end = offset + totalLength - 1
-        log?("pCloud range \(offset)-\(end) (\(totalLength) B)")
+        logLine?("pCloud range \(offset)-\(end) (\(totalLength) bytes)")
 
         while cursor <= end {
             if loadingRequest.isCancelled {
@@ -151,7 +151,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         let (_, response) = try await sessionData(for: request)
         if let http = response as? HTTPURLResponse,
            let length = contentLength(from: http) {
-            log?("Content-Length \(length) bytes (HEAD)")
+            logLine?("Content-Length \(length) bytes (HEAD)")
             return length
         }
 
@@ -161,7 +161,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         guard let cachedContentLength else {
             throw WebDAVResourceLoaderError.missingContentLength
         }
-        log?("Content-Length \(cachedContentLength) bytes (probe)")
+        logLine?("Content-Length \(cachedContentLength) bytes (probe)")
         return cachedContentLength
     }
 
@@ -200,7 +200,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                 guard WebDAVMediaSession.isRetriable(error), attempt < maxAttempts else {
                     throw error
                 }
-                log?("pCloud retry \(attempt + 1)/\(maxAttempts): \(error.localizedDescription)")
+                logLine?("pCloud retry \(attempt + 1)/\(maxAttempts): \(error.localizedDescription)")
                 try await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
             }
         }
