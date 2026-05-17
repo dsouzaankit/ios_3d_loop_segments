@@ -3,13 +3,16 @@ import Foundation
 /// Parse pCloud REST metadata (search, listfolder, etc.) into WebDAV browse items.
 enum PCloudMetadataParsing {
     static func extractEntries(from json: [String: Any]) -> [[String: Any]] {
-        for key in ["items", "matches", "results", "entries"] {
+        for key in ["items", "matches", "results", "entries", "files", "file"] {
             if let rows = json[key] as? [[String: Any]], !rows.isEmpty {
                 return flattenMetadataRows(rows)
             }
             if let anyItems = json[key] as? [Any] {
                 let rows = anyItems.compactMap { metadataDictionary($0) }
                 if !rows.isEmpty { return rows }
+            }
+            if let single = json[key] as? [String: Any], metadataDictionary(single) != nil {
+                return [single]
             }
         }
         if let metadata = json["metadata"] as? [[String: Any]], !metadata.isEmpty {
@@ -19,11 +22,57 @@ enum PCloudMetadataParsing {
             if let contents = metadata["contents"] as? [[String: Any]], !contents.isEmpty {
                 return flattenMetadataRows(contents)
             }
-            if metadata["name"] != nil {
+            if metadata["name"] != nil || metadata["fileid"] != nil || metadata["folderid"] != nil {
                 return [metadata]
             }
         }
+        if let rows = collectMetadataArrays(in: json), !rows.isEmpty {
+            return flattenMetadataRows(rows)
+        }
         return []
+    }
+
+    /// Flatten nested `contents` from `listfolder` (recursive or shallow).
+    static func flattenFolderContents(_ rows: [[String: Any]]) -> [[String: Any]] {
+        var flat: [[String: Any]] = []
+        flat.reserveCapacity(rows.count * 4)
+        for row in rows {
+            guard let item = metadataDictionary(row) else { continue }
+            flat.append(item)
+            if let nested = item["contents"] as? [[String: Any]], !nested.isEmpty {
+                flat.append(contentsOf: flattenFolderContents(nested))
+            } else if let nestedAny = item["contents"] as? [Any] {
+                let nestedRows = nestedAny.compactMap { metadataDictionary($0) }
+                if !nestedRows.isEmpty {
+                    flat.append(contentsOf: flattenFolderContents(nestedRows))
+                }
+            }
+        }
+        return flat
+    }
+
+    static func matchesSearchNeedle(_ needle: String, metadata: [String: Any], name: String) -> Bool {
+        guard !needle.isEmpty else { return false }
+        if name.localizedCaseInsensitiveContains(needle) { return true }
+        if let path = metadata["path"] as? String, path.localizedCaseInsensitiveContains(needle) {
+            return true
+        }
+        return false
+    }
+
+    private static func collectMetadataArrays(in json: [String: Any]) -> [[String: Any]]? {
+        var best: [[String: Any]] = []
+        for value in json.values {
+            if let rows = value as? [[String: Any]] {
+                let parsed = rows.compactMap { metadataDictionary($0) }
+                if parsed.count > best.count { best = parsed }
+            } else if let dict = value as? [String: Any] {
+                if let nested = collectMetadataArrays(in: dict), nested.count > best.count {
+                    best = nested
+                }
+            }
+        }
+        return best.isEmpty ? nil : best
     }
 
     static func webDAVItem(from metadata: [String: Any], webDAVFilesRoot: String? = nil) -> WebDAVItem? {
@@ -50,7 +99,9 @@ enum PCloudMetadataParsing {
     private static func metadataDictionary(_ value: Any) -> [String: Any]? {
         if let row = value as? [String: Any] {
             if let nested = row["metadata"] as? [String: Any] { return nested }
-            if row["name"] != nil { return row }
+            if row["name"] != nil || row["fileid"] != nil || row["folderid"] != nil {
+                return row
+            }
         }
         return nil
     }
@@ -75,6 +126,10 @@ enum PCloudMetadataParsing {
             return true
         }
         if intField(metadata["category"]) == 2 { return true }
+        if let contentType = metadata["contenttype"] as? String,
+           contentType.lowercased().contains("video") {
+            return true
+        }
         return false
     }
 

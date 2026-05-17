@@ -18,18 +18,48 @@ final class PCloudAPIClient {
         }
     }
 
-    func search(query: String) async throws -> [WebDAVItem] {
+    struct SearchDiagnostics {
+        let rawEntryCount: Int
+        let resolvedCount: Int
+    }
+
+    func search(query: String) async throws -> ([WebDAVItem], SearchDiagnostics) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+        guard !trimmed.isEmpty else {
+            return ([], SearchDiagnostics(rawEntryCount: 0, resolvedCount: 0))
+        }
 
         let creds = resolvedCredentials()
         let json = try await performSearch(query: trimmed, credentials: creds)
         try PCloudAPIRequest.throwIfAPIError(json)
-        return try await PCloudPathResolver.resolveSearchItems(
-            entries: PCloudMetadataParsing.extractEntries(from: json),
+        let raw = PCloudMetadataParsing.extractEntries(from: json)
+        let items = try await PCloudPathResolver.resolveSearchItems(
+            entries: raw,
             credentials: creds,
             apiClient: self
         )
+        return (items, SearchDiagnostics(rawEntryCount: raw.count, resolvedCount: items.count))
+    }
+
+    func listFolderContents(folderId: Int64) async throws -> [[String: Any]] {
+        let creds = resolvedCredentials()
+        let token = try await ensureAuthToken(credentials: creds)
+        let host = authAPIHost ?? authRegion?.apiHost ?? creds.region.apiHost
+        let json = try await PCloudAPIRequest.get(
+            host: host,
+            method: "listfolder",
+            parameters: [
+                "auth": token,
+                "folderid": "\(folderId)",
+            ],
+            session: session
+        )
+        try PCloudAPIRequest.throwIfAPIError(json)
+        guard let metadata = json["metadata"] as? [String: Any],
+              let contents = metadata["contents"] as? [[String: Any]] else {
+            return []
+        }
+        return PCloudMetadataParsing.flattenFolderContents(contents)
     }
 
     func apiPath(fileId: Int64) async throws -> String? {
@@ -112,7 +142,21 @@ final class PCloudAPIClient {
         authToken = token
         authRegion = region
         authAPIHost = apiHost
+        persistAuthSession(token: token, region: region, apiHost: apiHost, credentials: credentials)
         return token
+    }
+
+    private func persistAuthSession(
+        token: String,
+        region: PCloudRegion,
+        apiHost: String,
+        credentials: WebDAVCredentials
+    ) {
+        var updated = credentials
+        updated.region = region
+        updated.apiAuthToken = token
+        updated.apiAuthHost = apiHost
+        CredentialStore().save(updated)
     }
 
     private func normalizedAPIPath(_ value: Any?) -> String? {

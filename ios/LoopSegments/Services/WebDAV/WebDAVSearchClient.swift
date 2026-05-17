@@ -2,7 +2,7 @@ import Foundation
 
 /// Filename search by walking WebDAV folders (slower than REST search).
 enum WebDAVSearchClient {
-    private static let maxFoldersToVisit = 400
+    private static let maxFoldersToVisit = 1200
     private static let maxResults = 80
 
     static func search(query: String, credentials: WebDAVCredentials) async throws -> [WebDAVItem] {
@@ -36,7 +36,8 @@ enum WebDAVSearchClient {
 
             for item in items {
                 let haystack = "\(item.href)/\(item.name)".lowercased()
-                if haystack.contains(needle) {
+                let nameMatch = item.name.lowercased().contains(needle)
+                if haystack.contains(needle) || nameMatch {
                     if item.isDirectory || item.isVideo {
                         results.append(item)
                         if results.count >= maxResults { break }
@@ -62,7 +63,14 @@ enum WebDAVSearchClient {
         client: WebDAVClient,
         credentials: WebDAVCredentials
     ) async throws -> [String] {
-        var roots = ["/"]
+        var roots: [String] = []
+        if let stored = credentials.webDAVFilesRoot, !stored.isEmpty {
+            roots.append(WebDAVURLBuilder.directoryListingPath(stored))
+        }
+        if let userRoot = try? await PCloudWebDAVRootResolver.filesRoot(credentials: credentials) {
+            roots.append(userRoot)
+        }
+        roots.append("/")
         let top = try await client.list(path: "/")
         for dir in top where dir.isDirectory {
             let path = WebDAVURLBuilder.directoryListingPath(dir.href)
@@ -83,21 +91,23 @@ enum WebDAVSearchClient {
                 }
             }
         }
-        if let userRoot = try? await PCloudWebDAVRootResolver.filesRoot(credentials: credentials) {
-            roots.append(userRoot)
-        }
-        return uniquePaths(roots)
+        return prioritizeUserRoot(roots)
     }
 
-    private static func uniquePaths(_ paths: [String]) -> [String] {
+    private static func prioritizeUserRoot(_ paths: [String]) -> [String] {
         var seen = Set<String>()
-        var ordered: [String] = []
+        var userFiles: [String] = []
+        var other: [String] = []
         for path in paths {
             let normalized = WebDAVURLBuilder.directoryListingPath(path)
-            if seen.insert(normalized).inserted {
-                ordered.append(normalized)
+            guard seen.insert(normalized).inserted else { continue }
+            let lower = normalized.lowercased()
+            if lower.contains("remote.php") && lower.contains("/dav/files/") {
+                userFiles.append(normalized)
+            } else {
+                other.append(normalized)
             }
         }
-        return ordered
+        return userFiles + other
     }
 }
