@@ -1,0 +1,19 @@
+# Xcode / iOS (generated locally or in CI)
+ios/build/
+ios/DerivedData/
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+*.xcuserstate
+xcuserdata/
+.swiftpm/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets (never commit)
+*.p12
+*.mobileprovision
+.env
+.env.*

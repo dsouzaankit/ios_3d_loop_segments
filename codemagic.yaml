@@ -1,0 +1,33 @@
+# Cloud build for Loop Segments (no local Mac).
+# Configure code signing in Codemagic UI: Team, bundle id com.loopsegments.app
+
+workflows:
+  ios-release:
+    name: Loop Segments iOS
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      ios_signing:
+        distribution_type: ad_hoc
+        bundle_identifier: com.loopsegments.app
+      vars:
+        XCODE_SCHEME: LoopSegments
+    scripts:
+      - name: Generate Xcode project
+        script: |
+          brew install xcodegen
+          cd ios && xcodegen generate
+      - name: Build ipa
+        script: |
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/ios/LoopSegments.xcodeproj" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      email:
+        recipients:
+          - user@example.com
+        notify:
+          success: true
+          failure: true

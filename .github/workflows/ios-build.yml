@@ -1,0 +1,125 @@
+# Builds iOS on GitHub-hosted macOS (no local Mac).
+# - push / PR: simulator smoke build (no secrets)
+# - workflow_dispatch: device IPA artifact (unsigned, or signed if Apple ID secrets set)
+
+name: ios-build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-build.yml'
+  pull_request:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-build.yml'
+
+jobs:
+  build-simulator:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build (simulator, unsigned smoke test)
+        working-directory: ios
+        run: |
+          xcodebuild -project LoopSegments.xcodeproj \
+            -scheme LoopSegments \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -configuration Debug \
+            build CODE_SIGNING_ALLOWED=NO
+
+  build-ipa:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build device IPA
+        working-directory: ios
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          package_unsigned_ipa() {
+            APP_PATH="$(find build/DerivedData -name 'LoopSegments.app' -type d | head -1)"
+            if [[ -z "$APP_PATH" ]]; then
+              echo "LoopSegments.app not found under build/DerivedData"
+              find build/DerivedData -maxdepth 6 -type d -name '*.app' || true
+              exit 1
+            fi
+            rm -rf Payload LoopSegments.ipa
+            mkdir -p Payload
+            cp -R "$APP_PATH" Payload/
+            zip -yr LoopSegments.ipa Payload
+            rm -rf Payload
+          }
+
+          if [[ -n "${APPLE_ID:-}" ]]; then
+            if [[ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" || -z "${APPLE_TEAM_ID:-}" ]]; then
+              echo "APPLE_ID is set; also set APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID,"
+              echo "or remove APPLE_ID to build an unsigned IPA for Sideloadly."
+              exit 1
+            fi
+
+            ARCHIVE_PATH="$RUNNER_TEMP/LoopSegments.xcarchive"
+            EXPORT_PATH="$RUNNER_TEMP/ipa-export"
+
+            xcodebuild -project LoopSegments.xcodeproj \
+              -scheme LoopSegments \
+              -destination 'generic/platform=iOS' \
+              -configuration Release \
+              -archivePath "$ARCHIVE_PATH" \
+              archive \
+              -allowProvisioningUpdates \
+              DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+
+            /usr/libexec/PlistBuddy -c "Add :teamID string $APPLE_TEAM_ID" ExportOptions-development.plist 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Set :teamID $APPLE_TEAM_ID" ExportOptions-development.plist
+
+            xcodebuild -exportArchive \
+              -archivePath "$ARCHIVE_PATH" \
+              -exportPath "$EXPORT_PATH" \
+              -exportOptionsPlist ExportOptions-development.plist \
+              -allowProvisioningUpdates
+
+            cp "$EXPORT_PATH"/*.ipa LoopSegments.ipa
+          else
+            echo "No APPLE_ID secret — building unsigned IPA (re-sign in Sideloadly)."
+            xcodebuild -project LoopSegments.xcodeproj \
+              -scheme LoopSegments \
+              -destination 'generic/platform=iOS' \
+              -configuration Release \
+              -derivedDataPath build/DerivedData \
+              build \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY=- \
+              DEVELOPMENT_TEAM=
+
+            package_unsigned_ipa
+          fi
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LoopSegments-ipa
+          path: ios/LoopSegments.ipa
+          if-no-files-found: error
