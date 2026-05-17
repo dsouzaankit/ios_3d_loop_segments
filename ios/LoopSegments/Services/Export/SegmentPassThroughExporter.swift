@@ -72,8 +72,9 @@ enum SegmentPassThroughExporter {
         let minInRangeVideoSamples = 24
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         var lastSampleAt = CFAbsoluteTimeGetCurrent()
-        let stallBeforeFirstSample: Double = 120
-        let stallAfterStart: Double = 180
+        let stallBeforeFirstSample: Double = 90
+        let stallAfterStart: Double = 90
+        let stallWithFewSamples: Double = 45
 
         while true {
             if reader.status == .failed {
@@ -88,11 +89,20 @@ enum SegmentPassThroughExporter {
                 )
                 throw SegmentExporterError.readerSetupFailed
             }
+            if startedWriter,
+               inRangeVideoSamples < minInRangeVideoSamples,
+               now - lastSampleAt > stallWithFewSamples {
+                try? FileManager.default.removeItem(at: outputURL)
+                log(
+                    "Export stalled — only \(inRangeVideoSamples) video samples after \(Int(stallWithFewSamples))s (need \(minInRangeVideoSamples)); dense-download this minute and retry"
+                )
+                throw SegmentExporterError.segmentOutputTooSmall(0)
+            }
             if startedWriter, now - lastSampleAt > stallAfterStart {
                 log("Export stalled \(Int(stallAfterStart))s — ending segment with \(inRangeVideoSamples) samples")
                 break
             }
-            if now - lastProgressLog >= 30 {
+            if now - lastProgressLog >= 10 {
                 lastProgressLog = now
                 log(
                     String(

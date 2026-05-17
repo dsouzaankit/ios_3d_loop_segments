@@ -19,6 +19,7 @@ enum SegmentLocalReadiness {
         filledByteSpan: () -> TimelineByteRange,
         indexTailOnDisk: () -> Bool,
         refreshMP4Index: () async throws -> Void,
+        prepareSparseFileForReader: (() async throws -> Void)? = nil,
         isCancelled: () -> Bool,
         log: (String) -> Void
     ) async throws {
@@ -86,6 +87,10 @@ enum SegmentLocalReadiness {
                         log("Fetching larger MP4 index from pCloud (needed before AVFoundation can open tracks)…")
                         try await refreshMP4Index()
                     }
+                    if trackLoadStreak == 2, let prepare = prepareSparseFileForReader {
+                        log("Sparse temp: ensuring file header + dense window before reader…")
+                        try await prepare()
+                    }
                 } else {
                     trackLoadStreak = 0
                 }
@@ -101,20 +106,26 @@ enum SegmentLocalReadiness {
                         "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needEnd - requiredByteRange.start)) in window\(indexNote))"
                     )
                 }
+                let windowBytesReady = max(
+                    0,
+                    min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
+                ) >= (needEnd - requiredByteRange.start)
+                if trackLoadStreak >= 3, rangeReady, windowBytesReady, indexTailOnDisk(), probeAttempts >= 2 {
+                    log(
+                        "Readiness: window + index on disk but tracks still not visible — exporting anyway (temp/stream fallback during passthrough)"
+                    )
+                    return
+                }
                 if trackLoadStreak >= 8, rangeReady, probeAttempts >= 4 {
                     log(
                         "Readiness: \(formatBytes(filled.end - filled.start)) on disk but tracks still not visible — exporting anyway (will retry reader during passthrough)"
                     )
                     return
                 }
-                if zeroSampleStreak >= 6, rangeReady, indexTailOnDisk(), probeAttempts >= 4 {
+                if zeroSampleStreak >= 4, rangeReady {
                     log(
-                        "Readiness: \(formatBytes(filled.end - filled.start)) on disk but reader still sees no samples — exporting anyway (sparse moov-at-EOF)"
+                        "Readiness: 0 video samples in window — need dense download of this minute (not exporting empty segment)"
                     )
-                    return
-                }
-                if zeroSampleStreak >= 8, rangeReady {
-                    log("Readiness: enough bytes on disk but reader still sees 0 samples — waiting for more contiguous download")
                 }
             case .failed(let error):
                 throw error

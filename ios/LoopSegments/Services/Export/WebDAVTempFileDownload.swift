@@ -28,6 +28,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private var regionStart: Int64 = 0
     private var regionFilledEnd: Int64 = 0
     private var tailOnDisk = false
+    private var headOnDisk = false
     private var downloadTask: Task<Void, Error>?
     private var writeHandle: FileHandle?
     private var downloadCursor: Int64 = 0
@@ -116,6 +117,29 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         try write(data, at: tailStart)
         lock.lock()
         tailOnDisk = true
+        lock.unlock()
+        try writeHandle?.synchronize()
+    }
+
+    func ensureFileHeadOnDisk() async throws {
+        lock.lock()
+        let hasHead = headOnDisk
+        lock.unlock()
+        guard !hasHead else { return }
+        let headLen = min(Int64(512 * 1024), totalLength)
+        guard headLen > 0 else { return }
+        log("Fetching MP4 file header from pCloud (\(formatBytes(headLen)) at start)…")
+        let auth = authorizationProvider()
+        let data = try await Self.fetchRange(
+            remoteURL: remoteURL,
+            authorization: auth,
+            offset: 0,
+            endInclusive: headLen - 1
+        )
+        throughput.recordNetworkBytes(data.count)
+        try write(data, at: 0)
+        lock.lock()
+        headOnDisk = true
         lock.unlock()
         try writeHandle?.synchronize()
     }
@@ -273,7 +297,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
-            if isRangeFilled(range) || filledSpanLocked().end >= totalLength {
+            if isRangeFilled(range) {
                 let span = filledSpanLocked()
                 let endMin = Int(timelineEndSeconds) / 60
                 let endSec = Int(timelineEndSeconds) % 60
@@ -335,8 +359,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             lock.unlock()
             log("Download from file start — need ~\(formatBytes(range.end)) for first minute")
         } else {
-            regionStart = range.start
-            regionFilledEnd = range.start
+            // Keep prefetch head + index tail in span tracking (do not wipe to a single byte).
+            if headOnDisk {
+                regionStart = min(regionStart, 0)
+            }
+            regionStart = min(regionStart, range.start)
+            regionFilledEnd = max(regionFilledEnd, range.start)
+            if tailOnDisk {
+                regionFilledEnd = max(regionFilledEnd, totalLength)
+            }
             downloadCursor = range.start
             lock.unlock()
             let seekMin = Int(seekSeconds) / 60
@@ -359,6 +390,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let tailThreshold = max(0, totalLength - 3 * 1024 * 1024)
         for span in cache.storedSpans() {
             try write(span.data, at: span.start)
+            if span.start == 0 {
+                lock.lock()
+                headOnDisk = true
+                lock.unlock()
+            }
             if span.start >= tailThreshold {
                 lock.lock()
                 tailOnDisk = true
@@ -371,6 +407,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private func noteWrite(offset: Int64, length: Int) {
         let end = offset + Int64(length)
         if length <= 0 { return }
+        let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
+        if offset >= tailStart {
+            markIndexTailIfComplete(writeEnd: end)
+            return
+        }
         if regionFilledEnd == 0, regionStart == 0, offset == 0 {
             regionStart = 0
             regionFilledEnd = end
@@ -398,12 +439,19 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
+    private func markHeadIfComplete(writeEnd: Int64) {
+        if writeEnd >= min(totalLength, Int64(64 * 1024)) {
+            headOnDisk = true
+        }
+    }
+
     private func write(_ data: Data, at offset: Int64) throws {
         guard let writeHandle else { return }
         try writeHandle.seek(toOffset: UInt64(offset))
         try writeHandle.write(contentsOf: data)
         lock.lock()
         noteWrite(offset: offset, length: data.count)
+        markHeadIfComplete(writeEnd: offset + Int64(data.count))
         lock.unlock()
     }
 
@@ -413,8 +461,6 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             guard let self else { return }
             do {
                 try await self.runDownloadLoop()
-            } catch is CancellationError {
-                return
             } catch is CancellationError {
                 self.lock.lock()
                 let paused = self.backgroundPausedForStream

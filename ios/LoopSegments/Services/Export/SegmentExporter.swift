@@ -244,6 +244,9 @@ final class SegmentExporter {
                     preferredTimescale: 600
                 )
                 logHandler("Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…")
+                try await downloader.ensureFileHeadOnDisk()
+                try await downloader.ensureIndexTailOnDisk()
+                try await downloader.ensureContiguousRange(byteRange)
                 try await SegmentLocalReadiness.waitUntilReadable(
                     fileURL: downloader.fileURL,
                     rangeStart: rangeStart,
@@ -253,6 +256,11 @@ final class SegmentExporter {
                     filledByteSpan: { downloader.filledSpan() },
                     indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
                     refreshMP4Index: { try await downloader.ensureIndexTailOnDisk(force: true) },
+                    prepareSparseFileForReader: {
+                        try await downloader.ensureFileHeadOnDisk()
+                        try await downloader.ensureIndexTailOnDisk(force: true)
+                        try await downloader.ensureContiguousRange(byteRange)
+                    },
                     isCancelled: cancelCheck,
                     log: logHandler
                 )
