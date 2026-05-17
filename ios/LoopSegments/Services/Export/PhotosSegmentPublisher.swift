@@ -123,13 +123,9 @@ enum PhotosSegmentPublisher {
     }
 
     private static func importVideoIntoAlbum(url: URL) async throws -> String {
-        let existingAlbum = resolveAlbumCollection()
-        if let existingAlbum {
-            rememberAlbum(existingAlbum)
-        }
+        let album = try await ensureAlbumExists()
 
         var createdId: String?
-
         try await performChanges {
             let resourceOptions = PHAssetResourceCreationOptions()
             resourceOptions.shouldMoveFile = false
@@ -139,24 +135,30 @@ enum PhotosSegmentPublisher {
             create.addResource(with: .video, fileURL: url, options: resourceOptions)
             guard let assetPlaceholder = create.placeholderForCreatedAsset else { return }
             createdId = assetPlaceholder.localIdentifier
-
-            if let album = existingAlbum {
-                PHAssetCollectionChangeRequest(for: album)?.addAssets([assetPlaceholder] as NSArray)
-            } else {
-                let albumRequest = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(
-                    withTitle: albumTitle
-                )
-                guard let albumPlaceholder = albumRequest.placeholderForCreatedAssetCollection else { return }
-                rememberAlbum(localIdentifier: albumPlaceholder.localIdentifier)
-                PHAssetCollectionChangeRequest(for: albumPlaceholder)?
-                    .addAssets([assetPlaceholder] as NSArray)
-            }
+            PHAssetCollectionChangeRequest(for: album)?.addAssets([assetPlaceholder] as NSArray)
         }
 
         guard let createdId else {
             throw PhotosPublishError.noAssetCreated
         }
         return createdId
+    }
+
+    private static func ensureAlbumExists() async throws -> PHAssetCollection {
+        if let existing = resolveAlbumCollection() {
+            return existing
+        }
+
+        var albumId: String?
+        try await performChanges {
+            let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumTitle)
+            albumId = request.placeholderForCreatedAssetCollection?.localIdentifier
+        }
+        guard let albumId else { throw PhotosPublishError.noAlbumCreated }
+        rememberAlbum(localIdentifier: albumId)
+        let fetch = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil)
+        guard let album = fetch.firstObject else { throw PhotosPublishError.noAlbumCreated }
+        return album
     }
 
     private static func resolveAlbumCollection() -> PHAssetCollection? {
