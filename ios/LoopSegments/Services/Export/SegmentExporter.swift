@@ -252,19 +252,17 @@ final class SegmentExporter {
                 let slot = minuteIndex % Self.segmentFileCount
                 let stagingURL = ExportPaths.segmentStagingURL(index: slot)
 
-                let readAsset = AVURLAsset(
-                    url: downloader.fileURL,
-                    options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-                )
-
-                try await SegmentPassThroughExporter.exportWindow(
-                    asset: readAsset,
+                try await exportSegmentFromTempOrStream(
+                    tempURL: downloader.fileURL,
+                    remoteURL: inputURL,
+                    authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
+                    trustedLength: fileSize,
                     videoFormat: videoFormat,
                     audioFormat: audioFormat,
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     outputURL: stagingURL,
-                    sourceLabel: "temp file",
                     log: logHandler
                 )
                 try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
@@ -327,6 +325,71 @@ final class SegmentExporter {
         guard free >= needed else {
             throw SegmentExporterError.insufficientDiskSpace(needed: needed, available: max(0, free))
         }
+    }
+
+    private func exportSegmentFromTempOrStream(
+        tempURL: URL,
+        remoteURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        trustedLength: Int64,
+        videoFormat: CMFormatDescription,
+        audioFormat: CMFormatDescription?,
+        rangeStart: CMTime,
+        rangeDuration: CMTime,
+        outputURL: URL,
+        log: @escaping (String) -> Void
+    ) async throws {
+        let readAsset = AVURLAsset(
+            url: tempURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        do {
+            try await SegmentPassThroughExporter.exportWindow(
+                asset: readAsset,
+                videoFormat: videoFormat,
+                audioFormat: audioFormat,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "temp file",
+                log: log
+            )
+        } catch {
+            guard Self.shouldStreamFallback(after: error) else { throw error }
+            try? FileManager.default.removeItem(at: outputURL)
+            log(
+                "Temp file not readable yet (\(error.localizedDescription)) — exporting this 60s window from pCloud instead"
+            )
+            try await exportSegmentFromPCloudStream(
+                remoteURL: remoteURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                trustedLength: trustedLength,
+                videoFormat: videoFormat,
+                audioFormat: audioFormat,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                log: log
+            )
+        }
+    }
+
+    private static func shouldStreamFallback(after error: Error) -> Bool {
+        if let exportError = error as? SegmentExporterError {
+            switch exportError {
+            case .readerSetupFailed, .noKeyframeInWindow, .segmentOutputTooSmall:
+                return true
+            case .readerFailed(let underlying):
+                return isSparseContainerOpenFailure(underlying)
+            case .cancelled, .readerInterrupted, .seekPastEnd, .noVideoTrack, .unsupportedCodec,
+                 .missingFormatDescription, .writerSetupFailed, .writerFailed, .writerBackpressure,
+                 .insufficientDiskSpace:
+                return false
+            }
+        }
+        return isSparseContainerOpenFailure(error)
     }
 
     private func exportSegmentFromPCloudStream(
@@ -769,6 +832,12 @@ enum SegmentExporterError: LocalizedError {
         case .readerSetupFailed:
             return "Could not start reading the media file."
         case .readerFailed(let error):
+            if isSparseContainerOpenFailure(error) {
+                return """
+                Could not read this minute from the temp copy (incomplete sparse MP4). \
+                The app retries that minute from pCloud automatically; if this persists, try seek 0 min on Wi‑Fi.
+                """
+            }
             return "Read failed: \(error.localizedDescription)"
         case .writerSetupFailed:
             return "Could not start writing segment MP4."
@@ -789,4 +858,16 @@ enum SegmentExporterError: LocalizedError {
             return "Segment file too small (\(bytes) B) — source window was incomplete; try again after more temp download."
         }
     }
+}
+
+private func isSparseContainerOpenFailure(_ error: Error) -> Bool {
+    let text = error.localizedDescription.lowercased()
+    if text.contains("cannot open") { return true }
+    if text.contains("operation could not be completed") { return true }
+    if text.contains("file couldn't be opened") { return true }
+    if text.contains("file could not be opened") { return true }
+    let ns = error as NSError
+    if ns.domain == AVFoundationErrorDomain, ns.code == -11828 { return true }
+    if ns.domain == AVFoundationErrorDomain, ns.code == -11829 { return true }
+    return false
 }

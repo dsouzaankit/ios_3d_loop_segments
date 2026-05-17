@@ -20,7 +20,13 @@ enum SegmentPassThroughExporter {
         let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
         let rangeEnd = CMTimeAdd(rangeStart, rangeDuration)
 
-        let reader = try AVAssetReader(asset: asset)
+        let reader: AVAssetReader
+        do {
+            reader = try AVAssetReader(asset: asset)
+        } catch {
+            log("Reader could not open (\(sourceLabel)): \(error.localizedDescription)")
+            throw SegmentExporterError.readerFailed(error)
+        }
         reader.timeRange = CMTimeRange(start: rangeStart, end: rangeEnd)
 
         let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)

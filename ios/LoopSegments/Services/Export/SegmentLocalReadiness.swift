@@ -79,7 +79,7 @@ enum SegmentLocalReadiness {
                 } else {
                     zeroSampleStreak = 0
                 }
-                if reason.contains("cannot load tracks") || reason.contains("no video track visible") {
+                if isContainerOpenFailure(reason) {
                     trackLoadStreak += 1
                     if trackLoadStreak == 1 || trackLoadStreak == 4, indexRefreshCount < 3 {
                         indexRefreshCount += 1
@@ -226,6 +226,14 @@ enum SegmentLocalReadiness {
             return .needsMoreData(String(format: "timeline covers %.0fs, need ~%.0fs", coveredSeconds, needSeconds))
         }
         return .ok(videoSamples: inRangeCount)
+    }
+
+    private static func isContainerOpenFailure(_ reason: String) -> Bool {
+        let lower = reason.lowercased()
+        return lower.contains("cannot load tracks")
+            || lower.contains("no video track visible")
+            || lower.contains("cannot open reader")
+            || lower.contains("cannot open")
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {
