@@ -14,6 +14,7 @@ final class SegmentExporter {
 
     private let cancelLock = NSLock()
     private var isCancelled = false
+    private var retainedWebDAVLoader: WebDAVResourceLoader?
     private var retainedAsset: AVURLAsset?
     private var tempDownload: WebDAVTempFileDownload?
 
@@ -59,6 +60,7 @@ final class SegmentExporter {
         defer {
             tempDownload?.cancel()
             tempDownload = nil
+            retainedWebDAVLoader = nil
             retainedAsset = nil
             try? FileManager.default.removeItem(at: ExportPaths.workingSourceURL)
         }
@@ -84,25 +86,14 @@ final class SegmentExporter {
             return cancelled
         }
 
-        let downloader = try WebDAVTempFileDownload(
-            remoteURL: inputURL,
-            rangeCache: rangeCache,
+        let streamingAsset = try await openStreamingAsset(
+            inputURL: inputURL,
             authorizationProvider: authorizationProvider,
-            isCancelled: cancelCheck,
-            log: logHandler
+            rangeCache: rangeCache,
+            logHandler: logHandler
         )
-        tempDownload = downloader
-        try await downloader.waitUntilPlayable()
 
-        let asset = AVURLAsset(
-            url: downloader.fileURL,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-        )
-        retainedAsset = asset
-        _ = try await asset.load(.isPlayable)
-        logHandler("Opened temp file — publishing 60s segments as download catches up (DLNA can loop latest)")
-
-        let duration = try await asset.load(.duration)
+        let duration = try await streamingAsset.load(.duration)
         let durationSeconds = CMTimeGetSeconds(duration)
         let durationMs = Int64(durationSeconds * 1000)
 
@@ -114,10 +105,10 @@ final class SegmentExporter {
             logHandler("Seek \(seekMs / 60_000) min — download is from file start; first segments need more data on disk")
         }
 
-        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+        guard let videoTrack = try await streamingAsset.loadTracks(withMediaType: .video).first else {
             throw SegmentExporterError.noVideoTrack
         }
-        let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
+        let audioTrack = try await streamingAsset.loadTracks(withMediaType: .audio).first
 
         let videoFormat = try await videoFormatDescription(from: videoTrack)
         guard CodecSupport.canPassthroughToMP4(videoFormat) else {
@@ -137,6 +128,17 @@ final class SegmentExporter {
 
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
+
+        let downloader = try WebDAVTempFileDownload(
+            remoteURL: inputURL,
+            rangeCache: rangeCache,
+            authorizationProvider: authorizationProvider,
+            isCancelled: cancelCheck,
+            log: logHandler
+        )
+        tempDownload = downloader
+        downloader.logDownloadStarted()
+        logHandler("Publishing 60s segments as temp download catches up (DLNA can loop latest)")
 
         let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
@@ -169,13 +171,31 @@ final class SegmentExporter {
             )
             let slot = minuteIndex % Self.segmentFileCount
 
+            let useLocal = downloader.isReadyForLocalExport(
+                timelineEndSeconds: windowEndSeconds,
+                durationSeconds: durationSeconds
+            )
+            let readAsset: AVURLAsset
+            let sourceLabel: String
+            if useLocal {
+                readAsset = AVURLAsset(
+                    url: downloader.fileURL,
+                    options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+                )
+                sourceLabel = "temp file"
+            } else {
+                readAsset = streamingAsset
+                sourceLabel = "pCloud stream"
+            }
+
             try await SegmentPassThroughExporter.exportWindow(
-                sourceFile: downloader.fileURL,
+                asset: readAsset,
                 videoFormat: videoFormat,
                 audioFormat: audioFormat,
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
                 outputSlot: slot,
+                sourceLabel: sourceLabel,
                 log: logHandler
             )
 
@@ -199,6 +219,33 @@ final class SegmentExporter {
         if delay > 0.05 {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
+    }
+
+    private func openStreamingAsset(
+        inputURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        logHandler: @escaping (String) -> Void
+    ) async throws -> AVURLAsset {
+        logHandler("Probing duration/codecs via pCloud (prefetch cache)…")
+        let loader = WebDAVResourceLoader(
+            remoteURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            log: logHandler
+        )
+        retainedWebDAVLoader = loader
+        let asset = AVURLAsset(
+            url: loader.customAssetURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        retainedAsset = asset
+        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+        guard try await asset.load(.isPlayable) else {
+            throw SegmentExporterError.readerSetupFailed
+        }
+        logHandler("Opened for export (pCloud + temp buffer)")
+        return asset
     }
 
     private func videoFormatDescription(from track: AVAssetTrack) async throws -> CMFormatDescription {

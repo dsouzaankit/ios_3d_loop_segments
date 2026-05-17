@@ -5,15 +5,15 @@ import Foundation
 /// Stream-copy one 60s window from a local file (as fast as disk allows).
 enum SegmentPassThroughExporter {
     static func exportWindow(
-        sourceFile: URL,
+        asset: AVURLAsset,
         videoFormat: CMFormatDescription,
         audioFormat: CMFormatDescription?,
         rangeStart: CMTime,
         rangeDuration: CMTime,
         outputSlot: Int,
+        sourceLabel: String,
         log: (String) -> Void
     ) async throws {
-        let asset = AVURLAsset(url: sourceFile)
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw SegmentExporterError.noVideoTrack
         }
@@ -48,7 +48,7 @@ enum SegmentPassThroughExporter {
 
         let url = ExportPaths.segmentURL(index: outputSlot)
         try? FileManager.default.removeItem(at: url)
-        log("Writing \(url.lastPathComponent) (media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)))")
+        log("Writing \(url.lastPathComponent) via \(sourceLabel) (media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)))")
 
         var writerContext: SegmentWriterContext?
         var heldAudio: CMSampleBuffer?

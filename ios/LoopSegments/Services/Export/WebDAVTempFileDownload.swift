@@ -16,6 +16,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private let lock = NSLock()
     private var contiguousEnd: Int64 = 0
     private var tailOnDisk = false
+    private var pendingTailOffset: Int64?
+    private var pendingTailData: Data?
     private var downloadTask: Task<Void, Error>?
     private var writeHandle: FileHandle?
 
@@ -63,18 +65,25 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return contiguousEnd
     }
 
-    /// MP4 index (tail) + head on disk so `AVURLAsset` can open the growing file.
-    func waitUntilPlayable() async throws {
+    func logDownloadStarted() {
         log("Downloading to temp — \(formatBytes(totalLength)) (segments publish per 60s as data arrives)…")
-        while true {
-            if isCancelled() { throw SegmentExporterError.cancelled }
-            lock.lock()
-            let head = contiguousEnd
-            let hasTail = tailOnDisk
-            lock.unlock()
-            if head >= min(256 * 1024, totalLength) && hasTail { return }
-            try await Task.sleep(nanoseconds: 200_000_000)
-        }
+    }
+
+    /// Local file is safe for `AVAssetReader` when this minute’s bytes are contiguous and MP4 tail is not in a sparse hole.
+    func isReadyForLocalExport(timelineEndSeconds: Double, durationSeconds: Double) -> Bool {
+        guard durationSeconds > 0 else { return false }
+        let endSeconds = min(timelineEndSeconds, durationSeconds)
+        let fraction = endSeconds / durationSeconds
+        let slack: Int64 = 12 * 1024 * 1024
+        let required = min(totalLength, Int64(Double(totalLength) * fraction) + slack)
+        guard contiguousEndValue() >= required else { return false }
+
+        lock.lock()
+        let tailPending = pendingTailOffset != nil
+        let tailReady = tailOnDisk
+        lock.unlock()
+        if tailPending && !tailReady { return false }
+        return true
     }
 
     /// Wait until sequential download likely covers media through `timelineEndSeconds` (seek 0 recommended).
@@ -119,13 +128,35 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private func applyCachedSpans(_ cache: WebDAVRangeCache) throws {
         let tailThreshold = max(0, totalLength - 3 * 1024 * 1024)
         for span in cache.storedSpans() {
-            try write(span.data, at: span.start)
             if span.start >= tailThreshold {
-                lock.lock()
-                tailOnDisk = true
-                lock.unlock()
+                pendingTailOffset = span.start
+                pendingTailData = span.data
+                continue
             }
+            try write(span.data, at: span.start)
         }
+        try writeHandle?.synchronize()
+    }
+
+    private func flushPendingTailIfReady() throws {
+        lock.lock()
+        guard let offset = pendingTailOffset, let data = pendingTailData else {
+            lock.unlock()
+            return
+        }
+        let canWrite = contiguousEnd >= offset
+        lock.unlock()
+        guard canWrite else { return }
+
+        try write(data, at: offset)
+        lock.lock()
+        if pendingTailOffset == offset {
+            pendingTailOffset = nil
+            pendingTailData = nil
+            tailOnDisk = true
+        }
+        lock.unlock()
+        try writeHandle?.synchronize()
     }
 
     private func write(_ data: Data, at offset: Int64) throws {
@@ -175,6 +206,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 throw WebDAVResourceLoaderError.invalidResponse
             }
             try write(data, at: start)
+            try flushPendingTailIfReady()
 
             let pct = Int((end + 1) * 100 / totalLength)
             if pct >= lastLoggedPercent + Self.progressStepPercent || end + 1 >= totalLength {
