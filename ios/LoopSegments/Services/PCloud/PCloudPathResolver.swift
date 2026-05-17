@@ -13,6 +13,7 @@ enum PCloudPathResolver {
         results.reserveCapacity(entries.count)
 
         for entry in entries {
+            if Task.isCancelled { throw CancellationError() }
             let enriched = try await enrichPath(entry, apiClient: apiClient)
             guard let item = PCloudMetadataParsing.webDAVItem(
                 from: enriched,
@@ -24,6 +25,7 @@ enum PCloudPathResolver {
             if PCloudMetadataParsing.isBrowsableVideo(name: item.name, metadata: enriched, isFolder: isFolder) {
                 results.append(item)
             }
+            if results.count >= 80 { break }
         }
         return results.sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory && !rhs.isDirectory }

@@ -7,8 +7,8 @@ enum PCloudMetadataParsing {
             if let rows = json[key] as? [[String: Any]], !rows.isEmpty {
                 return flattenMetadataRows(rows)
             }
-            if let anyItems = json[key] as? [Any] {
-                let rows = anyItems.compactMap { metadataDictionary($0) }
+            if let anyItems = json[key] as? [Any], !anyItems.isEmpty {
+                let rows = parseSearchItemList(anyItems)
                 if !rows.isEmpty { return rows }
             }
             if let single = json[key] as? [String: Any], metadataDictionary(single) != nil {
@@ -102,10 +102,39 @@ enum PCloudMetadataParsing {
         rows.compactMap { metadataDictionary($0) }
     }
 
+    private static func parseSearchItemList(_ items: [Any]) -> [[String: Any]] {
+        var rows: [[String: Any]] = []
+        rows.reserveCapacity(items.count)
+        for item in items {
+            if let row = metadataDictionary(item) {
+                rows.append(normalizeSearchMetadata(row))
+                continue
+            }
+            if let fileId = int64Field(item) {
+                rows.append(["fileid": fileId])
+            }
+        }
+        return rows
+    }
+
+    private static func normalizeSearchMetadata(_ row: [String: Any]) -> [String: Any] {
+        var copy = row
+        guard copy["fileid"] == nil, copy["folderid"] == nil, let id = int64Field(row["id"]),
+              row["name"] != nil else {
+            return copy
+        }
+        if boolField(row["isfolder"]) {
+            copy["folderid"] = id
+        } else {
+            copy["fileid"] = id
+        }
+        return copy
+    }
+
     private static func metadataDictionary(_ value: Any) -> [String: Any]? {
         if let row = value as? [String: Any] {
             if let nested = row["metadata"] as? [String: Any] { return nested }
-            if row["name"] != nil || row["fileid"] != nil || row["folderid"] != nil {
+            if row["name"] != nil || row["fileid"] != nil || row["folderid"] != nil || row["id"] != nil {
                 return row
             }
         }

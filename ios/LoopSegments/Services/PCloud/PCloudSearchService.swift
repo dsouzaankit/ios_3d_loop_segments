@@ -42,6 +42,14 @@ enum PCloudSearchService {
                     statusNote: "Found \(apiResult.0.count) match(es) via pCloud web search."
                 )
             }
+            if apiRawCount > 0 {
+                return Result(
+                    items: [],
+                    statusNote: """
+                    pCloud returned \(apiRawCount) hit(s) but none mapped to videos/folders — sign out/in, open the folder in Browse, then search again.
+                    """
+                )
+            }
         }
 
         tried.append("pCloud folder index")

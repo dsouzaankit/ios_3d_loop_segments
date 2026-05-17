@@ -2,6 +2,9 @@ import Foundation
 
 /// pCloud REST API (search, etc.) using the same credentials as WebDAV.
 final class PCloudAPIClient {
+    private static let searchResultLimit = 80
+    private static let searchPageLimit = 600
+
     private let credentials: WebDAVCredentials
     private let session: URLSession
     private var authToken: String?
@@ -33,8 +36,9 @@ final class PCloudAPIClient {
         let json = try await performSearch(query: trimmed, credentials: creds)
         try PCloudAPIRequest.throwIfAPIError(json)
         let raw = PCloudMetadataParsing.extractEntries(from: json)
+        let capped = Array(raw.prefix(Self.searchResultLimit))
         let items = try await PCloudPathResolver.resolveSearchItems(
-            entries: raw,
+            entries: capped,
             credentials: creds,
             apiClient: self
         )
@@ -116,15 +120,13 @@ final class PCloudAPIClient {
         var lastJSON: [String: Any]?
         var lastCode = -1
 
+        let parameterSets: [[String: String]] = [
+            Self.browserSearchParameters(query: query, token: token),
+            Self.legacySearchParameters(query: query, token: token),
+        ]
+
         for host in hosts {
-            for includeSearchAll in [true, false] {
-                var parameters: [String: String] = [
-                    "auth": token,
-                    "query": query,
-                ]
-                if includeSearchAll {
-                    parameters["searchall"] = "1"
-                }
+            for parameters in parameterSets {
                 let json = try await PCloudAPIRequest.get(
                     host: host,
                     method: "search",
@@ -135,36 +137,64 @@ final class PCloudAPIClient {
                 if code == 1000 || code == 2000 {
                     authToken = nil
                     authAPIHost = nil
-                    let retryToken = try await ensureAuthToken(credentials: credentials)
-                    parameters["auth"] = retryToken
+                    var retryParams = parameters
+                    retryParams["auth"] = try await ensureAuthToken(credentials: credentials)
                     let retryJSON = try await PCloudAPIRequest.get(
                         host: host,
                         method: "search",
-                        parameters: parameters,
+                        parameters: retryParams,
                         session: session
                     )
                     let retryCode = PCloudAPIRequest.resultCode(retryJSON)
-                    if retryCode == 0 {
+                    if retryCode == 0, !PCloudMetadataParsing.extractEntries(from: retryJSON).isEmpty {
                         authAPIHost = host
                         return retryJSON
                     }
                     lastJSON = retryJSON
                     lastCode = retryCode
-                    break
+                    continue
                 }
                 if code == 0 {
-                    authAPIHost = host
-                    return json
+                    let entries = PCloudMetadataParsing.extractEntries(from: json)
+                    if !entries.isEmpty {
+                        authAPIHost = host
+                        return json
+                    }
+                    lastJSON = json
+                    lastCode = code
+                    continue
                 }
                 lastJSON = json
                 lastCode = code
             }
         }
 
+        if let lastJSON, PCloudAPIRequest.resultCode(lastJSON) == 0 {
+            return lastJSON
+        }
         if let lastJSON {
             return lastJSON
         }
         throw PCloudAPIError.api(code: lastCode, message: nil)
+    }
+
+    /// Same query shape as my.pcloud.com (`/search?query=&offset=0&limit=600&iconformat=id&auth=`).
+    private static func browserSearchParameters(query: String, token: String) -> [String: String] {
+        [
+            "auth": token,
+            "query": query,
+            "offset": "0",
+            "limit": "\(searchPageLimit)",
+            "iconformat": "id",
+        ]
+    }
+
+    private static func legacySearchParameters(query: String, token: String) -> [String: String] {
+        [
+            "auth": token,
+            "query": query,
+            "searchall": "1",
+        ]
     }
 
     private func searchHostsToTry(credentials: WebDAVCredentials) async -> [String] {
@@ -175,6 +205,8 @@ final class PCloudAPIClient {
         if let authAPIHost, !authAPIHost.isEmpty {
             hosts.append(authAPIHost)
         }
+        hosts.append(credentials.region.apiHost)
+        hosts.append(credentials.region.alternate.apiHost)
         let resolved = await PCloudAPIHostResolver.hostsToTry(for: credentials.region, session: session)
         hosts.append(contentsOf: resolved)
         var seen = Set<String>()
