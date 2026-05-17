@@ -42,6 +42,11 @@ enum ExportPaths {
         exportsDirectory.appendingPathComponent("export_progress.txt")
     }
 
+    /// Full remote MP4 copied here before `AVAssetReader` (deleted after export).
+    static var workingSourceURL: URL {
+        exportsDirectory.appendingPathComponent("_export_source_working.mp4")
+    }
+
     /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).
     static func ensureExportDirectories() {
         _ = exportsDirectory

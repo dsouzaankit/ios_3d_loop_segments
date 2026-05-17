@@ -14,8 +14,6 @@ final class SegmentExporter {
 
     private let cancelLock = NSLock()
     private var isCancelled = false
-    /// AVFoundation does not retain the resource-loader delegate or asset; keep alive for the whole export.
-    private var retainedWebDAVLoader: WebDAVResourceLoader?
     private var retainedAsset: AVURLAsset?
 
     func cancel() {
@@ -58,8 +56,8 @@ final class SegmentExporter {
         isCancelled = false
         cancelLock.unlock()
         defer {
-            retainedWebDAVLoader = nil
             retainedAsset = nil
+            try? FileManager.default.removeItem(at: ExportPaths.workingSourceURL)
         }
 
         if seekMs >= 10 * 60 * 1000 {
@@ -75,12 +73,21 @@ final class SegmentExporter {
             log: logHandler
         )
 
-        let asset = try await openPlayableAsset(
-            inputURL: inputURL,
+        let localURL = try await WebDAVSourceSpooler.spool(
+            remoteURL: inputURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
-            logHandler: logHandler
+            isCancelled: { [weak self] in
+                guard let self else { return true }
+                self.cancelLock.lock()
+                let cancelled = self.isCancelled
+                self.cancelLock.unlock()
+                return cancelled
+            },
+            log: logHandler
         )
+
+        let asset = try await openLocalAsset(fileURL: localURL, logHandler: logHandler)
         let duration = try await asset.load(.duration)
         let durationMs = Int64(CMTimeGetSeconds(duration) * 1000)
 
@@ -118,7 +125,7 @@ final class SegmentExporter {
         reader.timeRange = CMTimeRange(start: startTime, end: duration)
 
         let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
-        videoOutput.alwaysCopiesSampleData = false
+        videoOutput.alwaysCopiesSampleData = true
         guard reader.canAdd(videoOutput) else {
             throw SegmentExporterError.readerSetupFailed
         }
@@ -127,7 +134,7 @@ final class SegmentExporter {
         var audioOutput: AVAssetReaderTrackOutput?
         if let audioTrack {
             let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
-            output.alwaysCopiesSampleData = false
+            output.alwaysCopiesSampleData = true
             guard reader.canAdd(output) else {
                 throw SegmentExporterError.readerSetupFailed
             }
@@ -139,7 +146,7 @@ final class SegmentExporter {
             throw mapReaderFailure(reader.error) ?? SegmentExporterError.readerSetupFailed
         }
         logHandler("Reader started — exporting at ~1× realtime (60s per segment, keep app open)")
-        logHandler("Pulling samples from pCloud (stream-only, prefetch cache ~3 MiB)…")
+        logHandler("Reading local copy (no network during segment write)…")
 
         var segmentIndex = 0
         var loggedFirstSample = false
@@ -276,29 +283,14 @@ final class SegmentExporter {
         try ctx.append(sample, track: track)
     }
 
-    private func openPlayableAsset(
-        inputURL: URL,
-        authorizationProvider: @escaping WebDAVAuthorizationProvider,
-        rangeCache: WebDAVRangeCache,
-        logHandler: @escaping (String) -> Void
-    ) async throws -> AVURLAsset {
-        // Always use our WebDAV loader — system HTTP drops Authorization on later reads (~30s / seek).
-        logHandler("Opening via WebDAV loader (auth on every byte range)…")
-        let loader = WebDAVResourceLoader(
-            remoteURL: inputURL,
-            authorizationProvider: authorizationProvider,
-            rangeCache: rangeCache,
-            log: logHandler
-        )
-        retainedWebDAVLoader = loader
+    private func openLocalAsset(fileURL: URL, logHandler: @escaping (String) -> Void) async throws -> AVURLAsset {
         let asset = AVURLAsset(
-            url: loader.customAssetURL,
+            url: fileURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
         retainedAsset = asset
-        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
         _ = try await asset.load(.isPlayable)
-        logHandler("Opened via WebDAV loader")
+        logHandler("Opened local file for export")
         return asset
     }
 
@@ -475,6 +467,7 @@ enum SegmentExporterError: LocalizedError {
     case writerSetupFailed
     case writerFailed(Error)
     case writerBackpressure
+    case insufficientDiskSpace(needed: Int64, available: Int64)
 
     var errorDescription: String? {
         switch self {
@@ -500,6 +493,10 @@ enum SegmentExporterError: LocalizedError {
             return "Write failed: \(error.localizedDescription)"
         case .writerBackpressure:
             return "Segment writer timed out waiting for data."
+        case .insufficientDiskSpace(let needed, let available):
+            let needMB = needed / (1024 * 1024)
+            let haveMB = available / (1024 * 1024)
+            return "Need ~\(needMB) MB free to copy this file; only ~\(haveMB) MB available. Free space or pick a smaller file."
         }
     }
 }
