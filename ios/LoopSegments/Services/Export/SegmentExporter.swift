@@ -134,7 +134,7 @@ final class SegmentExporter {
         releaseStreamingProbe(streamFromPCloud: streamFromPCloud, log: logHandler)
 
         try Self.ensureExportDiskSpace(fileBytes: fileSize, streaming: streamFromPCloud)
-        if fileSize > streamOnlyThresholdBytes, !streamFromPCloud {
+        if fileSize > Self.streamOnlyThresholdBytes, !streamFromPCloud {
             logHandler(
                 "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
             )
