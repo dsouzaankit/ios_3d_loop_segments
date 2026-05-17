@@ -480,9 +480,10 @@ final class SegmentExporter {
             audioFormat = fmt
         }
         let duration = try await asset.load(.duration)
-        let durationSeconds = CMTimeGetSeconds(duration)
-        guard durationSeconds.isFinite, durationSeconds > 0 else {
+        var durationSeconds = CMTimeGetSeconds(duration)
+        if !durationSeconds.isFinite || durationSeconds <= 0 {
             log("Duration not available from index — export may mis-schedule segments")
+            durationSeconds = 1
         }
         return (durationSeconds, videoFormat, audioFormat)
     }
