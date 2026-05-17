@@ -17,3 +17,7 @@ desktop.ini
 *.mobileprovision
 .env
 .env.*
+
+ios/build artifacts/
+*.ipa
+*.zip
