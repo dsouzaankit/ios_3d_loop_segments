@@ -58,7 +58,10 @@ enum SegmentPassThroughExporter {
         var startedWriter = false
         var skippedBeforeRange = 0
         var skippedNonKeyframe = 0
+        var inRangeVideoSamples = 0
+        var lastInRangePTS = rangeStart
         let maxKeyframeScan = 240
+        let minInRangeVideoSamples = 24
 
         while true {
             if reader.status == .failed {
@@ -116,6 +119,10 @@ enum SegmentPassThroughExporter {
             }
 
             try writerContext?.append(next.sample, track: next.track)
+            if next.track == .video, CMTimeCompare(pts, rangeStart) >= 0 {
+                inRangeVideoSamples += 1
+                lastInRangePTS = pts
+            }
             if next.track == .audio {
                 heldAudio = nil
             }
@@ -123,6 +130,22 @@ enum SegmentPassThroughExporter {
 
         guard startedWriter else {
             throw SegmentExporterError.noKeyframeInWindow
+        }
+
+        let coveredSeconds = CMTimeGetSeconds(CMTimeSubtract(lastInRangePTS, rangeStart))
+        let needSeconds = CMTimeGetSeconds(rangeDuration) * 0.85
+        if inRangeVideoSamples < minInRangeVideoSamples || coveredSeconds < needSeconds {
+            try? FileManager.default.removeItem(at: outputURL)
+            log(
+                String(
+                    format: "Segment incomplete — %d video samples, ~%.0fs in window (need ~%d samples / ~%.0fs); download more temp data",
+                    inRangeVideoSamples,
+                    coveredSeconds,
+                    minInRangeVideoSamples,
+                    needSeconds
+                )
+            )
+            throw SegmentExporterError.segmentOutputTooSmall(0)
         }
 
         if let writerContext {

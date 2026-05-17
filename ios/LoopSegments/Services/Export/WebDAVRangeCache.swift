@@ -9,7 +9,12 @@ final class WebDAVRangeCache: @unchecked Sendable {
     private let maxStoredBytes: Int = 4 * 1024 * 1024
 
     func storeContentLength(_ length: Int64) {
+        guard length > 0 else { return }
         lock.lock()
+        if let existing = contentLength, existing >= length {
+            lock.unlock()
+            return
+        }
         contentLength = length
         lock.unlock()
     }

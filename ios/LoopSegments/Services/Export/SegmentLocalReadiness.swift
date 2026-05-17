@@ -27,20 +27,16 @@ enum SegmentLocalReadiness {
         continue
       }
 
-      if totalFileBytes > 0, contiguous >= totalFileBytes {
-        log("Readiness OK — full temp file on disk (\(formatBytes(contiguous)))")
-        return
-      }
-
-      // Sparse temp file: index at EOF, mdat growing from 0. AVAssetReader pre-probes often see 0 samples until more is contiguous.
-      if indexTailOnDisk() {
-        log("Readiness OK — \(formatBytes(contiguous)) contiguous from start (MP4 index at end of file)")
-        return
-      }
-
+      // Always probe the export window — sparse temp + index-at-EOF can look “ready” with too few bytes.
       switch probeWindow(fileURL: fileURL, rangeStart: rangeStart, rangeDuration: rangeDuration) {
       case .ok(let videoSamples):
-        log("Readiness OK — \(videoSamples) video samples in window (\(formatBytes(contiguous)) on disk)")
+        if totalFileBytes > 0, contiguous >= totalFileBytes {
+          log("Readiness OK — full temp file on disk (\(formatBytes(contiguous))), \(videoSamples) video samples in window")
+        } else if indexTailOnDisk() {
+          log("Readiness OK — \(formatBytes(contiguous)) contiguous + \(videoSamples) video samples (index at EOF)")
+        } else {
+          log("Readiness OK — \(videoSamples) video samples in window (\(formatBytes(contiguous)) on disk)")
+        }
         return
       case .needsMoreData(let reason):
         let now = CFAbsoluteTimeGetCurrent()

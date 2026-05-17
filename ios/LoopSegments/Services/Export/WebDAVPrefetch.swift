@@ -9,12 +9,18 @@ enum WebDAVPrefetch {
         remoteURL: URL,
         authorization: String,
         cache: WebDAVRangeCache,
+        catalogContentLength: Int64? = nil,
         log: ((String) -> Void)? = nil
     ) async throws {
         log?("Prefetch: HEAD (file size)")
-        let length = try await fetchContentLength(
+        let headLength = try await fetchContentLength(
             remoteURL: remoteURL,
             authorization: authorization,
+            log: log
+        )
+        let length = WebDAVContentLength.resolve(
+            headBytes: headLength > 0 ? headLength : nil,
+            catalogBytes: catalogContentLength,
             log: log
         )
         cache.storeContentLength(length)

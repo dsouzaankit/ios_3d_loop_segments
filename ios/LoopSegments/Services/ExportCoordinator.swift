@@ -65,6 +65,7 @@ final class ExportCoordinator {
             let result = try await Task.detached(priority: .userInitiated) {
                 try await self.exporter.run(
                     inputURL: inputURL,
+                    catalogContentLength: item.contentLength,
                     seekMs: seekMs,
                     authorizationProvider: authProvider,
                     logHandler: logHandler

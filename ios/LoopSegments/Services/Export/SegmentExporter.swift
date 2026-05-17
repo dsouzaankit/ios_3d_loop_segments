@@ -50,6 +50,7 @@ final class SegmentExporter {
 
     func run(
         inputURL: URL,
+        catalogContentLength: Int64? = nil,
         seekMs: Int64,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         logHandler: @escaping (String) -> Void
@@ -75,6 +76,7 @@ final class SegmentExporter {
             remoteURL: inputURL,
             authorization: authorizationProvider(),
             cache: rangeCache,
+            catalogContentLength: catalogContentLength,
             log: logHandler
         )
 
@@ -637,6 +639,9 @@ enum SegmentExporterError: LocalizedError {
         case .noKeyframeInWindow:
             return "Could not start segment on a keyframe — wait for more download or use seek 0 min."
         case .segmentOutputTooSmall(let bytes):
+            if bytes == 0 {
+                return "Segment window was incomplete — wait for more temp download (or seek 0 min on Wi‑Fi)."
+            }
             return "Segment file too small (\(bytes) B) — source window was incomplete; try again after more temp download."
         }
     }
