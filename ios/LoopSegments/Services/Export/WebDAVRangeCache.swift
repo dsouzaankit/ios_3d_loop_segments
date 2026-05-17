@@ -5,8 +5,12 @@ final class WebDAVRangeCache: @unchecked Sendable {
     private let lock = NSLock()
     private var contentLength: Int64?
     private var spans: [(start: Int64, end: Int64, data: Data)] = []
-    /// Prefetch only (~3 MiB). Loader must not grow this during export or large files OOM-jetsam.
-    private let maxStoredBytes: Int = 4 * 1024 * 1024
+    /// Prefetch only. Loader must not grow this during export or large files OOM-jetsam.
+    private let maxStoredBytes: Int
+
+    init(maxStoredBytes: Int = 4 * 1024 * 1024) {
+        self.maxStoredBytes = maxStoredBytes
+    }
 
     func storeContentLength(_ length: Int64) {
         guard length > 0 else { return }

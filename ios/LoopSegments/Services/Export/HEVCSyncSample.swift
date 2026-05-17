@@ -3,12 +3,19 @@ import Foundation
 
 /// HEVC often omits `NotSync` on sample attachments; scan for IDR/CRA NAL units before starting passthrough.
 enum HEVCSyncSample {
-  static func isReliableSyncPoint(_ sample: CMSampleBuffer, videoFormat: CMFormatDescription) -> Bool {
+  static func isReliableSyncPoint(
+    _ sample: CMSampleBuffer,
+    videoFormat: CMFormatDescription,
+    strictHEVCNALScan: Bool = true
+  ) -> Bool {
     if isSyncFromAttachments(sample) {
       return true
     }
     let codec = CMFormatDescriptionGetMediaSubType(videoFormat)
     guard CodecSupport.isHEVCVideo(codec) else {
+      return true
+    }
+    if !strictHEVCNALScan {
       return true
     }
     return containsRandomAccessPointNAL(sample)

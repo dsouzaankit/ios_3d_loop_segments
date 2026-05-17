@@ -2,6 +2,71 @@ import AVFoundation
 import Foundation
 import UniformTypeIdentifiers
 
+/// Caps AVFoundation “read to EOF” requests so a 12 GB remote MP4 is not pulled over the network.
+struct StreamReadPolicy {
+    let fileLength: Int64
+    let indexTailStart: Int64
+    let allowedSpans: [ClosedRange<Int64>]
+
+    static func forExportWindow(
+        fileLength: Int64,
+        window: TimelineByteRange,
+        indexTailBytes: Int64
+    ) -> StreamReadPolicy {
+        let tailStart = max(0, fileLength - indexTailBytes)
+        var spans: [ClosedRange<Int64>] = []
+        if fileLength > 0 {
+            let headEnd = min(fileLength - 1, 4 * 1024 * 1024 - 1)
+            spans.append(0 ... headEnd)
+        }
+        if window.end > window.start {
+            spans.append(window.start ... min(window.end - 1, max(0, fileLength - 1)))
+        }
+        if tailStart < fileLength {
+            spans.append(tailStart ... (fileLength - 1))
+        }
+        return StreamReadPolicy(
+            fileLength: fileLength,
+            indexTailStart: tailStart,
+            allowedSpans: spans
+        )
+    }
+
+    func cappedLength(
+        offset: Int64,
+        requested: Int64,
+        requestsAllDataToEndOfResource: Bool
+    ) -> Int64 {
+        let remaining = fileLength - offset
+        guard remaining > 0 else { return 0 }
+        if requestsAllDataToEndOfResource {
+            return min(remaining, maxAllDataToEnd(at: offset))
+        }
+        guard requested > 0 else { return 0 }
+        return min(requested, remaining, maxPartialRead(at: offset, requested: requested))
+    }
+
+    private func maxAllDataToEnd(at offset: Int64) -> Int64 {
+        let slack: Int64 = 8 * 1024 * 1024
+        for span in allowedSpans where span.contains(offset) {
+            let spanEnd = span.upperBound
+            return min(fileLength - offset, spanEnd - offset + 1 + slack)
+        }
+        if offset >= indexTailStart {
+            return fileLength - offset
+        }
+        return min(fileLength - offset, 8 * 1024 * 1024)
+    }
+
+    private func maxPartialRead(at offset: Int64, requested: Int64) -> Int64 {
+        for span in allowedSpans where span.contains(offset) {
+            let spanEnd = span.upperBound
+            return min(requested, spanEnd - offset + 1)
+        }
+        return min(requested, 512 * 1024)
+    }
+}
+
 /// Serves HTTPS WebDAV media to `AVURLAsset` with Basic auth and byte-range reads.
 final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     static let customScheme = "loopsegments-webdav"
@@ -13,7 +78,9 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
     private let session: URLSession
     private let rangeCache: WebDAVRangeCache?
+    private let readPolicy: StreamReadPolicy?
     private let logLine: ((String) -> Void)?
+    private let throughput = LoaderThroughput()
 
     private var cachedContentLength: Int64?
     private let trustedContentLength: Int64?
@@ -45,6 +112,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         session: URLSession = WebDAVMediaSession.shared,
         rangeCache: WebDAVRangeCache? = nil,
         trustedContentLength: Int64? = nil,
+        readPolicy: StreamReadPolicy? = nil,
         log: ((String) -> Void)? = nil
     ) {
         self.remoteURL = remoteURL
@@ -52,6 +120,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         self.session = session
         self.rangeCache = rangeCache
         self.trustedContentLength = trustedContentLength
+        self.readPolicy = readPolicy
         self.logLine = log
         super.init()
     }
@@ -167,25 +236,40 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         guard fileLength > 0, offset < fileLength else { return }
 
         let bytesRemaining = fileLength - offset
-        let totalLength: Int64
-        if dataRequest.requestsAllDataToEndOfResource {
-            totalLength = bytesRemaining
+        let requested = dataRequest.requestsAllDataToEndOfResource
+            ? bytesRemaining
+            : Int64(dataRequest.requestedLength)
+        guard requested > 0 else { return }
+
+        var totalLength: Int64
+        if let readPolicy {
+            totalLength = readPolicy.cappedLength(
+                offset: offset,
+                requested: requested,
+                requestsAllDataToEndOfResource: dataRequest.requestsAllDataToEndOfResource
+            )
+            if dataRequest.requestsAllDataToEndOfResource, requested > totalLength, requested > 16 * 1024 * 1024 {
+                logLine?(
+                    "pCloud read capped \(formatBytes(requested)) → \(formatBytes(totalLength)) at \(formatBytes(offset)) (AVFoundation asked for EOF)"
+                )
+            }
+        } else if dataRequest.requestsAllDataToEndOfResource {
+            totalLength = min(bytesRemaining, 16 * 1024 * 1024)
         } else {
-            let requested = Int64(dataRequest.requestedLength)
-            guard requested > 0 else { return }
             totalLength = min(requested, bytesRemaining)
         }
         guard totalLength > 0 else { return }
 
+        throughput.resetIfIdle()
         var cursor = offset
         let end = offset + totalLength - 1
         let largeRequest = totalLength > Self.maxRangeChunkBytes
         if largeRequest {
             logLine?(
-                "pCloud read \(offset)-\(end) (\(formatBytes(totalLength)) of \(formatBytes(fileLength)), \(Self.maxRangeChunkBytes / 1024) KiB chunks)"
+                "pCloud read \(offset)-\(end) (\(formatBytes(totalLength)) of \(formatBytes(fileLength)), \(Self.maxRangeChunkBytes / 1024) KiB chunks)\(throughput.speedSuffix())"
             )
         } else {
-            logLine?("pCloud range \(offset)-\(end) (\(totalLength) bytes)")
+            logLine?("pCloud range \(offset)-\(end) (\(totalLength) bytes)\(throughput.speedSuffix())")
         }
 
         var chunksDone = 0
@@ -196,6 +280,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             }
             let chunkEnd = min(cursor + Self.maxRangeChunkBytes - 1, end)
             let chunk = try await fetchRangeChunk(offset: cursor, endInclusive: chunkEnd)
+            throughput.recordNetworkBytes(chunk.count)
             await onLoaderQueue {
                 if loadingRequest.isCancelled { return }
                 dataRequest.respond(with: chunk)
@@ -206,7 +291,9 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                 lastProgressLog = chunksDone
                 let done = cursor - offset
                 let pct = Int(done * 100 / totalLength)
-                logLine?("pCloud read progress — \(pct)% (\(formatBytes(done)) / \(formatBytes(totalLength)))")
+                logLine?(
+                    "pCloud read progress — \(pct)% (\(formatBytes(done)) / \(formatBytes(totalLength)))\(throughput.speedSuffix())"
+                )
             }
             if chunksDone % 16 == 0 {
                 await Task.yield()
@@ -374,6 +461,52 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         default:
             return "application/octet-stream"
         }
+    }
+}
+
+private final class LoaderThroughput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var totalBytes: Int64 = 0
+    private var lastSampleBytes: Int64 = 0
+    private var lastSampleAt = CFAbsoluteTimeGetCurrent()
+    private var startedAt = CFAbsoluteTimeGetCurrent()
+
+    func resetIfIdle() {
+        lock.lock()
+        let idle = CFAbsoluteTimeGetCurrent() - lastSampleAt > 30
+        if idle {
+            totalBytes = 0
+            lastSampleBytes = 0
+            startedAt = CFAbsoluteTimeGetCurrent()
+        }
+        lock.unlock()
+    }
+
+    func recordNetworkBytes(_ bytes: Int) {
+        guard bytes > 0 else { return }
+        lock.lock()
+        totalBytes += Int64(bytes)
+        lock.unlock()
+    }
+
+    func speedSuffix() -> String {
+        lock.lock()
+        let now = CFAbsoluteTimeGetCurrent()
+        let intervalElapsed = now - lastSampleAt
+        let deltaBytes = totalBytes - lastSampleBytes
+        if intervalElapsed >= 0.5, deltaBytes > 0 {
+            let mbps = (Double(deltaBytes) * 8.0) / (intervalElapsed * 1_000_000.0)
+            lastSampleAt = now
+            lastSampleBytes = totalBytes
+            lock.unlock()
+            return String(format: " @ %.1f Mbps", mbps)
+        }
+        let avgElapsed = now - startedAt
+        let bytes = totalBytes
+        lock.unlock()
+        guard avgElapsed >= 1.0, bytes > 0 else { return "" }
+        let avg = (Double(bytes) * 8.0) / (avgElapsed * 1_000_000.0)
+        return String(format: " @ %.1f Mbps avg", avg)
     }
 }
 

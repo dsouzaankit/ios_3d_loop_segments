@@ -42,7 +42,7 @@ final class SegmentExporter {
             return .readerInterrupted
         }
         let text = error.localizedDescription.lowercased()
-        if text.contains("cancel") {
+        if text.contains("cancel") || text.contains("interrupted") {
             return .readerInterrupted
         }
         return .readerFailed(error)
@@ -170,12 +170,19 @@ final class SegmentExporter {
                 )
                 let slot = minuteIndex % Self.segmentFileCount
                 let stagingURL = ExportPaths.segmentStagingURL(index: slot)
+                let byteRange = WebDAVTempFileDownload.byteRangeForTimeline(
+                    totalLength: fileSize,
+                    timelineStartSeconds: windowStartSeconds,
+                    timelineEndSeconds: windowEndSeconds,
+                    durationSeconds: durationSeconds
+                )
 
                 try await exportSegmentFromPCloudStream(
                     remoteURL: inputURL,
                     authorizationProvider: authorizationProvider,
                     rangeCache: rangeCache,
                     trustedLength: fileSize,
+                    byteRange: byteRange,
                     videoFormat: videoFormat,
                     audioFormat: audioFormat,
                     rangeStart: rangeStart,
@@ -224,6 +231,7 @@ final class SegmentExporter {
                 logHandler(
                     "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
                 )
+                downloader.setDownloadHighWaterMark(byteRange.end + WebDAVTempFileDownload.exportTimelineSlackBytes)
                 try await downloader.waitUntilWindowReady(
                     timelineStartSeconds: windowStartSeconds,
                     timelineEndSeconds: windowEndSeconds,
@@ -253,11 +261,13 @@ final class SegmentExporter {
                 let stagingURL = ExportPaths.segmentStagingURL(index: slot)
 
                 try await exportSegmentFromTempOrStream(
+                    downloader: downloader,
                     tempURL: downloader.fileURL,
                     remoteURL: inputURL,
                     authorizationProvider: authorizationProvider,
                     rangeCache: rangeCache,
                     trustedLength: fileSize,
+                    byteRange: byteRange,
                     videoFormat: videoFormat,
                     audioFormat: audioFormat,
                     rangeStart: rangeStart,
@@ -328,11 +338,13 @@ final class SegmentExporter {
     }
 
     private func exportSegmentFromTempOrStream(
+        downloader: WebDAVTempFileDownload,
         tempURL: URL,
         remoteURL: URL,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
         trustedLength: Int64,
+        byteRange: TimelineByteRange,
         videoFormat: CMFormatDescription,
         audioFormat: CMFormatDescription?,
         rangeStart: CMTime,
@@ -359,20 +371,61 @@ final class SegmentExporter {
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
             log(
-                "Temp file not readable yet (\(error.localizedDescription)) — exporting this 60s window from pCloud instead"
+                "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
             )
-            try await exportSegmentFromPCloudStream(
-                remoteURL: remoteURL,
-                authorizationProvider: authorizationProvider,
-                rangeCache: rangeCache,
-                trustedLength: trustedLength,
-                videoFormat: videoFormat,
-                audioFormat: audioFormat,
-                rangeStart: rangeStart,
-                rangeDuration: rangeDuration,
-                outputURL: outputURL,
-                log: log
-            )
+            downloader.pauseBackgroundDownload()
+            try await downloader.ensureContiguousRange(byteRange)
+            do {
+                try await SegmentPassThroughExporter.exportWindow(
+                    asset: readAsset,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    sourceLabel: "temp file (window filled)",
+                    log: log
+                )
+                return
+            } catch {
+                guard Self.shouldStreamFallback(after: error) else { throw error }
+                try? FileManager.default.removeItem(at: outputURL)
+                log(
+                    "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
+                )
+            }
+            downloader.pauseBackgroundDownload()
+            do {
+                try await exportSegmentFromPCloudStream(
+                    remoteURL: remoteURL,
+                    authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
+                    trustedLength: trustedLength,
+                    byteRange: byteRange,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    log: log
+                )
+            } catch SegmentExporterError.noKeyframeInWindow {
+                try? FileManager.default.removeItem(at: outputURL)
+                log(
+                    "pCloud stream found no keyframe — downloading \(Self.formatBytes(byteRange.length)) to temp and retrying locally"
+                )
+                try await downloader.ensureContiguousRange(byteRange)
+                try await SegmentPassThroughExporter.exportWindow(
+                    asset: readAsset,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    sourceLabel: "temp file (after stream keyframe miss)",
+                    log: log
+                )
+            }
         }
     }
 
@@ -397,6 +450,7 @@ final class SegmentExporter {
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
         trustedLength: Int64,
+        byteRange: TimelineByteRange,
         videoFormat: CMFormatDescription,
         audioFormat: CMFormatDescription?,
         rangeStart: CMTime,
@@ -404,11 +458,28 @@ final class SegmentExporter {
         outputURL: URL,
         log: @escaping (String) -> Void
     ) async throws {
+        let auth = authorizationProvider()
+        if trustedLength > 0 {
+            try await WebDAVPrefetch.prefetchStreamExportIndex(
+                remoteURL: remoteURL,
+                authorization: auth,
+                cache: rangeCache,
+                fileLength: trustedLength,
+                log: log
+            )
+        }
+        let indexTailBytes = WebDAVTempFileDownload.indexTailFetchBytes(totalLength: max(trustedLength, 1))
+        let readPolicy = StreamReadPolicy.forExportWindow(
+            fileLength: trustedLength,
+            window: byteRange,
+            indexTailBytes: indexTailBytes
+        )
         let loader = WebDAVResourceLoader(
             remoteURL: remoteURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
             trustedContentLength: trustedLength > 0 ? trustedLength : nil,
+            readPolicy: readPolicy,
             log: log
         )
         let asset = AVURLAsset(

@@ -70,6 +70,30 @@ enum WebDAVPrefetch {
         log?("Prefetch: complete — \(formatBytes(length)) file, head + index cached for export")
     }
 
+    /// Before streaming a segment window, cache a large MP4 index at EOF (moov-at-end HEVC).
+    static func prefetchStreamExportIndex(
+        remoteURL: URL,
+        authorization: String,
+        cache: WebDAVRangeCache,
+        fileLength: Int64,
+        log: ((String) -> Void)? = nil
+    ) async throws {
+        guard fileLength > 0 else { return }
+        let tailLen = WebDAVTempFileDownload.indexTailFetchBytes(totalLength: fileLength)
+        let tailStart = max(0, fileLength - tailLen)
+        if tailStart >= fileLength { return }
+        log?("Prefetch: MP4 index \(formatBytes(fileLength - tailStart)) at EOF for pCloud stream export")
+        let tailData = try await fetchRange(
+            remoteURL: remoteURL,
+            authorization: authorization,
+            offset: tailStart,
+            endInclusive: fileLength - 1,
+            log: log
+        )
+        cache.storeRange(offset: tailStart, data: tailData, isIndexTail: true)
+        log?("Prefetch: index cached — stream reads are capped to this window + index (not full file)")
+    }
+
     private static func formatBytes(_ bytes: Int64) -> String {
         if bytes >= 1024 * 1024 * 1024 {
             return String(format: "%.2f GB", Double(bytes) / 1_073_741_824.0)

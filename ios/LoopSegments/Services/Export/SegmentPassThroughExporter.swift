@@ -67,7 +67,8 @@ enum SegmentPassThroughExporter {
         var skippedNonKeyframe = 0
         var inRangeVideoSamples = 0
         var lastInRangePTS = rangeStart
-        let maxKeyframeScan = 480
+        let relaxKeyframeGating = sourceLabel.lowercased().contains("pcloud stream")
+        let maxKeyframeScan = relaxKeyframeGating ? 2400 : 480
         let minInRangeVideoSamples = 24
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         var lastSampleAt = CFAbsoluteTimeGetCurrent()
@@ -135,10 +136,20 @@ enum SegmentPassThroughExporter {
                     skippedBeforeRange += 1
                     continue
                 }
-                let preferKeyframe = skippedNonKeyframe < maxKeyframeScan
-                if preferKeyframe, !HEVCSyncSample.isReliableSyncPoint(next.sample, videoFormat: videoFormat) {
+                let requireSync = skippedNonKeyframe < maxKeyframeScan
+                let hasSync = HEVCSyncSample.isReliableSyncPoint(
+                    next.sample,
+                    videoFormat: videoFormat,
+                    strictHEVCNALScan: !relaxKeyframeGating
+                )
+                if requireSync, !hasSync {
                     skippedNonKeyframe += 1
                     continue
+                }
+                if !hasSync, relaxKeyframeGating {
+                    log(
+                        "Starting on in-range frame without confirmed HEVC sync (\(skippedNonKeyframe + 1) frames scanned, \(sourceLabel))"
+                    )
                 }
                 timelineOrigin = pts
                 let ctx = try SegmentWriterContext(
@@ -169,6 +180,9 @@ enum SegmentPassThroughExporter {
         }
 
         guard startedWriter else {
+            log(
+                "No segment start — skipped \(skippedBeforeRange) pre-window, \(skippedNonKeyframe) non-sync (\(sourceLabel))"
+            )
             throw SegmentExporterError.noKeyframeInWindow
         }
 

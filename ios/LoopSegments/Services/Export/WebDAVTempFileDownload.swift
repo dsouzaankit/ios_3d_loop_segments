@@ -13,6 +13,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private static let downloadChunkBytes: Int64 = 2 * 1024 * 1024
     private static let progressStepPercent = 5
     private static let timelineSlackBytes: Int64 = 24 * 1024 * 1024
+    static let exportTimelineSlackBytes: Int64 = timelineSlackBytes
 
     let fileURL: URL
     let totalLength: Int64
@@ -30,6 +31,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private var downloadTask: Task<Void, Error>?
     private var writeHandle: FileHandle?
     private var downloadCursor: Int64 = 0
+    /// When set, background download stops at this byte (avoids pulling the rest of a multi‑GB file).
+    private var downloadHighWaterMark: Int64 = 0
+    private var backgroundPausedForStream = false
     private let throughput = DownloadThroughput()
 
     init(
@@ -121,9 +125,17 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         try? writeHandle?.close()
     }
 
-    func cancel() {
+    /// Stop background range fetches but keep the sparse temp file (e.g. before pCloud stream export).
+    func pauseBackgroundDownload() {
+        lock.lock()
+        backgroundPausedForStream = true
+        lock.unlock()
         downloadTask?.cancel()
         downloadTask = nil
+    }
+
+    func cancel() {
+        pauseBackgroundDownload()
         try? writeHandle?.close()
         writeHandle = nil
         ExportPaths.removeWorkingSourceCopy()
@@ -145,8 +157,61 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         log("Downloading to temp — \(formatBytes(totalLength)) (segments publish per 60s as data arrives)…")
     }
 
+    /// Limit background range fetches to `[regionStart, highWaterMark)` (plus index tail).
+    func setDownloadHighWaterMark(_ highWaterMark: Int64) {
+        lock.lock()
+        downloadHighWaterMark = min(max(0, highWaterMark), totalLength)
+        lock.unlock()
+    }
+
+    /// Fill every byte in `range` from pCloud (dense on disk) so AVFoundation can open the sparse temp.
+    func ensureContiguousRange(_ range: TimelineByteRange) async throws {
+        guard range.length > 0 else { return }
+        let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
+        let rangeEnd = min(range.end, totalLength)
+        log(
+            "Downloading window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) from pCloud (\(formatBytes(rangeEnd - range.start)))…"
+        )
+        var offset = range.start
+        while offset < rangeEnd {
+            if isCancelled() || Task.isCancelled { throw CancellationError() }
+            let end = min(offset + Self.downloadChunkBytes - 1, rangeEnd - 1)
+            let auth = authorizationProvider()
+            let data = try await Self.fetchRange(
+                remoteURL: remoteURL,
+                authorization: auth,
+                offset: offset,
+                endInclusive: end
+            )
+            throughput.recordNetworkBytes(data.count)
+            try write(data, at: offset)
+            offset = end + 1
+        }
+        if tailStart < totalLength, !hasIndexTailOnDisk() {
+            try await ensureIndexTailOnDisk()
+        }
+        try writeHandle?.synchronize()
+        log(
+            "Window on disk — contiguous \(formatBytes(filledSpan().start))–\(formatBytes(filledSpan().end))\(averageSpeedLogSuffix())"
+        )
+    }
+
     /// File byte span that must be on disk for media `[timelineStartSeconds, timelineEndSeconds]`.
     func byteRangeForTimeline(
+        timelineStartSeconds: Double,
+        timelineEndSeconds: Double,
+        durationSeconds: Double
+    ) -> TimelineByteRange {
+        Self.byteRangeForTimeline(
+            totalLength: totalLength,
+            timelineStartSeconds: timelineStartSeconds,
+            timelineEndSeconds: timelineEndSeconds,
+            durationSeconds: durationSeconds
+        )
+    }
+
+    static func byteRangeForTimeline(
+        totalLength: Int64,
         timelineStartSeconds: Double,
         timelineEndSeconds: Double,
         durationSeconds: Double
@@ -160,7 +225,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             reported: durationSeconds,
             totalBytes: totalLength
         )
-        let preroll = keyframePrerollBytes(timelineStartSeconds: startSec)
+        let preroll = Self.keyframePrerollBytes(timelineStartSeconds: startSec, totalLength: totalLength)
         let startByte = max(
             0,
             Int64((startSec / effectiveDuration) * Double(totalLength)) - preroll
@@ -283,7 +348,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
-    private func keyframePrerollBytes(timelineStartSeconds: Double) -> Int64 {
+    private static func keyframePrerollBytes(timelineStartSeconds: Double, totalLength: Int64) -> Int64 {
         guard timelineStartSeconds > 0.5 else { return 0 }
         let fromDuration = Int64(min(48 * 1024 * 1024, (timelineStartSeconds / 120.0) * Double(totalLength)))
         let fromSize = min(32 * 1024 * 1024, totalLength / 40)
@@ -350,6 +415,13 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 try await self.runDownloadLoop()
             } catch is CancellationError {
                 return
+            } catch is CancellationError {
+                self.lock.lock()
+                let paused = self.backgroundPausedForStream
+                self.lock.unlock()
+                if paused {
+                    self.log("Background download paused — using pCloud for this segment")
+                }
             } catch {
                 if !self.isCancelled() {
                     self.log("Download stopped: \(error.localizedDescription) — export may continue via pCloud stream if enabled")
@@ -371,7 +443,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             }
             lock.unlock()
 
-            let end = min(start + Self.downloadChunkBytes - 1, totalLength - 1)
+            lock.lock()
+            let highWater = downloadHighWaterMark
+            lock.unlock()
+            let stopAt = (highWater > 0) ? min(highWater, totalLength) : totalLength
+            if start >= stopAt {
+                try await Task.sleep(nanoseconds: 500_000_000)
+                continue
+            }
+            let end = min(start + Self.downloadChunkBytes - 1, stopAt - 1, totalLength - 1)
             let length = Int(end - start + 1)
             let auth = authorizationProvider()
             let data = try await Self.fetchRange(
