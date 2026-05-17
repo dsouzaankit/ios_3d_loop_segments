@@ -1,10 +1,12 @@
 import Foundation
 
-/// In-memory byte cache so AVFoundation resource requests can finish within ~30s.
+/// In-memory byte cache for prefetch (MP4 head + tail). Read-only during AVFoundation streaming.
 final class WebDAVRangeCache: @unchecked Sendable {
     private let lock = NSLock()
     private var contentLength: Int64?
     private var spans: [(start: Int64, end: Int64, data: Data)] = []
+    /// Prefetch only (~3 MiB). Loader must not grow this during export or large files OOM-jetsam.
+    private let maxStoredBytes: Int = 4 * 1024 * 1024
 
     func storeContentLength(_ length: Int64) {
         lock.lock()
@@ -18,12 +20,19 @@ final class WebDAVRangeCache: @unchecked Sendable {
         return contentLength
     }
 
+    private func storedByteCountLocked() -> Int {
+        spans.reduce(0) { $0 + $1.data.count }
+    }
+
     func storeRange(offset: Int64, data: Data) {
         guard !data.isEmpty else { return }
         let end = offset + Int64(data.count) - 1
         lock.lock()
+        defer { lock.unlock() }
+        if storedByteCountLocked() + data.count > maxStoredBytes {
+            return
+        }
         spans.append((offset, end, data))
-        lock.unlock()
     }
 
     func dataForRequest(offset: Int64, length: Int) -> Data? {

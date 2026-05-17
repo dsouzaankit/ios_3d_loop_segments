@@ -139,9 +139,10 @@ final class SegmentExporter {
             throw mapReaderFailure(reader.error) ?? SegmentExporterError.readerSetupFailed
         }
         logHandler("Reader started — exporting at ~1× realtime (60s per segment, keep app open)")
-        logHandler("Pulling samples from pCloud (runs off main thread)…")
+        logHandler("Pulling samples from pCloud (stream-only, prefetch cache ~3 MiB)…")
 
         var segmentIndex = 0
+        var loggedFirstSample = false
         var lastProgressLogMs = seekMs
         var writerContext: SegmentWriterContext?
         var segmentAnchor: CMTime?
@@ -194,6 +195,11 @@ final class SegmentExporter {
                     CMSampleBufferGetPresentationTimeStamp($1.sample)
             }) else {
                 break
+            }
+
+            if !loggedFirstSample {
+                loggedFirstSample = true
+                logHandler("First media sample received — writing segments")
             }
 
             try await processSample(

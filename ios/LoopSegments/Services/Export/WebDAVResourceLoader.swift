@@ -3,10 +3,8 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// Serves HTTPS WebDAV media to `AVURLAsset` with Basic auth and byte-range reads.
-/// Uses async HTTP + incremental `respond(with:)` so AVFoundation's ~30s loader deadline is not hit.
 final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     static let customScheme = "loopsegments-webdav"
-    /// Keep each network round-trip payload small on cellular.
     private static let maxRangeChunkBytes: Int64 = 512 * 1024
 
     let remoteURL: URL
@@ -15,12 +13,12 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
     private let session: URLSession
     private let rangeCache: WebDAVRangeCache?
-    private var cachedContentLength: Int64?
-    private let lengthLock = NSLock()
-    private var lengthResolveTask: Task<Int64, Error>?
-    private var inflightFills: [ObjectIdentifier: Task<Void, Never>] = [:]
-    private let inflightLock = NSLock()
     private let logLine: ((String) -> Void)?
+
+    private var cachedContentLength: Int64?
+    private var lengthResolveTask: Task<Int64, Error>?
+    private var activeFillTask: Task<Void, Never>?
+    private let stateLock = NSLock()
 
     convenience init(
         remoteURL: URL,
@@ -66,15 +64,14 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         _ resourceLoader: AVAssetResourceLoader,
         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
     ) -> Bool {
-        let id = ObjectIdentifier(loadingRequest)
         let task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             await self.fill(loadingRequest)
-            self.removeInflight(id)
         }
-        inflightLock.lock()
-        inflightFills[id] = task
-        inflightLock.unlock()
+        stateLock.lock()
+        activeFillTask?.cancel()
+        activeFillTask = task
+        stateLock.unlock()
         return true
     }
 
@@ -82,22 +79,12 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         _ resourceLoader: AVAssetResourceLoader,
         didCancel loadingRequest: AVAssetResourceLoadingRequest
     ) {
-        queue.async {
-            let id = ObjectIdentifier(loadingRequest)
-            self.inflightLock.lock()
-            let task = self.inflightFills.removeValue(forKey: id)
-            self.inflightLock.unlock()
-            task?.cancel()
-        }
+        stateLock.lock()
+        activeFillTask?.cancel()
+        activeFillTask = nil
+        stateLock.unlock()
     }
 
-    private func removeInflight(_ id: ObjectIdentifier) {
-        inflightLock.lock()
-        inflightFills.removeValue(forKey: id)
-        inflightLock.unlock()
-    }
-
-    /// AVFoundation requires `respond` / `finishLoading` on the resource-loader delegate queue.
     private func onLoaderQueue<T>(_ body: @escaping () -> T) async -> T {
         await withCheckedContinuation { continuation in
             queue.async {
@@ -107,7 +94,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func fill(_ loadingRequest: AVAssetResourceLoadingRequest) async {
-        if await onLoaderQueue({ loadingRequest.isCancelled }) || Task.isCancelled {
+        if await onLoaderQueue({ loadingRequest.isCancelled }) {
             return
         }
 
@@ -115,7 +102,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             if loadingRequest.contentInformationRequest != nil {
                 let length = try await resolveContentLength()
                 await onLoaderQueue {
-                    if loadingRequest.isCancelled || Task.isCancelled { return }
+                    if loadingRequest.isCancelled { return }
                     guard let info = loadingRequest.contentInformationRequest else { return }
                     info.contentLength = length
                     info.isByteRangeAccessSupported = true
@@ -128,7 +115,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             }
 
             await onLoaderQueue {
-                if !loadingRequest.isCancelled, !Task.isCancelled {
+                if !loadingRequest.isCancelled {
                     loadingRequest.finishLoading()
                 }
             }
@@ -136,7 +123,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             return
         } catch {
             let cancelled = await onLoaderQueue { loadingRequest.isCancelled }
-            guard !cancelled, !Task.isCancelled else { return }
+            guard !cancelled else { return }
             let wrapped = NSError(
                 domain: "WebDAVResourceLoader",
                 code: 1,
@@ -163,77 +150,32 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         let end = offset + totalLength - 1
         if totalLength > Self.maxRangeChunkBytes {
             logLine?(
-                "pCloud read \(offset)-\(end) (\(totalLength) bytes requested, \(Self.maxRangeChunkBytes / 1024) KiB HTTP chunks)"
+                "pCloud read \(offset)-\(end) (\(totalLength) bytes requested, \(Self.maxRangeChunkBytes / 1024) KiB chunks, stream-only)"
             )
         } else {
             logLine?("pCloud range \(offset)-\(end) (\(totalLength) bytes)")
         }
 
+        var chunksDone = 0
         while cursor <= end {
-            let cancelled = await onLoaderQueue { loadingRequest.isCancelled }
-            if cancelled || Task.isCancelled {
+            if await onLoaderQueue({ loadingRequest.isCancelled }) || Task.isCancelled {
                 return
             }
             let chunkEnd = min(cursor + Self.maxRangeChunkBytes - 1, end)
             let chunk = try await fetchRangeChunk(offset: cursor, endInclusive: chunkEnd)
             await onLoaderQueue {
-                if loadingRequest.isCancelled || Task.isCancelled { return }
+                if loadingRequest.isCancelled { return }
                 dataRequest.respond(with: chunk)
             }
             cursor = chunkEnd + 1
+            chunksDone += 1
+            if chunksDone % 16 == 0 {
+                await Task.yield()
+            }
         }
     }
 
-    private func resolveContentLength() async throws -> Int64 {
-        if let preloaded = rangeCache?.contentLengthValue() {
-            storeLength(preloaded)
-            return preloaded
-        }
-        lengthLock.lock()
-        if let cachedContentLength {
-            lengthLock.unlock()
-            return cachedContentLength
-        }
-        if let lengthResolveTask {
-            lengthLock.unlock()
-            return try await lengthResolveTask.value
-        }
-
-        let task = Task<Int64, Error> {
-            try await self.loadContentLengthFromServer()
-        }
-        lengthResolveTask = task
-        lengthLock.unlock()
-
-        defer {
-            lengthLock.lock()
-            if lengthResolveTask != nil { lengthResolveTask = nil }
-            lengthLock.unlock()
-        }
-        let length = try await task.value
-        storeLength(length)
-        return length
-    }
-
-    private func loadContentLengthFromServer() async throws -> Int64 {
-        let request = authorizedRequest(method: "HEAD")
-        let (_, response) = try await sessionData(for: request)
-        if let http = response as? HTTPURLResponse,
-           let length = contentLength(from: http) {
-            logLine?("Content-Length \(length) bytes (HEAD)")
-            return length
-        }
-
-        _ = try await fetchRangeChunk(offset: 0, endInclusive: 0)
-        lengthLock.lock()
-        defer { lengthLock.unlock() }
-        guard let cachedContentLength else {
-            throw WebDAVResourceLoaderError.missingContentLength
-        }
-        logLine?("Content-Length \(cachedContentLength) bytes (probe)")
-        return cachedContentLength
-    }
-
+    /// Read prefetch cache only; do not store streamed bytes (multi-GB files would jetsam).
     private func fetchRangeChunk(offset: Int64, endInclusive: Int64) async throws -> Data {
         let length = Int(endInclusive - offset + 1)
         if length > 0, let cached = rangeCache?.dataForRequest(offset: offset, length: length) {
@@ -247,16 +189,9 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         guard (200 ... 299).contains(http.statusCode) || http.statusCode == 206 else {
             throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
         }
-
         if let length = contentLength(from: http) {
             storeLength(length)
-        } else if http.statusCode == 206,
-                  let range = http.value(forHTTPHeaderField: "Content-Range"),
-                  let total = parseTotalLength(from: range) {
-            storeLength(total)
         }
-
-        rangeCache?.storeRange(offset: offset, data: data)
         return data
     }
 
@@ -270,7 +205,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         request.setValue(authorizationProvider(), forHTTPHeaderField: "Authorization")
         request.setValue("bytes=\(offset)-\(endInclusive)", forHTTPHeaderField: "Range")
 
-        let result = try await sessionData(for: request)
+        let result = try await WebDAVMediaSession.data(for: request, log: logLine)
         if let http = result.1 as? HTTPURLResponse,
            http.statusCode == 401,
            !retriedAuth {
@@ -280,15 +215,57 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         return result
     }
 
-    private func authorizedRequest(method: String) -> URLRequest {
-        var request = URLRequest(url: remoteURL)
-        request.httpMethod = method
-        request.setValue(authorizationProvider(), forHTTPHeaderField: "Authorization")
-        return request
+    private func resolveContentLength() async throws -> Int64 {
+        if let preloaded = rangeCache?.contentLengthValue() {
+            storeLength(preloaded)
+            return preloaded
+        }
+        stateLock.lock()
+        if let cachedContentLength {
+            let value = cachedContentLength
+            stateLock.unlock()
+            return value
+        }
+        if let lengthResolveTask {
+            stateLock.unlock()
+            return try await lengthResolveTask.value
+        }
+
+        let task = Task<Int64, Error> {
+            try await self.loadContentLengthFromServer()
+        }
+        lengthResolveTask = task
+        stateLock.unlock()
+
+        defer {
+            stateLock.lock()
+            lengthResolveTask = nil
+            stateLock.unlock()
+        }
+        let length = try await task.value
+        storeLength(length)
+        return length
     }
 
-    private func sessionData(for request: URLRequest) async throws -> (Data, URLResponse) {
-        try await WebDAVMediaSession.data(for: request, log: logLine)
+    private func loadContentLengthFromServer() async throws -> Int64 {
+        var request = URLRequest(url: remoteURL)
+        request.httpMethod = "HEAD"
+        request.setValue(authorizationProvider(), forHTTPHeaderField: "Authorization")
+        let (_, response) = try await WebDAVMediaSession.data(for: request, log: logLine)
+        if let http = response as? HTTPURLResponse,
+           let length = contentLength(from: http) {
+            logLine?("Content-Length \(length) bytes (HEAD)")
+            return length
+        }
+
+        _ = try await fetchRangeChunk(offset: 0, endInclusive: 0)
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let cachedContentLength else {
+            throw WebDAVResourceLoaderError.missingContentLength
+        }
+        logLine?("Content-Length \(cachedContentLength) bytes (probe)")
+        return cachedContentLength
     }
 
     private func contentLength(from response: HTTPURLResponse) -> Int64? {
@@ -308,9 +285,9 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func storeLength(_ length: Int64) {
-        lengthLock.lock()
+        stateLock.lock()
         cachedContentLength = length
-        lengthLock.unlock()
+        stateLock.unlock()
         rangeCache?.storeContentLength(length)
     }
 
