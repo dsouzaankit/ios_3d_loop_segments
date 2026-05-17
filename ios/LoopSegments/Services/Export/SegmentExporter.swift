@@ -14,8 +14,9 @@ final class SegmentExporter {
 
     private let cancelLock = NSLock()
     private var isCancelled = false
-    /// AVFoundation does not retain the resource-loader delegate; keep alive for the whole export.
+    /// AVFoundation does not retain the resource-loader delegate or asset; keep alive for the whole export.
     private var retainedWebDAVLoader: WebDAVResourceLoader?
+    private var retainedAsset: AVURLAsset?
 
     func cancel() {
         cancelLock.lock()
@@ -56,7 +57,10 @@ final class SegmentExporter {
         cancelLock.lock()
         isCancelled = false
         cancelLock.unlock()
-        defer { retainedWebDAVLoader = nil }
+        defer {
+            retainedWebDAVLoader = nil
+            retainedAsset = nil
+        }
 
         if seekMs >= 10 * 60 * 1000 {
             logHandler("Deep seek (\(seekMs / 60_000) min) — pCloud may need extra reads; try 0 min first on cellular")
@@ -135,6 +139,7 @@ final class SegmentExporter {
             throw mapReaderFailure(reader.error) ?? SegmentExporterError.readerSetupFailed
         }
         logHandler("Reader started — exporting at ~1× realtime (60s per segment, keep app open)")
+        logHandler("Pulling samples from pCloud (runs off main thread)…")
 
         var segmentIndex = 0
         var lastProgressLogMs = seekMs
@@ -284,6 +289,7 @@ final class SegmentExporter {
             url: loader.customAssetURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
+        retainedAsset = asset
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
         _ = try await asset.load(.isPlayable)
         logHandler("Opened via WebDAV loader")
@@ -381,10 +387,10 @@ private final class SegmentWriterContext {
         var attempts = 0
         while !input.isReadyForMoreMediaData {
             attempts += 1
-            if attempts > 5000 {
+            if attempts > 50_000 {
                 throw SegmentExporterError.writerBackpressure
             }
-            Thread.sleep(forTimeInterval: 0.002)
+            Thread.sleep(forTimeInterval: 0.001)
         }
 
         guard input.append(sample) else {

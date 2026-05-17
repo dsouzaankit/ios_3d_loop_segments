@@ -61,12 +61,15 @@ final class ExportCoordinator {
         }
 
         do {
-            let result = try await exporter.run(
-                inputURL: inputURL,
-                seekMs: seekMs,
-                authorizationProvider: authProvider,
-                logHandler: logHandler
-            )
+            // Export must not run on @MainActor — AVAssetReader + resource loader deadlock/crash the UI thread.
+            let result = try await Task.detached(priority: .userInitiated) {
+                try await self.exporter.run(
+                    inputURL: inputURL,
+                    seekMs: seekMs,
+                    authorizationProvider: authProvider,
+                    logHandler: logHandler
+                )
+            }.value
             logHandler("Export finished — segment files kept for USB/Photos sync (removed on Stop or when app backgrounds)")
             logWriter.finish(status: result.reachedEnd ? "completed (end of file)" : "stopped")
             return result

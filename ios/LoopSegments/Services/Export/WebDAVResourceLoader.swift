@@ -67,15 +67,14 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
     ) -> Bool {
         let id = ObjectIdentifier(loadingRequest)
-        queue.async {
-            let task = Task {
-                await self.fill(loadingRequest)
-                self.removeInflight(id)
-            }
-            self.inflightLock.lock()
-            self.inflightFills[id] = task
-            self.inflightLock.unlock()
+        let task = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            await self.fill(loadingRequest)
+            self.removeInflight(id)
         }
+        inflightLock.lock()
+        inflightFills[id] = task
+        inflightLock.unlock()
         return true
     }
 
