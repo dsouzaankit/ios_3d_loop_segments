@@ -16,6 +16,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private let logLine: ((String) -> Void)?
 
     private var cachedContentLength: Int64?
+    private let trustedContentLength: Int64?
     private var lengthResolveTask: Task<Int64, Error>?
     private var activeFillTask: Task<Void, Never>?
     private let stateLock = NSLock()
@@ -32,6 +33,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             authorizationProvider: { authorization },
             session: session,
             rangeCache: rangeCache,
+            trustedContentLength: rangeCache?.contentLengthValue(),
             log: log
         )
     }
@@ -41,14 +43,26 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         session: URLSession = WebDAVMediaSession.shared,
         rangeCache: WebDAVRangeCache? = nil,
+        trustedContentLength: Int64? = nil,
         log: ((String) -> Void)? = nil
     ) {
         self.remoteURL = remoteURL
         self.authorizationProvider = authorizationProvider
         self.session = session
         self.rangeCache = rangeCache
+        self.trustedContentLength = trustedContentLength
         self.logLine = log
         super.init()
+    }
+
+    /// Stop in-flight probe reads when switching to local temp export.
+    func cancelOutstandingWork() {
+        stateLock.lock()
+        activeFillTask?.cancel()
+        activeFillTask = nil
+        lengthResolveTask?.cancel()
+        lengthResolveTask = nil
+        stateLock.unlock()
     }
 
     var customAssetURL: URL {
@@ -149,9 +163,12 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         let bytesRemaining = fileLength - offset
         let totalLength: Int64
         if dataRequest.requestsAllDataToEndOfResource {
-            totalLength = bytesRemaining
+            // Never satisfy “to EOF” in one callback — AV may ask for 10+ GB and jetsam/cancel export.
+            totalLength = min(bytesRemaining, Self.maxRangeChunkBytes)
         } else {
-            totalLength = min(Int64(dataRequest.requestedLength), bytesRemaining)
+            let requested = Int64(dataRequest.requestedLength)
+            guard requested > 0 else { return }
+            totalLength = min(requested, bytesRemaining)
         }
         guard totalLength > 0 else { return }
 
@@ -198,9 +215,6 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         guard (200 ... 299).contains(http.statusCode) || http.statusCode == 206 else {
             throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
         }
-        if let length = contentLength(from: http) {
-            storeLengthIfPlausible(length)
-        }
         return data
     }
 
@@ -225,6 +239,10 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func resolveContentLength() async throws -> Int64 {
+        if let trustedContentLength, trustedContentLength > 0 {
+            storeLength(trustedContentLength)
+            return trustedContentLength
+        }
         if let preloaded = rangeCache?.contentLengthValue() {
             storeLength(preloaded)
             return preloaded

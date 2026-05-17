@@ -259,6 +259,7 @@ final class SegmentExporter {
             remoteURL: inputURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
+            trustedContentLength: rangeCache.contentLengthValue(),
             log: logHandler
         )
         retainedWebDAVLoader = loader
@@ -277,6 +278,7 @@ final class SegmentExporter {
 
     private func releaseStreamingProbe(log: (String) -> Void) {
         guard retainedAsset != nil || retainedWebDAVLoader != nil else { return }
+        retainedWebDAVLoader?.cancelOutstandingWork()
         retainedAsset?.resourceLoader.setDelegate(nil, queue: nil)
         retainedWebDAVLoader = nil
         retainedAsset = nil

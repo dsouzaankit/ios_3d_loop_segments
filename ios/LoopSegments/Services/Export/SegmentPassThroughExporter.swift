@@ -46,6 +46,7 @@ enum SegmentPassThroughExporter {
                 log("Local reader failed: \(readerError.localizedDescription)")
                 throw SegmentExporterError.readerFailed(readerError)
             }
+            log("Local reader could not start — temp file may still be sparse; wait for download % or seek 0 min")
             throw SegmentExporterError.readerSetupFailed
         }
 
