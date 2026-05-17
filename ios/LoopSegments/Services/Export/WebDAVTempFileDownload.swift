@@ -57,6 +57,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     func cancel() {
         downloadTask?.cancel()
         downloadTask = nil
+        try? writeHandle?.close()
+        writeHandle = nil
+        ExportPaths.removeWorkingSourceCopy()
     }
 
     func contiguousEndValue() -> Int64 {

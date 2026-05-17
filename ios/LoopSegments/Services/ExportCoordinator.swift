@@ -70,7 +70,7 @@ final class ExportCoordinator {
                     logHandler: logHandler
                 )
             }.value
-            logHandler("Export finished — segment files kept for USB/Photos sync (removed on Stop or when app backgrounds)")
+            logHandler("Export finished — 3d_op_*.mp4 kept for USB/Photos; temp source copy removed from Exports")
             if PhotosSegmentPublisher.isEnabled {
                 logHandler("Photos: syncing finished segments to library…")
                 await PhotosSegmentPublisher.publishAllSegmentsFromExports(log: logHandler)
@@ -80,7 +80,7 @@ final class ExportCoordinator {
         } catch SegmentExporterError.cancelled {
             if userRequestedCancel {
                 await SegmentCleanup.removeAllSegments(log: logHandler)
-                logHandler("Cleanup: removed segment files after Stop")
+                logHandler("Cleanup: removed 3d_op_*.mp4 and temp source copy from Exports")
                 logWriter.finish(status: "cancelled")
                 throw SegmentExporterError.cancelled
             }

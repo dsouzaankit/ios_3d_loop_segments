@@ -42,15 +42,30 @@ enum ExportPaths {
         exportsDirectory.appendingPathComponent("export_progress.txt")
     }
 
-    /// Full remote MP4 copied here before `AVAssetReader` (deleted after export).
+    /// Full remote MP4 while downloading; removed with segment cleanup (Stop / background / export end).
     static var workingSourceURL: URL {
         exportsDirectory.appendingPathComponent("_export_source_working.mp4")
+    }
+
+    @discardableResult
+    static func removeWorkingSourceCopy(log: ((String) -> Void)? = nil) -> Bool {
+        let url = workingSourceURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        do {
+            try FileManager.default.removeItem(at: url)
+            log?("Removed \(url.lastPathComponent) from Exports")
+            return true
+        } catch {
+            log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
+            return false
+        }
     }
 
     /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).
     static func ensureExportDirectories() {
         _ = exportsDirectory
         _ = logsDirectory
+        _ = removeWorkingSourceCopy()
         let probe = exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
         let text = "Loop Segments \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") \(ISO8601DateFormatter().string(from: Date()))\n"
         if let data = text.data(using: .utf8) {

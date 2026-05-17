@@ -58,7 +58,7 @@ struct ExportView: View {
                 Text("Each 60s chunk is published when that minute is on disk (slow link: PC/DLNA can loop the latest chunk while the rest downloads). Check Albums → Loop Segments or Recents.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("Segments also stay in app Exports until you copy to PC, tap Stop, or leave the app.")
+                Text("3d_op_*.mp4 stay in Exports until Stop or leaving the app; temp _export_source_working.mp4 is removed when export ends or on cleanup.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

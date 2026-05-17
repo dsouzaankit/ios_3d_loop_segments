@@ -62,7 +62,7 @@ final class SegmentExporter {
             tempDownload = nil
             retainedWebDAVLoader = nil
             retainedAsset = nil
-            try? FileManager.default.removeItem(at: ExportPaths.workingSourceURL)
+            ExportPaths.removeWorkingSourceCopy(log: logHandler)
         }
 
         if seekMs >= 10 * 60 * 1000 {
