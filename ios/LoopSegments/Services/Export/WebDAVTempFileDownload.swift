@@ -136,18 +136,23 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let avgFromSize = Double(totalLength) / effectiveDuration
         let linearFromSize = Int64(endSeconds * avgFromSize) + slack
 
-        // 3D SBS can be high bitrate, but cap first-minute floor so export can start before hundreds of MB.
-        let highBitrateFloorMbps = min(35.0, max(8.0, (Double(totalLength) * 8.0) / (effectiveDuration * 1_000_000.0)))
-        let floorBytesPerSecond = highBitrateFloorMbps * 1_000_000.0 / 8.0
-        let floorRequired = Int64(endSeconds * floorBytesPerSecond) + slack
-        let capForFirstMinute = Int64(180 * 1024 * 1024)
-        var required = max(linearFromSize, min(floorRequired, capForFirstMinute + slack))
+        // Size-implied bitrate (API duration on multi‑GB files is often too long → old formula asked for ~80 MB).
+        let impliedMbps = (Double(totalLength) * 8.0) / (effectiveDuration * 1_000_000.0)
+        let floorMbps = min(40.0, max(15.0, impliedMbps))
+        let floorRequired = Int64(endSeconds * (floorMbps * 1_000_000.0 / 8.0)) + slack
+        var required = max(linearFromSize, floorRequired)
 
-        // Trust reported duration when it is plausible vs file size (avoid 100% trap on bad short probes).
+        // First minute of large moov-at-EOF files: need real mdat before AVAssetReader sees samples.
+        if totalLength > 900_000_000, endSeconds <= 60.5 {
+            required = max(required, min(Int64(300 * 1024 * 1024) + slack, totalLength))
+        } else if totalLength > 500_000_000, endSeconds <= 60.5 {
+            required = max(required, min(Int64(180 * 1024 * 1024) + slack, totalLength))
+        }
+
         let sizeImpliedDuration = Double(totalLength) * 8.0 / (2.0 * 1_000_000.0)
         if durationSeconds >= sizeImpliedDuration * 0.35 {
             let fromReported = Int64((endSeconds / durationSeconds) * Double(totalLength)) + slack
-            required = max(required, min(fromReported, capForFirstMinute + slack))
+            required = max(required, fromReported)
         }
 
         return min(required, totalLength)

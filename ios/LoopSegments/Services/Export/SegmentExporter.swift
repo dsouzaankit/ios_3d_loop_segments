@@ -237,6 +237,9 @@ final class SegmentExporter {
                     timelineEndSeconds: windowEndSeconds,
                     durationSeconds: durationSeconds
                 )
+                logHandler(
+                    "Need ~\(Self.formatBytes(bytesNeeded)) contiguous for media through \(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (file \(Self.formatBytes(downloader.totalLength)), duration \(Int(durationSeconds / 60)) min)"
+                )
                 try await SegmentLocalReadiness.waitUntilReadable(
                     fileURL: downloader.fileURL,
                     rangeStart: rangeStart,
