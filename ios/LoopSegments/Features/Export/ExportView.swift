@@ -66,7 +66,7 @@ struct ExportView: View {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
                 Text("1. Segments stage in Exports, then 3d_op_00/01 publish once per ~60s wall time (DLNA-safe)")
-                Text(logHint.isEmpty ? "Logs: Exports/export_latest.txt" : logHint)
+                Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if !liveLogTail.isEmpty {
@@ -161,7 +161,7 @@ struct ExportView: View {
         refreshLogHint()
         if let full = try? String(contentsOf: ExportPaths.latestLogTextURL, encoding: .utf8), !full.isEmpty {
             let lines = full.split(separator: "\n", omittingEmptySubsequences: true)
-            liveLogTail = lines.suffix(6).joined(separator: "\n")
+            liveLogTail = lines.suffix(12).joined(separator: "\n")
             return
         }
         if let progress = try? String(contentsOf: ExportPaths.exportProgressURL, encoding: .utf8),

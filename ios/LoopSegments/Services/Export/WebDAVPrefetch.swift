@@ -11,23 +11,26 @@ enum WebDAVPrefetch {
         cache: WebDAVRangeCache,
         log: ((String) -> Void)? = nil
     ) async throws {
-        log?("Prefetch: HEAD")
+        log?("Prefetch: HEAD (file size)")
         let length = try await fetchContentLength(
             remoteURL: remoteURL,
             authorization: authorization,
             log: log
         )
         cache.storeContentLength(length)
-        log?("Prefetch: file size \(length) bytes")
+        log?("Prefetch: file size \(formatBytes(length)) (\(length) bytes)")
         if length > 0, length < 4096 {
             throw WebDAVResourceLoaderError.suspiciousContentLength(length)
         }
 
-        if length <= 0 { return }
+        if length <= 0 {
+            log?("Prefetch: skipped — unknown file size")
+            return
+        }
 
         let firstEnd = min(headPrefixBytes, length) - 1
         if firstEnd >= 0 {
-            log?("Prefetch: first \(firstEnd + 1) bytes")
+            log?("Prefetch: downloading first \(formatBytes(firstEnd + 1))")
             let data = try await fetchRange(
                 remoteURL: remoteURL,
                 authorization: authorization,
@@ -41,9 +44,10 @@ enum WebDAVPrefetch {
         let tailLen = min(tailSuffixBytes, length)
         let tailStart = max(0, length - tailLen)
         if tailStart <= firstEnd + 1 {
+            log?("Prefetch: complete (file smaller than head+tail window)")
             return
         }
-        log?("Prefetch: last \(length - tailStart) bytes (MP4 index)")
+        log?("Prefetch: downloading last \(formatBytes(length - tailStart)) (MP4 index at EOF)")
         let tailData = try await fetchRange(
             remoteURL: remoteURL,
             authorization: authorization,
@@ -52,6 +56,17 @@ enum WebDAVPrefetch {
             log: log
         )
         cache.storeRange(offset: tailStart, data: tailData)
+        log?("Prefetch: complete — \(formatBytes(length)) file, head + index cached for export")
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        if bytes >= 1024 * 1024 * 1024 {
+            return String(format: "%.2f GB", Double(bytes) / 1_073_741_824.0)
+        }
+        if bytes >= 1024 * 1024 {
+            return String(format: "%.0f MB", Double(bytes) / 1_048_576.0)
+        }
+        return "\(bytes) B"
     }
 
     private static func fetchContentLength(

@@ -2,6 +2,8 @@ import Foundation
 
 /// Append-only export log under `Exports/`. Rewrites whole file atomically each line so USB/Files always see a complete snapshot.
 final class ExportLogWriter: @unchecked Sendable {
+    private static let progressLineCount = 12
+
     private let queue = DispatchQueue(label: "com.loopsegments.export-log")
     private let primaryURL: URL
     private let archiveURL: URL
@@ -91,8 +93,10 @@ final class ExportLogWriter: @unchecked Sendable {
         try Self.writeAtomically(data, to: sessionURL)
         try Self.writeAtomically(data, to: ExportPaths.latestLogURL)
 
-        if let lastLine = text.split(separator: "\n", omittingEmptySubsequences: true).last {
-            let progress = String(lastLine) + "\n"
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        if !lines.isEmpty {
+            // PC sync often only copies this file — keep last N lines so Prefetch is still visible after Download updates.
+            let progress = lines.suffix(Self.progressLineCount).joined(separator: "\n") + "\n"
             try progress.write(to: progressURL, atomically: true, encoding: .utf8)
         }
 
