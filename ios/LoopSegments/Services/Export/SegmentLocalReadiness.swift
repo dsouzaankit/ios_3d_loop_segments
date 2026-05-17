@@ -9,7 +9,6 @@ enum SegmentLocalReadiness {
 
     static func waitUntilReadable(
         fileURL: URL,
-        videoFormat: CMFormatDescription,
         rangeStart: CMTime,
         rangeDuration: CMTime,
         totalFileBytes: Int64,
@@ -60,16 +59,8 @@ enum SegmentLocalReadiness {
                     lastLog = now
                     log("Waiting for clearer source — \(reason) (\(formatBytes(contiguous)) / \(formatBytes(needOnDisk)))")
                 }
-                if zeroSampleStreak >= 6, contiguous >= needOnDisk {
-                    if CodecSupport.isAV1Video(videoFormat) {
-                        throw SegmentExporterError.unsupportedCodec(CodecSupport.fourCCString(videoFormat))
-                    }
-                }
                 if zeroSampleStreak >= 8, contiguous >= needOnDisk {
                     log("Readiness: enough bytes on disk but reader still sees 0 samples — waiting for more contiguous download")
-                }
-                if zeroSampleStreak >= 20, contiguous >= needOnDisk {
-                    throw SegmentExporterError.unsupportedCodec(CodecSupport.fourCCString(videoFormat))
                 }
             case .failed(let error):
                 throw error

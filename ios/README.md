@@ -33,7 +33,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 ## Export (AVFoundation)
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
-- Passthrough to MP4 when supported: H.264, HEVC, AV1 + AAC
+- Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + AAC (AV1 sources are rejected at probe)
 - 60s segments, two-file rotate (`3d_op_00` / `3d_op_01`)
 - Real-time read pacing (like ffmpeg `-re`)
 - Runs until end of file or **Stop**
