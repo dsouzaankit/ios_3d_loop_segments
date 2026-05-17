@@ -1,9 +1,18 @@
 import Foundation
 
-/// Downloads the full remote MP4 to temp storage; exposes contiguous progress for timed segment export.
+/// Byte span in the sparse temp file needed for a timeline window (ffmpeg `-ss` style, not from offset 0).
+struct TimelineByteRange: Equatable {
+    let start: Int64
+    let end: Int64
+
+    var length: Int64 { max(0, end - start) }
+}
+
+/// Downloads remote MP4 ranges into a sparse temp file for timed segment export.
 final class WebDAVTempFileDownload: @unchecked Sendable {
     private static let downloadChunkBytes: Int64 = 2 * 1024 * 1024
     private static let progressStepPercent = 5
+    private static let timelineSlackBytes: Int64 = 24 * 1024 * 1024
 
     let fileURL: URL
     let totalLength: Int64
@@ -14,10 +23,13 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private let log: (String) -> Void
 
     private let lock = NSLock()
-    private var contiguousEnd: Int64 = 0
+    /// Contiguous downloaded span `[regionStart, regionFilledEnd)`.
+    private var regionStart: Int64 = 0
+    private var regionFilledEnd: Int64 = 0
     private var tailOnDisk = false
     private var downloadTask: Task<Void, Error>?
     private var writeHandle: FileHandle?
+    private var downloadCursor: Int64 = 0
 
     init(
         remoteURL: URL,
@@ -45,6 +57,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         writeHandle = try FileHandle(forWritingTo: fileURL)
         try applyCachedSpans(rangeCache)
         try finalizeSparseLayout()
+    }
+
+    /// Position download at seek (or 0) and start background range fetches.
+    func beginExport(seekSeconds: Double, durationSeconds: Double) {
+        applyInitialPosition(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
         startBackgroundDownload()
     }
 
@@ -56,17 +73,16 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             .int64Value ?? 0
         lock.lock()
         let hasTail = tailOnDisk
-        let contiguous = contiguousEnd
+        let span = filledSpanLocked()
         lock.unlock()
         log(
-            "Temp sparse layout — file size \(formatBytes(onDisk)), contiguous from 0: \(formatBytes(contiguous)), index tail: \(hasTail ? "yes" : "no")"
+            "Temp sparse layout — file size \(formatBytes(onDisk)), contiguous \(formatBytes(span.start))–\(formatBytes(span.end)), index tail: \(hasTail ? "yes" : "no")"
         )
         if !hasTail {
             log("Warning: MP4 index not on disk yet — track probe may use pCloud")
         }
     }
 
-    /// Write index tail from pCloud when prefetch did not land on disk.
     func ensureIndexTailOnDisk() async throws {
         lock.lock()
         let hasTail = tailOnDisk
@@ -103,13 +119,12 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         ExportPaths.removeWorkingSourceCopy()
     }
 
-    func contiguousEndValue() -> Int64 {
+    func filledSpan() -> TimelineByteRange {
         lock.lock()
         defer { lock.unlock() }
-        return contiguousEnd
+        return filledSpanLocked()
     }
 
-    /// True when prefetched/downloaded MP4 `moov` is at the end of the temp file (allows export before 100% download).
     func hasIndexTailOnDisk() -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -120,81 +135,56 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         log("Downloading to temp — \(formatBytes(totalLength)) (segments publish per 60s as data arrives)…")
     }
 
-    /// Bytes that must be contiguous from offset 0 before exporting through `timelineEndSeconds`.
-    func bytesRequiredThroughTimeline(
+    /// File byte span that must be on disk for media `[timelineStartSeconds, timelineEndSeconds]`.
+    func byteRangeForTimeline(
+        timelineStartSeconds: Double,
         timelineEndSeconds: Double,
         durationSeconds: Double
-    ) -> Int64 {
-        guard durationSeconds > 0, totalLength > 0 else { return totalLength }
-        let endSeconds = min(max(0, timelineEndSeconds), durationSeconds)
-        let slack: Int64 = 24 * 1024 * 1024
-
+    ) -> TimelineByteRange {
+        guard durationSeconds > 0, totalLength > 0 else {
+            return TimelineByteRange(start: 0, end: totalLength)
+        }
+        let startSec = min(max(0, timelineStartSeconds), durationSeconds)
+        let endSec = min(max(startSec, timelineEndSeconds), durationSeconds)
         let effectiveDuration = Self.effectiveDurationSeconds(
             reported: durationSeconds,
             totalBytes: totalLength
         )
-        let avgFromSize = Double(totalLength) / effectiveDuration
-        let linearFromSize = Int64(endSeconds * avgFromSize) + slack
-
-        // Size-implied bitrate (API duration on multi‑GB files is often too long → old formula asked for ~80 MB).
-        let impliedMbps = (Double(totalLength) * 8.0) / (effectiveDuration * 1_000_000.0)
-        let floorMbps = min(40.0, max(15.0, impliedMbps))
-        let floorRequired = Int64(endSeconds * (floorMbps * 1_000_000.0 / 8.0)) + slack
-        var required = max(linearFromSize, floorRequired)
-
-        // First minute of large moov-at-EOF files: need real mdat before AVAssetReader sees samples.
-        if totalLength > 900_000_000, endSeconds <= 60.5 {
-            required = max(required, min(Int64(300 * 1024 * 1024) + slack, totalLength))
-        } else if totalLength > 500_000_000, endSeconds <= 60.5 {
-            required = max(required, min(Int64(180 * 1024 * 1024) + slack, totalLength))
-        }
-
-        let sizeImpliedDuration = Double(totalLength) * 8.0 / (2.0 * 1_000_000.0)
-        if durationSeconds >= sizeImpliedDuration * 0.35 {
-            let fromReported = Int64((endSeconds / durationSeconds) * Double(totalLength)) + slack
-            required = max(required, fromReported)
-        }
-
-        return min(required, totalLength)
-    }
-
-    /// Sequential bytes from file start through this point in the timeline (MP4 index tail is written at EOF at init).
-    func isReadyForLocalExport(timelineEndSeconds: Double, durationSeconds: Double) -> Bool {
-        guard durationSeconds > 0, tailOnDisk else { return false }
-        let required = bytesRequiredThroughTimeline(
-            timelineEndSeconds: timelineEndSeconds,
-            durationSeconds: durationSeconds
+        let preroll = keyframePrerollBytes(timelineStartSeconds: startSec)
+        let startByte = max(
+            0,
+            Int64((startSec / effectiveDuration) * Double(totalLength)) - preroll
         )
-        return contiguousEndValue() >= required
-    }
-
-    /// After timeline bytes exist on disk, wait until local `AVAssetReader` can run (no pCloud stream fallback).
-    func waitUntilLocalExportReady(
-        timelineEndSeconds: Double,
-        durationSeconds: Double
-    ) async throws {
-        guard durationSeconds > 0 else { return }
-        let endSeconds = min(timelineEndSeconds, durationSeconds)
-        while !isReadyForLocalExport(
-            timelineEndSeconds: timelineEndSeconds,
-            durationSeconds: durationSeconds
-        ) {
-            if isCancelled() { throw SegmentExporterError.cancelled }
-            try await Task.sleep(nanoseconds: 250_000_000)
+        var endByte = min(
+            totalLength,
+            Int64((endSec / effectiveDuration) * Double(totalLength)) + Self.timelineSlackBytes
+        )
+        let windowSeconds = endSec - startSec
+        if totalLength > 900_000_000, windowSeconds <= 60.5, startSec <= 0.5 {
+            endByte = max(endByte, min(Int64(300 * 1024 * 1024) + Self.timelineSlackBytes, totalLength))
+        } else if totalLength > 500_000_000, windowSeconds <= 60.5, startSec <= 0.5 {
+            endByte = max(endByte, min(Int64(180 * 1024 * 1024) + Self.timelineSlackBytes, totalLength))
         }
-        let mediaMin = Int(endSeconds) / 60
-        let mediaSec = Int(endSeconds) % 60
-        log("Local temp ready through \(mediaMin):\(String(format: "%02d", mediaSec)) — \(formatBytes(contiguousEndValue())) contiguous from start")
+        if endByte <= startByte {
+            endByte = min(totalLength, startByte + Self.downloadChunkBytes)
+        }
+        return TimelineByteRange(start: startByte, end: endByte)
     }
 
-    /// Wait until sequential download likely covers media through `timelineEndSeconds` (seek 0 recommended).
-    func waitUntilTimelineEnd(
+    func isRangeFilled(_ range: TimelineByteRange) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return regionStart <= range.start && regionFilledEnd >= range.end
+    }
+
+    func waitUntilWindowReady(
+        timelineStartSeconds: Double,
         timelineEndSeconds: Double,
         durationSeconds: Double
     ) async throws {
         guard durationSeconds > 0 else { return }
-        let endSeconds = min(timelineEndSeconds, durationSeconds)
-        let required = bytesRequiredThroughTimeline(
+        let range = byteRangeForTimeline(
+            timelineStartSeconds: timelineStartSeconds,
             timelineEndSeconds: timelineEndSeconds,
             durationSeconds: durationSeconds
         )
@@ -203,34 +193,101 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
-            let contiguous = contiguousEndValue()
-            if contiguous >= required || contiguous >= totalLength { return }
+            if isRangeFilled(range) || filledSpanLocked().end >= totalLength { return }
 
             let now = CFAbsoluteTimeGetCurrent()
-            let dlPct = totalLength > 0 ? Int(contiguous * 100 / totalLength) : 0
-            let needPct = totalLength > 0 ? Int(required * 100 / totalLength) : 0
-            if dlPct >= lastLoggedPercent + Self.progressStepPercent || now - lastStallLog >= 20 {
+            let span = filledSpanLocked()
+            let filledInWindow = max(0, min(span.end, range.end) - max(span.start, range.start))
+            let needLen = range.length
+            let pct = needLen > 0 ? Int(filledInWindow * 100 / needLen) : 0
+            if pct >= lastLoggedPercent + Self.progressStepPercent || now - lastStallLog >= 20 {
                 lastStallLog = now
-                lastLoggedPercent = (dlPct / Self.progressStepPercent) * Self.progressStepPercent
-                let mediaMin = Int(endSeconds) / 60
-                let mediaSec = Int(endSeconds) % 60
+                lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
+                let endMin = Int(timelineEndSeconds) / 60
+                let endSec = Int(timelineEndSeconds) % 60
                 log(
-                    "Download \(dlPct)% (\(formatBytes(contiguous))) — need ~\(needPct)% (\(formatBytes(required))) for media through \(mediaMin):\(String(format: "%02d", mediaSec))"
+                    "Download window \(pct)% — \(formatBytes(filledInWindow)) / \(formatBytes(needLen)) for \(endMin):\(String(format: "%02d", endSec)) (file \(formatBytes(range.start))–\(formatBytes(range.end)))"
                 )
             }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
     }
 
+    func waitUntilLocalExportReady(
+        timelineStartSeconds: Double,
+        timelineEndSeconds: Double,
+        durationSeconds: Double
+    ) async throws {
+        guard durationSeconds > 0, tailOnDisk else { return }
+        let range = byteRangeForTimeline(
+            timelineStartSeconds: timelineStartSeconds,
+            timelineEndSeconds: timelineEndSeconds,
+            durationSeconds: durationSeconds
+        )
+        while !isRangeFilled(range) {
+            if isCancelled() { throw SegmentExporterError.cancelled }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        let endMin = Int(timelineEndSeconds) / 60
+        let endSec = Int(timelineEndSeconds) % 60
+        let span = filledSpan()
+        log(
+            "Local temp ready for \(endMin):\(String(format: "%02d", endSec)) — \(formatBytes(span.start))–\(formatBytes(span.end)) on disk"
+        )
+    }
+
     func waitUntilComplete() async throws {
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
-            if contiguousEndValue() >= totalLength {
+            lock.lock()
+            let atEOF = regionFilledEnd >= totalLength
+            lock.unlock()
+            if atEOF {
                 log("Temp copy complete — \(formatBytes(totalLength))")
                 return
             }
             try await Task.sleep(nanoseconds: 500_000_000)
         }
+    }
+
+    // MARK: - Private
+
+    private func filledSpanLocked() -> TimelineByteRange {
+        TimelineByteRange(start: regionStart, end: regionFilledEnd)
+    }
+
+    private func applyInitialPosition(seekSeconds: Double, durationSeconds: Double) {
+        let firstWindowEnd = min(seekSeconds + 60, durationSeconds)
+        let range = byteRangeForTimeline(
+            timelineStartSeconds: seekSeconds,
+            timelineEndSeconds: firstWindowEnd,
+            durationSeconds: durationSeconds
+        )
+        lock.lock()
+        if seekSeconds <= 0.5 {
+            regionStart = 0
+            downloadCursor = regionFilledEnd
+            lock.unlock()
+            log("Download from file start — need ~\(formatBytes(range.end)) for first minute")
+        } else {
+            regionStart = range.start
+            regionFilledEnd = range.start
+            downloadCursor = range.start
+            lock.unlock()
+            let seekMin = Int(seekSeconds) / 60
+            let seekSec = Int(seekSeconds) % 60
+            log(
+                "Seek \(seekMin):\(String(format: "%02d", seekSec)) — download from ~\(formatBytes(range.start)) (skipping earlier bytes, like ffmpeg -ss)"
+            )
+            log("First segment needs ~\(formatBytes(range.length)) at \(formatBytes(range.start))–\(formatBytes(range.end))")
+        }
+    }
+
+    private func keyframePrerollBytes(timelineStartSeconds: Double) -> Int64 {
+        guard timelineStartSeconds > 0.5 else { return 0 }
+        let fromDuration = Int64(min(48 * 1024 * 1024, (timelineStartSeconds / 120.0) * Double(totalLength)))
+        let fromSize = min(32 * 1024 * 1024, totalLength / 40)
+        return max(fromDuration, fromSize)
     }
 
     private func applyCachedSpans(_ cache: WebDAVRangeCache) throws {
@@ -246,18 +303,41 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         try writeHandle?.synchronize()
     }
 
+    private func noteWrite(offset: Int64, length: Int) {
+        let end = offset + Int64(length)
+        if length <= 0 { return }
+        if regionFilledEnd == 0, regionStart == 0, offset == 0 {
+            regionStart = 0
+            regionFilledEnd = end
+            return
+        }
+        if offset == regionFilledEnd {
+            regionFilledEnd = end
+        } else if end <= regionStart {
+            regionStart = offset
+            regionFilledEnd = max(regionFilledEnd, end)
+        } else if offset >= regionStart, offset <= regionFilledEnd {
+            if end > regionFilledEnd { regionFilledEnd = end }
+        } else if offset > regionFilledEnd {
+            regionStart = offset
+            regionFilledEnd = end
+        } else if offset < regionStart, end >= regionStart {
+            regionStart = offset
+            if end > regionFilledEnd { regionFilledEnd = end }
+        }
+    }
+
     private func write(_ data: Data, at offset: Int64) throws {
         guard let writeHandle else { return }
         try writeHandle.seek(toOffset: UInt64(offset))
         try writeHandle.write(contentsOf: data)
         lock.lock()
-        if offset == contiguousEnd {
-            contiguousEnd += Int64(data.count)
-        }
+        noteWrite(offset: offset, length: data.count)
         lock.unlock()
     }
 
     private func startBackgroundDownload() {
+        downloadTask?.cancel()
         downloadTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
@@ -277,8 +357,13 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         while true {
             if isCancelled() || Task.isCancelled { throw CancellationError() }
 
-            let start = contiguousEndValue()
-            if start >= totalLength { return }
+            lock.lock()
+            var start = downloadCursor
+            if start >= totalLength {
+                lock.unlock()
+                return
+            }
+            lock.unlock()
 
             let end = min(start + Self.downloadChunkBytes - 1, totalLength - 1)
             let length = Int(end - start + 1)
@@ -294,16 +379,20 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             }
             try write(data, at: start)
 
-            let pct = Int((end + 1) * 100 / totalLength)
-            if pct >= lastLoggedPercent + Self.progressStepPercent || end + 1 >= totalLength {
+            lock.lock()
+            downloadCursor = regionFilledEnd
+            let cursor = downloadCursor
+            lock.unlock()
+
+            let pct = totalLength > 0 ? Int(cursor * 100 / totalLength) : 0
+            if pct >= lastLoggedPercent + Self.progressStepPercent || cursor >= totalLength {
                 lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
-                log("Download \(pct)% — \(formatBytes(end + 1)) / \(formatBytes(totalLength))")
+                log("Download \(pct)% — \(formatBytes(cursor)) / \(formatBytes(totalLength))")
             }
             await Task.yield()
         }
     }
 
-    /// Multi-GB files with a too-short probed duration used to require ~100% download before minute 0.
     private static func effectiveDurationSeconds(reported: Double, totalBytes: Int64) -> Double {
         guard reported > 0, totalBytes > 0 else { return reported }
         let floorMbps = 2.0
@@ -319,7 +408,6 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
         let free = freeNumber.int64Value
         let margin: Int64 = 128 * 1024 * 1024
-        // Sparse temp: we never require the full remote size on disk up front.
         let reserveCap: Int64 = 900 * 1024 * 1024
         let reserve = min(needed, reserveCap) + margin
         if free < reserve {

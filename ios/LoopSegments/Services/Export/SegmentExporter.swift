@@ -66,9 +66,6 @@ final class SegmentExporter {
             ExportPaths.removeWorkingSourceCopy(log: logHandler)
         }
 
-        if seekMs >= 10 * 60 * 1000 {
-            logHandler("Deep seek (\(seekMs / 60_000) min) — pCloud may need extra reads; try 0 min first on cellular")
-        }
 
         let rangeCache = WebDAVRangeCache()
         logHandler("Prefetching from pCloud (size + MP4 index)…")
@@ -139,8 +136,8 @@ final class SegmentExporter {
         if durationMs > 0, seekMs >= durationMs - 250 {
             throw SegmentExporterError.seekPastEnd
         }
-        if seekMs > 0 {
-            logHandler("Seek \(seekMs / 60_000) min — download is from file start; first segments need more data on disk")
+        if !streamFromPCloud, let downloader = tempDownload {
+            downloader.beginExport(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
         }
 
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
@@ -219,11 +216,13 @@ final class SegmentExporter {
                 }
 
                 let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
-                try await downloader.waitUntilTimelineEnd(
+                try await downloader.waitUntilWindowReady(
+                    timelineStartSeconds: windowStartSeconds,
                     timelineEndSeconds: windowEndSeconds,
                     durationSeconds: durationSeconds
                 )
                 try await downloader.waitUntilLocalExportReady(
+                    timelineStartSeconds: windowStartSeconds,
                     timelineEndSeconds: windowEndSeconds,
                     durationSeconds: durationSeconds
                 )
@@ -233,20 +232,21 @@ final class SegmentExporter {
                     seconds: windowEndSeconds - windowStartSeconds,
                     preferredTimescale: 600
                 )
-                let bytesNeeded = downloader.bytesRequiredThroughTimeline(
+                let byteRange = downloader.byteRangeForTimeline(
+                    timelineStartSeconds: windowStartSeconds,
                     timelineEndSeconds: windowEndSeconds,
                     durationSeconds: durationSeconds
                 )
                 logHandler(
-                    "Need ~\(Self.formatBytes(bytesNeeded)) contiguous for media through \(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (file \(Self.formatBytes(downloader.totalLength)), duration \(Int(durationSeconds / 60)) min)"
+                    "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
                 )
                 try await SegmentLocalReadiness.waitUntilReadable(
                     fileURL: downloader.fileURL,
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     totalFileBytes: downloader.totalLength,
-                    contiguousBytesOnDisk: { downloader.contiguousEndValue() },
-                    bytesRequiredOnDisk: bytesNeeded,
+                    requiredByteRange: byteRange,
+                    filledByteSpan: { downloader.filledSpan() },
                     indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
                     isCancelled: cancelCheck,
                     log: logHandler
@@ -289,7 +289,9 @@ final class SegmentExporter {
                 minuteIndex += 1
             }
 
-            try await downloader.waitUntilComplete()
+            if seekSeconds <= 0.5 {
+                try await downloader.waitUntilComplete()
+            }
         }
 
         logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")

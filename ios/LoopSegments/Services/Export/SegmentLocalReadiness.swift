@@ -12,24 +12,24 @@ enum SegmentLocalReadiness {
         rangeStart: CMTime,
         rangeDuration: CMTime,
         totalFileBytes: Int64,
-        contiguousBytesOnDisk: () -> Int64,
-        bytesRequiredOnDisk: Int64,
+        requiredByteRange: TimelineByteRange,
+        filledByteSpan: () -> TimelineByteRange,
         indexTailOnDisk: () -> Bool,
         isCancelled: () -> Bool,
         log: (String) -> Void
     ) async throws {
         let probeFloor = probeMinContiguousBytes(
-            totalFileBytes: totalFileBytes,
-            bytesRequiredOnDisk: bytesRequiredOnDisk,
+            windowBytes: requiredByteRange.length,
             rangeDuration: rangeDuration
         )
+        let needEnd = requiredByteRange.end + max(0, probeFloor - requiredByteRange.length)
         var lastLog = CFAbsoluteTimeGetCurrent()
         var zeroSampleStreak = 0
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
-            let contiguous = contiguousBytesOnDisk()
-            let needOnDisk = max(bytesRequiredOnDisk, probeFloor)
-            if contiguous < needOnDisk {
+            let filled = filledByteSpan()
+            let rangeReady = filled.start <= requiredByteRange.start && filled.end >= needEnd
+            if !rangeReady {
                 try await Task.sleep(nanoseconds: 250_000_000)
                 continue
             }
@@ -40,12 +40,12 @@ enum SegmentLocalReadiness {
                 rangeDuration: rangeDuration
             ) {
             case .ok(let videoSamples):
-                if totalFileBytes > 0, contiguous >= totalFileBytes {
-                    log("Readiness OK — full temp file on disk (\(formatBytes(contiguous))), \(videoSamples) video samples in window")
+                if totalFileBytes > 0, filled.end >= totalFileBytes {
+                    log("Readiness OK — full temp file on disk (\(formatBytes(filled.end))), \(videoSamples) video samples in window")
                 } else if indexTailOnDisk() {
-                    log("Readiness OK — \(formatBytes(contiguous)) contiguous + \(videoSamples) video samples (index at EOF)")
+                    log("Readiness OK — \(formatBytes(filled.start))–\(formatBytes(filled.end)) + \(videoSamples) video samples (index at EOF)")
                 } else {
-                    log("Readiness OK — \(videoSamples) video samples in window (\(formatBytes(contiguous)) on disk)")
+                    log("Readiness OK — \(videoSamples) video samples in window (\(formatBytes(filled.start))–\(formatBytes(filled.end)) on disk)")
                 }
                 return
             case .needsMoreData(let reason):
@@ -57,10 +57,16 @@ enum SegmentLocalReadiness {
                 let now = CFAbsoluteTimeGetCurrent()
                 if now - lastLog >= 15 {
                     lastLog = now
-                    log("Waiting for clearer source — \(reason) (\(formatBytes(contiguous)) / \(formatBytes(needOnDisk)))")
+                    let filledInWindow = max(
+                        0,
+                        min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
+                    )
+                    log(
+                        "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needEnd - requiredByteRange.start)) in window)"
+                    )
                 }
-                if zeroSampleStreak >= 8, contiguous >= needOnDisk {
-                    log("Readiness: enough bytes on disk but reader still sees 0 samples — waiting for more contiguous download")
+                if zeroSampleStreak >= 8, rangeReady {
+                    log("Readiness: byte range on disk but reader still sees 0 samples — waiting for more download")
                 }
             case .failed(let error):
                 throw error
@@ -80,22 +86,15 @@ enum SegmentLocalReadiness {
 
     /// Extra contiguous bytes before trusting AVAssetReader on sparse moov-at-EOF temp files.
     private static func probeMinContiguousBytes(
-        totalFileBytes: Int64,
-        bytesRequiredOnDisk: Int64,
+        windowBytes: Int64,
         rangeDuration: CMTime
     ) -> Int64 {
-        guard totalFileBytes > 0 else { return bytesRequiredOnDisk }
+        guard windowBytes > 0 else { return 0 }
         let windowSeconds = CMTimeGetSeconds(rangeDuration)
-        guard windowSeconds > 0 else { return bytesRequiredOnDisk }
+        guard windowSeconds > 0 else { return windowBytes }
 
-        var fraction = min(0.4, windowSeconds / 600.0)
-        if totalFileBytes > 1_000_000_000, windowSeconds <= 60.5 {
-            fraction = max(fraction, 0.22)
-        } else if totalFileBytes > 500_000_000, windowSeconds <= 60.5 {
-            fraction = max(fraction, 0.14)
-        }
-        let fromSize = Int64(Double(totalFileBytes) * fraction)
-        return max(bytesRequiredOnDisk, fromSize)
+        let extra = windowSeconds <= 60.5 ? Int64(16 * 1024 * 1024) : Int64(4 * 1024 * 1024)
+        return windowBytes + extra
     }
 
     private enum ProbeResult {
