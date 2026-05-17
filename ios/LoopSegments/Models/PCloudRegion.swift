@@ -35,4 +35,11 @@ enum PCloudRegion: String, CaseIterable, Identifiable, Codable {
     var apiBaseURL: URL {
         URL(string: "https://\(apiHost)/")!
     }
+
+    var alternate: PCloudRegion {
+        switch self {
+        case .us: return .eu
+        case .eu: return .us
+        }
+    }
 }

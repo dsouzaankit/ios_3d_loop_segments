@@ -2,66 +2,144 @@ import CryptoKit
 import Foundation
 
 enum PCloudAuth {
-    /// pCloud password login: `getdigest` → `userinfo` → auth token (same app password as WebDAV).
+    private static let authExpireSeconds = "31536000"
+    private static let deviceName = "LoopSegments-iOS"
+
+    /// Verifies REST API login (search). Returns the datacenter that accepted the password.
+    static func verifyAPIAccess(
+        credentials: WebDAVCredentials,
+        session: URLSession = .shared
+    ) async throws -> PCloudRegion {
+        let (_, region) = try await fetchAuthSession(
+            email: credentials.email,
+            password: credentials.password,
+            preferredRegion: credentials.region,
+            session: session
+        )
+        return region
+    }
+
+    /// pCloud REST token — plain password over HTTPS first (matches WebDAV app passwords), then digest.
     static func fetchAuthToken(
         email: String,
         password: String,
         region: PCloudRegion,
         session: URLSession = .shared
     ) async throws -> String {
-        let digest = try await requestDigest(region: region, session: session)
-        let passwordDigest = makePasswordDigest(email: email, password: password, digest: digest)
-        return try await requestAuthToken(
+        let (token, _) = try await fetchAuthSession(
             email: email,
-            passwordDigest: passwordDigest,
-            digest: digest,
-            region: region,
+            password: password,
+            preferredRegion: region,
             session: session
         )
+        return token
     }
 
-    private static func requestDigest(region: PCloudRegion, session: URLSession) async throws -> String {
-        let url = region.apiBaseURL.appendingPathComponent("getdigest")
-        let (data, response) = try await session.data(from: url)
-        try validateHTTP(response)
-        let json = try decodeJSONObject(data)
-        try throwIfAPIError(json)
-        guard let digest = json["digest"] as? String, !digest.isEmpty else {
-            throw PCloudAPIError.unexpectedResponse
-        }
-        return digest
-    }
-
-    private static func requestAuthToken(
+    static func fetchAuthSession(
         email: String,
-        passwordDigest: String,
-        digest: String,
-        region: PCloudRegion,
+        password: String,
+        preferredRegion: PCloudRegion,
+        session: URLSession
+    ) async throws -> (token: String, region: PCloudRegion) {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty, !trimmedPassword.isEmpty else {
+            throw PCloudAPIError.authenticationFailed("Email and password are required.")
+        }
+
+        var lastError: Error?
+        for region in [preferredRegion, preferredRegion.alternate] {
+            let host = region.apiHost
+            do {
+                let token = try await requestAuthTokenPlain(
+                    email: trimmedEmail,
+                    password: trimmedPassword,
+                    apiHost: host,
+                    session: session
+                )
+                return (token, region)
+            } catch {
+                lastError = error
+            }
+            do {
+                let token = try await requestAuthTokenDigest(
+                    email: trimmedEmail,
+                    password: trimmedPassword,
+                    apiHost: host,
+                    session: session
+                )
+                return (token, region)
+            } catch {
+                lastError = error
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        throw PCloudAPIError.authenticationFailed(nil)
+    }
+
+    private static func requestAuthTokenPlain(
+        email: String,
+        password: String,
+        apiHost: String,
         session: URLSession
     ) async throws -> String {
-        var components = URLComponents(url: region.apiBaseURL.appendingPathComponent("userinfo"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "getauth", value: "1"),
-            URLQueryItem(name: "logout", value: "1"),
-            URLQueryItem(name: "username", value: email.lowercased()),
-            URLQueryItem(name: "digest", value: digest),
-            URLQueryItem(name: "passworddigest", value: passwordDigest),
-            URLQueryItem(name: "authexpire", value: "31536000"),
-        ]
-        guard let url = components.url else { throw PCloudAPIError.unexpectedResponse }
-        let (data, response) = try await session.data(from: url)
-        try validateHTTP(response)
-        let json = try decodeJSONObject(data)
-        try throwIfAPIError(json)
-        guard let auth = json["auth"] as? String, !auth.isEmpty else {
-            throw PCloudAPIError.authenticationFailed(json["error"] as? String)
+        let json = try await PCloudAPIRequest.get(
+            host: apiHost,
+            method: "userinfo",
+            parameters: [
+                "getauth": "1",
+                "username": email,
+                "password": password,
+                "authexpire": authExpireSeconds,
+                "device": deviceName,
+            ],
+            session: session
+        )
+        return try parseAuthToken(from: json)
+    }
+
+    private static func requestAuthTokenDigest(
+        email: String,
+        password: String,
+        apiHost: String,
+        session: URLSession
+    ) async throws -> String {
+        let digestJSON = try await PCloudAPIRequest.get(host: apiHost, method: "getdigest", session: session)
+        try PCloudAPIRequest.throwIfAPIError(digestJSON)
+        guard let digest = digestJSON["digest"] as? String, !digest.isEmpty else {
+            throw PCloudAPIError.unexpectedResponse
         }
-        return auth
+
+        let passwordDigest = makePasswordDigest(email: email, password: password, digest: digest)
+        let json = try await PCloudAPIRequest.get(
+            host: apiHost,
+            method: "userinfo",
+            parameters: [
+                "getauth": "1",
+                "username": email,
+                "digest": digest,
+                "passworddigest": passwordDigest,
+                "authexpire": authExpireSeconds,
+                "device": deviceName,
+            ],
+            session: session
+        )
+        return try parseAuthToken(from: json)
+    }
+
+    private static func parseAuthToken(from json: [String: Any]) throws -> String {
+        let code = PCloudAPIRequest.resultCode(json)
+        if code == 0, let auth = json["auth"] as? String, !auth.isEmpty {
+            return auth
+        }
+        throw PCloudAPIError.api(code: code, message: PCloudAPIRequest.errorMessage(json))
     }
 
     private static func makePasswordDigest(email: String, password: String, digest: String) -> String {
-        let emailLower = email.lowercased()
-        let usernameHashHex = sha1Hex(Data(emailLower.utf8))
+        let usernameHashHex = sha1Hex(Data(email.utf8))
         var combined = Data(password.utf8)
         combined.append(Data(usernameHashHex.utf8))
         combined.append(Data(digest.utf8))
@@ -70,29 +148,5 @@ enum PCloudAuth {
 
     private static func sha1Hex(_ data: Data) -> String {
         Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func decodeJSONObject(_ data: Data) throws -> [String: Any] {
-        let object = try JSONSerialization.jsonObject(with: data)
-        guard let dict = object as? [String: Any] else {
-            throw PCloudAPIError.unexpectedResponse
-        }
-        return dict
-    }
-
-    private static func throwIfAPIError(_ json: [String: Any]) throws {
-        let code = json["result"] as? Int ?? (json["result"] as? NSNumber)?.intValue ?? -1
-        guard code == 0 else {
-            throw PCloudAPIError.api(code: code, message: json["error"] as? String)
-        }
-    }
-
-    private static func validateHTTP(_ response: URLResponse) throws {
-        guard let http = response as? HTTPURLResponse else {
-            throw PCloudAPIError.unexpectedResponse
-        }
-        guard (200 ... 299).contains(http.statusCode) else {
-            throw PCloudAPIError.httpStatus(http.statusCode)
-        }
     }
 }

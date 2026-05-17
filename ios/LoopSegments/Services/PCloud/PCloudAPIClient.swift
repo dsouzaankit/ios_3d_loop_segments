@@ -5,6 +5,7 @@ final class PCloudAPIClient {
     private let credentials: WebDAVCredentials
     private let session: URLSession
     private var authToken: String?
+    private var authRegion: PCloudRegion?
 
     init(credentials: WebDAVCredentials, session: URLSession = .shared) {
         self.credentials = credentials
@@ -15,44 +16,60 @@ final class PCloudAPIClient {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        let token = try await ensureAuthToken()
-        var components = URLComponents(url: credentials.region.apiBaseURL.appendingPathComponent("search"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "auth", value: token),
-            URLQueryItem(name: "query", value: trimmed),
-        ]
-        guard let url = components.url else { throw PCloudAPIError.unexpectedResponse }
+        let creds = resolvedCredentials()
+        let token = try await ensureAuthToken(credentials: creds)
+        let apiHost = authRegion?.apiHost ?? creds.region.apiHost
+        let json = try await PCloudAPIRequest.get(
+            host: apiHost,
+            method: "search",
+            parameters: [
+                "auth": token,
+                "query": trimmed,
+            ],
+            session: session
+        )
 
-        let (data, response) = try await session.data(from: url)
-        try Self.validateHTTP(response)
-        let json = try Self.decodeJSONObject(data)
-        let code = Self.apiResultCode(json)
+        let code = PCloudAPIRequest.resultCode(json)
         if code == 1000 || code == 2000 {
             authToken = nil
-            let retryToken = try await ensureAuthToken()
-            var retry = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-            retry.queryItems = [
-                URLQueryItem(name: "auth", value: retryToken),
-                URLQueryItem(name: "query", value: trimmed),
-            ]
-            guard let retryURL = retry.url else { throw PCloudAPIError.unexpectedResponse }
-            let (retryData, retryResponse) = try await session.data(from: retryURL)
-            try Self.validateHTTP(retryResponse)
-            return try parseSearchItems(Self.decodeJSONObject(retryData))
+            let retryToken = try await ensureAuthToken(credentials: creds)
+            let retryJSON = try await PCloudAPIRequest.get(
+                host: apiHost,
+                method: "search",
+                parameters: [
+                    "auth": retryToken,
+                    "query": trimmed,
+                ],
+                session: session
+            )
+            try PCloudAPIRequest.throwIfAPIError(retryJSON)
+            return try parseSearchItems(retryJSON)
         }
-        try Self.throwIfAPIError(json)
+
+        try PCloudAPIRequest.throwIfAPIError(json)
         return try parseSearchItems(json)
     }
 
-    private func ensureAuthToken() async throws -> String {
+    private func resolvedCredentials() -> WebDAVCredentials {
+        let store = CredentialStore()
+        if let loaded = store.load(account: credentials.email),
+           loaded.region == credentials.region,
+           !loaded.password.isEmpty {
+            return loaded
+        }
+        return credentials
+    }
+
+    private func ensureAuthToken(credentials: WebDAVCredentials) async throws -> String {
         if let authToken, !authToken.isEmpty { return authToken }
-        let token = try await PCloudAuth.fetchAuthToken(
+        let (token, region) = try await PCloudAuth.fetchAuthSession(
             email: credentials.email,
             password: credentials.password,
-            region: credentials.region,
+            preferredRegion: credentials.region,
             session: session
         )
         authToken = token
+        authRegion = region
         return token
     }
 
@@ -100,36 +117,6 @@ final class PCloudAPIClient {
         default: return nil
         }
     }
-
-    private static func apiResultCode(_ json: [String: Any]) -> Int {
-        if let code = json["result"] as? Int { return code }
-        if let code = json["result"] as? NSNumber { return code.intValue }
-        return -1
-    }
-
-    private static func throwIfAPIError(_ json: [String: Any]) throws {
-        let code = apiResultCode(json)
-        guard code == 0 else {
-            throw PCloudAPIError.api(code: code, message: json["error"] as? String)
-        }
-    }
-
-    private static func decodeJSONObject(_ data: Data) throws -> [String: Any] {
-        let object = try JSONSerialization.jsonObject(with: data)
-        guard let dict = object as? [String: Any] else {
-            throw PCloudAPIError.unexpectedResponse
-        }
-        return dict
-    }
-
-    private static func validateHTTP(_ response: URLResponse) throws {
-        guard let http = response as? HTTPURLResponse else {
-            throw PCloudAPIError.unexpectedResponse
-        }
-        guard (200 ... 299).contains(http.statusCode) else {
-            throw PCloudAPIError.httpStatus(http.statusCode)
-        }
-    }
 }
 
 enum PCloudAPIError: LocalizedError {
@@ -145,15 +132,32 @@ enum PCloudAPIError: LocalizedError {
         case .httpStatus(let code):
             return "pCloud API HTTP \(code)."
         case .api(let code, let message):
-            if let message, !message.isEmpty {
-                return "pCloud error \(code): \(message)"
-            }
-            return "pCloud error \(code)."
+            return Self.describeAPI(code: code, message: message)
         case .authenticationFailed(let message):
             if let message, !message.isEmpty {
                 return "pCloud sign-in failed: \(message)"
             }
-            return "pCloud sign-in failed. Use the same app password as WebDAV."
+            return Self.describeAPI(code: 2000, message: nil)
+        }
+    }
+
+    private static func describeAPI(code: Int, message: String?) -> String {
+        let detail = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch code {
+        case 2000:
+            return """
+            pCloud search login failed (use the same app password as WebDAV). \
+            Check US/Europe region matches your account at my.pcloud.com. \
+            If WebDAV works but search still fails, create a new app password (Settings → Security).
+            \(detail.isEmpty ? "" : " (\(detail))")
+            """
+        case 1000:
+            return "pCloud search requires login — sign out and sign in again."
+        default:
+            if !detail.isEmpty {
+                return "pCloud error \(code): \(detail)"
+            }
+            return "pCloud error \(code)."
         }
     }
 }
