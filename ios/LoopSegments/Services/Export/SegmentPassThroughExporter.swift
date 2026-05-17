@@ -42,9 +42,9 @@ enum SegmentPassThroughExporter {
         }
 
         guard reader.startReading() else {
-            if let reader.error {
-                log("Local reader failed: \(reader.error.localizedDescription)")
-                throw SegmentExporterError.readerFailed(reader.error)
+            if let readerError = reader.error {
+                log("Local reader failed: \(readerError.localizedDescription)")
+                throw SegmentExporterError.readerFailed(readerError)
             }
             throw SegmentExporterError.readerSetupFailed
         }
