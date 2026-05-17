@@ -88,17 +88,50 @@ final class SegmentExporter {
             return cancelled
         }
 
-        let streamingAsset = try await openStreamingAsset(
-            inputURL: inputURL,
-            authorizationProvider: authorizationProvider,
-            rangeCache: rangeCache,
-            logHandler: logHandler
-        )
+        let fileSize = rangeCache.contentLengthValue() ?? 0
+        let streamFromPCloud = Self.shouldStreamSegments(fileBytes: fileSize)
+        try Self.ensureExportDiskSpace(fileBytes: fileSize, streaming: streamFromPCloud)
 
-        let duration = try await streamingAsset.load(.duration)
-        let durationSeconds = CMTimeGetSeconds(duration)
+        let durationSeconds: Double
+        let videoFormat: CMFormatDescription
+        let audioFormat: CMFormatDescription?
+
+        if streamFromPCloud {
+            logHandler("Low free space — probing codecs via pCloud stream (prefetch cache)")
+            let streamingAsset = try await openStreamingAsset(
+                inputURL: inputURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                logHandler: logHandler
+            )
+            (durationSeconds, videoFormat, audioFormat) = try await probeStreamMetadata(
+                asset: streamingAsset,
+                log: logHandler
+            )
+            releaseStreamingProbe(streamFromPCloud: true, log: logHandler)
+        } else {
+            if fileSize > Self.streamOnlyThresholdBytes {
+                logHandler(
+                    "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
+                )
+            }
+            let downloader = try WebDAVTempFileDownload(
+                remoteURL: inputURL,
+                rangeCache: rangeCache,
+                authorizationProvider: authorizationProvider,
+                isCancelled: cancelCheck,
+                log: logHandler
+            )
+            tempDownload = downloader
+            downloader.logDownloadStarted()
+            logHandler("Probing duration/codecs from temp file (prefetch head + MP4 index at EOF)…")
+            (durationSeconds, videoFormat, audioFormat) = try await probeLocalMetadata(
+                fileURL: downloader.fileURL,
+                log: logHandler
+            )
+        }
+
         let durationMs = Int64(durationSeconds * 1000)
-
         let seekSeconds = Double(seekMs) / 1000.0
         if durationMs > 0, seekMs >= durationMs - 250 {
             throw SegmentExporterError.seekPastEnd
@@ -107,40 +140,8 @@ final class SegmentExporter {
             logHandler("Seek \(seekMs / 60_000) min — download is from file start; first segments need more data on disk")
         }
 
-        guard let videoTrack = try await streamingAsset.loadTracks(withMediaType: .video).first else {
-            throw SegmentExporterError.noVideoTrack
-        }
-        let audioTrack = try await streamingAsset.loadTracks(withMediaType: .audio).first
-
-        let videoFormat = try await videoFormatDescription(from: videoTrack)
-        guard CodecSupport.canPassthroughToMP4(videoFormat) else {
-            let fourCC = CodecSupport.fourCCString(videoFormat)
-            throw SegmentExporterError.unsupportedCodec(fourCC)
-        }
-
-        var audioFormat: CMFormatDescription?
-        if let audioTrack {
-            let fmt = try await audioFormatDescription(from: audioTrack)
-            guard CodecSupport.canPassthroughAudio(fmt) else {
-                let fourCC = CodecSupport.fourCCString(fmt)
-                throw SegmentExporterError.unsupportedCodec(fourCC)
-            }
-            audioFormat = fmt
-        }
-
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
-
-        let fileSize = rangeCache.contentLengthValue() ?? 0
-        let streamFromPCloud = Self.shouldStreamSegments(fileBytes: fileSize)
-        releaseStreamingProbe(streamFromPCloud: streamFromPCloud, log: logHandler)
-
-        try Self.ensureExportDiskSpace(fileBytes: fileSize, streaming: streamFromPCloud)
-        if fileSize > Self.streamOnlyThresholdBytes, !streamFromPCloud {
-            logHandler(
-                "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
-            )
-        }
 
         let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
@@ -200,15 +201,9 @@ final class SegmentExporter {
                 minuteIndex += 1
             }
         } else {
-            let downloader = try WebDAVTempFileDownload(
-                remoteURL: inputURL,
-                rangeCache: rangeCache,
-                authorizationProvider: authorizationProvider,
-                isCancelled: cancelCheck,
-                log: logHandler
-            )
-            tempDownload = downloader
-            downloader.logDownloadStarted()
+            guard let downloader = tempDownload else {
+                throw SegmentExporterError.readerSetupFailed
+            }
             logHandler("Publishing 60s segments as temp download catches up (DLNA can loop latest)")
 
             while true {
@@ -402,7 +397,6 @@ final class SegmentExporter {
         rangeCache: WebDAVRangeCache,
         logHandler: @escaping (String) -> Void
     ) async throws -> AVURLAsset {
-        logHandler("Probing duration/codecs via pCloud (prefetch cache)…")
         let loader = WebDAVResourceLoader(
             remoteURL: inputURL,
             authorizationProvider: authorizationProvider,
@@ -417,12 +411,80 @@ final class SegmentExporter {
         )
         retainedAsset = asset
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
-        guard try await asset.load(.isPlayable) else {
-            logHandler("pCloud probe: file not playable yet (parallel reads or index still loading — retry)")
-            throw SegmentExporterError.readerSetupFailed
-        }
-        logHandler("Opened for export (pCloud probe)")
         return asset
+    }
+
+    private func probeLocalMetadata(
+        fileURL: URL,
+        log: @escaping (String) -> Void
+    ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
+        let asset = AVURLAsset(
+            url: fileURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        var lastLog = CFAbsoluteTimeGetCurrent()
+        for attempt in 1 ... 90 {
+            if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
+                let probed = try await probeMediaMetadata(asset: asset, videoTrack: videoTrack, log: log)
+                log("Opened for export (local temp index, attempt \(attempt))")
+                return probed
+            }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastLog >= 10 {
+                lastLog = now
+                log("Waiting for video track in temp file (head + index)…")
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        throw SegmentExporterError.noVideoTrack
+    }
+
+    /// Low-disk fallback: retry track load over pCloud (never requires full-file `isPlayable`).
+    private func probeStreamMetadata(
+        asset: AVURLAsset,
+        log: @escaping (String) -> Void
+    ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
+        var lastLog = CFAbsoluteTimeGetCurrent()
+        for attempt in 1 ... 120 {
+            if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
+                let probed = try await probeMediaMetadata(asset: asset, videoTrack: videoTrack, log: log)
+                log("Opened for export (pCloud index, attempt \(attempt))")
+                return probed
+            }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastLog >= 15 {
+                lastLog = now
+                log("Waiting for video track via pCloud (prefetch index)…")
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        throw SegmentExporterError.readerSetupFailed
+    }
+
+    private func probeMediaMetadata(
+        asset: AVURLAsset,
+        videoTrack: AVAssetTrack,
+        log: @escaping (String) -> Void
+    ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
+        let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
+        let videoFormat = try await videoFormatDescription(from: videoTrack)
+        guard CodecSupport.canPassthroughToMP4(videoFormat) else {
+            throw SegmentExporterError.unsupportedCodec(CodecSupport.fourCCString(videoFormat))
+        }
+        var audioFormat: CMFormatDescription?
+        if let audioTrack {
+            let fmt = try await audioFormatDescription(from: audioTrack)
+            guard CodecSupport.canPassthroughAudio(fmt) else {
+                throw SegmentExporterError.unsupportedCodec(CodecSupport.fourCCString(fmt))
+            }
+            audioFormat = fmt
+        }
+        let duration = try await asset.load(.duration)
+        let durationSeconds = CMTimeGetSeconds(duration)
+        guard durationSeconds.isFinite, durationSeconds > 0 else {
+            log("Duration not available from index — export may mis-schedule segments")
+        }
+        return (durationSeconds, videoFormat, audioFormat)
     }
 
     private func releaseStreamingProbe(streamFromPCloud: Bool, log: (String) -> Void) {
