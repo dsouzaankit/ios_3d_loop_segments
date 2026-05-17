@@ -1,7 +1,7 @@
 import Foundation
 import Photos
 
-/// Publishes finished segment MP4s to the Photos library **Hidden** album (not Recents).
+/// Publishes finished segment MP4s to the Photos library (visible for Recents and PC import).
 enum PhotosSegmentPublisher {
     private static let enabledKey = "publishSegmentsToPhotos"
     private static let assetIdsKey = "photos_segment_asset_local_ids"
@@ -23,7 +23,7 @@ enum PhotosSegmentPublisher {
         case .authorized:
             return true
         case .limited:
-            log?("Photos: Limited access — hidden clips may not sync reliably; use Settings → Loop Segments → Photos → Full Access.")
+            log?("Photos: Limited access — use Settings → Loop Segments → Photos → Full Access for reliable PC import.")
             return true
         case .denied, .restricted:
             log?("Photos: access denied — open Settings → Loop Segments → Photos and allow access.")
@@ -52,9 +52,9 @@ enum PhotosSegmentPublisher {
 
         do {
             try await deletePreviousAsset(slot: segmentSlot)
-            let assetId = try await importHiddenVideo(url: videoURL)
+            let assetId = try await importVideo(url: videoURL)
             storeAssetId(assetId, slot: segmentSlot)
-            log("Photos: saved \(videoURL.lastPathComponent) (\(bytes / 1024) KB) → Hidden album (not Recents)")
+            log("Photos: saved \(videoURL.lastPathComponent) (\(bytes / 1024) KB) → Photos library")
         } catch {
             log("Photos: failed \(videoURL.lastPathComponent) — \(error.localizedDescription)")
         }
@@ -93,7 +93,7 @@ enum PhotosSegmentPublisher {
                 try await performChanges {
                     PHAssetChangeRequest.deleteAssets(fetch)
                 }
-                log?("Photos: removed \(fetch.count) hidden segment clip(s)")
+                log?("Photos: removed \(fetch.count) segment clip(s)")
             }
             clearStoredAssetIds()
         } catch {
@@ -118,13 +118,12 @@ enum PhotosSegmentPublisher {
         }
     }
 
-    private static func importHiddenVideo(url: URL) async throws -> String {
+    private static func importVideo(url: URL) async throws -> String {
         var createdId: String?
         try await performChanges {
             guard let request = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url) else {
                 return
             }
-            request.isHidden = true
             createdId = request.placeholderForCreatedAsset?.localIdentifier
         }
 

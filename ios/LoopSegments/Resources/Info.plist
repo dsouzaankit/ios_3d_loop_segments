@@ -32,9 +32,9 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Loop Segments saves 60s segment videos to the Photos Hidden album so you can import them on a PC without cluttering Recents.</string>
+	<string>Loop Segments saves 60s segment videos to your Photos library so you can import them on a PC.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Loop Segments needs Photos access to save segment videos to the Hidden album and remove them when export ends or the app closes.</string>
+	<string>Loop Segments needs Photos access to save segment videos and remove them when export ends or the app closes.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

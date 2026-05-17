@@ -41,7 +41,7 @@ struct ExportView: View {
                 }
             }
             Section("Photos (optional — PC sync)") {
-                Toggle("Save segments to Photos (Hidden)", isOn: Binding(
+                Toggle("Save segments to Photos", isOn: Binding(
                     get: { PhotosSegmentPublisher.isEnabled },
                     set: { newValue in
                         PhotosSegmentPublisher.isEnabled = newValue
@@ -55,7 +55,7 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Each 60s chunk goes to Photos → Hidden (not Recents). On PC use Apple Devices and include Hidden, or sync from Exports via USB.")
+                Text("Each 60s chunk is saved to Photos (visible in Recents). On PC use Sync-FromIPhonePhotos.ps1 or Apple Devices import from Internal Storage.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("3d_op_*.mp4 stay in Exports until Stop or leaving the app; temp _export_source_working.mp4 is removed when export ends or on cleanup.")
@@ -76,7 +76,7 @@ struct ExportView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                Text("3. With Photos on: Apple Devices → Photos → show Hidden album for MTP sync")
+                Text("3. With Photos on: PC can pick newest videos from Internal Storage (202605_a, etc.)")
                 Text("4. Or Apple Devices → Loop Segments → Exports → Save to PC")
                 Text("5. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
                     .font(.footnote)
@@ -129,7 +129,7 @@ struct ExportView: View {
             return
         }
         if await PhotosSegmentPublisher.ensureAccess() {
-            photosAccessNote = "Photos access OK — clips go to the Hidden album only."
+            photosAccessNote = "Photos access OK — clips save to your library (USB import friendly)."
         } else {
             photosAccessNote = "Photos access needed: Settings → Loop Segments → Photos → allow access."
         }
