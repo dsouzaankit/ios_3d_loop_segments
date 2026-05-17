@@ -6,6 +6,7 @@ final class PCloudAPIClient {
     private let session: URLSession
     private var authToken: String?
     private var authRegion: PCloudRegion?
+    private var authAPIHost: String?
 
     init(credentials: WebDAVCredentials, session: URLSession = .shared) {
         self.credentials = credentials
@@ -18,7 +19,7 @@ final class PCloudAPIClient {
 
         let creds = resolvedCredentials()
         let token = try await ensureAuthToken(credentials: creds)
-        let apiHost = authRegion?.apiHost ?? creds.region.apiHost
+        let apiHost = authAPIHost ?? authRegion?.apiHost ?? creds.region.apiHost
         let json = try await PCloudAPIRequest.get(
             host: apiHost,
             method: "search",
@@ -32,6 +33,7 @@ final class PCloudAPIClient {
         let code = PCloudAPIRequest.resultCode(json)
         if code == 1000 || code == 2000 {
             authToken = nil
+            authAPIHost = nil
             let retryToken = try await ensureAuthToken(credentials: creds)
             let retryJSON = try await PCloudAPIRequest.get(
                 host: apiHost,
@@ -62,7 +64,7 @@ final class PCloudAPIClient {
 
     private func ensureAuthToken(credentials: WebDAVCredentials) async throws -> String {
         if let authToken, !authToken.isEmpty { return authToken }
-        let (token, region) = try await PCloudAuth.fetchAuthSession(
+        let (token, region, apiHost) = try await PCloudAuth.fetchAuthSession(
             email: credentials.email,
             password: credentials.password,
             preferredRegion: credentials.region,
@@ -70,6 +72,7 @@ final class PCloudAPIClient {
         )
         authToken = token
         authRegion = region
+        authAPIHost = apiHost
         return token
     }
 
@@ -146,9 +149,9 @@ enum PCloudAPIError: LocalizedError {
         switch code {
         case 2000:
             return """
-            pCloud search login failed (use the same app password as WebDAV). \
-            Check US/Europe region matches your account at my.pcloud.com. \
-            If WebDAV works but search still fails, create a new app password (Settings → Security).
+            pCloud search could not log in with your saved password. \
+            Sign out, confirm US/Europe matches my.pcloud.com, and sign in again with the same password you use in the pCloud app. \
+            If you use two-factor authentication, pCloud may require a separate security password for API access.
             \(detail.isEmpty ? "" : " (\(detail))")
             """
         case 1000:

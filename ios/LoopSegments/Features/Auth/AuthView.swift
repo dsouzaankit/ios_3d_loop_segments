@@ -3,7 +3,7 @@ import SwiftUI
 struct AuthView: View {
     @EnvironmentObject private var session: AppSession
 
-    @State private var region: PCloudRegion = .us
+    @State private var region: PCloudRegion = AuthView.initialRegion
     @State private var email = ""
     @State private var password = ""
     @State private var isBusy = false
@@ -28,10 +28,10 @@ struct AuthView: View {
                         .textContentType(.password)
                 }
                 Section {
-                    Text("Use the same US/Europe region as your pCloud account. With 2FA, create an app password at my.pcloud.com (Settings → Security). Sign-in uses WebDAV; search tries pCloud API then folder browse if API login fails.")
+                    Text("Use your normal pCloud email and password. Sign-in only checks WebDAV (not the search API). If the wrong region was selected, the app tries the other datacenter automatically.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("Build 1.2.6 · pCloud WebDAV · AVFoundation segment export")
+                    Text("Build \(AuthView.buildLabel) · pCloud WebDAV · AVFoundation segment export")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -49,6 +49,20 @@ struct AuthView: View {
                 }
             }
         }
+    }
+
+    private static var initialRegion: PCloudRegion {
+        if let raw = UserDefaults.standard.string(forKey: "pcloud_region_last_sign_in"),
+           let region = PCloudRegion(rawValue: raw) {
+            return region
+        }
+        return .us
+    }
+
+    private static var buildLabel: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
     }
 
     private func signIn() async {

@@ -21,11 +21,21 @@ enum PCloudAPIRequest {
         components.host = host
         components.percentEncodedPath = "/\(method)"
         if !parameters.isEmpty {
-            components.queryItems = parameters
+            let query = parameters
                 .sorted { $0.key < $1.key }
-                .map { URLQueryItem(name: $0.key, value: $0.value) }
+                .map { percentEncodedQueryPair(name: $0.key, value: $0.value) }
+                .joined(separator: "&")
+            components.percentEncodedQuery = query
         }
         return components.url
+    }
+
+    /// RFC 3986 query encoding (`+` stays `%2B`, not a space).
+    private static func percentEncodedQueryPair(name: String, value: String) -> String {
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let encodedName = name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name
+        let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+        return "\(encodedName)=\(encodedValue)"
     }
 
     static func resultCode(_ json: [String: Any]) -> Int {

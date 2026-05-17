@@ -10,7 +10,7 @@ enum PCloudAuth {
         credentials: WebDAVCredentials,
         session: URLSession = .shared
     ) async throws -> PCloudRegion {
-        let (_, region) = try await fetchAuthSession(
+        let (_, region, _) = try await fetchAuthSession(
             email: credentials.email,
             password: credentials.password,
             preferredRegion: credentials.region,
@@ -19,14 +19,14 @@ enum PCloudAuth {
         return region
     }
 
-    /// pCloud REST token — plain password over HTTPS first (matches WebDAV app passwords), then digest.
+    /// pCloud REST token — plain password over HTTPS first, then digest; tries regional + nearest API hosts.
     static func fetchAuthToken(
         email: String,
         password: String,
         region: PCloudRegion,
         session: URLSession = .shared
     ) async throws -> String {
-        let (token, _) = try await fetchAuthSession(
+        let (token, _, _) = try await fetchAuthSession(
             email: email,
             password: password,
             preferredRegion: region,
@@ -40,7 +40,7 @@ enum PCloudAuth {
         password: String,
         preferredRegion: PCloudRegion,
         session: URLSession
-    ) async throws -> (token: String, region: PCloudRegion) {
+    ) async throws -> (token: String, region: PCloudRegion, apiHost: String) {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty, !trimmedPassword.isEmpty else {
@@ -49,28 +49,30 @@ enum PCloudAuth {
 
         var lastError: Error?
         for region in [preferredRegion, preferredRegion.alternate] {
-            let host = region.apiHost
-            do {
-                let token = try await requestAuthTokenPlain(
-                    email: trimmedEmail,
-                    password: trimmedPassword,
-                    apiHost: host,
-                    session: session
-                )
-                return (token, region)
-            } catch {
-                lastError = error
-            }
-            do {
-                let token = try await requestAuthTokenDigest(
-                    email: trimmedEmail,
-                    password: trimmedPassword,
-                    apiHost: host,
-                    session: session
-                )
-                return (token, region)
-            } catch {
-                lastError = error
+            let hosts = await PCloudAPIHostResolver.hostsToTry(for: region, session: session)
+            for host in hosts {
+                do {
+                    let token = try await requestAuthTokenPlain(
+                        email: trimmedEmail,
+                        password: trimmedPassword,
+                        apiHost: host,
+                        session: session
+                    )
+                    return (token, region, host)
+                } catch {
+                    lastError = error
+                }
+                do {
+                    let token = try await requestAuthTokenDigest(
+                        email: trimmedEmail,
+                        password: trimmedPassword,
+                        apiHost: host,
+                        session: session
+                    )
+                    return (token, region, host)
+                } catch {
+                    lastError = error
+                }
             }
         }
 
@@ -91,6 +93,7 @@ enum PCloudAuth {
             method: "userinfo",
             parameters: [
                 "getauth": "1",
+                "logout": "1",
                 "username": email,
                 "password": password,
                 "authexpire": authExpireSeconds,
@@ -119,6 +122,7 @@ enum PCloudAuth {
             method: "userinfo",
             parameters: [
                 "getauth": "1",
+                "logout": "1",
                 "username": email,
                 "digest": digest,
                 "passworddigest": passwordDigest,

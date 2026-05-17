@@ -1,6 +1,6 @@
 import Foundation
 
-/// Search via pCloud REST when possible; fall back to WebDAV folder walk (app passwords).
+/// Search via pCloud REST when possible; fall back to WebDAV folder walk.
 enum PCloudSearchService {
     struct Result {
         let items: [WebDAVItem]

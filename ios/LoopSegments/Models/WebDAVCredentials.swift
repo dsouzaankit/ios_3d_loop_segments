@@ -6,7 +6,7 @@ struct WebDAVCredentials: Codable, Equatable {
     var password: String
 
     var authorizationHeaderValue: String {
-        let raw = "\(email):\(password)"
+        let raw = "\(email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()):\(password)"
         let data = Data(raw.utf8)
         return "Basic \(data.base64EncodedString())"
     }

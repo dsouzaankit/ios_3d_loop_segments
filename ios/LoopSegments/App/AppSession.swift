@@ -16,13 +16,27 @@ final class AppSession: ObservableObject {
     }
 
     func signIn(region: PCloudRegion, email: String, password: String) async throws {
-        let creds = WebDAVCredentials(region: region, email: email, password: password)
-        let client = WebDAVClient(credentials: creds)
-        _ = try await client.list(path: "/")
-        credentialStore.save(creds)
-        credentials = creds
-        WebDAVMediaSession.setActiveCredentials(creds)
-        UserDefaults.standard.set(creds.region.rawValue, forKey: "pcloud_region_last_sign_in")
+        let attempt = WebDAVCredentials(
+            region: region,
+            email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+            password: password.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        guard !attempt.email.isEmpty, !attempt.password.isEmpty else {
+            throw WebDAVError.httpStatus(401)
+        }
+
+        let previous = credentials
+        WebDAVMediaSession.setActiveCredentials(attempt)
+        do {
+            let verified = try await WebDAVSignIn.verify(credentials: attempt)
+            credentialStore.save(verified)
+            credentials = verified
+            WebDAVMediaSession.setActiveCredentials(verified)
+            UserDefaults.standard.set(verified.region.rawValue, forKey: "pcloud_region_last_sign_in")
+        } catch {
+            WebDAVMediaSession.setActiveCredentials(previous)
+            throw error
+        }
     }
 
     func signOut() {

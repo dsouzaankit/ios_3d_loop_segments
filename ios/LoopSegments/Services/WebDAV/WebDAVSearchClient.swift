@@ -1,6 +1,6 @@
 import Foundation
 
-/// Filename search by walking WebDAV folders (works with app passwords; slower than REST).
+/// Filename search by walking WebDAV folders (slower than REST search).
 enum WebDAVSearchClient {
     private static let maxFoldersToVisit = 250
     private static let maxResults = 80
