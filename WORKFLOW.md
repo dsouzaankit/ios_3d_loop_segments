@@ -1,6 +1,8 @@
-# Workflow: iPhone cellular → USB → PC DLNA (WLAN)
+# Workflow: iPhone cellular → PC DLNA (WLAN)
 
-Three separate networks. **No Personal Hotspot** required. **No PC-side ffmpeg** — export runs only on the iPhone.
+> **Feasibility:** Manual **Apple Devices → Save to PC** does **not** automate updating the DLNA folder while segments rotate. See **[FEASIBILITY.md](FEASIBILITY.md)** — production automation is either **PC `Run-SegmentCopy.ps1`** (pCloud → PC) or a **future Wi‑Fi pull** from the phone; USB copy is at best **once per export session**.
+
+Three separate networks. **No Personal Hotspot** required for the iPhone path below.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
@@ -47,34 +49,57 @@ Large files on cellular: expect long runs; export paces reads in real time.
 
 ---
 
-## 3. USB transfer to the PC
+## 3. USB transfer to the PC (Apple Devices)
 
-1. Connect iPhone with USB; unlock; tap **Trust** on the phone.
-2. On Windows, open **Apple Devices** / Explorer → iPhone → **Loop Segments** → **Exports**.
-3. Run sync (copies into DLNA library folder):
+Apple Devices does **not** mount the iPhone app as a drive path. You **manually** choose a **Windows output folder** when saving from **Loop Segments → Exports**. There is no true auto-sync from Apple.
+
+### Simplest (one step)
+
+When Apple Devices asks where to save, pick your **DLNA library folder** directly:
+
+`F:\f1_media\3d_fullsbs_trans`
+
+Save `3d_op_00.mp4` and `3d_op_01.mp4` there. Done — no extra script.
+
+### Automation (what is and is not automated)
+
+| Step | Automated? |
+|------|------------|
+| iPhone export (pCloud → segments) | **Yes** — in the app |
+| Apple Devices → PC folder | **No** — you choose the Windows path and save (Apple limitation) |
+| PC folder → DLNA library | **Yes** — watcher or scheduled copy (below) |
+
+**One-time setup**
+
+1. Create `Documents\LoopSegmentsIncoming` (or save straight to `F:\f1_media\3d_fullsbs_trans` and skip automation).
+2. In Apple Devices, always save **Loop Segments → Exports** into that incoming folder (Windows remembers the path).
+
+**Option 1 — Watcher (automated copy after each save)**
 
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Sync-IphoneSegments.ps1
+.\Watch-LoopSegmentsIncoming.ps1 -RegisterLogonTask
 ```
 
-If auto-discovery fails, paste the Exports path:
+At logon, a background task watches `LoopSegmentsIncoming` and runs `Copy-FromIncoming.ps1` when MP4s/logs change. You still **save manually** in Apple Devices; copy to DLNA is automatic.
+
+Run the watcher in a window (no task):
 
 ```powershell
-.\Sync-IphoneSegments.ps1 -SourceRoot 'D:\Apple iPhone\Internal Storage\Loop Segments\Exports'
+.\Watch-LoopSegmentsIncoming.ps1
 ```
 
-**Wait for device** (polls until both MP4s are visible):
+**Option 2 — Scheduled copy every N minutes**
 
-```powershell
-.\Sync-IphoneSegments.ps1 -WaitForDevice -WaitMinutes 30
-```
+Task Scheduler → run `Copy-FromIncoming.ps1` on a schedule (picks up files after you saved to incoming).
 
-Optional: register a logon task that runs sync when you sign in (after plugging in the phone):
+**Option 0 — No automation**
 
-```powershell
-.\Register-UsbSyncTask.ps1
-```
+Save directly to `F:\f1_media\3d_fullsbs_trans` in the Apple Devices dialog — one manual step total.
+
+### Legacy: `Sync-IphoneSegments.ps1`
+
+Only if Windows exposes a readable iPhone `Exports` path (uncommon with Apple Devices Save dialog only).
 
 ---
 
@@ -86,10 +111,37 @@ Optional: register a logon task that runs sync when you sign in (after plugging 
 
 ---
 
+## Finding **Loop Segments → Exports** on Windows
+
+**`Internal Storage` with folders like `202605_a`, `202604_b`, …** = **Photos** (camera roll by month). That is normal. Your segment MP4s are **not** there.
+
+| Where to look | What you should see |
+|---------------|---------------------|
+| **iPhone → Files → On My iPhone → Loop Segments → Exports** | `3d_op_00.mp4`, `export_latest.txt`, `loop_segments_ok.txt` (always check here first) |
+| **Apple Devices** → **Loop Segments** → **Exports** → **Save to PC** (you pick the Windows folder) | **Normal path** — not automatable by Apple; save to `F:\f1_media\...` or incoming + `Copy-FromIncoming.ps1` |
+| **Explorer → This PC → Apple iPhone → Internal Storage** | Often **only** Photos (`202605_a`, …) — not the app |
+
+If Explorer never shows **Loop Segments**:
+
+1. Install/update **[Apple Devices](https://apps.microsoft.com/detail/9NP83LWLPZ9K)** (or iTunes for drivers).
+2. Open the **Apple Devices** app → select iPhone → look for **Files** or apps list → **Loop Segments**.
+3. On the phone, confirm exports exist in **Files** (step above).
+4. Copy files manually: in **Files**, select `3d_op_*.mp4` → **Share** → save to **iCloud Drive** / **OneDrive** / email to PC (workaround when USB app folders don’t mount).
+
+`Sync-IphoneSegments.ps1` only works when Windows exposes  
+`…\Loop Segments\Exports` (or you paste that path into `-SourceRoot`).
+
+```powershell
+.\Sync-IphoneSegments.ps1 -Discover
+```
+
+---
+
 ## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
+| Internal Storage only `202605_a` folders | Those are **Photos**, not the app. Use **Files → On My iPhone → Loop Segments → Exports** on the phone; try **Apple Devices** app on PC for File Sharing |
 | PC can’t see iPhone | Unlock phone, replug USB, open **Apple Devices** app; if Exports vanished during export, **stop export**, unlock, then browse again. Copy path from Explorer → `-SourceRoot` |
 | Network timed out on export | Strong cellular; keep app foreground; try Wi‑Fi; read `Exports/export_latest.txt` |
 | Sync can’t find Exports | Use `-SourceRoot` from Explorer address bar |

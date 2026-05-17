@@ -42,6 +42,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $SegmentNames = @('3d_op_00.mp4', '3d_op_01.mp4')
+$SourceConfigFile = Join-Path $PSScriptRoot 'loop-segments-source.txt'
+
+if ([string]::IsNullOrWhiteSpace($SourceRoot) -and (Test-Path -LiteralPath $SourceConfigFile -PathType Leaf)) {
+    $SourceRoot = (Get-Content -LiteralPath $SourceConfigFile -Raw).Trim()
+    if ($SourceRoot) {
+        Write-Host "Using saved source: $SourceRoot"
+    }
+}
 
 if ($LogsOnly) { $AllowPartial = $true }
 
@@ -215,10 +223,12 @@ function Show-DiscoverReport {
         Write-Host ''
         Write-Host 'Checklist:'
         Write-Host '  1. USB cable, iPhone unlocked, Trust This Computer'
-        Write-Host '  2. Apple Devices / iTunes installed (device visible in Apple Devices app)'
-        Write-Host '  3. In Explorer open: This PC -> Apple iPhone -> Internal Storage -> Loop Segments -> Exports'
-        Write-Host '  4. Copy the path from the Explorer address bar and run:'
+        Write-Host '  2. On iPhone: Files -> On My iPhone -> Loop Segments -> Exports (3d_op_*.mp4)'
+        Write-Host '  3. Folders like 202605_a under Internal Storage are PHOTOS only — not this app'
+        Write-Host '  4. On PC: open Apple Devices app -> iPhone -> Files / File Sharing -> Loop Segments'
+        Write-Host '  5. If Explorer shows Loop Segments\Exports, copy address bar path:'
         Write-Host "     .\Sync-IphoneSegments.ps1 -SourceRoot '<that path>'"
+        Write-Host '  6. Else: Share MP4s from iPhone Files app to cloud/email, then copy to F:\f1_media\...'
         return
     }
 

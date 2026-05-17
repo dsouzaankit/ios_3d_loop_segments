@@ -14,6 +14,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     let queue = DispatchQueue(label: "com.loopsegments.webdav-resource-loader")
 
     private let session: URLSession
+    private let rangeCache: WebDAVRangeCache?
     private var cachedContentLength: Int64?
     private let lengthLock = NSLock()
     private var lengthResolveTask: Task<Int64, Error>?
@@ -23,11 +24,13 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         remoteURL: URL,
         authorization: String,
         session: URLSession = WebDAVMediaSession.shared,
+        rangeCache: WebDAVRangeCache? = nil,
         log: ((String) -> Void)? = nil
     ) {
         self.remoteURL = remoteURL
         self.authorization = authorization
         self.session = session
+        self.rangeCache = rangeCache
         self.logLine = log
         super.init()
     }
@@ -117,6 +120,10 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func resolveContentLength() async throws -> Int64 {
+        if let preloaded = rangeCache?.contentLengthValue() {
+            storeLength(preloaded)
+            return preloaded
+        }
         lengthLock.lock()
         if let cachedContentLength {
             lengthLock.unlock()
@@ -166,6 +173,11 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func fetchRangeChunk(offset: Int64, endInclusive: Int64) async throws -> Data {
+        let length = Int(endInclusive - offset + 1)
+        if length > 0, let cached = rangeCache?.dataForRequest(offset: offset, length: length) {
+            return cached
+        }
+
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "GET"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
@@ -187,6 +199,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             storeLength(total)
         }
 
+        rangeCache?.storeRange(offset: offset, data: data)
         return data
     }
 
@@ -235,6 +248,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         lengthLock.lock()
         cachedContentLength = length
         lengthLock.unlock()
+        rangeCache?.storeContentLength(length)
     }
 
     private func mimeType(for url: URL) -> String {

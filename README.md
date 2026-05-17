@@ -1,8 +1,15 @@
 # ios_3d_loop_segments
 
-**iPhone cellular → pCloud WebDAV → segment export → USB → PC → DLNA on WLAN**
+**iPhone cellular → pCloud → segment export → (PC) → DLNA**
 
-No Personal Hotspot: the phone uses **cellular** for pCloud; the PC uses **WLAN** only for DLNA playback after a **USB** file copy. The PC does **not** run ffmpeg or pull from pCloud for this pipeline.
+The iPhone app automates **pCloud export** on cellular. Getting files onto the PC **automatically** is **not** solved by USB + Apple Devices (manual save only). See **[FEASIBILITY.md](FEASIBILITY.md)**.
+
+| Automated today | Not automated today |
+|-----------------|---------------------|
+| pCloud → phone `3d_op_00/01.mp4` | Phone → PC DLNA folder (without manual Apple Devices or PC ffmpeg) |
+| **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Live 60s refresh on PC via USB |
+
+**Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
 
 | Step | Device | Connection |
 |------|--------|------------|
@@ -16,14 +23,14 @@ Full guide: **[WORKFLOW.md](WORKFLOW.md)**
 
 ## Windows (after iPhone export)
 
+**Apple Devices** → save `3d_op_*.mp4` to `F:\f1_media\3d_fullsbs_trans` (simplest), or save to `Documents\LoopSegmentsIncoming` then:
+
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Sync-IphoneSegments.ps1 -WaitForDevice
+.\Copy-FromIncoming.ps1
 ```
 
-Copies `3d_op_00.mp4` / `3d_op_01.mp4` into `F:\f1_media\3d_fullsbs_trans` for your existing DLNA server.
-
-Optional logon auto-sync: `.\Register-UsbSyncTask.ps1`
+`Sync-IphoneSegments.ps1` only applies if your PC exposes a readable iPhone Exports path (uncommon with Apple Devices).
 
 ---
 

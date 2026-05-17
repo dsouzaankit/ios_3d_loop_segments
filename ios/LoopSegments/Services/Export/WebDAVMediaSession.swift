@@ -37,10 +37,10 @@ enum WebDAVMediaSession {
             stronger signal, or Wi‑Fi for export. Keep the app open; see log for pCloud retry lines.
             """
         }
-        if ns.domain == "WebDAVResourceLoader" || ns.localizedDescription.contains("timed out") {
+        if ns.localizedDescription.contains("timed out") {
             return """
-            Timed out opening video from pCloud. Use **0 min** seek first, or Wi‑Fi. \
-            Deep seeks pull more data from cloud before export starts.
+            Timed out opening video from pCloud. Try **Wi‑Fi** for export, wait for stronger cellular, \
+            or use PC Run-SegmentCopy.ps1 (see FEASIBILITY.md). Check log for Prefetch / retry lines.
             """
         }
         return error.localizedDescription

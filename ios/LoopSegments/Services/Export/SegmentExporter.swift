@@ -38,22 +38,25 @@ final class SegmentExporter {
         isCancelled = false
         cancelLock.unlock()
 
-        let loader = WebDAVResourceLoader(
-            remoteURL: inputURL,
-            authorization: authorizationHeader,
-            log: logHandler
-        )
-        let asset = AVURLAsset(
-            url: loader.customAssetURL,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-        )
-        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
-
         if seekMs >= 10 * 60 * 1000 {
             logHandler("Deep seek (\(seekMs / 60_000) min) — pCloud may need extra reads; try 0 min first on cellular")
         }
-        logHandler("Loading asset from pCloud…")
-        _ = try await asset.load(.isPlayable)
+
+        let rangeCache = WebDAVRangeCache()
+        logHandler("Prefetching from pCloud (size + MP4 index)…")
+        try await WebDAVPrefetch.warmUp(
+            remoteURL: inputURL,
+            authorization: authorizationHeader,
+            cache: rangeCache,
+            log: logHandler
+        )
+
+        let asset = try await openPlayableAsset(
+            inputURL: inputURL,
+            authorizationHeader: authorizationHeader,
+            rangeCache: rangeCache,
+            logHandler: logHandler
+        )
         let duration = try await asset.load(.duration)
         let durationMs = Int64(CMTimeGetSeconds(duration) * 1000)
 
@@ -227,6 +230,43 @@ final class SegmentExporter {
 
         guard let ctx = writerContext else { return }
         try ctx.append(sample, track: track)
+    }
+
+    private func openPlayableAsset(
+        inputURL: URL,
+        authorizationHeader: String,
+        rangeCache: WebDAVRangeCache,
+        logHandler: @escaping (String) -> Void
+    ) async throws -> AVURLAsset {
+        let headerOptions: [String: Any] = [
+            AVURLAssetHTTPHeaderFieldsKey: ["Authorization": authorizationHeader],
+            AVURLAssetPreferPreciseDurationAndTimingKey: false,
+        ]
+        let directAsset = AVURLAsset(url: inputURL, options: headerOptions)
+        logHandler("Opening via system HTTP…")
+        do {
+            _ = try await directAsset.load(.isPlayable)
+            logHandler("Opened via system HTTP")
+            return directAsset
+        } catch {
+            logHandler("System HTTP: \(error.localizedDescription)")
+        }
+
+        logHandler("Opening via WebDAV loader…")
+        let loader = WebDAVResourceLoader(
+            remoteURL: inputURL,
+            authorization: authorizationHeader,
+            rangeCache: rangeCache,
+            log: logHandler
+        )
+        let asset = AVURLAsset(
+            url: loader.customAssetURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+        _ = try await asset.load(.isPlayable)
+        logHandler("Opened via WebDAV loader")
+        return asset
     }
 
     private func applyRealTimePacing(mediaSeconds: Double, wallOrigin: CFAbsoluteTime) async throws {
