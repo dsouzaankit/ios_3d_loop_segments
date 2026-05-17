@@ -44,7 +44,50 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
         writeHandle = try FileHandle(forWritingTo: fileURL)
         try applyCachedSpans(rangeCache)
+        try finalizeSparseLayout()
         startBackgroundDownload()
+    }
+
+    /// Sparse temp must report full remote size so AVFoundation can read `moov` at EOF.
+    private func finalizeSparseLayout() throws {
+        try writeHandle?.truncate(atOffset: UInt64(totalLength))
+        try writeHandle?.synchronize()
+        let onDisk = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?
+            .int64Value ?? 0
+        lock.lock()
+        let hasTail = tailOnDisk
+        let contiguous = contiguousEnd
+        lock.unlock()
+        log(
+            "Temp sparse layout — file size \(formatBytes(onDisk)), contiguous from 0: \(formatBytes(contiguous)), index tail: \(hasTail ? "yes" : "no")"
+        )
+        if !hasTail {
+            log("Warning: MP4 index not on disk yet — track probe may use pCloud")
+        }
+    }
+
+    /// Write index tail from pCloud when prefetch did not land on disk.
+    func ensureIndexTailOnDisk() async throws {
+        lock.lock()
+        let hasTail = tailOnDisk
+        lock.unlock()
+        guard !hasTail else { return }
+
+        let tailLen = min(2 * 1024 * 1024, totalLength)
+        let tailStart = max(0, totalLength - tailLen)
+        log("Fetching MP4 index tail from pCloud (\(formatBytes(totalLength - tailStart)))…")
+        let auth = authorizationProvider()
+        let data = try await Self.fetchRange(
+            remoteURL: remoteURL,
+            authorization: auth,
+            offset: tailStart,
+            endInclusive: totalLength - 1
+        )
+        try write(data, at: tailStart)
+        lock.lock()
+        tailOnDisk = true
+        lock.unlock()
+        try writeHandle?.synchronize()
     }
 
     deinit {

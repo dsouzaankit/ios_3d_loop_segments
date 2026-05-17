@@ -124,9 +124,12 @@ final class SegmentExporter {
             )
             tempDownload = downloader
             downloader.logDownloadStarted()
-            logHandler("Probing duration/codecs from temp file (prefetch head + MP4 index at EOF)…")
-            (durationSeconds, videoFormat, audioFormat) = try await probeLocalMetadata(
+            try await downloader.ensureIndexTailOnDisk()
+            (durationSeconds, videoFormat, audioFormat) = try await probeMetadataPreferLocal(
                 fileURL: downloader.fileURL,
+                inputURL: inputURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
                 log: logHandler
             )
         }
@@ -414,17 +417,48 @@ final class SegmentExporter {
         return asset
     }
 
+    private func probeMetadataPreferLocal(
+        fileURL: URL,
+        inputURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        log: @escaping (String) -> Void
+    ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
+        log("Probing duration/codecs from temp file (prefetch head + MP4 index at EOF)…")
+        do {
+            return try await probeLocalMetadata(fileURL: fileURL, log: log)
+        } catch SegmentExporterError.noVideoTrack {
+            log("Local temp had no video track — probing via pCloud (prefetch cache, no full download)")
+        }
+        let streamingAsset = try await openStreamingAsset(
+            inputURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            logHandler: log
+        )
+        defer {
+            retainedWebDAVLoader?.cancelOutstandingWork()
+            retainedAsset?.resourceLoader.setDelegate(nil, queue: nil)
+            retainedWebDAVLoader = nil
+            retainedAsset = nil
+        }
+        return try await probeStreamMetadata(asset: streamingAsset, log: log)
+    }
+
     private func probeLocalMetadata(
         fileURL: URL,
         log: @escaping (String) -> Void
     ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
         let asset = AVURLAsset(
             url: fileURL,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+            options: [
+                AVURLAssetPreferPreciseDurationAndTimingKey: false,
+                AVURLAssetOutOfBandMIMETypeKey: "video/mp4",
+            ]
         )
         var lastLog = CFAbsoluteTimeGetCurrent()
-        for attempt in 1 ... 90 {
-            if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
+        for attempt in 1 ... 60 {
+            if let videoTrack = try? await firstVideoTrack(in: asset) {
                 let probed = try await probeMediaMetadata(asset: asset, videoTrack: videoTrack, log: log)
                 log("Opened for export (local temp index, attempt \(attempt))")
                 return probed
@@ -439,6 +473,14 @@ final class SegmentExporter {
         throw SegmentExporterError.noVideoTrack
     }
 
+    private func firstVideoTrack(in asset: AVURLAsset) async throws -> AVAssetTrack? {
+        if let track = try await asset.loadTracks(withMediaType: .video).first {
+            return track
+        }
+        let tracks = try await asset.load(.tracks)
+        return tracks.first { $0.mediaType == .video }
+    }
+
     /// Low-disk fallback: retry track load over pCloud (never requires full-file `isPlayable`).
     private func probeStreamMetadata(
         asset: AVURLAsset,
@@ -446,7 +488,7 @@ final class SegmentExporter {
     ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
         var lastLog = CFAbsoluteTimeGetCurrent()
         for attempt in 1 ... 120 {
-            if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
+            if let videoTrack = try? await firstVideoTrack(in: asset) {
                 let probed = try await probeMediaMetadata(asset: asset, videoTrack: videoTrack, log: log)
                 log("Opened for export (pCloud index, attempt \(attempt))")
                 return probed

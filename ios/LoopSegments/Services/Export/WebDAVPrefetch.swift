@@ -35,6 +35,22 @@ enum WebDAVPrefetch {
         }
 
         let firstEnd = min(headPrefixBytes, length) - 1
+        let tailLen = min(tailSuffixBytes, length)
+        let tailStart = max(0, length - tailLen)
+
+        // Index at EOF first — required for large moov-at-end files to expose video tracks.
+        if tailStart > firstEnd + 1 {
+            log?("Prefetch: downloading last \(formatBytes(length - tailStart)) (MP4 index at EOF)")
+            let tailData = try await fetchRange(
+                remoteURL: remoteURL,
+                authorization: authorization,
+                offset: tailStart,
+                endInclusive: length - 1,
+                log: log
+            )
+            cache.storeRange(offset: tailStart, data: tailData, isIndexTail: true)
+        }
+
         if firstEnd >= 0 {
             log?("Prefetch: downloading first \(formatBytes(firstEnd + 1))")
             let data = try await fetchRange(
@@ -47,21 +63,10 @@ enum WebDAVPrefetch {
             cache.storeRange(offset: 0, data: data)
         }
 
-        let tailLen = min(tailSuffixBytes, length)
-        let tailStart = max(0, length - tailLen)
         if tailStart <= firstEnd + 1 {
             log?("Prefetch: complete (file smaller than head+tail window)")
             return
         }
-        log?("Prefetch: downloading last \(formatBytes(length - tailStart)) (MP4 index at EOF)")
-        let tailData = try await fetchRange(
-            remoteURL: remoteURL,
-            authorization: authorization,
-            offset: tailStart,
-            endInclusive: length - 1,
-            log: log
-        )
-        cache.storeRange(offset: tailStart, data: tailData)
         log?("Prefetch: complete — \(formatBytes(length)) file, head + index cached for export")
     }
 

@@ -29,13 +29,17 @@ final class WebDAVRangeCache: @unchecked Sendable {
         spans.reduce(0) { $0 + $1.data.count }
     }
 
-    func storeRange(offset: Int64, data: Data) {
+    /// `isIndexTail` — always keep MP4 `moov` at EOF even if cache is full (dropping it breaks track discovery).
+    func storeRange(offset: Int64, data: Data, isIndexTail: Bool = false) {
         guard !data.isEmpty else { return }
         let end = offset + Int64(data.count) - 1
         lock.lock()
         defer { lock.unlock() }
-        if storedByteCountLocked() + data.count > maxStoredBytes {
+        if !isIndexTail, storedByteCountLocked() + data.count > maxStoredBytes {
             return
+        }
+        if isIndexTail, storedByteCountLocked() + data.count > maxStoredBytes {
+            spans.removeAll()
         }
         spans.append((offset, end, data))
     }
