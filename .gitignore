@@ -21,3 +21,4 @@ desktop.ini
 ios/build artifacts/
 *.ipa
 *.zip
+ios/logs/

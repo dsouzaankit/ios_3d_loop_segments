@@ -239,7 +239,7 @@ final class SegmentExporter {
         logHandler: @escaping (String) -> Void
     ) async throws -> AVURLAsset {
         let headerOptions: [String: Any] = [
-            AVURLAssetHTTPHeaderFieldsKey: ["Authorization": authorizationHeader],
+            "AVURLAssetHTTPHeaderFieldsKey": ["Authorization": authorizationHeader],
             AVURLAssetPreferPreciseDurationAndTimingKey: false,
         ]
         let directAsset = AVURLAsset(url: inputURL, options: headerOptions)

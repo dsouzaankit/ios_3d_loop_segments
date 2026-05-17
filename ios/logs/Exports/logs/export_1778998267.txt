@@ -1,9 +1,0 @@
-Loop Segments export log
-Started: 2026-05-17T06:11:07Z
-File: atkg-Gracie-Gates-skirt-pov.mp4
-Path: /atk_media/atkg-Gracie-Gates-skirt-pov.mp4
-Seek ms: 600000
-2026-05-17T06:11:07Z Export started
-2026-05-17T06:11:07Z Loading asset…
-2026-05-17T06:11:36Z ERROR: The request timed out.
-2026-05-17T06:11:36Z --- failed ---
