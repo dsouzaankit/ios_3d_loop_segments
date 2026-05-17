@@ -15,6 +15,9 @@ enum WebDAVPrefetch {
         let length = try await fetchContentLength(remoteURL: remoteURL, authorization: authorization)
         cache.storeContentLength(length)
         log?("Prefetch: file size \(length) bytes")
+        if length > 0, length < 4096 {
+            throw WebDAVResourceLoaderError.suspiciousContentLength(length)
+        }
 
         if length <= 0 { return }
 
@@ -54,7 +57,9 @@ enum WebDAVPrefetch {
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
-        if let len = contentLength(from: http) { return len }
+        if (200 ... 299).contains(http.statusCode), let len = contentLength(from: http) {
+            return len
+        }
 
         let (_, probeResponse) = try await sessionData(for: rangeRequest(
             remoteURL: remoteURL,
@@ -62,9 +67,13 @@ enum WebDAVPrefetch {
             offset: 0,
             endInclusive: 0
         ))
-        if let http = probeResponse as? HTTPURLResponse, let len = contentLength(from: http) {
-            return len
+        guard let probeHttp = probeResponse as? HTTPURLResponse else {
+            throw WebDAVResourceLoaderError.invalidResponse
         }
+        guard (200 ... 299).contains(probeHttp.statusCode) || probeHttp.statusCode == 206 else {
+            throw WebDAVResourceLoaderError.httpStatus(probeHttp.statusCode)
+        }
+        if let len = contentLength(from: probeHttp) { return len }
         throw WebDAVResourceLoaderError.missingContentLength
     }
 

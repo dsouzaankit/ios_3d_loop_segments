@@ -9,8 +9,9 @@ Three separate networks. **No Personal Hotspot** required for the iPhone path be
 │  iPhone (cellular LTE/5G only — Wi‑Fi off is OK for export)      │
 │    Loop Segments app → pCloud WebDAV (internet)                 │
 │    Writes Documents/Exports/3d_op_00.mp4, 3d_op_01.mp4          │
+│    Optional: copies each finished segment → Photos album          │
 └────────────────────────────┬────────────────────────────────────┘
-                             │ USB cable (file transfer only)
+                             │ USB (Exports and/or Photos)
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Windows PC                                                     │
@@ -44,6 +45,7 @@ Install via **TestFlight** or sideload (AltStore, etc.) with an Apple Developer 
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
 5. Keep the app in the foreground until both `3d_op_00.mp4` and `3d_op_01.mp4` exist (Files → Loop Segments → Exports).
+6. **Photos (v1.2+):** On the export screen, leave **Save segments to Photos** on. Each finished segment is copied to the **Loop Segments** album (slot 0/1 rotate — old clip for that slot is removed). iOS does not allow apps to write to **DCIM**; Photos is the supported path and is what Windows often lists as monthly folders (`202605_a`, etc.).
 
 Large files on cellular: expect long runs; export paces reads in real time.
 
@@ -51,7 +53,11 @@ Large files on cellular: expect long runs; export paces reads in real time.
 
 ## 3. USB transfer to the PC (Apple Devices)
 
-Apple Devices does **not** mount the iPhone app as a drive path. You **manually** choose a **Windows output folder** when saving from **Loop Segments → Exports**. There is no true auto-sync from Apple.
+Apple Devices does **not** mount the iPhone app as a drive path. You **manually** choose a **Windows output folder** when saving from **Loop Segments → Exports** or import from **Photos** (if you used Photos export). There is no true auto-sync from Apple.
+
+**Photos path:** Apple Devices → import photos/videos → look for recent items from the **Loop Segments** album, or browse Internal Storage photo folders. Still manual per save/import — rotating segments do not auto-update the PC DLNA folder.
+
+**MTP script (experimental):** `windows\Sync-FromIPhonePhotos.ps1` walks **This PC → Apple iPhone → Internal Storage** (DCIM and folders like `202605_a`), copies the **newest** `.mp4`/`.mov` files via `Shell.Application.CopyHere`, and renames them to `3d_op_00.mp4` / `3d_op_01.mp4` on the PC. Run `-Discover` first. **Watch mode:** `.\Sync-FromIPhonePhotos.ps1 -Watch` (every 60s until Enter) or double-click `Sync-FromIPhonePhotos-Watch.cmd`. This is fragile if your camera roll has other recent videos.
 
 ### Simplest (one step)
 

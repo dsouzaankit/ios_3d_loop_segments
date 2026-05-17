@@ -34,8 +34,7 @@ final class WebDAVClient {
         if normalized == "/" {
             return credentials.region.baseURL
         }
-        let trimmed = String(normalized.dropFirst())
-        return credentials.region.baseURL.appendingPathComponent(trimmed)
+        return WebDAVURLBuilder.fileURL(href: normalized, baseURL: credentials.region.baseURL)
     }
 }
 

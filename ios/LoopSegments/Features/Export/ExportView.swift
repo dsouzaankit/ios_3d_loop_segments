@@ -38,18 +38,25 @@ struct ExportView: View {
                     }
                 }
             }
+            Section("Photos (optional — PC camera roll)") {
+                Toggle("Save segments to Photos", isOn: Binding(
+                    get: { PhotosSegmentPublisher.isEnabled },
+                    set: { PhotosSegmentPublisher.isEnabled = $0 }
+                ))
+                Text("Each finished 60s segment is copied to the “Loop Segments” album (replaces the previous slot 0 or 1). Windows may show these under iPhone photo folders in Apple Devices — not the app Exports folder. Apps cannot write to DCIM directly.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
-                Text("1. Export creates 3d_op_00.mp4 / 3d_op_01.mp4 here")
+                Text("1. Export creates 3d_op_00.mp4 / 3d_op_01.mp4 in app storage")
                 Text(logHint.isEmpty ? "Logs: Exports/export_latest.txt" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("2. Plug iPhone into Windows PC (USB)")
-                Text("3. Run Sync-IphoneSegments.ps1 on PC")
-                Text("4. Play from PC DLNA server on WLAN")
+                Text("2. With Photos on: also check Loop Segments album on PC (Apple Devices → Photos)")
+                Text("3. Or Apple Devices → Loop Segments → Exports → Save to PC")
+                Text("4. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

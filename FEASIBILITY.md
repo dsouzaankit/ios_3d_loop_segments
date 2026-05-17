@@ -13,6 +13,7 @@ For a **rolling 2×60s buffer** meant to feed **PC DLNA**, you need the PC folde
 | pCloud browse + seek + export on **cellular** | Done (AVFoundation) |
 | Two files `3d_op_00.mp4` / `3d_op_01.mp4` on the phone | Done (overwrite every ~60s) |
 | **PC DLNA folder updated automatically** | **Not solved** with USB + Apple Devices alone |
+| Copy segments to **Photos** (v1.2, “Loop Segments” album) | Done — may appear under PC photo import; still **manual** import, not DCIM write |
 
 ## Viable production paths
 

@@ -24,9 +24,7 @@ struct WebDAVItem: Identifiable, Hashable {
     }
 
     func mediaURL(credentials: WebDAVCredentials) -> URL {
-        var base = credentials.region.baseURL
-        let path = href.hasPrefix("/") ? String(href.dropFirst()) : href
-        return base.appendingPathComponent(path)
+        WebDAVURLBuilder.fileURL(href: href, baseURL: credentials.region.baseURL)
     }
 }
 

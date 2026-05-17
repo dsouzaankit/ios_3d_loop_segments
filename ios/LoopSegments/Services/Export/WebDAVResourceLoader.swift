@@ -276,6 +276,7 @@ enum WebDAVResourceLoaderError: LocalizedError {
     case invalidResponse
     case httpStatus(Int)
     case missingContentLength
+    case suspiciousContentLength(Int64)
 
     var errorDescription: String? {
         switch self {
@@ -285,6 +286,8 @@ enum WebDAVResourceLoaderError: LocalizedError {
             return "pCloud media request failed (HTTP \(code))."
         case .missingContentLength:
             return "Could not determine file size from pCloud."
+        case .suspiciousContentLength(let bytes):
+            return "pCloud returned \(bytes) bytes for this file (not a video). Check the path or try re-browsing the folder."
         }
     }
 }

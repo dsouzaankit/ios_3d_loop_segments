@@ -136,8 +136,10 @@ final class SegmentExporter {
             return ctx
         }
 
-        func finishSegment(_ ctx: SegmentWriterContext) async throws {
+        func finishSegment(_ ctx: SegmentWriterContext, slot: Int) async throws {
             try await ctx.finish()
+            let url = ExportPaths.segmentURL(index: slot)
+            await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: url, log: logHandler)
         }
 
         while true {
@@ -184,7 +186,7 @@ final class SegmentExporter {
         }
 
         if let ctx = writerContext {
-            try await finishSegment(ctx)
+            try await finishSegment(ctx, slot: segmentIndex)
         }
 
         logHandler(reachedEnd ? "Reached end of file." : "Export stopped.")
@@ -201,7 +203,7 @@ final class SegmentExporter {
         segmentAnchor: inout CMTime?,
         lastMediaTimeMs: inout Int64,
         beginSegment: (CMTime) throws -> SegmentWriterContext,
-        finishSegment: (SegmentWriterContext) async throws -> Void
+        finishSegment: (SegmentWriterContext, Int) async throws -> Void
     ) async throws {
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
         lastMediaTimeMs = Int64(CMTimeGetSeconds(pts) * 1000)
@@ -220,7 +222,7 @@ final class SegmentExporter {
             let segmentElapsed = CMTimeGetSeconds(CMTimeSubtract(pts, anchor))
             if segmentElapsed >= Self.segmentDurationSeconds {
                 if let ctx = writerContext {
-                    try await finishSegment(ctx)
+                    try await finishSegment(ctx, slot: segmentIndex)
                 }
                 segmentIndex = (segmentIndex + 1) % Self.segmentFileCount
                 writerContext = try beginSegment(pts)

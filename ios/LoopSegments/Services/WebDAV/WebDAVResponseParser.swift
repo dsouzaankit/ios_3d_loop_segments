@@ -87,7 +87,7 @@ enum WebDAVResponseParser {
 
         private func flushCurrent() {
             guard !currentHref.isEmpty else { return }
-            let displayName = (currentHref as NSString).lastPathComponent
+            let displayName = WebDAVURLBuilder.displayName(fromHref: currentHref)
             guard !displayName.isEmpty, displayName != "/" else { return }
             items.append(WebDAVItem(
                 href: currentHref,

@@ -42,6 +42,7 @@ final class ExportCoordinator {
         defer { BackgroundTaskKeeper.end() }
 
         logHandler("Export started")
+        logHandler("Media URL: \(inputURL.absoluteString)")
 
         do {
             let result = try await exporter.run(
