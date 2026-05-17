@@ -14,6 +14,8 @@ final class SegmentExporter {
 
     private let cancelLock = NSLock()
     private var isCancelled = false
+    /// AVFoundation does not retain the resource-loader delegate; keep alive for the whole export.
+    private var retainedWebDAVLoader: WebDAVResourceLoader?
 
     func cancel() {
         cancelLock.lock()
@@ -54,6 +56,7 @@ final class SegmentExporter {
         cancelLock.lock()
         isCancelled = false
         cancelLock.unlock()
+        defer { retainedWebDAVLoader = nil }
 
         if seekMs >= 10 * 60 * 1000 {
             logHandler("Deep seek (\(seekMs / 60_000) min) — pCloud may need extra reads; try 0 min first on cellular")
@@ -181,10 +184,12 @@ final class SegmentExporter {
                 break
             }
 
-            let next = candidates.min {
+            guard let next = candidates.min(by: {
                 CMSampleBufferGetPresentationTimeStamp($0.sample) <
                     CMSampleBufferGetPresentationTimeStamp($1.sample)
-            }!
+            }) else {
+                break
+            }
 
             try await processSample(
                 next.sample,
@@ -274,6 +279,7 @@ final class SegmentExporter {
             rangeCache: rangeCache,
             log: logHandler
         )
+        retainedWebDAVLoader = loader
         let asset = AVURLAsset(
             url: loader.customAssetURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
