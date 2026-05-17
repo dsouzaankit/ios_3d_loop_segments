@@ -18,7 +18,8 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private var cachedContentLength: Int64?
     private let trustedContentLength: Int64?
     private var lengthResolveTask: Task<Int64, Error>?
-    private var activeFillTask: Task<Void, Never>?
+    /// AVFoundation often issues several loading requests at once (content info + ranges). Cancelling the previous request caused multi‑GB reads to abort and export failed with “Could not start reading”.
+    private var activeFillTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     private let stateLock = NSLock()
 
     convenience init(
@@ -58,8 +59,10 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     /// Stop in-flight probe reads when switching to local temp export.
     func cancelOutstandingWork() {
         stateLock.lock()
-        activeFillTask?.cancel()
-        activeFillTask = nil
+        for task in activeFillTasks.values {
+            task.cancel()
+        }
+        activeFillTasks.removeAll()
         lengthResolveTask?.cancel()
         lengthResolveTask = nil
         stateLock.unlock()
@@ -78,13 +81,16 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         _ resourceLoader: AVAssetResourceLoader,
         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
     ) -> Bool {
+        let requestID = ObjectIdentifier(loadingRequest)
         let task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             await self.fill(loadingRequest)
+            self.stateLock.lock()
+            self.activeFillTasks.removeValue(forKey: requestID)
+            self.stateLock.unlock()
         }
         stateLock.lock()
-        activeFillTask?.cancel()
-        activeFillTask = task
+        activeFillTasks[requestID] = task
         stateLock.unlock()
         return true
     }
@@ -93,9 +99,9 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         _ resourceLoader: AVAssetResourceLoader,
         didCancel loadingRequest: AVAssetResourceLoadingRequest
     ) {
+        let requestID = ObjectIdentifier(loadingRequest)
         stateLock.lock()
-        activeFillTask?.cancel()
-        activeFillTask = nil
+        activeFillTasks.removeValue(forKey: requestID)?.cancel()
         stateLock.unlock()
     }
 
@@ -163,8 +169,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         let bytesRemaining = fileLength - offset
         let totalLength: Int64
         if dataRequest.requestsAllDataToEndOfResource {
-            // Never satisfy “to EOF” in one callback — AV may ask for 10+ GB and jetsam/cancel export.
-            totalLength = min(bytesRemaining, Self.maxRangeChunkBytes)
+            totalLength = bytesRemaining
         } else {
             let requested = Int64(dataRequest.requestedLength)
             guard requested > 0 else { return }
@@ -174,7 +179,8 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
         var cursor = offset
         let end = offset + totalLength - 1
-        if totalLength > Self.maxRangeChunkBytes {
+        let largeRequest = totalLength > Self.maxRangeChunkBytes
+        if largeRequest {
             logLine?(
                 "pCloud read \(offset)-\(end) (\(formatBytes(totalLength)) of \(formatBytes(fileLength)), \(Self.maxRangeChunkBytes / 1024) KiB chunks)"
             )
@@ -183,6 +189,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         }
 
         var chunksDone = 0
+        var lastProgressLog = 0
         while cursor <= end {
             if await onLoaderQueue({ loadingRequest.isCancelled }) || Task.isCancelled {
                 return
@@ -195,6 +202,12 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             }
             cursor = chunkEnd + 1
             chunksDone += 1
+            if largeRequest, chunksDone - lastProgressLog >= 128 {
+                lastProgressLog = chunksDone
+                let done = cursor - offset
+                let pct = Int(done * 100 / totalLength)
+                logLine?("pCloud read progress — \(pct)% (\(formatBytes(done)) / \(formatBytes(totalLength)))")
+            }
             if chunksDone % 16 == 0 {
                 await Task.yield()
             }

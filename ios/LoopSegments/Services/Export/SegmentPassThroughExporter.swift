@@ -43,10 +43,10 @@ enum SegmentPassThroughExporter {
 
         guard reader.startReading() else {
             if let readerError = reader.error {
-                log("Local reader failed: \(readerError.localizedDescription)")
+                log("Reader failed (\(sourceLabel)): \(readerError.localizedDescription)")
                 throw SegmentExporterError.readerFailed(readerError)
             }
-            log("Local reader could not start — temp file may still be sparse; wait for download % or seek 0 min")
+            log("Reader could not start (\(sourceLabel)) — sparse temp may need more download, or pCloud range reads were interrupted")
             throw SegmentExporterError.readerSetupFailed
         }
 

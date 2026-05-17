@@ -65,7 +65,7 @@ struct ExportView: View {
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
-                Text("1. Files over ~1.5 GB stream each minute from pCloud (no full copy). Smaller files use a temp copy.")
+                Text("1. Large files use a sparse temp copy (only bytes needed per minute, not the full file).")
                 Text("2. Segments stage in Exports, then 3d_op_00/01 publish once per ~60s wall time (DLNA-safe)")
                 Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)

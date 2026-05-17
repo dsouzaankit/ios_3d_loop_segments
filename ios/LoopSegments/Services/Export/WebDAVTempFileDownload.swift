@@ -271,8 +271,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
         let free = freeNumber.int64Value
         let margin: Int64 = 128 * 1024 * 1024
-        if free < needed + margin {
-            throw SegmentExporterError.insufficientDiskSpace(needed: needed, available: max(0, free))
+        // Sparse temp: we never require the full remote size on disk up front.
+        let reserveCap: Int64 = 900 * 1024 * 1024
+        let reserve = min(needed, reserveCap) + margin
+        if free < reserve {
+            throw SegmentExporterError.insufficientDiskSpace(needed: reserve, available: max(0, free))
         }
     }
 

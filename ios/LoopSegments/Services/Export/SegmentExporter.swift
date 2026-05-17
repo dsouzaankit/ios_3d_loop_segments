@@ -134,6 +134,11 @@ final class SegmentExporter {
         releaseStreamingProbe(streamFromPCloud: streamFromPCloud, log: logHandler)
 
         try Self.ensureExportDiskSpace(fileBytes: fileSize, streaming: streamFromPCloud)
+        if fileSize > streamOnlyThresholdBytes, !streamFromPCloud {
+            logHandler(
+                "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
+            )
+        }
 
         let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
@@ -293,10 +298,11 @@ final class SegmentExporter {
     private static let diskMarginBytes: Int64 = 384 * 1024 * 1024
     private static let streamingWorkingSetBytes: Int64 = 700 * 1024 * 1024
 
+    /// Direct AVFoundation-on-WebDAV only when there is not enough room even for a sparse partial temp file.
     private static func shouldStreamSegments(fileBytes: Int64) -> Bool {
         guard fileBytes > 0 else { return false }
-        if fileBytes > streamOnlyThresholdBytes { return true }
-        return !hasDiskForFullCopy(fileBytes: fileBytes)
+        guard let free = freeDiskBytes() else { return false }
+        return free < streamingWorkingSetBytes + diskMarginBytes
     }
 
     private static func hasDiskForFullCopy(fileBytes: Int64) -> Bool {
@@ -410,6 +416,7 @@ final class SegmentExporter {
         retainedAsset = asset
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
         guard try await asset.load(.isPlayable) else {
+            logHandler("pCloud probe: file not playable yet (parallel reads or index still loading — retry)")
             throw SegmentExporterError.readerSetupFailed
         }
         logHandler("Opened for export (pCloud probe)")
@@ -626,7 +633,7 @@ enum SegmentExporterError: LocalizedError {
         case .insufficientDiskSpace(let needed, let available):
             let needMB = needed / (1024 * 1024)
             let haveMB = available / (1024 * 1024)
-            return "Need ~\(needMB) MB free in Exports (device storage); only ~\(haveMB) MB available. Free space on iPhone, or use a file under ~1.5 GB for full temp copy."
+            return "Need ~\(needMB) MB free on iPhone storage; only ~\(haveMB) MB available. Free space in Settings → General → iPhone Storage."
         case .noKeyframeInWindow:
             return "Could not start segment on a keyframe — wait for more download or use seek 0 min."
         case .segmentOutputTooSmall(let bytes):
