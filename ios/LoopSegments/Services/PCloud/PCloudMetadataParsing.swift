@@ -107,7 +107,7 @@ enum PCloudMetadataParsing {
         rows.reserveCapacity(items.count)
         for item in items {
             if let row = metadataDictionary(item) {
-                rows.append(normalizeSearchMetadata(row))
+                rows.append(Self.normalizeSearchMetadata(row))
                 continue
             }
             if let fileId = int64Field(item) {
@@ -117,18 +117,48 @@ enum PCloudMetadataParsing {
         return rows
     }
 
-    private static func normalizeSearchMetadata(_ row: [String: Any]) -> [String: Any] {
+    /// Normalize web search rows (`id` is often `d&lt;folderid&gt;` or `f&lt;fileid&gt;`, not a bare integer).
+    static func normalizeSearchMetadata(_ row: [String: Any]) -> [String: Any] {
         var copy = row
-        guard copy["fileid"] == nil, copy["folderid"] == nil, let id = int64Field(row["id"]),
-              row["name"] != nil else {
-            return copy
+        let ids = resolvedIds(from: copy)
+        if let folderId = ids.folderId {
+            copy["folderid"] = folderId
         }
-        if boolField(row["isfolder"]) {
-            copy["folderid"] = id
-        } else {
-            copy["fileid"] = id
+        if let fileId = ids.fileId {
+            copy["fileid"] = fileId
         }
         return copy
+    }
+
+    static func resolvedIds(from metadata: [String: Any]) -> (fileId: Int64?, folderId: Int64?) {
+        var fileId = int64Field(metadata["fileid"])
+        var folderId = int64Field(metadata["folderid"])
+        if let prefixed = prefixedItemId(metadata["id"]) {
+            if prefixed.isFolder {
+                folderId = folderId ?? prefixed.id
+            } else {
+                fileId = fileId ?? prefixed.id
+            }
+        }
+        if fileId == nil, folderId == nil, boolField(metadata["isfolder"]) {
+            folderId = int64Field(metadata["id"])
+        } else if fileId == nil, folderId == nil {
+            fileId = int64Field(metadata["id"])
+        }
+        return (fileId, folderId)
+    }
+
+    private static func prefixedItemId(_ value: Any?) -> (id: Int64, isFolder: Bool)? {
+        guard let raw = value as? String else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let first = trimmed.first, trimmed.count > 1 else { return nil }
+        let digits = trimmed.dropFirst()
+        guard let id = Int64(digits) else { return nil }
+        switch first {
+        case "d": return (id, true)
+        case "f": return (id, false)
+        default: return nil
+        }
     }
 
     private static func metadataDictionary(_ value: Any) -> [String: Any]? {
@@ -207,6 +237,11 @@ enum PCloudMetadataParsing {
         case let n as Int64: return n
         case let n as Int: return Int64(n)
         case let n as NSNumber: return n.int64Value
+        case let text as String:
+            if let prefixed = prefixedItemId(text) { return prefixed.id }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, let n = Int64(trimmed) else { return nil }
+            return n
         default: return nil
         }
     }
