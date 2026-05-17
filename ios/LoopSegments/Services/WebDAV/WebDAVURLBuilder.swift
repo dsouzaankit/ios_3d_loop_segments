@@ -39,29 +39,40 @@ enum WebDAVURLBuilder {
         return leaf.removingPercentEncoding ?? leaf
     }
 
-    /// Combine PROPFIND `href` with the directory that was listed (fixes relative `subdir/` entries).
-    static func resolveHref(_ href: String, relativeTo listingPath: String) -> String {
+    /// Resolve PROPFIND `href` against the URL that was listed (RFC 3986 — handles `remote.php/dav/...` paths).
+    static func resolveHref(_ href: String, relativeTo listingURL: URL) -> String {
         let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.contains("://") {
-            return normalizedHrefPath(trimmed)
+        guard !trimmed.isEmpty else { return "/" }
+
+        let resolved: URL
+        if let absolute = URL(string: trimmed), absolute.scheme != nil {
+            resolved = absolute
+        } else if let relative = URL(string: trimmed, relativeTo: listingURL) {
+            resolved = relative
+        } else if trimmed.hasPrefix("/") {
+            return canonicalBrowsePath(trimmed)
+        } else {
+            return canonicalBrowsePath("/\(trimmed)")
         }
 
-        if trimmed.hasPrefix("/") {
-            return normalizedHrefPath(trimmed)
+        var path = resolved.path
+        if path.isEmpty { path = "/" }
+        if let query = resolved.query, !query.isEmpty {
+            path += "?\(query)"
         }
+        return path
+    }
 
-        var base = normalizedHrefPath(listingPath)
-        if base == "/" {
-            return normalizedHrefPath("/\(trimmed)")
-        }
-        if !base.hasSuffix("/") {
-            base += "/"
-        }
-        return normalizedHrefPath(base + trimmed)
+    /// Path used in `pathStack` / PROPFIND (`/remote.php/dav/files/.../folder/`).
+    static func canonicalBrowsePath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "/" else { return "/" }
+        if trimmed.hasPrefix("/") { return trimmed }
+        return "/\(trimmed)"
     }
 
     static func directoryListingPath(_ path: String) -> String {
-        let normalized = normalizedHrefPath(path)
+        let normalized = canonicalBrowsePath(normalizedHrefPath(path))
         if normalized == "/" { return "/" }
         return normalized.hasSuffix("/") ? normalized : normalized + "/"
     }

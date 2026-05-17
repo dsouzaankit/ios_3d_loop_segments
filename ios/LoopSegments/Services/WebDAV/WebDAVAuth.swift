@@ -7,7 +7,9 @@ enum WebDAVAuth {
     static func provider(fallback: WebDAVCredentials) -> WebDAVAuthorizationProvider {
         let store = CredentialStore()
         return {
-            if let loaded = store.load() {
+            if let loaded = store.load(account: fallback.email),
+               loaded.region == fallback.region,
+               !loaded.password.isEmpty {
                 return loaded.authorizationHeaderValue
             }
             return fallback.authorizationHeaderValue

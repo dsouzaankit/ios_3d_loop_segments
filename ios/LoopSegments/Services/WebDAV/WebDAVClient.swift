@@ -8,17 +8,29 @@ final class WebDAVClient {
     }
 
     func list(path: String) async throws -> [WebDAVItem] {
-        let url = resolveURL(for: path)
-        var request = URLRequest(url: url)
+        try await list(path: path, credentials: credentials, retriedAuth: false)
+    }
+
+    private func list(
+        path: String,
+        credentials: WebDAVCredentials,
+        retriedAuth: Bool
+    ) async throws -> [WebDAVItem] {
+        let listingURL = resolveURL(for: path)
+        var request = URLRequest(url: listingURL)
         request.httpMethod = "PROPFIND"
         request.setValue("1", forHTTPHeaderField: "Depth")
         request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
-        let auth = WebDAVAuth.provider(fallback: credentials)
-        request.setValue(auth(), forHTTPHeaderField: "Authorization")
+        request.setValue(credentials.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
 
         let (data, response) = try await WebDAVMediaSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVError.invalidResponse
+        }
+        if http.statusCode == 401, !retriedAuth,
+           let fresh = CredentialStore().load(account: credentials.email),
+           fresh.region == credentials.region {
+            return try await list(path: path, credentials: fresh, retriedAuth: true)
         }
         guard (200 ... 299).contains(http.statusCode) else {
             throw WebDAVError.httpStatus(http.statusCode)
@@ -27,7 +39,7 @@ final class WebDAVClient {
         let listingPath = WebDAVURLBuilder.directoryListingPath(path)
         let parsed = try WebDAVResponseParser.parse(data: data, baseHost: credentials.region.webDAVHost)
         return parsed.compactMap { item in
-            let resolved = WebDAVURLBuilder.resolveHref(item.href, relativeTo: listingPath)
+            let resolved = WebDAVURLBuilder.resolveHref(item.href, relativeTo: listingURL)
             if WebDAVURLBuilder.pathsEqual(resolved, listingPath) {
                 return nil
             }

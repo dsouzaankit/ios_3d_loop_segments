@@ -2,6 +2,31 @@ import Foundation
 
 /// URLSession tuned for large pCloud WebDAV reads over cellular (export).
 enum WebDAVMediaSession {
+    private final class SessionDelegate: NSObject, URLSessionTaskDelegate {
+        var credentials: WebDAVCredentials?
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            didReceive challenge: URLAuthenticationChallenge,
+            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+        ) {
+            guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodHTTPBasic,
+                  let credentials else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+            let credential = URLCredential(
+                user: credentials.email,
+                password: credentials.password,
+                persistence: .forSession
+            )
+            completionHandler(.useCredential, credential)
+        }
+    }
+
+    private static let sessionDelegate = SessionDelegate()
+
     static let shared: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 180
@@ -10,8 +35,12 @@ enum WebDAVMediaSession {
         config.allowsCellularAccess = true
         config.allowsExpensiveNetworkAccess = true
         config.allowsConstrainedNetworkAccess = true
-        return URLSession(configuration: config)
+        return URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
     }()
+
+    static func setActiveCredentials(_ credentials: WebDAVCredentials?) {
+        sessionDelegate.credentials = credentials
+    }
 
     /// Retries transient cellular drops (connection lost, timeout, etc.).
     static func data(

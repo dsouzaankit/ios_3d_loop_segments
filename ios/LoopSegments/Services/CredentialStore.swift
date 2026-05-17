@@ -17,13 +17,16 @@ final class CredentialStore {
         SecItemAdd(add as CFDictionary, nil)
     }
 
-    func load() -> WebDAVCredentials? {
-        let query: [String: Any] = [
+    func load(account email: String? = nil) -> WebDAVCredentials? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        if let email, !email.isEmpty {
+            query[kSecAttrAccount as String] = email
+        }
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess, let data = item as? Data else { return nil }

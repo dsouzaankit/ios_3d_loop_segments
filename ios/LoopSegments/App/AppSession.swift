@@ -12,6 +12,7 @@ final class AppSession: ObservableObject {
 
     init() {
         credentials = credentialStore.load()
+        WebDAVMediaSession.setActiveCredentials(credentials)
     }
 
     func signIn(region: PCloudRegion, email: String, password: String) async throws {
@@ -20,12 +21,14 @@ final class AppSession: ObservableObject {
         _ = try await client.list(path: "/")
         credentialStore.save(creds)
         credentials = creds
+        WebDAVMediaSession.setActiveCredentials(creds)
         UserDefaults.standard.set(creds.region.rawValue, forKey: "pcloud_region_last_sign_in")
     }
 
     func signOut() {
         credentialStore.clear()
         credentials = nil
+        WebDAVMediaSession.setActiveCredentials(nil)
     }
 
     func startExport(item: WebDAVItem, seekMs: Int64) async throws {
