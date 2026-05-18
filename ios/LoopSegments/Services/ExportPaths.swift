@@ -81,6 +81,38 @@ enum ExportPaths {
         }
     }
 
+    /// Remove prior export log snapshots so `export_latest.txt` / `export_progress.txt` only reflect this run.
+    static func clearLogsForNewExport(log: ((String) -> Void)? = nil) {
+        _ = exportsDirectory
+        _ = logsDirectory
+        let fm = FileManager.default
+
+        for url in [latestLogTextURL, latestLogURL, exportProgressURL] {
+            guard fm.fileExists(atPath: url.path) else { continue }
+            do {
+                try fm.removeItem(at: url)
+                log?("Cleared \(url.lastPathComponent)")
+            } catch {
+                log?("Could not clear \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        if let names = try? fm.contentsOfDirectory(atPath: exportsDirectory.path) {
+            for name in names where name.hasPrefix("export_session_") {
+                let url = exportsDirectory.appendingPathComponent(name)
+                try? fm.removeItem(at: url)
+                log?("Cleared \(name)")
+            }
+        }
+
+        if let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) {
+            for name in names where name.hasPrefix("export_") {
+                let url = logsDirectory.appendingPathComponent(name)
+                try? fm.removeItem(at: url)
+            }
+        }
+    }
+
     /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).
     static func ensureExportDirectories() {
         _ = exportsDirectory

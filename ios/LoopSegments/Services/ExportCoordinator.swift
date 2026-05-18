@@ -29,6 +29,7 @@ final class ExportCoordinator {
         }
 
         let inputURL = item.mediaURL(credentials: credentials)
+        ExportPaths.clearLogsForNewExport()
         let logWriter = try ExportLogWriter(
             itemName: item.name,
             seekMs: seekMs,
@@ -42,7 +43,7 @@ final class ExportCoordinator {
         BackgroundTaskKeeper.begin()
         defer { BackgroundTaskKeeper.end() }
 
-        logHandler("Export started")
+        logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
         logHandler("Logs: export_latest.txt, \(logWriter.sessionLogFileName), export_progress.txt (in Exports)")
         logHandler("pCloud region: \(credentials.region.displayName) (\(credentials.region.webDAVHost))")
         logHandler("Media URL: \(inputURL.absoluteString)")
