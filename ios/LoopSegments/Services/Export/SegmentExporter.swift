@@ -634,8 +634,10 @@ final class SegmentExporter {
     private static func shouldStreamFallback(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {
             switch exportError {
-            case .readerSetupFailed, .noKeyframeInWindow, .segmentOutputTooSmall:
+            case .readerSetupFailed, .segmentOutputTooSmall:
                 return true
+            case .noKeyframeInWindow, .timelineByteWindowMismatch:
+                return false
             case .readerFailed(let underlying):
                 return isSparseContainerOpenFailure(underlying)
             case .writerFailed:
@@ -1093,6 +1095,7 @@ enum SegmentExporterError: LocalizedError {
     case writerBackpressure
     case insufficientDiskSpace(needed: Int64, available: Int64)
     case noKeyframeInWindow
+    case timelineByteWindowMismatch(mediaTime: String)
     case segmentOutputTooSmall(Int64)
     case midFileTempUnreadable(mediaTime: String, underlying: String)
 
@@ -1149,6 +1152,11 @@ enum SegmentExporterError: LocalizedError {
             return "Need ~\(needMB) MB free on iPhone storage; only ~\(haveMB) MB available. Free space in Settings → General → iPhone Storage."
         case .noKeyframeInWindow:
             return "Could not start segment on a keyframe — wait for more download or use seek 0 min."
+        case .timelineByteWindowMismatch(let mediaTime):
+            return """
+            Dense bytes for \(mediaTime) did not contain that minute’s video (linear file offset estimate). \
+            Try seek 0 min for the first segment, then later minutes, or wait for a larger dense download on Wi‑Fi/cellular.
+            """
         case .segmentOutputTooSmall(let bytes):
             if bytes == 0 {
                 return "Segment window was incomplete — wait for more temp download (or seek 0 min on Wi‑Fi)."

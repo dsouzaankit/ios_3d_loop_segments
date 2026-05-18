@@ -28,7 +28,15 @@ enum SegmentPassThroughExporter {
             log("Reader could not open (\(sourceLabel)): \(error.localizedDescription)")
             throw SegmentExporterError.readerFailed(error)
         }
-        reader.timeRange = CMTimeRange(start: rangeStart, end: rangeEnd)
+        let readerLeadInSeconds = min(45.0, max(0, CMTimeGetSeconds(rangeStart)))
+        let readerStart = CMTimeSubtract(
+            rangeStart,
+            CMTime(seconds: readerLeadInSeconds, preferredTimescale: rangeStart.timescale)
+        )
+        reader.timeRange = CMTimeRange(
+            start: readerStart,
+            end: rangeEnd
+        )
 
         let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
         videoOutput.alwaysCopiesSampleData = false
@@ -71,6 +79,12 @@ enum SegmentPassThroughExporter {
         let label = sourceLabel.lowercased()
         let relaxKeyframeGating = label.contains("pcloud stream") || label.contains("sparse temp + pcloud")
         let maxKeyframeScan = relaxKeyframeGating ? 2400 : 480
+        let earliestStart = relaxKeyframeGating
+            ? CMTimeSubtract(
+                rangeStart,
+                CMTime(seconds: ExportDeliveryPolicy.maxKeyframeStartOffsetSeconds, preferredTimescale: rangeStart.timescale)
+            )
+            : rangeStart
         let minInRangeVideoSamples = 24
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         var lastSampleAt = CFAbsoluteTimeGetCurrent()
@@ -131,6 +145,12 @@ enum SegmentPassThroughExporter {
             if let heldAudio { candidates.append((.audio, heldAudio)) }
 
             if candidates.isEmpty {
+                if !startedWriter {
+                    log(
+                        "Reader ended — \(skippedBeforeRange) samples before \(formatMediaTime(rangeStart)), " +
+                            "\(skippedNonKeyframe) non-sync skipped (reader status \(reader.status.rawValue))"
+                    )
+                }
                 break
             }
 
@@ -147,7 +167,7 @@ enum SegmentPassThroughExporter {
                     heldAudio = nil
                     continue
                 }
-                if CMTimeCompare(pts, rangeStart) < 0 {
+                if CMTimeCompare(pts, earliestStart) < 0 {
                     skippedBeforeRange += 1
                     continue
                 }
@@ -206,6 +226,11 @@ enum SegmentPassThroughExporter {
             log(
                 "No segment start — skipped \(skippedBeforeRange) pre-window, \(skippedNonKeyframe) non-sync (\(sourceLabel))"
             )
+            if skippedBeforeRange > 0, skippedNonKeyframe == 0 {
+                throw SegmentExporterError.timelineByteWindowMismatch(
+                    mediaTime: formatMediaTime(rangeStart)
+                )
+            }
             throw SegmentExporterError.noKeyframeInWindow
         }
 

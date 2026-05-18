@@ -13,6 +13,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private static let downloadChunkBytes: Int64 = 2 * 1024 * 1024
     private static let progressStepPercent = 5
     private static let timelineSlackBytes: Int64 = 24 * 1024 * 1024
+    /// Extra timeline before `startSec` when mapping to file bytes (linear estimate can lag real moov sample times).
+    private static let timelineStartPrerollSeconds: Double = 45
     static let exportTimelineSlackBytes: Int64 = timelineSlackBytes
 
     let fileURL: URL
@@ -324,10 +326,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             reported: durationSeconds,
             totalBytes: totalLength
         )
-        let preroll = Self.keyframePrerollBytes(timelineStartSeconds: startSec, totalLength: totalLength)
+        let timePrerollSec = startSec > 0.5
+            ? min(Self.timelineStartPrerollSeconds, startSec)
+            : 0
+        let byteStartSec = max(0, startSec - timePrerollSec)
+        let preroll = Self.keyframePrerollBytes(timelineStartSeconds: byteStartSec, totalLength: totalLength)
         let startByte = max(
             0,
-            Int64((startSec / effectiveDuration) * Double(totalLength)) - preroll
+            Int64((byteStartSec / effectiveDuration) * Double(totalLength)) - preroll
         )
         var endByte = min(
             totalLength,
