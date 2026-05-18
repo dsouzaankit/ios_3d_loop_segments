@@ -49,6 +49,11 @@ struct BrowserView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        if isSearchActive {
+                            Text("Debug log: Files → Loop Segments → Exports → search_debug.txt")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                         if isSearchActive, searchResults.isEmpty, !isSearching {
                             ContentUnavailableView(
                                 "No results",
@@ -243,11 +248,14 @@ struct BrowserView: View {
             guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             searchResults = result.items
             searchModeNote = result.statusNote
+            SearchDebugLog.log("UI: \(result.items.count) result(s) — \(result.statusNote)")
         } catch is CancellationError {
+            SearchDebugLog.log("UI: search cancelled")
             return
         } catch {
             guard !Task.isCancelled else { return }
             guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            SearchDebugLog.log("UI error: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
         }
     }

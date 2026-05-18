@@ -34,8 +34,24 @@ final class PCloudAPIClient {
 
         let creds = resolvedCredentials()
         let json = try await performSearch(query: trimmed, credentials: creds)
+        let apiCode = PCloudAPIRequest.resultCode(json)
+        if apiCode != 0 {
+            SearchDebugLog.log(
+                "api search final result=\(apiCode) msg=\(PCloudAPIRequest.errorMessage(json) ?? "-")"
+            )
+        }
         try PCloudAPIRequest.throwIfAPIError(json)
         let raw = PCloudMetadataParsing.extractEntries(from: json)
+        SearchDebugLog.log("api extractEntries count=\(raw.count)")
+        if raw.isEmpty, apiCode == 0 {
+            SearchDebugLog.log("api empty items — sample keys: \(Array(json.keys).sorted().prefix(12).joined(separator: ","))")
+        } else if let first = raw.first {
+            let name = first["name"] as? String ?? "?"
+            let ids = PCloudMetadataParsing.resolvedIds(from: first)
+            SearchDebugLog.log(
+                "api first hit name=\(name) fileId=\(ids.fileId.map(String.init) ?? "-") folderId=\(ids.folderId.map(String.init) ?? "-") path=\(first["path"] as? String ?? "-")"
+            )
+        }
         let capped = Array(raw.prefix(Self.searchResultLimit))
         let items = try await PCloudPathResolver.resolveSearchItems(
             entries: capped,
@@ -125,8 +141,11 @@ final class PCloudAPIClient {
             Self.legacySearchParameters(query: query, token: token),
         ]
 
+        SearchDebugLog.log("api search hosts=\(hosts.joined(separator: ",")) tokenLen=\(token.count)")
+
         for host in hosts {
-            for parameters in parameterSets {
+            for (styleIndex, parameters) in parameterSets.enumerated() {
+                let style = styleIndex == 0 ? "browser" : "legacy"
                 let json = try await PCloudAPIRequest.get(
                     host: host,
                     method: "search",
@@ -134,6 +153,14 @@ final class PCloudAPIClient {
                     session: session
                 )
                 let code = PCloudAPIRequest.resultCode(json)
+                let entries = PCloudMetadataParsing.extractEntries(from: json)
+                SearchDebugLog.logAPIAttempt(
+                    host: host,
+                    parameterStyle: style,
+                    resultCode: code,
+                    entryCount: entries.count,
+                    topLevelKeys: Array(json.keys)
+                )
                 if code == 1000 || code == 2000 {
                     authToken = nil
                     authAPIHost = nil
@@ -146,7 +173,15 @@ final class PCloudAPIClient {
                         session: session
                     )
                     let retryCode = PCloudAPIRequest.resultCode(retryJSON)
-                    if retryCode == 0, !PCloudMetadataParsing.extractEntries(from: retryJSON).isEmpty {
+                    let retryEntries = PCloudMetadataParsing.extractEntries(from: retryJSON)
+                    SearchDebugLog.logAPIAttempt(
+                        host: host,
+                        parameterStyle: "\(style)-retry",
+                        resultCode: retryCode,
+                        entryCount: retryEntries.count,
+                        topLevelKeys: Array(retryJSON.keys)
+                    )
+                    if retryCode == 0, !retryEntries.isEmpty {
                         authAPIHost = host
                         return retryJSON
                     }
@@ -155,7 +190,6 @@ final class PCloudAPIClient {
                     continue
                 }
                 if code == 0 {
-                    let entries = PCloudMetadataParsing.extractEntries(from: json)
                     if !entries.isEmpty {
                         authAPIHost = host
                         return json

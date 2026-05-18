@@ -23,6 +23,8 @@ enum PCloudSearchService {
             return Result(items: [], statusNote: "Enter a file or folder name to search.")
         }
 
+        SearchDebugLog.beginSearch(query: trimmed, credentials: credentials, browsePaths: browsePaths)
+
         var tried: [String] = []
         var apiRawCount = 0
         var webDAVTimedOut = false
@@ -32,43 +34,54 @@ enum PCloudSearchService {
 
         tried.append("pCloud web search")
         status?("pCloud web search…")
-        if let apiResult = try? await timed("pCloud web search", seconds: webSearchTimeoutSeconds, {
-            try await api.search(query: trimmed)
-        }) {
+        do {
+            let apiResult = try await timed("pCloud web search", seconds: webSearchTimeoutSeconds) {
+                try await api.search(query: trimmed)
+            }
             apiRawCount = apiResult.1.rawEntryCount
+            SearchDebugLog.log(
+                "web search raw=\(apiResult.1.rawEntryCount) resolved=\(apiResult.1.resolvedCount) shown=\(apiResult.0.count)"
+            )
             if !apiResult.0.isEmpty {
-                return Result(
-                    items: apiResult.0,
-                    statusNote: "Found \(apiResult.0.count) match(es) via pCloud web search."
-                )
+                let note = "Found \(apiResult.0.count) match(es) via pCloud web search."
+                SearchDebugLog.log("done: \(note)")
+                return Result(items: apiResult.0, statusNote: note)
             }
             if apiRawCount > 0 {
-                return Result(
-                    items: [],
-                    statusNote: """
-                    pCloud returned \(apiRawCount) hit(s) but none mapped to videos/folders — sign out/in, open the folder in Browse, then search again.
-                    """
-                )
+                let note = """
+                pCloud returned \(apiRawCount) hit(s) but none mapped to videos/folders — sign out/in, open the folder in Browse, then search again.
+                """
+                SearchDebugLog.log("done: raw hits but 0 mapped (see resolve drops above)")
+                return Result(items: [], statusNote: note)
             }
+            SearchDebugLog.log("web search: 0 raw hits")
+        } catch is ExportAsyncTimeout.TimedOut {
+            SearchDebugLog.log("web search: timed out after \(Int(webSearchTimeoutSeconds))s")
+        } catch {
+            SearchDebugLog.log("web search failed: \(error.localizedDescription)")
         }
 
         tried.append("pCloud folder index")
         status?("pCloud folder index (shallow)…")
-        if let catalog = try? await timed("pCloud folder index", seconds: catalogTimeoutSeconds, {
-            try await PCloudAPIFolderSearch.search(
-                query: trimmed,
-                credentials: credentials,
-                apiClient: api
-            )
-        }) {
-            if !catalog.isEmpty {
-                return Result(
-                    items: catalog,
-                    statusNote: "Found \(catalog.count) match(es) via pCloud folder index."
+        do {
+            let catalog = try await timed("pCloud folder index", seconds: catalogTimeoutSeconds) {
+                try await PCloudAPIFolderSearch.search(
+                    query: trimmed,
+                    credentials: credentials,
+                    apiClient: api
                 )
             }
-        } else {
+            SearchDebugLog.log("folder index matches=\(catalog.count)")
+            if !catalog.isEmpty {
+                let note = "Found \(catalog.count) match(es) via pCloud folder index."
+                SearchDebugLog.log("done: \(note)")
+                return Result(items: catalog, statusNote: note)
+            }
+        } catch is ExportAsyncTimeout.TimedOut {
             catalogTimedOut = true
+            SearchDebugLog.log("folder index: timed out after \(Int(catalogTimeoutSeconds))s")
+        } catch {
+            SearchDebugLog.log("folder index failed: \(error.localizedDescription)")
         }
 
         tried.append("folders (WebDAV)")
@@ -87,18 +100,20 @@ enum PCloudSearchService {
         } catch is ExportAsyncTimeout.TimedOut {
             webDAVTimedOut = true
             webDAV = []
+            SearchDebugLog.log("WebDAV walk: timed out after \(Int(webDAVTimeoutSeconds))s")
+        } catch {
+            SearchDebugLog.log("WebDAV walk failed: \(error.localizedDescription)")
         }
+
+        SearchDebugLog.log("WebDAV walk matches=\(webDAV.count)")
 
         if !webDAV.isEmpty {
-            return Result(
-                items: webDAV,
-                statusNote: "Found \(webDAV.count) match(es) via folder search (WebDAV)."
-            )
+            let note = "Found \(webDAV.count) match(es) via folder search (WebDAV)."
+            SearchDebugLog.log("done: \(note)")
+            return Result(items: webDAV, statusNote: note)
         }
 
-        return Result(
-            items: [],
-            statusNote: emptyMessage(
+        let empty = emptyMessage(
                 query: trimmed,
                 tried: tried,
                 apiRawCount: apiRawCount,
@@ -106,7 +121,8 @@ enum PCloudSearchService {
                 webDAVTimedOut: webDAVTimedOut,
                 catalogTimedOut: catalogTimedOut
             )
-        )
+        SearchDebugLog.log("done: no matches — \(empty)")
+        return Result(items: [], statusNote: empty)
     }
 
     private static func timed<T>(
