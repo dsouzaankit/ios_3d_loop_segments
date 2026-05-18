@@ -86,7 +86,7 @@ enum PCloudSearchService {
 
         tried.append("folders (WebDAV)")
         status?("WebDAV folder walk (last resort, \(Int(webDAVTimeoutSeconds))s max)…")
-        let webDAV: [WebDAVItem]
+        var webDAV: [WebDAVItem] = []
         do {
             webDAV = try await timed("WebDAV search", seconds: webDAVTimeoutSeconds) {
                 try await WebDAVSearchClient.search(
@@ -102,6 +102,7 @@ enum PCloudSearchService {
             webDAV = []
             SearchDebugLog.log("WebDAV walk: timed out after \(Int(webDAVTimeoutSeconds))s")
         } catch {
+            webDAV = []
             SearchDebugLog.log("WebDAV walk failed: \(error.localizedDescription)")
         }
 
