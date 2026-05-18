@@ -70,6 +70,7 @@ enum SegmentPassThroughExporter {
 
         var writerContext: SegmentWriterContext?
         var heldAudio: CMSampleBuffer?
+        var skipAudio = false
         var startedWriter = false
         var timelineOrigin: CMTime?
         var skippedBeforeRange = 0
@@ -169,7 +170,7 @@ enum SegmentPassThroughExporter {
             if videoSample != nil {
                 lastSampleAt = CFAbsoluteTimeGetCurrent()
             }
-            if heldAudio == nil, let audioOutput {
+            if !skipAudio, heldAudio == nil, let audioOutput {
                 do {
                     heldAudio = try await ExportAsyncTimeout.run(
                         seconds: sampleReadTimeout,
@@ -199,10 +200,12 @@ enum SegmentPassThroughExporter {
                 break
             }
 
-            guard let next = candidates.min(by: {
-                CMSampleBufferGetPresentationTimeStamp($0.sample) <
-                    CMSampleBufferGetPresentationTimeStamp($1.sample)
-            }) else {
+            guard let next = selectNextCandidate(
+                candidates,
+                inRangeVideoSamples: inRangeVideoSamples,
+                skipAudio: skipAudio,
+                videoFirstUntil: minInRangeVideoSamples
+            ) else {
                 break
             }
 
@@ -257,6 +260,14 @@ enum SegmentPassThroughExporter {
                     isCancelled: isCancelled,
                     log: log
                 )
+            } catch SegmentExporterError.writerAudioStall {
+                log(
+                    "Audio writer stalled — continuing video-only for this segment (DLNA may have no audio track)"
+                )
+                writerContext?.abandonAudio()
+                skipAudio = true
+                heldAudio = nil
+                continue
             } catch SegmentExporterError.writerFailed(let underlying) {
                 let ns = underlying as NSError
                 log(
@@ -319,6 +330,26 @@ enum SegmentPassThroughExporter {
         if let writerContext {
             try await writerContext.finish()
         }
+    }
+
+    private static func selectNextCandidate(
+        _ candidates: [(track: SegmentTrackKind, sample: CMSampleBuffer)],
+        inRangeVideoSamples: Int,
+        skipAudio: Bool,
+        videoFirstUntil: Int
+    ) -> (track: SegmentTrackKind, sample: CMSampleBuffer)? {
+        guard !candidates.isEmpty else { return nil }
+        if skipAudio {
+            return candidates.first { $0.track == .video }
+        }
+        if inRangeVideoSamples < videoFirstUntil,
+           let video = candidates.first(where: { $0.track == .video }) {
+            return video
+        }
+        return candidates.min(by: {
+            CMSampleBufferGetPresentationTimeStamp($0.sample) <
+                CMSampleBufferGetPresentationTimeStamp($1.sample)
+        })
     }
 
     private static func formatMediaTime(_ time: CMTime) -> String {

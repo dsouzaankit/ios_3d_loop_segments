@@ -933,6 +933,7 @@ final class SegmentWriterContext {
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput
     private let audioInput: AVAssetWriterInput?
+    private var audioAbandoned = false
 
     init(
         outputURL: URL,
@@ -978,8 +979,16 @@ final class SegmentWriterContext {
         writer.startSession(atSourceTime: sourceTime)
     }
 
-    private static let writerReadyTimeoutSeconds: Double = 120
+    private static let writerVideoReadyTimeoutSeconds: Double = 120
+    private static let writerAudioReadyTimeoutSeconds: Double = 25
     private static let writerReadyLogIntervalSeconds: Double = 10
+
+    /// Stop accepting audio samples; writer keeps video track open.
+    func abandonAudio() {
+        guard let audioInput, !audioAbandoned else { return }
+        audioAbandoned = true
+        audioInput.markAsFinished()
+    }
 
     func append(
         _ sample: CMSampleBuffer,
@@ -991,10 +1000,13 @@ final class SegmentWriterContext {
         switch track {
         case .video: input = videoInput
         case .audio:
-            guard let audioInput else { return }
+            guard let audioInput, !audioAbandoned else { return }
             input = audioInput
         }
 
+        let readyTimeout = track == .audio
+            ? Self.writerAudioReadyTimeoutSeconds
+            : Self.writerVideoReadyTimeoutSeconds
         let waitStart = CFAbsoluteTimeGetCurrent()
         var lastWaitLog = waitStart
         while !input.isReadyForMoreMediaData {
@@ -1002,7 +1014,10 @@ final class SegmentWriterContext {
                 throw SegmentExporterError.cancelled
             }
             let now = CFAbsoluteTimeGetCurrent()
-            if now - waitStart >= Self.writerReadyTimeoutSeconds {
+            if now - waitStart >= readyTimeout {
+                if track == .audio {
+                    throw SegmentExporterError.writerAudioStall
+                }
                 throw SegmentExporterError.writerBackpressure
             }
             if now - lastWaitLog >= Self.writerReadyLogIntervalSeconds {
@@ -1026,7 +1041,9 @@ final class SegmentWriterContext {
 
     func finish() async throws {
         videoInput.markAsFinished()
-        audioInput?.markAsFinished()
+        if !audioAbandoned {
+            audioInput?.markAsFinished()
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             writer.finishWriting {
                 continuation.resume()
@@ -1123,6 +1140,7 @@ enum SegmentExporterError: LocalizedError {
     case writerSetupFailed
     case writerFailed(Error)
     case writerBackpressure
+    case writerAudioStall
     case insufficientDiskSpace(needed: Int64, available: Int64)
     case noKeyframeInWindow
     case timelineByteWindowMismatch(mediaTime: String)
@@ -1168,9 +1186,11 @@ enum SegmentExporterError: LocalizedError {
             return "Write failed: \(error.localizedDescription)"
         case .writerBackpressure:
             return """
-            Segment writer timed out waiting for data (often after pCloud stream at 10+ min). \
+            Video writer timed out (often sparse temp / pCloud read stall). \
             Try seek 0 min, keep the app open on Wi‑Fi, and wait for “Window on disk” before later minutes.
             """
+        case .writerAudioStall:
+            return "Audio writer stalled (internal — should fall back to video-only)."
         case .midFileTempUnreadable(let mediaTime, let underlying):
             return """
             Could not export the \(mediaTime) minute (\(underlying)). \
