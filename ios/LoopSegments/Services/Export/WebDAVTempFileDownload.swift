@@ -188,6 +188,12 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return tailOnDisk
     }
 
+    func hasHeadOnDisk() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return headOnDisk
+    }
+
     func logDownloadStarted() {
         log("Sparse temp — \(formatBytes(totalLength)) on disk (one dense window per 60s segment)…")
     }
@@ -210,6 +216,10 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let alreadyDense = exportWindowStart == range.start && exportWindowContiguousEnd >= rangeEnd
         lock.unlock()
         if alreadyDense {
+            lock.lock()
+            exportWindowStart = range.start
+            exportWindowContiguousEnd = max(exportWindowContiguousEnd, rangeEnd)
+            lock.unlock()
             log(
                 "Window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) already dense on disk — skip re-download"
             )

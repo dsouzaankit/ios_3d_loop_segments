@@ -10,8 +10,9 @@ enum SegmentLocalReadiness {
     private static let probeTimeoutLargeFile: Double = 90
     private static let probeTimeoutDefault: Double = 45
     /// Stop probing and let passthrough / stream fallback try (avoids infinite 0-sample loop).
-    private static let maxReadinessWallSeconds: Double = 150
+    private static let maxReadinessWallSeconds: Double = 90
     private static let proceedAfterZeroSampleProbes = 10
+    private static let proceedAfterZeroSampleProbesDense = 3
 
     static func waitUntilReadable(
         fileURL: URL,
@@ -42,6 +43,7 @@ enum SegmentLocalReadiness {
         var lastZeroSampleLog = CFAbsoluteTimeGetCurrent()
         var preparePassCount = 0
         let needWindowBytes = needEnd - requiredByteRange.start
+        let denseNeedWindowBytes = requiredByteRange.length
         let wallStart = CFAbsoluteTimeGetCurrent()
 
         while true {
@@ -126,16 +128,25 @@ enum SegmentLocalReadiness {
                             min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
                         )
                     let indexNote = indexTailOnDisk() ? "" : ", MP4 index still loading"
+                    let needLabel = denseReady ? denseNeedWindowBytes : needWindowBytes
                     log(
-                        "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needWindowBytes)) in window\(indexNote))"
+                        "Waiting for clearer source — \(reason) (\(formatBytes(filledInWindow)) / \(formatBytes(needLabel)) in window\(indexNote))"
                     )
                 }
+                // Dense fill covers `requiredByteRange` only; do not require probeFloor (+16 MB) extra bytes.
                 let windowBytesReady = denseReady
-                    ? windowFilledBytes() >= needWindowBytes
+                    ? windowFilledBytes() >= requiredByteRange.length
                     : max(
                         0,
                         min(filled.end, needEnd) - max(filled.start, requiredByteRange.start)
                     ) >= needWindowBytes
+                if zeroInWindow, denseReady, indexTailOnDisk(), windowBytesReady,
+                   probeAttempts >= proceedAfterZeroSampleProbesDense {
+                    log(
+                        "Readiness: dense window on disk but probe still 0 samples — proceeding to passthrough (sparse MP4 index may not preflight)"
+                    )
+                    return
+                }
                 if trackLoadStreak >= 3, rangeReady, windowBytesReady, indexTailOnDisk(), probeAttempts >= 2,
                    !reason.contains("only 0 video samples") {
                     log(
@@ -155,8 +166,9 @@ enum SegmentLocalReadiness {
                     if nowZero - lastZeroSampleLog >= 15 {
                         lastZeroSampleLog = nowZero
                         let indexNote = indexTailOnDisk() ? "index at EOF on disk" : "still fetching MP4 index at EOF"
+                        let needLabel = denseReady ? denseNeedWindowBytes : needWindowBytes
                         log(
-                            "Readiness: 0 video samples in 0:00 window — \(formatBytes(windowFilledBytes())) / \(formatBytes(needWindowBytes)) downloaded (\(indexNote))"
+                            "Readiness: 0 video samples in window — \(formatBytes(windowFilledBytes())) / \(formatBytes(needLabel)) downloaded (\(indexNote))"
                         )
                     }
                 }

@@ -272,25 +272,34 @@ final class SegmentExporter {
                 try await downloader.ensureFileHeadOnDisk()
                 try await downloader.ensureIndexTailOnDisk()
                 try await downloader.ensureContiguousRange(byteRange)
-                try await SegmentLocalReadiness.waitUntilReadable(
-                    fileURL: downloader.fileURL,
-                    rangeStart: rangeStart,
-                    rangeDuration: rangeDuration,
-                    totalFileBytes: downloader.totalLength,
-                    requiredByteRange: byteRange,
-                    isWindowDenseFilled: { downloader.isRangeFilled(byteRange) },
-                    windowFilledBytes: { downloader.exportWindowFilledBytes(for: byteRange) },
-                    filledByteSpan: { downloader.filledSpan() },
-                    indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
-                    refreshMP4Index: { try await downloader.ensureIndexTailOnDisk(force: true) },
-                    prepareSparseFileForReader: {
-                        try await downloader.ensureFileHeadOnDisk()
-                        try await downloader.ensureIndexTailOnDisk(force: true)
-                        try await downloader.ensureContiguousRange(byteRange)
-                    },
-                    isCancelled: cancelCheck,
-                    log: logHandler
-                )
+                if downloader.isRangeFilled(byteRange),
+                   downloader.hasHeadOnDisk(),
+                   downloader.hasIndexTailOnDisk() {
+                    logHandler(
+                        "Dense window + MP4 head/index on disk — skipping readiness probe " +
+                            "(AVAssetReader preflight often reports 0 samples on sparse HEVC)"
+                    )
+                } else {
+                    try await SegmentLocalReadiness.waitUntilReadable(
+                        fileURL: downloader.fileURL,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        totalFileBytes: downloader.totalLength,
+                        requiredByteRange: byteRange,
+                        isWindowDenseFilled: { downloader.isRangeFilled(byteRange) },
+                        windowFilledBytes: { downloader.exportWindowFilledBytes(for: byteRange) },
+                        filledByteSpan: { downloader.filledSpan() },
+                        indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
+                        refreshMP4Index: { try await downloader.ensureIndexTailOnDisk(force: true) },
+                        prepareSparseFileForReader: {
+                            try await downloader.ensureFileHeadOnDisk()
+                            try await downloader.ensureIndexTailOnDisk(force: true)
+                            try await downloader.ensureContiguousRange(byteRange)
+                        },
+                        isCancelled: cancelCheck,
+                        log: logHandler
+                    )
+                }
 
                 let slot = minuteIndex % Self.segmentFileCount
                 let stagingURL = ExportPaths.segmentStagingURL(index: slot)

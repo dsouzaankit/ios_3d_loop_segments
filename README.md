@@ -6,7 +6,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 | Automated today | Not automated today |
 |-----------------|---------------------|
-| pCloud → phone `3d_op_00/01.mp4` | Phone → PC DLNA folder (without manual Apple Devices or PC ffmpeg) |
+| pCloud → phone `3d_op_00.mp4` + Photos; PC pair via `Sync-FromIPhonePhotos.ps1 -Watch` | Apple Devices manual save; live wall-clock sync to PC |
 | **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Live 60s refresh on PC via USB |
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
@@ -30,7 +30,7 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 .\Copy-FromIncoming.ps1
 ```
 
-**PowerShell cannot automate phone `Exports` → PC.** Apple Devices requires a manual **Save to PC**; scripts only automate copy from a **local Windows folder** you already saved into (`Copy-FromIncoming.ps1`). `Sync-IphoneSegments.ps1` works only if Explorer exposes a readable iPhone `Exports` path (uncommon). See [FEASIBILITY.md](FEASIBILITY.md).
+**Without Apple Devices:** enable **Save segments to Photos** on the phone, USB, then `windows\Sync-FromIPhonePhotos.ps1 -Watch` → your DLNA folder (see [WORKFLOW.md](WORKFLOW.md)). **Apple Devices** manual save to `F:\f1_media\...` or `LoopSegmentsIncoming` + `Copy-FromIncoming.ps1` still works. `Sync-IphoneSegments.ps1` only if Explorer shows `Loop Segments\Exports`. Export on phone uses **dense fill per minute** (build 93+), not pCloud stream-while-mux. See [ios/README.md](ios/README.md) and [FEASIBILITY.md](FEASIBILITY.md).
 
 ---
 
@@ -53,7 +53,8 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [WORKFLOW.md](WORKFLOW.md) | Step-by-step cellular / USB / DLNA |
 | [DESIGN.md](DESIGN.md) | Architecture |
 | [ios/](ios/) | Loop Segments iPhone app |
-| [windows/Sync-IphoneSegments.ps1](windows/Sync-IphoneSegments.ps1) | USB → DLNA folder only |
+| [windows/Sync-FromIPhonePhotos.ps1](windows/Sync-FromIPhonePhotos.ps1) | Photos MTP → PC `3d_op_00/01` (watch mode) |
+| [windows/Sync-IphoneSegments.ps1](windows/Sync-IphoneSegments.ps1) | Exports USB → DLNA (if path visible) |
 | [windows/Register-UsbSyncTask.ps1](windows/Register-UsbSyncTask.ps1) | Logon sync task |
 | [codemagic.yaml](codemagic.yaml) | Cloud iOS build |
 

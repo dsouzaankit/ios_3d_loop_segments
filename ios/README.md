@@ -37,7 +37,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + AAC (AV1 sources are rejected at probe)
-- 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via `Sync-FromIPhonePhotos.ps1` (build 92+)
+- 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via `Sync-FromIPhonePhotos.ps1` (build 92+). **Build 93+:** Photos on = **dense fill** per minute (not pCloud stream export).
 - Real-time read pacing (like ffmpeg `-re`)
 - Runs until end of file or **Stop**
 
@@ -57,7 +57,17 @@ When **Photos is on** (default), export **dense-fills** each minute to sparse te
 
 **Known limitation:** iOS Photos can reject programmatic import of some **high‑resolution HEVC** MP4s (e.g. 4K/8K passthrough), even when AVFoundation can read and export them. The app logs `PHPhotosErrorDomain` **3302** (`invalidResource`) and suggests using **Files → Loop Segments → Exports** instead. Browsing 8K HEVC in the Photos *app* is not the same as third‑party library import — see [Apple HEVC support](https://support.apple.com/en-qa/116944).
 
-If you only need DLNA/USB quality, turn **Save segments to Photos** off on the export screen.
+Turn **Save segments to Photos** off only if you do not need MTP/USB sync to PC (dense fill still runs; no Photos import).
+
+### Export transport (build 93+)
+
+| Mode | When | Behavior |
+|------|------|----------|
+| **Dense + Photos** (default) | Photos toggle **on** | Sparse temp shell once; **one dense pCloud download per minute**; passthrough → `3d_op_00.mp4` → Photos import |
+| **Dense, no Photos** | Photos toggle **off** | Same dense fill; no library import (use Exports if PC can see it) |
+| **pCloud stream** | Very low free disk | Fallback only — see `export_latest.txt` |
+
+No background prefetch + duplicate dense fill on the same minute (removed in build 93).
 
 ## Search: `tokenSaved=false` / no API token
 

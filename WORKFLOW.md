@@ -8,14 +8,14 @@ Three separate networks. **No Personal Hotspot** required for the iPhone path be
 ┌─────────────────────────────────────────────────────────────────┐
 │  iPhone (cellular LTE/5G only — Wi‑Fi off is OK for export)      │
 │    Loop Segments app → pCloud WebDAV (internet)                 │
-│    Writes Documents/Exports/3d_op_00.mp4, 3d_op_01.mp4          │
-│    Optional: copies each finished segment → Photos album          │
+│    Dense-fill each 60s from pCloud → Exports/3d_op_00.mp4       │
+│    Optional: each segment → Photos (MTP shows IMG_*.mp4 on PC)   │
 └────────────────────────────┬────────────────────────────────────┘
                              │ USB (Exports and/or Photos)
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Windows PC                                                     │
-│    Sync-IphoneSegments.ps1 → F:\f1_media\3d_fullsbs_trans       │
+│    Sync-FromIPhonePhotos.ps1 -Watch → 3d_op_00/01 (DLNA pair)  │
 │    DLNA media server → WLAN → TV / receiver / PotPlayer         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -44,10 +44,10 @@ Install via **TestFlight** or sideload (AltStore, etc.) with an Apple Developer 
 2. Optional: turn **Wi‑Fi off** to force cellular-only pCloud access (no hotspot).
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
-5. Keep the app in the foreground until both `3d_op_00.mp4` and `3d_op_01.mp4` exist (Files → Loop Segments → Exports).
-6. **Photos (v1.2+, optional):** **Save segments to Photos** copies each finished segment to the **Loop Segments** album (slot 0/1 rotate). iOS does not allow apps to write to **DCIM**; Photos is what Windows often lists as monthly folders (`202605_a`, etc.). **Not required for DLNA** — `3d_op_*.mp4` in **Exports** keeps full HEVC/H.264 passthrough. Photos import may fail with error **3302** on some high‑resolution HEVC sources; use **Files → Loop Segments → Exports** (USB) instead. See [ios/README.md](ios/README.md#photos-library-optional--not-required-for-dlna).
+5. Keep the app in the foreground. On phone: **Files → Loop Segments → Exports** should show `3d_op_00.mp4` updating each ~60s of **media** time (first segment can take several minutes on large moov-at-end HEVC while the minute **dense-downloads**).
+6. **Photos (default on, build 93+):** each minute is **dense-filled** to sparse temp on the phone, passthrough-copied to `3d_op_00.mp4`, then imported to the **Loop Segments** album. iOS does not write **DCIM**; Windows MTP often lists clips as `IMG_*.mp4` under monthly folders (`202605_a`, etc.). **Exports** still has full passthrough. Photos may fail with **3302** on some HEVC — see [ios/README.md](ios/README.md#photos-library-optional--not-required-for-dlna). Turning Photos off still uses dense fill but skips library import (no MTP path without Photos).
 
-Large files on cellular: expect long runs; export paces reads in real time.
+Large files on cellular: first segment waits for index + dense window (`Downloading window … (dense fill)` → `Window on disk` in `export_latest.txt`). Later minutes reuse the same sparse temp shell; export does not keep up with live TV wall clock on slow LTE — OK if the DLNA player **loops** the PC pair.
 
 ---
 
@@ -57,7 +57,7 @@ Apple Devices does **not** mount the iPhone app as a drive path. You **manually*
 
 **Photos path:** Apple Devices → import photos/videos → look for recent items from the **Loop Segments** album, or browse Internal Storage photo folders. Still manual per save/import — rotating segments do not auto-update the PC DLNA folder.
 
-**MTP script (experimental):** `windows\Sync-FromIPhonePhotos.ps1` walks **This PC → Apple iPhone → Internal Storage** — by default **DCIM** plus only the **latest** monthly folder (`202605_a`, etc.), where Photos usually stores new exports. It copies the **newest** `.mp4`/`.mov` there to `3d_op_00.mp4` / `3d_op_01.mp4`. Run `-Discover` first. **Watch mode:** `.\Sync-FromIPhonePhotos.ps1 -Watch` or `Sync-FromIPhonePhotos-Watch.cmd`. Use `-AllMonthFolders` to scan every month (older behavior). Still fragile if other recent videos exist in that folder.
+**MTP script (no Apple Devices):** `windows\Sync-FromIPhonePhotos.ps1` scans **This PC → Apple iPhone → Internal Storage** (latest month folder + DCIM). Each run copies the **newest** phone video and overwrites the **older** of the PC DLNA files `3d_op_00.mp4` / `3d_op_01.mp4` (ring buffer; backward time jumps in a looping player are OK). Run `-Discover` first. **Watch:** `.\Sync-FromIPhonePhotos.ps1 -Watch` or `Sync-FromIPhonePhotos-Watch.cmd`. `-LegacyDualMap` restores the old “two newest → 00/01 by date” behavior. Assume only your export clips are newest in that folder.
 
 ### Simplest (one step)
 
