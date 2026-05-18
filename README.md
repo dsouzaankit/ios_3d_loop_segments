@@ -40,6 +40,8 @@ Sources: [`ios/`](ios/). Install on your phone: **[ios/BUILD-WITHOUT-MAC.md](ios
 
 Export uses **AVFoundation** on device (no embedded ffmpeg). **iOS 26.x:** **1.0.5+** to launch; **1.1.0** for export and fixed logs. Rebuild IPA from GitHub Actions if the phone still shows 1.0.5.
 
+**Experimental:** [ios-ffmpeg/](ios-ffmpeg/) — same workflow with embedded **FFmpeg-iOS** SPM ([kewlbear/FFmpeg-iOS](https://github.com/kewlbear/FFmpeg-iOS); not retired ffmpeg-kit). Separate bundle ID; verify on your iOS version.
+
 On phone: **Settings → Cellular → Loop Segments → On**.
 
 ---

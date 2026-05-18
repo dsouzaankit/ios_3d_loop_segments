@@ -424,13 +424,16 @@ final class SegmentExporter {
                 return
             } catch {
                 guard Self.shouldStreamFallback(after: error, midFileDenseOnly: midFileDenseOnly) else { throw error }
-                if midFileDenseOnly {
-                    throw SegmentExporterError.readerSetupFailed
-                }
                 try? FileManager.default.removeItem(at: outputURL)
-                log(
-                    "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
-                )
+                if midFileDenseOnly {
+                    log(
+                        "Temp still not readable at mid-file — streaming this 60s window from pCloud (capped reads)"
+                    )
+                } else {
+                    log(
+                        "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
+                    )
+                }
             }
             downloader.pauseBackgroundDownload()
             do {

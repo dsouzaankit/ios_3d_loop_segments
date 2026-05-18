@@ -117,7 +117,7 @@ enum PCloudMetadataParsing {
         return rows
     }
 
-    /// Normalize web search rows (`id` is often `d&lt;folderid&gt;` or `f&lt;fileid&gt;`, not a bare integer).
+    /// Normalize web search rows (`id` is often `d` + folderid or `f` + fileid, not a bare integer).
     static func normalizeSearchMetadata(_ row: [String: Any]) -> [String: Any] {
         var copy = row
         let ids = resolvedIds(from: copy)

@@ -9,6 +9,9 @@ enum SegmentLocalReadiness {
     private static let maxProbeSamples = 120
     private static let probeTimeoutLargeFile: Double = 90
     private static let probeTimeoutDefault: Double = 45
+    /// Stop probing and let passthrough / stream fallback try (avoids infinite 0-sample loop).
+    private static let maxReadinessWallSeconds: Double = 150
+    private static let proceedAfterZeroSampleProbes = 10
 
     static func waitUntilReadable(
         fileURL: URL,
@@ -39,9 +42,17 @@ enum SegmentLocalReadiness {
         var lastZeroSampleLog = CFAbsoluteTimeGetCurrent()
         var preparePassCount = 0
         let needWindowBytes = needEnd - requiredByteRange.start
+        let wallStart = CFAbsoluteTimeGetCurrent()
 
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
+            let wallElapsed = CFAbsoluteTimeGetCurrent() - wallStart
+            if wallElapsed >= maxReadinessWallSeconds {
+                log(
+                    "Readiness: stopping after \(Int(wallElapsed))s — proceeding to export (probe saw 0 samples; passthrough or pCloud stream will retry)"
+                )
+                return
+            }
             let filled = filledByteSpan()
             let denseReady = isWindowDenseFilled()
             let rangeReady = denseReady || (filled.start <= requiredByteRange.start && filled.end >= needEnd)
@@ -81,16 +92,20 @@ enum SegmentLocalReadiness {
                 }
                 return
             case .needsMoreData(let reason):
-                if reason.contains("only 0 video samples") {
+                let zeroInWindow = isZeroSampleInWindow(reason)
+                if zeroInWindow {
                     zeroSampleStreak += 1
                 } else {
                     zeroSampleStreak = 0
                 }
-                if isContainerOpenFailure(reason) {
+                if isContainerOpenFailure(reason) || zeroInWindow {
                     trackLoadStreak += 1
-                    if trackLoadStreak == 1 || trackLoadStreak == 4, indexRefreshCount < 3 {
+                    if trackLoadStreak == 1 || trackLoadStreak == 4, indexRefreshCount < 4 {
                         indexRefreshCount += 1
-                        log("Fetching larger MP4 index from pCloud (needed before AVFoundation can open tracks)…")
+                        let why = zeroInWindow
+                            ? "probe saw 0 video samples in this minute"
+                            : "AVFoundation could not open tracks"
+                        log("Fetching MP4 index from pCloud (\(why))…")
                         try await refreshMP4Index()
                     }
                     if trackLoadStreak == 2, let prepare = prepareSparseFileForReader {
@@ -135,19 +150,25 @@ enum SegmentLocalReadiness {
                     )
                     return
                 }
-                if zeroSampleStreak >= 4, rangeReady {
+                if zeroInWindow, rangeReady {
                     let nowZero = CFAbsoluteTimeGetCurrent()
                     if nowZero - lastZeroSampleLog >= 15 {
                         lastZeroSampleLog = nowZero
+                        let indexNote = indexTailOnDisk() ? "index at EOF on disk" : "still fetching MP4 index at EOF"
                         log(
-                            "Readiness: 0 video samples at timeline — dense window \(formatBytes(windowFilledBytes())) / \(formatBytes(needWindowBytes)) (checking index / byte map)"
+                            "Readiness: 0 video samples in 0:00 window — \(formatBytes(windowFilledBytes())) / \(formatBytes(needWindowBytes)) downloaded (\(indexNote))"
                         )
                     }
                 }
-                if windowBytesReady, indexTailOnDisk(), preparePassCount >= 1,
-                   reason.contains("only 0 video samples"), probeAttempts >= 8 {
+                if zeroInWindow, rangeReady, windowBytesReady, indexTailOnDisk(), probeAttempts >= proceedAfterZeroSampleProbes {
                     log(
-                        "Readiness: dense window on disk but probe still 0 samples — proceeding to export (reader may find frames passthrough missed)"
+                        "Readiness: window + index on disk but probe still 0 samples — proceeding to export (passthrough / stream fallback)"
+                    )
+                    return
+                }
+                if zeroInWindow, rangeReady, windowBytesReady, probeAttempts >= proceedAfterZeroSampleProbes + 4 {
+                    log(
+                        "Readiness: window on disk, probe still 0 samples — proceeding to export (index tail may still be loading)"
                     )
                     return
                 }
@@ -269,6 +290,15 @@ enum SegmentLocalReadiness {
             || lower.contains("no video track visible")
             || lower.contains("cannot open reader")
             || lower.contains("cannot open")
+    }
+
+    /// Reader opens but finds no decodable frames in the export window (common when `moov` / byte map mismatch).
+    private static func isZeroSampleInWindow(_ reason: String) -> Bool {
+        let lower = reason.lowercased()
+        if lower.contains("only 0 video samples") { return true }
+        if lower.contains("none in 0:00 window") { return true }
+        if lower.contains("0 video samples") && lower.contains("incomplete") { return true }
+        return false
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {

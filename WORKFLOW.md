@@ -57,7 +57,7 @@ Apple Devices does **not** mount the iPhone app as a drive path. You **manually*
 
 **Photos path:** Apple Devices → import photos/videos → look for recent items from the **Loop Segments** album, or browse Internal Storage photo folders. Still manual per save/import — rotating segments do not auto-update the PC DLNA folder.
 
-**MTP script (experimental):** `windows\Sync-FromIPhonePhotos.ps1` walks **This PC → Apple iPhone → Internal Storage** (DCIM and folders like `202605_a`), copies the **newest** `.mp4`/`.mov` files via `Shell.Application.CopyHere`, and renames them to `3d_op_00.mp4` / `3d_op_01.mp4` on the PC. Run `-Discover` first. **Watch mode:** `.\Sync-FromIPhonePhotos.ps1 -Watch` (every 60s until Enter) or double-click `Sync-FromIPhonePhotos-Watch.cmd`. This is fragile if your camera roll has other recent videos.
+**MTP script (experimental):** `windows\Sync-FromIPhonePhotos.ps1` walks **This PC → Apple iPhone → Internal Storage** — by default **DCIM** plus only the **latest** monthly folder (`202605_a`, etc.), where Photos usually stores new exports. It copies the **newest** `.mp4`/`.mov` there to `3d_op_00.mp4` / `3d_op_01.mp4`. Run `-Discover` first. **Watch mode:** `.\Sync-FromIPhonePhotos.ps1 -Watch` or `Sync-FromIPhonePhotos-Watch.cmd`. Use `-AllMonthFolders` to scan every month (older behavior). Still fragile if other recent videos exist in that folder.
 
 ### Simplest (one step)
 

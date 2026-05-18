@@ -1,6 +1,6 @@
 import Foundation
 
-/// Documents the segment contract (legacy PC ffmpeg used MKV; iOS target is MP4 via AVFoundation).
+/// Documents the segment contract (legacy PC ffmpeg used MKV; production iOS uses AVFoundation; `ios-ffmpeg/` uses kewlbear/FFmpeg-iOS).
 enum SegmentCopyCommand {
     static let segmentTimeSeconds = 60
     static let segmentWrap = 2
