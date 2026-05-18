@@ -117,6 +117,7 @@ enum ExportPaths {
     static func ensureExportDirectories() {
         _ = exportsDirectory
         _ = logsDirectory
+        SearchDebugLog.ensureReady()
         _ = removeWorkingSourceCopy()
         let probe = exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
         let text = "Loop Segments \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") \(ISO8601DateFormatter().string(from: Date()))\n"

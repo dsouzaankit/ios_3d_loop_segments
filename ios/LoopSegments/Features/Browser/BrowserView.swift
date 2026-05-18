@@ -13,6 +13,7 @@ struct BrowserView: View {
     @State private var isSearching = false
     @State private var searchToken = 0
     @State private var searchModeNote = ""
+    @State private var searchDebugStatus = ""
 
     private var currentPath: String { pathStack.last ?? "/" }
     private var isSearchActive: Bool {
@@ -50,7 +51,10 @@ struct BrowserView: View {
                                 .foregroundStyle(.secondary)
                         }
                         if isSearchActive {
-                            Text("Debug log: Files → Loop Segments → Exports → search_debug.txt")
+                            Text(searchDebugStatus)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text("Files app → On My iPhone → Loop Segments → Exports → search_debug.txt")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -103,6 +107,10 @@ struct BrowserView: View {
                         }
                     }
                 }
+            }
+            .onAppear {
+                SearchDebugLog.ensureReady()
+                searchDebugStatus = SearchDebugLog.statusLine()
             }
             .task(id: listToken) {
                 guard !isSearchActive else { return }
@@ -225,11 +233,25 @@ struct BrowserView: View {
         await performSearch(query: query)
     }
 
+    private func refreshSearchDebugStatus() {
+        searchDebugStatus = SearchDebugLog.statusLine()
+    }
+
     private func performSearch(query: String) async {
-        guard let credentials = session.credentials else { return }
+        SearchDebugLog.ensureReady()
+        guard let credentials = session.credentials else {
+            SearchDebugLog.log("UI: search skipped — not signed in")
+            refreshSearchDebugStatus()
+            return
+        }
+        SearchDebugLog.log("UI: search started for \"\(query)\"")
+        refreshSearchDebugStatus()
         isSearching = true
         searchModeNote = "pCloud web search…"
-        defer { isSearching = false }
+        defer {
+            isSearching = false
+            refreshSearchDebugStatus()
+        }
         do {
             let result = try await PCloudSearchService.search(
                 query: query,
@@ -249,6 +271,7 @@ struct BrowserView: View {
             searchResults = result.items
             searchModeNote = result.statusNote
             SearchDebugLog.log("UI: \(result.items.count) result(s) — \(result.statusNote)")
+            refreshSearchDebugStatus()
         } catch is CancellationError {
             SearchDebugLog.log("UI: search cancelled")
             return
