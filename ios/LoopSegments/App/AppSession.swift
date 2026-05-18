@@ -54,7 +54,7 @@ final class AppSession: ObservableObject {
     }
 
     /// Refreshes API token / WebDAV files root before search (updates keychain + published credentials).
-    func prepareCredentialsForSearch() async -> WebDAVCredentials? {
+    func prepareCredentialsForSearch() async throws -> WebDAVCredentials? {
         guard var stored = credentials else { return nil }
         let needsToken = stored.apiAuthToken?.isEmpty != false
         let needsRoot = !PCloudWebDAVRootResolver.isValidFilesRoot(stored.webDAVFilesRoot)
