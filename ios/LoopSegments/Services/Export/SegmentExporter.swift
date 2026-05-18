@@ -87,11 +87,15 @@ final class SegmentExporter {
 
         let fileSize = rangeCache.contentLengthValue() ?? 0
         let streamFromPCloud = Self.shouldStreamSegments(fileBytes: fileSize)
-        if ExportDeliveryPolicy.preferStreamPerSegment {
+        if PhotosSegmentPublisher.isEnabled, !streamFromPCloud {
             logHandler(
-                "Photos-first delivery — streaming each 60s from pCloud (full passthrough; no sparse temp). " +
-                    "First Photos target ≤\(Int(ExportDeliveryPolicy.firstPhotosTargetSeconds))s; " +
-                    "then ~\(Int(ExportDeliveryPolicy.segmentPublishCadenceSeconds))s cadence."
+                "Photos + dense fill — each minute downloads to temp before passthrough (more reliable on large HEVC than stream; " +
+                    "first Photos target ≤\(Int(ExportDeliveryPolicy.firstPhotosTargetSeconds))s when cellular is fast enough)."
+            )
+        } else if ExportDeliveryPolicy.preferStreamPerSegment {
+            logHandler(
+                "Streaming each 60s from pCloud (no sparse temp). " +
+                    "First segment target ≤\(Int(ExportDeliveryPolicy.firstPhotosTargetSeconds))s."
             )
         }
         try Self.ensureExportDiskSpace(fileBytes: fileSize, streaming: streamFromPCloud)
@@ -144,7 +148,11 @@ final class SegmentExporter {
             throw SegmentExporterError.seekPastEnd
         }
         if !streamFromPCloud, let downloader = tempDownload {
-            downloader.beginExport(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
+            downloader.beginExport(
+                seekSeconds: seekSeconds,
+                durationSeconds: durationSeconds,
+                useBackgroundDownload: false
+            )
         }
 
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
@@ -218,7 +226,7 @@ final class SegmentExporter {
             guard let downloader = tempDownload else {
                 throw SegmentExporterError.readerSetupFailed
             }
-            logHandler("Publishing 60s segments as temp download catches up (DLNA can loop latest)")
+            logHandler("Publishing 60s segments — dense fill each minute, then passthrough")
 
             while true {
                 try checkCancelled()
@@ -255,13 +263,6 @@ final class SegmentExporter {
                 logHandler(
                     "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
                 )
-                downloader.setDownloadHighWaterMark(byteRange.end + WebDAVTempFileDownload.exportTimelineSlackBytes)
-                try await downloader.waitUntilWindowReady(
-                    timelineStartSeconds: windowStartSeconds,
-                    timelineEndSeconds: windowEndSeconds,
-                    durationSeconds: durationSeconds
-                )
-
                 let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
                 let rangeDuration = CMTime(
                     seconds: windowEndSeconds - windowStartSeconds,

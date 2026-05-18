@@ -68,11 +68,19 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         try finalizeSparseLayout()
     }
 
-    /// Position download at seek (or 0) and start background range fetches.
-    func beginExport(seekSeconds: Double, durationSeconds: Double) {
+    /// Position download at seek (or 0). Optionally start background range fetches (off when using dense-only per minute).
+    func beginExport(
+        seekSeconds: Double,
+        durationSeconds: Double,
+        useBackgroundDownload: Bool = true
+    ) {
         throughput.reset()
         applyInitialPosition(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
-        startBackgroundDownload()
+        if useBackgroundDownload {
+            startBackgroundDownload()
+        } else {
+            log("Dense-only temp — each minute downloaded once before passthrough (no background prefetch).")
+        }
     }
 
     /// Sparse temp must report full remote size so AVFoundation can read `moov` at EOF.
@@ -181,7 +189,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     func logDownloadStarted() {
-        log("Downloading to temp — \(formatBytes(totalLength)) (segments publish per 60s as data arrives)…")
+        log("Sparse temp — \(formatBytes(totalLength)) on disk (one dense window per 60s segment)…")
     }
 
     /// Limit background range fetches to `[regionStart, highWaterMark)` (plus index tail).
@@ -197,6 +205,17 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
         let rangeEnd = min(range.end, totalLength)
         let needLen = rangeEnd - range.start
+
+        lock.lock()
+        let alreadyDense = exportWindowStart == range.start && exportWindowContiguousEnd >= rangeEnd
+        lock.unlock()
+        if alreadyDense {
+            log(
+                "Window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) already dense on disk — skip re-download"
+            )
+            return
+        }
+
         log(
             "Downloading window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) from pCloud (\(formatBytes(needLen)), dense fill)…"
         )

@@ -9,9 +9,9 @@ enum ExportDeliveryPolicy {
     /// Reject passthrough if the first keyframe is farther than this into the 60s window.
     static let maxKeyframeStartOffsetSeconds: Double = 5
 
-    /// Stream each minute from pCloud (no sparse + dense temp). Favors speed and correct MP4 ranges over disk/cellular savings.
+    /// Stream each minute from pCloud (no sparse + dense temp). Off by default; Photos uses dense fill then library import.
     static var preferStreamPerSegment: Bool {
-        PhotosSegmentPublisher.isEnabled
+        false
     }
 
     /// Publish first segment to Photos/DLNA as soon as it is ready (no wall-clock hold).

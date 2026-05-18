@@ -55,10 +55,10 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("With Photos on: each 60s overwrites one clip on the phone; PC sync builds 3d_op_00/01 (MTP may show IMG_*.mp4). Backward jumps in the DLNA loop are OK.")
+                Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (3d_op_00.mp4). First segment can take a few minutes on large files.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("Turn Photos off to use sparse temp (saves cellular/disk, slower).")
+                Text("PC sync: Sync-FromIPhonePhotos.ps1 -Watch copies newest MTP clip to older DLNA slot (3d_op_00/01).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("3d_op_*.mp4 stay in Exports until Stop or leaving the app; temp _export_source_working.mp4 is removed when export ends or on cleanup.")
@@ -68,8 +68,8 @@ struct ExportView: View {
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
-                Text("1. Large files use a sparse temp copy (only bytes needed per minute, not the full file).")
-                Text("2. Each ~60s segment stages then publishes to 3d_op_00.mp4 on the phone (PC keeps two DLNA files via USB sync)")
+                Text("1. Large files: sparse temp shell; each minute dense-fills only that window from pCloud (not the full file).")
+                Text("2. Passthrough to 3d_op_00.mp4, then Photos if enabled; PC builds 3d_op_00/01 via MTP watch")
                 Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)

@@ -47,7 +47,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 **Save segments to Photos** copies each finished segment into the **Loop Segments** album for PC import via Apple Devices / `Sync-FromIPhonePhotos.ps1`. This path is **optional**.
 
-When **Photos is on** (default), export uses **stream-per-minute** from pCloud (full passthrough, no sparse+dense temp). Each minute overwrites **`3d_op_00.mp4`** on the phone and adds one Photos clip (**PC MTP** often shows `IMG_*.mp4` under `202605_a`). **`Sync-FromIPhonePhotos.ps1 -Watch`** copies the **newest** clip to the **older** of `3d_op_00` / `3d_op_01` on the PC (always overwrite; backward jumps in a looping DLNA player are OK). Turn Photos **off** to use sparse temp (no MTP path).
+When **Photos is on** (default), export **dense-fills** each minute to sparse temp, passthroughs to **`3d_op_00.mp4`**, then imports to Photos (**PC MTP** often shows `IMG_*.mp4` under `202605_a`). First segment is slower than stream-export but more reliable on large moov-at-end HEVC. **`Sync-FromIPhonePhotos.ps1 -Watch`** copies the **newest** clip to the **older** of `3d_op_00` / `3d_op_01` on the PC. Low disk may still force pCloud stream (see export log).
 
 | | **Exports (`3d_op_*.mp4`)** | **Photos import** |
 |---|---------------------------|-------------------|
