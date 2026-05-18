@@ -386,10 +386,10 @@ final class SegmentExporter {
         let midFileDenseOnly = byteRange.start >= Self.midFilePrefetchThresholdBytes
         if midFileDenseOnly {
             log(
-                "Mid-file segment — dense-download \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)) (no pCloud stream for 10+ min)"
+                "Mid-file segment — dense-download \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)) (local temp only; no pCloud stream fallback)"
             )
             downloader.pauseBackgroundDownload()
-            try await downloader.ensureContiguousRange(byteRange)
+            try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
         }
         do {
             try await SegmentPassThroughExporter.exportWindow(
@@ -403,8 +403,33 @@ final class SegmentExporter {
                 log: log
             )
         } catch {
-            guard Self.shouldStreamFallback(after: error, midFileDenseOnly: midFileDenseOnly) else { throw error }
+            guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
+            if midFileDenseOnly {
+                log(
+                    "Temp not readable (\(error.localizedDescription)) — refreshing header, index, and window on disk…"
+                )
+                downloader.pauseBackgroundDownload()
+                try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
+                do {
+                    try await SegmentPassThroughExporter.exportWindow(
+                        asset: readAsset,
+                        videoFormat: videoFormat,
+                        audioFormat: audioFormat,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        outputURL: outputURL,
+                        sourceLabel: "temp file (mid-file prepared)",
+                        log: log
+                    )
+                    return
+                } catch {
+                    throw SegmentExporterError.midFileTempUnreadable(
+                        mediaTime: formatMediaTimeForLog(rangeStart),
+                        underlying: error.localizedDescription
+                    )
+                }
+            }
             log(
                 "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
             )
@@ -423,17 +448,11 @@ final class SegmentExporter {
                 )
                 return
             } catch {
-                guard Self.shouldStreamFallback(after: error, midFileDenseOnly: midFileDenseOnly) else { throw error }
+                guard Self.shouldStreamFallback(after: error) else { throw error }
                 try? FileManager.default.removeItem(at: outputURL)
-                if midFileDenseOnly {
-                    log(
-                        "Temp still not readable at mid-file — streaming this 60s window from pCloud (capped reads)"
-                    )
-                } else {
-                    log(
-                        "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
-                    )
-                }
+                log(
+                    "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
+                )
             }
             downloader.pauseBackgroundDownload()
             do {
@@ -471,10 +490,27 @@ final class SegmentExporter {
         }
     }
 
+    private func prepareMidFileTempForReader(
+        downloader: WebDAVTempFileDownload,
+        byteRange: TimelineByteRange,
+        log: @escaping (String) -> Void
+    ) async throws {
+        log("Mid-file temp: ensuring file header + MP4 index + dense window before reader…")
+        try await downloader.ensureFileHeadOnDisk()
+        try await downloader.ensureIndexTailOnDisk(force: true)
+        try await downloader.ensureContiguousRange(byteRange)
+    }
+
+    private func formatMediaTimeForLog(_ time: CMTime) -> String {
+        let seconds = CMTimeGetSeconds(time)
+        let min = Int(seconds) / 60
+        let sec = Int(seconds) % 60
+        return String(format: "%d:%02d", min, sec)
+    }
+
     private static let midFilePrefetchThresholdBytes: Int64 = 32 * 1024 * 1024
 
-    private static func shouldStreamFallback(after error: Error, midFileDenseOnly: Bool = false) -> Bool {
-        if midFileDenseOnly { return true }
+    private static func shouldStreamFallback(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {
             switch exportError {
             case .readerSetupFailed, .noKeyframeInWindow, .segmentOutputTooSmall:
@@ -926,6 +962,7 @@ enum SegmentExporterError: LocalizedError {
     case insufficientDiskSpace(needed: Int64, available: Int64)
     case noKeyframeInWindow
     case segmentOutputTooSmall(Int64)
+    case midFileTempUnreadable(mediaTime: String, underlying: String)
 
     var errorDescription: String? {
         switch self {
@@ -965,7 +1002,15 @@ enum SegmentExporterError: LocalizedError {
             }
             return "Write failed: \(error.localizedDescription)"
         case .writerBackpressure:
-            return "Segment writer timed out waiting for data."
+            return """
+            Segment writer timed out waiting for data (often after pCloud stream at 10+ min). \
+            Try seek 0 min, keep the app open on Wi‑Fi, and wait for “Window on disk” before later minutes.
+            """
+        case .midFileTempUnreadable(let mediaTime, let underlying):
+            return """
+            Could not export the \(mediaTime) minute from the temp copy (\(underlying)). \
+            Use seek 0 min first so the file header and index download, then export later minutes, or stay on Wi‑Fi with the app open until “Window on disk” appears.
+            """
         case .insufficientDiskSpace(let needed, let available):
             let needMB = needed / (1024 * 1024)
             let haveMB = available / (1024 * 1024)

@@ -505,7 +505,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 let paused = self.backgroundPausedForStream
                 self.lock.unlock()
                 if paused {
-                    self.log("Background download paused — using pCloud for this segment")
+                    self.log("Background download paused — filling this segment’s window on temp")
                 }
             } catch {
                 if !self.isCancelled() {
