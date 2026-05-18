@@ -208,6 +208,7 @@ final class SegmentExporter {
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     outputURL: stagingURL,
+                    isCancelled: cancelCheck,
                     log: logHandler
                 )
                 try await publishValidatedSegment(
@@ -317,6 +318,7 @@ final class SegmentExporter {
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     outputURL: stagingURL,
+                    isCancelled: cancelCheck,
                     log: logHandler
                 )
                 try await publishValidatedSegment(
@@ -438,6 +440,7 @@ final class SegmentExporter {
         rangeStart: CMTime,
         rangeDuration: CMTime,
         outputURL: URL,
+        isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
     ) async throws {
         let midFileSegment = byteRange.start >= Self.midFilePrefetchThresholdBytes
@@ -472,6 +475,7 @@ final class SegmentExporter {
                 rangeDuration: rangeDuration,
                 outputURL: outputURL,
                 sourceLabel: tempSourceLabel,
+                isCancelled: isCancelled,
                 log: log
             )
         } catch {
@@ -497,6 +501,7 @@ final class SegmentExporter {
                         rangeDuration: rangeDuration,
                         outputURL: outputURL,
                         sourceLabel: "sparse temp + pCloud (retry)",
+                        isCancelled: isCancelled,
                         log: log
                     )
                     return
@@ -520,6 +525,7 @@ final class SegmentExporter {
                         rangeDuration: rangeDuration,
                         outputURL: outputURL,
                         sourceLabel: "sparse temp + pCloud (window filled)",
+                        isCancelled: isCancelled,
                         log: log
                     )
                     return
@@ -544,6 +550,7 @@ final class SegmentExporter {
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     outputURL: outputURL,
+                    isCancelled: isCancelled,
                     log: log
                 )
             } catch SegmentExporterError.noKeyframeInWindow, SegmentExporterError.readerInterrupted,
@@ -561,6 +568,7 @@ final class SegmentExporter {
                     rangeDuration: rangeDuration,
                     outputURL: outputURL,
                     sourceLabel: tempSourceLabel,
+                    isCancelled: isCancelled,
                     log: log
                 )
             }
@@ -652,6 +660,7 @@ final class SegmentExporter {
         rangeStart: CMTime,
         rangeDuration: CMTime,
         outputURL: URL,
+        isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
     ) async throws {
         let auth = authorizationProvider()
@@ -696,6 +705,7 @@ final class SegmentExporter {
             rangeDuration: rangeDuration,
             outputURL: outputURL,
             sourceLabel: "pCloud stream",
+            isCancelled: isCancelled,
             log: log
         )
     }
@@ -951,7 +961,11 @@ final class SegmentWriterContext {
         writer.startSession(atSourceTime: sourceTime)
     }
 
-    func append(_ sample: CMSampleBuffer, track: SegmentTrackKind) throws {
+    func append(
+        _ sample: CMSampleBuffer,
+        track: SegmentTrackKind,
+        isCancelled: (() -> Bool)? = nil
+    ) throws {
         let input: AVAssetWriterInput
         switch track {
         case .video: input = videoInput
@@ -962,6 +976,9 @@ final class SegmentWriterContext {
 
         var attempts = 0
         while !input.isReadyForMoreMediaData {
+            if isCancelled?() == true {
+                throw SegmentExporterError.cancelled
+            }
             attempts += 1
             if attempts > 600_000 {
                 throw SegmentExporterError.writerBackpressure

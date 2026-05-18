@@ -12,6 +12,7 @@ enum SegmentPassThroughExporter {
         rangeDuration: CMTime,
         outputURL: URL,
         sourceLabel: String,
+        isCancelled: (() -> Bool)? = nil,
         log: (String) -> Void
     ) async throws {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
@@ -78,6 +79,9 @@ enum SegmentPassThroughExporter {
         let stallWithFewSamples: Double = 45
 
         while true {
+            if isCancelled?() == true {
+                throw SegmentExporterError.cancelled
+            }
             if reader.status == .failed {
                 throw reader.error.map { SegmentExporterError.readerFailed($0) }
                     ?? SegmentExporterError.readerSetupFailed
@@ -181,7 +185,7 @@ enum SegmentPassThroughExporter {
             let origin = timelineOrigin ?? rangeStart
             let timedSample = try SegmentSampleTiming.retimeToSegmentStart(next.sample, subtract: origin)
             do {
-                try writerContext?.append(timedSample, track: next.track)
+                try writerContext?.append(timedSample, track: next.track, isCancelled: isCancelled)
             } catch SegmentExporterError.writerFailed(let underlying) {
                 let ns = underlying as NSError
                 log(

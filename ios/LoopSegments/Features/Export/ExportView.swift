@@ -11,6 +11,7 @@ struct ExportView: View {
     @State private var logHint = ""
     @State private var photosAccessNote = ""
     @State private var liveLogTail = ""
+    @State private var exportTask: Task<Void, Never>?
 
     var body: some View {
         Form {
@@ -92,13 +93,16 @@ struct ExportView: View {
             }
             Section {
                 Button(session.isExportRunning ? "Exporting…" : "Start export") {
-                    Task { await startExport() }
+                    exportTask?.cancel()
+                    exportTask = Task { await startExport() }
                 }
                 .disabled(session.isExportRunning)
                 if session.isExportRunning {
                     Button("Stop", role: .destructive) {
                         session.cancelExport()
-                        status = "Cancelled"
+                        exportTask?.cancel()
+                        exportTask = nil
+                        status = "Stopping…"
                     }
                 }
             }
@@ -110,6 +114,10 @@ struct ExportView: View {
             if PhotosSegmentPublisher.isEnabled {
                 Task { await requestPhotosAccess() }
             }
+        }
+        .onDisappear {
+            exportTask?.cancel()
+            exportTask = nil
         }
         .task(id: session.isExportRunning) {
             guard session.isExportRunning else { return }
@@ -146,8 +154,11 @@ struct ExportView: View {
         do {
             try await session.startExport(item: item, seekMs: seekMs)
             status = "Done — latest segment in Exports (and Photos if enabled). Run Photos sync on PC; leave app to clear."
-        } catch SegmentExporterError.cancelled {
+        } catch is CancellationError, SegmentExporterError.cancelled {
             status = "Stopped — segment files removed from device"
+        } catch ExportError.stillStopping {
+            errorMessage = error.localizedDescription
+            status = "Wait for the previous export to finish stopping"
         } catch SegmentExporterError.readerInterrupted {
             errorMessage = "pCloud read was interrupted (not Stop). Try seek 0 min or Wi‑Fi."
             status = "Interrupted — partial segments may be in Exports"

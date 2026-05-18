@@ -6,6 +6,12 @@ final class ExportCoordinator {
     private var active = false
     var userRequestedCancel = false
 
+    var isBusy: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return active
+    }
+
     func cancel() {
         exporter.cancel()
     }
@@ -63,15 +69,19 @@ final class ExportCoordinator {
 
         do {
             // Export must not run on @MainActor — AVAssetReader + resource loader deadlock/crash the UI thread.
-            let result = try await Task.detached(priority: .userInitiated) {
-                try await self.exporter.run(
-                    inputURL: inputURL,
-                    catalogContentLength: item.contentLength,
-                    seekMs: seekMs,
-                    authorizationProvider: authProvider,
-                    logHandler: logHandler
-                )
-            }.value
+            let result = try await withTaskCancellationHandler {
+                try await Task.detached(priority: .userInitiated) {
+                    try await self.exporter.run(
+                        inputURL: inputURL,
+                        catalogContentLength: item.contentLength,
+                        seekMs: seekMs,
+                        authorizationProvider: authProvider,
+                        logHandler: logHandler
+                    )
+                }.value
+            } onCancel: {
+                self.exporter.cancel()
+            }
             logHandler("Export finished — 3d_op_*.mp4 kept for USB/Photos; temp source copy removed from Exports")
             if PhotosSegmentPublisher.isEnabled {
                 logHandler("Photos: syncing finished segments to library…")

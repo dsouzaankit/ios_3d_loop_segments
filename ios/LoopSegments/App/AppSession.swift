@@ -120,6 +120,10 @@ final class AppSession: ObservableObject {
     func startExport(item: WebDAVItem, seekMs: Int64) async throws {
         guard let credentials else { throw ExportError.notSignedIn }
         guard !isExportRunning else { throw ExportError.jobAlreadyActive }
+        for _ in 0 ..< 300 where exportCoordinator.isBusy {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard !exportCoordinator.isBusy else { throw ExportError.stillStopping }
 
         userRequestedExportCancel = false
         exportCoordinator.userRequestedCancel = false
@@ -139,17 +143,20 @@ final class AppSession: ObservableObject {
         userRequestedExportCancel = true
         exportCoordinator.userRequestedCancel = true
         exportCoordinator.cancel()
+        isExportRunning = false
     }
 }
 
 enum ExportError: LocalizedError {
     case notSignedIn
     case jobAlreadyActive
+    case stillStopping
 
     var errorDescription: String? {
         switch self {
         case .notSignedIn: return "Sign in to pCloud first."
         case .jobAlreadyActive: return "An export is already running."
+        case .stillStopping: return "Previous export is still stopping — wait a moment and tap Start again."
         }
     }
 }
