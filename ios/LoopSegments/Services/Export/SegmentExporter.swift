@@ -658,7 +658,7 @@ final class SegmentExporter {
             case .writerFailed:
                 return true
             case .cancelled, .readerInterrupted, .seekPastEnd, .noVideoTrack, .unsupportedCodec,
-                 .missingFormatDescription, .writerSetupFailed, .writerBackpressure,
+                 .missingFormatDescription, .writerSetupFailed, .writerBackpressure, .writerAudioStall,
                  .insufficientDiskSpace, .midFileTempUnreadable:
                 return false
             }
