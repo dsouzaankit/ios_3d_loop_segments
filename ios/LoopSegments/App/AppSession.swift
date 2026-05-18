@@ -31,7 +31,11 @@ final class AppSession: ObservableObject {
         do {
             var verified = try await WebDAVSignIn.verify(credentials: attempt)
             PCloudWebDAVRootResolver.clearCache()
-            verified = try await enrichWithAPIAccess(verified)
+            do {
+                verified = try await enrichWithAPIAccess(verified)
+            } catch {
+                SearchDebugLog.log("sign-in: WebDAV OK but API token failed — \(error.localizedDescription)")
+            }
             credentialStore.save(verified)
             credentials = verified
             WebDAVMediaSession.setActiveCredentials(verified)
@@ -67,16 +71,18 @@ final class AppSession: ObservableObject {
 
     private func enrichWithAPIAccess(_ credentials: WebDAVCredentials) async throws -> WebDAVCredentials {
         var updated = credentials
-        if let session = try? await PCloudAuth.fetchAuthSession(
+        let session = try await PCloudAuth.fetchAuthSession(
             email: credentials.email,
             password: credentials.password,
             preferredRegion: credentials.region,
             session: .shared
-        ) {
-            updated.region = session.region
-            updated.apiAuthToken = session.token
-            updated.apiAuthHost = session.apiHost
-        }
+        )
+        updated.region = session.region
+        updated.apiAuthToken = session.token
+        updated.apiAuthHost = session.apiHost
+        SearchDebugLog.log(
+            "sign-in: API token saved len=\(session.token.count) host=\(session.apiHost) region=\(session.region.rawValue)"
+        )
         if let root = try? await PCloudWebDAVRootResolver.filesRoot(credentials: updated) {
             updated.webDAVFilesRoot = root
         }
