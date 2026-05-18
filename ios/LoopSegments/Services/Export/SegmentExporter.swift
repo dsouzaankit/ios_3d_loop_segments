@@ -192,9 +192,6 @@ final class SegmentExporter {
                 )
                 try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
 
-                await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: stagingURL, log: logHandler)
-                logHandler("Ready for PC Photos sync — \(ExportPaths.segmentURL(index: slot).lastPathComponent) (staging)")
-
                 await waitForDLNAPublishSchedule(
                     minuteIndex: minuteIndex,
                     wallOrigin: dlnaPublishOrigin,
@@ -202,9 +199,12 @@ final class SegmentExporter {
                     log: logHandler
                 )
                 try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
+                let finalURL = ExportPaths.segmentURL(index: slot)
+                await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: finalURL, log: logHandler)
+                logHandler("Ready for PC Photos sync — \(finalURL.lastPathComponent)")
 
                 lastMediaTimeMs = Int64(windowEndSeconds * 1000)
-                logHandler("DLNA slot updated — \(ExportPaths.segmentURL(index: slot).lastPathComponent) (streamed from pCloud)")
+                logHandler("DLNA slot updated — \(finalURL.lastPathComponent) (streamed from pCloud)")
                 minuteIndex += 1
             }
         } else {
@@ -304,9 +304,6 @@ final class SegmentExporter {
                 )
                 try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
 
-                await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: stagingURL, log: logHandler)
-                logHandler("Ready for PC Photos sync — \(ExportPaths.segmentURL(index: slot).lastPathComponent) (staging)")
-
                 await waitForDLNAPublishSchedule(
                     minuteIndex: minuteIndex,
                     wallOrigin: dlnaPublishOrigin,
@@ -314,9 +311,12 @@ final class SegmentExporter {
                     log: logHandler
                 )
                 try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
+                let finalURL = ExportPaths.segmentURL(index: slot)
+                await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: finalURL, log: logHandler)
+                logHandler("Ready for PC Photos sync — \(finalURL.lastPathComponent)")
 
                 lastMediaTimeMs = Int64(windowEndSeconds * 1000)
-                logHandler("DLNA slot updated — \(ExportPaths.segmentURL(index: slot).lastPathComponent)")
+                logHandler("DLNA slot updated — \(finalURL.lastPathComponent)")
 
                 minuteIndex += 1
             }
@@ -763,6 +763,7 @@ final class SegmentWriterContext {
         realTime: Bool = true
     ) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        writer.shouldOptimizeForNetworkUse = true
         videoInput = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: nil,

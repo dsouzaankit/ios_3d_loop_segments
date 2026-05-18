@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Photos
 
@@ -49,6 +50,7 @@ enum PhotosSegmentPublisher {
             log("Photos: skipped \(videoURL.lastPathComponent) — file too small (\(bytes) B); wait for segment to finish writing")
             return
         }
+        guard await videoIsPlayableForPhotos(url: videoURL, log: log) else { return }
 
         do {
             try await deletePreviousAsset(slot: segmentSlot)
@@ -56,7 +58,7 @@ enum PhotosSegmentPublisher {
             storeAssetId(assetId, slot: segmentSlot)
             log("Photos: saved \(videoURL.lastPathComponent) (\(bytes / 1024) KB) → Photos library")
         } catch {
-            log("Photos: failed \(videoURL.lastPathComponent) — \(error.localizedDescription)")
+            log("Photos: failed \(videoURL.lastPathComponent) — \(describePhotosError(error))")
         }
     }
 
@@ -103,6 +105,35 @@ enum PhotosSegmentPublisher {
     }
 
     // MARK: - Private
+
+    private static func videoIsPlayableForPhotos(url: URL, log: @escaping (String) -> Void) async -> Bool {
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        do {
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard !tracks.isEmpty else {
+                log("Photos: skipped \(url.lastPathComponent) — no video track (file may still be writing)")
+                return false
+            }
+            return true
+        } catch {
+            log("Photos: skipped \(url.lastPathComponent) — not readable yet (\(error.localizedDescription))")
+            return false
+        }
+    }
+
+    private static func describePhotosError(_ error: Error) -> String {
+        let ns = error as NSError
+        var parts = [error.localizedDescription]
+        if ns.domain == PHPhotosErrorDomain || ns.domain == "PHPhotosErrorDomain" {
+            parts.append("code \(ns.code)")
+            if ns.code == 3302 {
+                parts.append(
+                    "(invalidResource — try Settings → Loop Segments → Photos → Full Access, free storage, or re-export)"
+                )
+            }
+        }
+        return parts.joined(separator: " ")
+    }
 
     private static func requestAuthorizationIfNeeded() async -> PHAuthorizationStatus {
         let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
