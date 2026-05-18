@@ -970,7 +970,7 @@ final class SegmentWriterContext {
         _ sample: CMSampleBuffer,
         track: SegmentTrackKind,
         isCancelled: (() -> Bool)? = nil,
-        log: ((String) -> Void)? = nil
+        log: (@escaping (String) -> Void)? = nil
     ) async throws {
         let input: AVAssetWriterInput
         switch track {

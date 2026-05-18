@@ -13,7 +13,7 @@ enum SegmentPassThroughExporter {
         outputURL: URL,
         sourceLabel: String,
         isCancelled: (() -> Bool)? = nil,
-        log: (String) -> Void
+        log: @escaping (String) -> Void
     ) async throws {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw SegmentExporterError.noVideoTrack
