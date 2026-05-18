@@ -46,20 +46,21 @@ enum PhotosSegmentPublisher {
         }
     }
 
-    static func publish(segmentSlot: Int, videoURL: URL, log: @escaping (String) -> Void) async {
-        guard isEnabled else { return }
-        guard await ensureAccess(log: log) else { return }
+    @discardableResult
+    static func publish(segmentSlot: Int, videoURL: URL, log: @escaping (String) -> Void) async -> Bool {
+        guard isEnabled else { return false }
+        guard await ensureAccess(log: log) else { return false }
 
         let bytes = fileByteCount(videoURL)
         guard FileManager.default.fileExists(atPath: videoURL.path) else {
             log("Photos: skipped slot \(segmentSlot) — file missing at \(videoURL.lastPathComponent)")
-            return
+            return false
         }
         guard bytes > 8192 else {
             log("Photos: skipped \(videoURL.lastPathComponent) — file too small (\(bytes) B); wait for segment to finish writing")
-            return
+            return false
         }
-        guard await videoIsPlayableForPhotos(url: videoURL, log: log) else { return }
+        guard await videoIsPlayableForPhotos(url: videoURL, log: log) else { return false }
 
         let probe = await probeImportResource(url: videoURL, label: "DLNA export")
         log("Photos: pre-import — \(probe.logLine)")
@@ -100,8 +101,10 @@ enum PhotosSegmentPublisher {
             }
             storeAssetId(assetId, slot: segmentSlot)
             log("Photos: saved as \(filename) (\(bytes / 1024) KB) → Photos library")
+            return true
         } catch {
             log("Photos: failed \(videoURL.lastPathComponent) — \(describePhotosError(error))")
+            return false
         }
     }
 
@@ -318,22 +321,12 @@ enum PhotosSegmentPublisher {
         let safeName = sanitizedPhotosFilename(preferredFilename)
         log("Photos: passthrough remux for library import (DLNA \(source.lastPathComponent) unchanged)")
         let asset = AVURLAsset(url: source, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
-            throw PhotosPublishError.changeFailed
-        }
-        let dest = FileManager.default.temporaryDirectory
-            .appendingPathComponent("LoopSegments-\(safeName)")
-        try? FileManager.default.removeItem(at: dest)
-        session.outputURL = dest
-        session.outputFileType = .mp4
-        session.shouldOptimizeForNetworkUse = true
-        let ok = await runExportSession(session)
-        guard ok, fileByteCount(dest) > 8192 else {
-            if let err = session.error {
-                throw err
-            }
-            throw PhotosPublishError.changeFailed
-        }
+        let dest = try await exportToTempMP4(
+            asset: asset,
+            preset: AVAssetExportPresetPassthrough,
+            filenamePrefix: "LoopSegments",
+            safeName: safeName
+        )
         log("Photos: remux ready (\(fileByteCount(dest) / 1024) KB, same codec as DLNA file)")
         return dest
     }
@@ -344,7 +337,13 @@ enum PhotosSegmentPublisher {
         log: @escaping (String) -> Void
     ) async throws -> URL {
         let safeName = sanitizedPhotosFilename(preferredFilename)
-        let asset = AVURLAsset(url: source, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        let isolatedSource = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LoopSegments-src-\(safeName)")
+        try? FileManager.default.removeItem(at: isolatedSource)
+        try FileManager.default.copyItem(at: source, to: isolatedSource)
+        defer { try? FileManager.default.removeItem(at: isolatedSource) }
+
+        let asset = AVURLAsset(url: isolatedSource, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         let compatible = Set(AVAssetExportSession.exportPresets(compatibleWith: asset))
         let presetCandidates = [
             AVAssetExportPreset1920x1080,
@@ -352,28 +351,55 @@ enum PhotosSegmentPublisher {
             AVAssetExportPreset960x540,
             AVAssetExportPresetMediumQuality,
         ]
-        guard let preset = presetCandidates.first(where: { compatible.contains($0) }) else {
+        let presets = presetCandidates.filter { compatible.contains($0) }
+        guard !presets.isEmpty else {
             throw PhotosPublishError.changeFailed
         }
-        log("Photos: H.264 transcode (\(preset)) — may take 1–3 min per 60s segment on device")
+        log("Photos: H.264 transcode — may take 1–3 min per 60s segment on device")
+        var lastFailure = "no preset succeeded"
+        for preset in presets {
+            log("Photos: trying \(preset)…")
+            do {
+                let dest = try await exportToTempMP4(
+                    asset: asset,
+                    preset: preset,
+                    filenamePrefix: "LoopSegments-h264",
+                    safeName: safeName
+                )
+                let outProbe = await probeImportResource(url: dest, label: "H.264 for Photos")
+                log("Photos: transcode output (\(preset)) — \(outProbe.logLine)")
+                return dest
+            } catch {
+                lastFailure = describePhotosError(error)
+                log("Photos: \(preset) failed — \(lastFailure)")
+            }
+        }
+        throw NSError(
+            domain: "PhotosSegmentPublisher",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: lastFailure]
+        )
+    }
+
+    private static func exportToTempMP4(
+        asset: AVURLAsset,
+        preset: String,
+        filenamePrefix: String,
+        safeName: String
+    ) async throws -> URL {
         guard let session = AVAssetExportSession(asset: asset, presetName: preset) else {
             throw PhotosPublishError.changeFailed
         }
         let dest = FileManager.default.temporaryDirectory
-            .appendingPathComponent("LoopSegments-h264-\(safeName)")
+            .appendingPathComponent("\(filenamePrefix)-\(preset)-\(safeName)")
         try? FileManager.default.removeItem(at: dest)
         session.outputURL = dest
         session.outputFileType = .mp4
         session.shouldOptimizeForNetworkUse = true
-        let ok = await runExportSession(session)
-        guard ok, fileByteCount(dest) > 8192 else {
-            if let err = session.error {
-                throw err
-            }
-            throw PhotosPublishError.changeFailed
+        let result = await runExportSession(session)
+        guard result.succeeded, fileByteCount(dest) > 8192 else {
+            throw result.error ?? PhotosPublishError.changeFailed
         }
-        let outProbe = await probeImportResource(url: dest, label: "H.264 for Photos")
-        log("Photos: transcode output — \(outProbe.logLine)")
         return dest
     }
 
@@ -407,10 +433,20 @@ enum PhotosSegmentPublisher {
         return (w, h)
     }
 
-    private static func runExportSession(_ session: AVAssetExportSession) async -> Bool {
+    private struct ExportSessionResult {
+        let succeeded: Bool
+        let error: Error?
+
+        init(session: AVAssetExportSession) {
+            succeeded = session.status == .completed
+            error = session.error
+        }
+    }
+
+    private static func runExportSession(_ session: AVAssetExportSession) async -> ExportSessionResult {
         await withCheckedContinuation { continuation in
             session.exportAsynchronously {
-                continuation.resume(returning: session.status == .completed)
+                continuation.resume(returning: ExportSessionResult(session: session))
             }
         }
     }
@@ -418,6 +454,12 @@ enum PhotosSegmentPublisher {
     private static func describePhotosError(_ error: Error) -> String {
         let ns = error as NSError
         var parts = [error.localizedDescription]
+        if ns.domain != PHPhotosErrorDomain, ns.domain != "PHPhotosErrorDomain" {
+            parts.append("\(ns.domain) \(ns.code)")
+            if let reason = ns.userInfo[NSLocalizedFailureReasonErrorKey] as? String, !reason.isEmpty {
+                parts.append(reason)
+            }
+        }
         if ns.domain == PHPhotosErrorDomain || ns.domain == "PHPhotosErrorDomain" {
             parts.append("code \(ns.code)")
             if ns.code == 3302 {

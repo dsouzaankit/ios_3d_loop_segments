@@ -385,18 +385,33 @@ final class SegmentExporter {
         }
         try ExportPaths.publishSegmentToDLNA(slot: slot, log: log)
         let finalURL = ExportPaths.segmentURL(index: slot)
-        await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: finalURL, log: log)
-        log("Ready for PC Photos sync — \(finalURL.lastPathComponent)")
+        let photosSaved = await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: finalURL, log: log)
+        if photosSaved {
+            log("Ready for PC Photos sync — \(finalURL.lastPathComponent)")
+        } else if PhotosSegmentPublisher.isEnabled {
+            log("DLNA ready — Photos import failed; use Exports/\(finalURL.lastPathComponent) or Apple Devices")
+        } else {
+            log("Ready for PC sync — \(finalURL.lastPathComponent) (Photos off)")
+        }
         if minuteIndex == 0, ExportDeliveryPolicy.prioritizeFirstPhotosPublish {
             let elapsed = CFAbsoluteTimeGetCurrent() - wallOrigin
-            log(
-                String(
-                    format: "Photos-first: %@ in library %.0fs after export start (target ≤%.0fs)",
-                    finalURL.lastPathComponent,
-                    elapsed,
-                    ExportDeliveryPolicy.firstPhotosTargetSeconds
+            if photosSaved {
+                log(
+                    String(
+                        format: "Photos-first: %@ in library %.0fs after export start (target ≤%.0fs)",
+                        finalURL.lastPathComponent,
+                        elapsed,
+                        ExportDeliveryPolicy.firstPhotosTargetSeconds
+                    )
                 )
-            )
+            } else if PhotosSegmentPublisher.isEnabled {
+                log(
+                    String(
+                        format: "Photos-first: import failed %.0fs after export start (DLNA file OK in Exports)",
+                        elapsed
+                    )
+                )
+            }
         }
         if ExportPaths.segmentFileCount == 1 {
             log("Segment \(finalURL.lastPathComponent) published (~60s cadence)")
