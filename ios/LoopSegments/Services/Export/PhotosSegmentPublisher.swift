@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 import Photos
 
@@ -54,7 +55,9 @@ enum PhotosSegmentPublisher {
 
         do {
             try await deletePreviousAsset(slot: segmentSlot)
-            let assetId = try await importVideo(url: videoURL)
+            let importURL = try await photosCompatibleCopy(from: videoURL, log: log)
+            defer { try? FileManager.default.removeItem(at: importURL) }
+            let assetId = try await importVideo(url: importURL)
             storeAssetId(assetId, slot: segmentSlot)
             log("Photos: saved \(videoURL.lastPathComponent) (\(bytes / 1024) KB) → Photos library")
         } catch {
@@ -114,10 +117,66 @@ enum PhotosSegmentPublisher {
                 log("Photos: skipped \(url.lastPathComponent) — no video track (file may still be writing)")
                 return false
             }
+            let duration = try await asset.load(.duration)
+            guard duration.isNumeric, CMTimeGetSeconds(duration) > 0.5 else {
+                log("Photos: skipped \(url.lastPathComponent) — duration too short for Photos")
+                return false
+            }
             return true
         } catch {
             log("Photos: skipped \(url.lastPathComponent) — not readable yet (\(error.localizedDescription))")
             return false
+        }
+    }
+
+    /// Passthrough remux often fails Photos (3302 invalidResource); export a library-friendly MP4 first.
+    private static func photosCompatibleCopy(
+        from source: URL,
+        log: @escaping (String) -> Void
+    ) async throws -> URL {
+        let asset = AVURLAsset(url: source, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        let presets = [
+            AVAssetExportPresetPassthrough,
+            AVAssetExportPreset1280x720,
+            AVAssetExportPresetMediumQuality,
+        ]
+        var lastError: Error?
+        for preset in presets {
+            guard let session = AVAssetExportSession(asset: asset, presetName: preset) else { continue }
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent("photos-import-\(UUID().uuidString).mp4")
+            try? FileManager.default.removeItem(at: dest)
+            session.outputURL = dest
+            session.outputFileType = .mp4
+            session.shouldOptimizeForNetworkUse = true
+            let ok = await runExportSession(session)
+            if ok, fileByteCount(dest) > 8192 {
+                log("Photos: remuxed for library via \(presetLabel(preset)) (\(fileByteCount(dest) / 1024) KB)")
+                return dest
+            }
+            lastError = session.error
+            try? FileManager.default.removeItem(at: dest)
+            if let err = session.error {
+                log("Photos: remux \(presetLabel(preset)) failed — \(err.localizedDescription)")
+            }
+        }
+        if let lastError {
+            throw lastError
+        }
+        throw PhotosPublishError.changeFailed
+    }
+
+    private static func presetLabel(_ preset: String) -> String {
+        if preset == AVAssetExportPresetPassthrough { return "passthrough" }
+        if preset == AVAssetExportPreset1280x720 { return "720p" }
+        return "medium"
+    }
+
+    private static func runExportSession(_ session: AVAssetExportSession) async -> Bool {
+        await withCheckedContinuation { continuation in
+            session.exportAsynchronously {
+                continuation.resume(returning: session.status == .completed)
+            }
         }
     }
 
