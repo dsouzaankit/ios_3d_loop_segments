@@ -4,6 +4,7 @@ import Foundation
 import Photos
 
 /// Publishes finished segment MP4s to the Photos library (visible for Recents and PC import).
+/// Uses a temporary passthrough remux only — never modifies `3d_op_*.mp4` (DLNA/USB keep full HEVC).
 enum PhotosSegmentPublisher {
     private static let enabledKey = "publishSegmentsToPhotos"
     private static let assetIdsKey = "photos_segment_asset_local_ids"
@@ -129,47 +130,31 @@ enum PhotosSegmentPublisher {
         }
     }
 
-    /// Passthrough remux often fails Photos (3302 invalidResource); export a library-friendly MP4 first.
+    /// Passthrough remux for Photos only (same HEVC/H.264 — no downscale; DLNA slot file is not touched).
     private static func photosCompatibleCopy(
         from source: URL,
         log: @escaping (String) -> Void
     ) async throws -> URL {
+        log("Photos: passthrough remux for library import (DLNA \(source.lastPathComponent) unchanged)")
         let asset = AVURLAsset(url: source, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-        let presets = [
-            AVAssetExportPresetPassthrough,
-            AVAssetExportPreset1280x720,
-            AVAssetExportPresetMediumQuality,
-        ]
-        var lastError: Error?
-        for preset in presets {
-            guard let session = AVAssetExportSession(asset: asset, presetName: preset) else { continue }
-            let dest = FileManager.default.temporaryDirectory
-                .appendingPathComponent("photos-import-\(UUID().uuidString).mp4")
-            try? FileManager.default.removeItem(at: dest)
-            session.outputURL = dest
-            session.outputFileType = .mp4
-            session.shouldOptimizeForNetworkUse = true
-            let ok = await runExportSession(session)
-            if ok, fileByteCount(dest) > 8192 {
-                log("Photos: remuxed for library via \(presetLabel(preset)) (\(fileByteCount(dest) / 1024) KB)")
-                return dest
-            }
-            lastError = session.error
-            try? FileManager.default.removeItem(at: dest)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+            throw PhotosPublishError.changeFailed
+        }
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("photos-import-\(UUID().uuidString).mp4")
+        try? FileManager.default.removeItem(at: dest)
+        session.outputURL = dest
+        session.outputFileType = .mp4
+        session.shouldOptimizeForNetworkUse = true
+        let ok = await runExportSession(session)
+        guard ok, fileByteCount(dest) > 8192 else {
             if let err = session.error {
-                log("Photos: remux \(presetLabel(preset)) failed — \(err.localizedDescription)")
+                throw err
             }
+            throw PhotosPublishError.changeFailed
         }
-        if let lastError {
-            throw lastError
-        }
-        throw PhotosPublishError.changeFailed
-    }
-
-    private static func presetLabel(_ preset: String) -> String {
-        if preset == AVAssetExportPresetPassthrough { return "passthrough" }
-        if preset == AVAssetExportPreset1280x720 { return "720p" }
-        return "medium"
+        log("Photos: remux ready (\(fileByteCount(dest) / 1024) KB, same codec as DLNA file)")
+        return dest
     }
 
     private static func runExportSession(_ session: AVAssetExportSession) async -> Bool {
@@ -187,7 +172,7 @@ enum PhotosSegmentPublisher {
             parts.append("code \(ns.code)")
             if ns.code == 3302 {
                 parts.append(
-                    "(invalidResource — try Settings → Loop Segments → Photos → Full Access, free storage, or re-export)"
+                    "(invalidResource — DLNA file unchanged; use USB/Exports copy. Try Photos Full Access or disable Photos export.)"
                 )
             }
         }
