@@ -59,7 +59,17 @@ enum PhotosSegmentPublisher {
             let filename = videoURL.lastPathComponent
             let importURL = try await photosCompatibleCopy(from: videoURL, preferredFilename: filename, log: log)
             defer { try? FileManager.default.removeItem(at: importURL) }
-            let assetId = try await importVideo(url: importURL, originalFilename: filename)
+            let assetId: String
+            do {
+                assetId = try await importVideo(url: importURL, originalFilename: filename)
+            } catch {
+                guard isPhotosInvalidResource(error) else { throw error }
+                log("Photos: passthrough import rejected (3302) — transcoding to H.264 for library only (DLNA file unchanged)…")
+                let h264URL = try await transcodeH264ForPhotos(from: videoURL, preferredFilename: filename, log: log)
+                defer { try? FileManager.default.removeItem(at: h264URL) }
+                assetId = try await importVideo(url: h264URL, originalFilename: filename)
+                log("Photos: H.264 transcode import OK (\(fileByteCount(h264URL) / 1024) KB)")
+            }
             storeAssetId(assetId, slot: segmentSlot)
             log("Photos: saved as \(filename) (\(bytes / 1024) KB) → Photos library")
         } catch {
@@ -160,6 +170,50 @@ enum PhotosSegmentPublisher {
         return dest
     }
 
+    /// Photos-only H.264 — used when `PHPhotosError` 3302 rejects passthrough HEVC (8K/4K).
+    private static func transcodeH264ForPhotos(
+        from source: URL,
+        preferredFilename: String,
+        log: @escaping (String) -> Void
+    ) async throws -> URL {
+        let safeName = sanitizedPhotosFilename(preferredFilename)
+        let asset = AVURLAsset(url: source, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        let compatible = Set(AVAssetExportSession.exportPresets(compatibleWith: asset))
+        let presetCandidates = [
+            AVAssetExportPreset1920x1080,
+            AVAssetExportPreset1280x720,
+            AVAssetExportPreset960x540,
+            AVAssetExportPresetMediumQuality,
+        ]
+        guard let preset = presetCandidates.first(where: { compatible.contains($0) }) else {
+            throw PhotosPublishError.changeFailed
+        }
+        log("Photos: H.264 transcode (\(preset)) — may take 1–3 min per 60s segment on device")
+        guard let session = AVAssetExportSession(asset: asset, presetName: preset) else {
+            throw PhotosPublishError.changeFailed
+        }
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LoopSegments-h264-\(safeName)")
+        try? FileManager.default.removeItem(at: dest)
+        session.outputURL = dest
+        session.outputFileType = .mp4
+        session.shouldOptimizeForNetworkUse = true
+        let ok = await runExportSession(session)
+        guard ok, fileByteCount(dest) > 8192 else {
+            if let err = session.error {
+                throw err
+            }
+            throw PhotosPublishError.changeFailed
+        }
+        return dest
+    }
+
+    private static func isPhotosInvalidResource(_ error: Error) -> Bool {
+        let ns = error as NSError
+        guard ns.domain == PHPhotosErrorDomain || ns.domain == "PHPhotosErrorDomain" else { return false }
+        return ns.code == 3302
+    }
+
     private static func runExportSession(_ session: AVAssetExportSession) async -> Bool {
         await withCheckedContinuation { continuation in
             session.exportAsynchronously {
@@ -175,7 +229,7 @@ enum PhotosSegmentPublisher {
             parts.append("code \(ns.code)")
             if ns.code == 3302 {
                 parts.append(
-                    "(invalidResource — DLNA file unchanged; use USB/Exports copy. Try Photos Full Access or disable Photos export.)"
+                    "(invalidResource — app retries H.264 transcode for Photos only; DLNA 3d_op_*.mp4 stays passthrough. Try Photos Full Access.)"
                 )
             }
         }

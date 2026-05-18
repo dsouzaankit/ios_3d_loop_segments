@@ -52,10 +52,10 @@ When **Photos is on** (default), export **dense-fills** each minute to sparse te
 | | **Exports (`3d_op_*.mp4`)** | **Photos import** |
 |---|---------------------------|-------------------|
 | Purpose | USB → PC → DLNA (primary) | Convenience / MTP script |
-| Codec / resolution | Full **passthrough** HEVC or H.264 from source | Same codec via temp passthrough remux — **DLNA files are never downscaled** |
-| Reliability | Reliable once export finishes | **May fail** on some sources |
+| Codec / resolution | Full **passthrough** HEVC or H.264 from source | Passthrough remux first; on **3302** → **H.264 transcode** (up to 1080p preset) for Photos only — **DLNA file never re-encoded** |
+| Reliability | Reliable once export finishes | HEVC passthrough may need H.264 fallback (slower, 1–3 min/segment) |
 
-**Known limitation:** iOS Photos can reject programmatic import of some **high‑resolution HEVC** MP4s (e.g. 4K/8K passthrough), even when AVFoundation can read and export them. The app logs `PHPhotosErrorDomain` **3302** (`invalidResource`) and suggests using **Files → Loop Segments → Exports** instead. Browsing 8K HEVC in the Photos *app* is not the same as third‑party library import — see [Apple HEVC support](https://support.apple.com/en-qa/116944).
+**Photos 3302:** iOS often rejects programmatic import of **high‑resolution HEVC** (`PHPhotosErrorDomain` **3302**). The app then **transcodes to H.264** for the Photos copy only; `3d_op_00.mp4` in Exports stays full passthrough for DLNA. USB can also use **Files → Exports** without Photos. See [Apple HEVC support](https://support.apple.com/en-qa/116944).
 
 Turn **Save segments to Photos** off only if you do not need MTP/USB sync to PC (dense fill still runs; no Photos import).
 
