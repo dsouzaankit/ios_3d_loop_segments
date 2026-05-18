@@ -443,12 +443,12 @@ final class SegmentExporter {
         let midFileSegment = byteRange.start >= Self.midFilePrefetchThresholdBytes
         if midFileSegment {
             log(
-                "Mid-file segment — dense \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)); " +
-                    "hybrid reader (local bytes + pCloud for sparse holes)"
+                "Mid-file segment — dense \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start))"
             )
             downloader.pauseBackgroundDownload()
             try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
         }
+        log("Passthrough via sparse temp + pCloud (filled ranges local; holes fetched on demand)")
         let (readAsset, hybridLoader) = makePassthroughAsset(
             downloader: downloader,
             tempURL: tempURL,
@@ -456,16 +456,13 @@ final class SegmentExporter {
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
             trustedLength: trustedLength,
-            useHybridSparse: midFileSegment,
             log: log
         )
-        if let hybridLoader {
-            defer {
-                readAsset.resourceLoader.setDelegate(nil, queue: nil)
-                hybridLoader.cancelOutstandingWork()
-            }
+        defer {
+            readAsset.resourceLoader.setDelegate(nil, queue: nil)
+            hybridLoader.cancelOutstandingWork()
         }
-        let tempSourceLabel = midFileSegment ? "sparse temp + pCloud" : "temp file"
+        let tempSourceLabel = "sparse temp + pCloud"
         do {
             try await SegmentPassThroughExporter.exportWindow(
                 asset: readAsset,
@@ -480,7 +477,12 @@ final class SegmentExporter {
         } catch {
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
-            if midFileSegment {
+            let writerRejected = Self.isWriterSampleRejection(error)
+            if writerRejected {
+                log(
+                    "Writer rejected passthrough samples (\(error.localizedDescription)) — likely sparse-hole reads; retrying via pCloud stream"
+                )
+            } else if midFileSegment {
                 log(
                     "Hybrid temp not readable (\(error.localizedDescription)) — refreshing header, index, and window…"
                 )
@@ -501,11 +503,9 @@ final class SegmentExporter {
                 } catch {
                     guard Self.shouldStreamFallback(after: error) else { throw error }
                     try? FileManager.default.removeItem(at: outputURL)
-                    log(
-                        "Hybrid temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
-                    )
                 }
-            } else {
+            }
+            if !writerRejected {
                 log(
                     "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
                 )
@@ -519,18 +519,18 @@ final class SegmentExporter {
                         rangeStart: rangeStart,
                         rangeDuration: rangeDuration,
                         outputURL: outputURL,
-                        sourceLabel: "temp file (window filled)",
+                        sourceLabel: "sparse temp + pCloud (window filled)",
                         log: log
                     )
                     return
                 } catch {
                     guard Self.shouldStreamFallback(after: error) else { throw error }
                     try? FileManager.default.removeItem(at: outputURL)
-                    log(
-                        "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
-                    )
                 }
             }
+            log(
+                "Streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
+            )
             downloader.pauseBackgroundDownload()
             do {
                 try await exportSegmentFromPCloudStream(
@@ -585,16 +585,8 @@ final class SegmentExporter {
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
         trustedLength: Int64,
-        useHybridSparse: Bool,
         log: @escaping (String) -> Void
-    ) -> (AVURLAsset, WebDAVResourceLoader?) {
-        guard useHybridSparse else {
-            let asset = AVURLAsset(
-                url: tempURL,
-                options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-            )
-            return (asset, nil)
-        }
+    ) -> (AVURLAsset, WebDAVResourceLoader) {
         let loader = WebDAVResourceLoader(
             remoteURL: remoteURL,
             authorizationProvider: authorizationProvider,
@@ -615,6 +607,13 @@ final class SegmentExporter {
         return (asset, loader)
     }
 
+    private static func isWriterSampleRejection(_ error: Error) -> Bool {
+        guard case SegmentExporterError.writerFailed(let underlying) = error else { return false }
+        let ns = underlying as NSError
+        if ns.domain == AVFoundationErrorDomain, ns.code == -11800 { return true }
+        return underlying.localizedDescription.lowercased().contains("could not be completed")
+    }
+
     private func formatMediaTimeForLog(_ time: CMTime) -> String {
         let seconds = CMTimeGetSeconds(time)
         let min = Int(seconds) / 60
@@ -631,8 +630,10 @@ final class SegmentExporter {
                 return true
             case .readerFailed(let underlying):
                 return isSparseContainerOpenFailure(underlying)
+            case .writerFailed:
+                return true
             case .cancelled, .readerInterrupted, .seekPastEnd, .noVideoTrack, .unsupportedCodec,
-                 .missingFormatDescription, .writerSetupFailed, .writerFailed, .writerBackpressure,
+                 .missingFormatDescription, .writerSetupFailed, .writerBackpressure,
                  .insufficientDiskSpace, .midFileTempUnreadable:
                 return false
             }

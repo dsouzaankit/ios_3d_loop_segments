@@ -180,7 +180,15 @@ enum SegmentPassThroughExporter {
 
             let origin = timelineOrigin ?? rangeStart
             let timedSample = try SegmentSampleTiming.retimeToSegmentStart(next.sample, subtract: origin)
-            try writerContext?.append(timedSample, track: next.track)
+            do {
+                try writerContext?.append(timedSample, track: next.track)
+            } catch SegmentExporterError.writerFailed(let underlying) {
+                let ns = underlying as NSError
+                log(
+                    "Writer append failed (\(next.track)) at source \(formatMediaTime(pts)) — \(underlying.localizedDescription) (domain \(ns.domain) \(ns.code))"
+                )
+                throw SegmentExporterError.writerFailed(underlying)
+            }
             if next.track == .video, CMTimeCompare(pts, rangeStart) >= 0 {
                 inRangeVideoSamples += 1
                 lastInRangePTS = pts
