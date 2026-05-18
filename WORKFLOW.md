@@ -45,7 +45,7 @@ Install via **TestFlight** or sideload (AltStore, etc.) with an Apple Developer 
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
 5. Keep the app in the foreground until both `3d_op_00.mp4` and `3d_op_01.mp4` exist (Files → Loop Segments → Exports).
-6. **Photos (v1.2+):** On the export screen, leave **Save segments to Photos** on. Each finished segment is copied to the **Loop Segments** album (slot 0/1 rotate — old clip for that slot is removed). iOS does not allow apps to write to **DCIM**; Photos is the supported path and is what Windows often lists as monthly folders (`202605_a`, etc.).
+6. **Photos (v1.2+, optional):** **Save segments to Photos** copies each finished segment to the **Loop Segments** album (slot 0/1 rotate). iOS does not allow apps to write to **DCIM**; Photos is what Windows often lists as monthly folders (`202605_a`, etc.). **Not required for DLNA** — `3d_op_*.mp4` in **Exports** keeps full HEVC/H.264 passthrough. Photos import may fail with error **3302** on some high‑resolution HEVC sources; use **Files → Loop Segments → Exports** (USB) instead. See [ios/README.md](ios/README.md#photos-library-optional--not-required-for-dlna).
 
 Large files on cellular: expect long runs; export paces reads in real time.
 

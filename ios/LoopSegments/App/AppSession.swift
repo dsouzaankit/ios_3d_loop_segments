@@ -59,9 +59,9 @@ final class AppSession: ObservableObject {
         let needsToken = stored.apiAuthToken?.isEmpty != false
         let needsRoot = !PCloudWebDAVRootResolver.isValidFilesRoot(stored.webDAVFilesRoot)
         if needsToken {
-            SearchDebugLog.log("search prepare: fetching pCloud API token (max 20s)…")
+            SearchDebugLog.log("search prepare: fetching pCloud API token (max 45s)…")
             do {
-                stored = try await ExportAsyncTimeout.run(seconds: 20, operation: "pCloud API login") {
+                stored = try await ExportAsyncTimeout.run(seconds: 45, operation: "pCloud API login") {
                     try await self.enrichWithAPIAccess(stored)
                 }
             } catch is CancellationError {

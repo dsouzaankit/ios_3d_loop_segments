@@ -55,7 +55,7 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Each 60s chunk is saved to Photos (visible in Recents). On PC use Sync-FromIPhonePhotos.ps1 or Apple Devices import from Internal Storage.")
+                Text("With Photos on: each 60s is streamed from pCloud (full quality, no sparse temp). First clip targets Photos within ~72s; then ~60s cadence. Turn off to use sparse temp (saves data/disk, slower).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("3d_op_*.mp4 stay in Exports until Stop or leaving the app; temp _export_source_working.mp4 is removed when export ends or on cleanup.")

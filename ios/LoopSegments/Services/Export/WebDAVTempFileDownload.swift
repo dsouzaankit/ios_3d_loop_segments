@@ -196,10 +196,13 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         guard range.length > 0 else { return }
         let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
         let rangeEnd = min(range.end, totalLength)
+        let needLen = rangeEnd - range.start
         log(
-            "Downloading window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) from pCloud (\(formatBytes(rangeEnd - range.start)))…"
+            "Downloading window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) from pCloud (\(formatBytes(needLen)), dense fill)…"
         )
         var offset = range.start
+        var lastLoggedPercent = -Self.progressStepPercent
+        var lastProgressLog = CFAbsoluteTimeGetCurrent()
         while offset < rangeEnd {
             if isCancelled() || Task.isCancelled { throw CancellationError() }
             let end = min(offset + Self.downloadChunkBytes - 1, rangeEnd - 1)
@@ -213,6 +216,16 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             throughput.recordNetworkBytes(data.count)
             try write(data, at: offset)
             offset = end + 1
+            let done = offset - range.start
+            let now = CFAbsoluteTimeGetCurrent()
+            let pct = needLen > 0 ? Int(done * 100 / needLen) : 100
+            if pct >= lastLoggedPercent + Self.progressStepPercent || now - lastProgressLog >= 20 {
+                lastProgressLog = now
+                lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
+                log(
+                    "Downloading window \(pct)% — \(formatBytes(done)) / \(formatBytes(needLen)) (dense)\(speedLogSuffix())"
+                )
+            }
         }
         if tailStart < totalLength, !hasIndexTailOnDisk() {
             try await ensureIndexTailOnDisk()

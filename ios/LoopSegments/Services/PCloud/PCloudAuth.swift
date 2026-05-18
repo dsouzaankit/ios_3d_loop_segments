@@ -6,10 +6,19 @@ enum PCloudAuth {
     private static let authInactiveExpireSeconds = "2592000"
     private static let deviceName = "LoopSegments-iOS"
 
+    /// No cookie jar — avoids `userinfo` returning a profile without a new `auth` token from a stale session.
+    private static let authSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: config)
+    }()
+
     /// Verifies REST API login (search). Returns the datacenter that accepted the password.
     static func verifyAPIAccess(
         credentials: WebDAVCredentials,
-        session: URLSession = .shared
+        session: URLSession = authSession
     ) async throws -> PCloudRegion {
         let (_, region, _) = try await fetchAuthSession(
             email: credentials.email,
@@ -25,7 +34,7 @@ enum PCloudAuth {
         email: String,
         password: String,
         region: PCloudRegion,
-        session: URLSession = .shared
+        session: URLSession = authSession
     ) async throws -> String {
         let (token, _, _) = try await fetchAuthSession(
             email: email,
@@ -155,8 +164,8 @@ enum PCloudAuth {
 
     private static func plainAuthParameterSets(username: String, password: String) -> [[String: String]] {
         [
-            baseAuthParameters(username: username, password: password, includeLogout: false),
             baseAuthParameters(username: username, password: password, includeLogout: true),
+            baseAuthParameters(username: username, password: password, includeLogout: false),
         ]
     }
 
@@ -170,13 +179,13 @@ enum PCloudAuth {
                 username: username,
                 digest: digest,
                 passwordDigest: passwordDigest,
-                includeLogout: false
+                includeLogout: true
             ),
             baseAuthParameters(
                 username: username,
                 digest: digest,
                 passwordDigest: passwordDigest,
-                includeLogout: true
+                includeLogout: false
             ),
         ]
     }
@@ -226,22 +235,40 @@ enum PCloudAuth {
     }
 
     private static func extractAuthToken(_ json: [String: Any]) -> String? {
-        for key in ["auth", "authtoken", "token"] {
+        for key in ["auth", "authtoken", "token", "access_token"] {
             if let value = json[key] as? String {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { return trimmed }
             }
+            if let value = json[key] as? NSNumber {
+                let text = value.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { return text }
+            }
         }
         return nil
+    }
+
+    /// `result=0` with `userid` but no `auth` — password often works for WebDAV but API search token is blocked.
+    private static func isProfileWithoutAuthToken(_ json: [String: Any]) -> Bool {
+        PCloudAPIRequest.resultCode(json) == 0
+            && extractAuthToken(json) == nil
+            && json["userid"] != nil
     }
 
     private static func missingTokenMessage(_ json: [String: Any]) -> String {
         if let apiMessage = PCloudAPIRequest.errorMessage(json), !apiMessage.isEmpty {
             return apiMessage
         }
+        if isProfileWithoutAuthToken(json) {
+            return """
+            pCloud returned your account profile but no API search token (WebDAV can still work). \
+            Sign out, confirm US vs Europe matches my.pCloud, then sign in again. \
+            If two-factor authentication (2FA) is on, pCloud often blocks third-party API tokens — try disabling 2FA temporarily, \
+            or use an app-specific password from pCloud Security settings if your account offers one.
+            """
+        }
         return """
-        pCloud accepted login but returned no API token. Sign out, pick the correct US/Europe region, and sign in again. \
-        If you use two-factor authentication, create an app password in pCloud settings and use that here instead of your main password.
+        pCloud login did not return an API token. Sign out, pick the correct US/Europe region, and sign in again.
         """
     }
 

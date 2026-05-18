@@ -1,5 +1,3 @@
-https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
-
 # Build and install without owning a Mac
 
 Apple still requires a **signed IPA** to run on a physical iPhone. You do **not** have to join the **$99/year** Developer Program for personal testing — a **free Apple ID** is enough, with a **~7-day** reinstall cycle.

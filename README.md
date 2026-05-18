@@ -30,7 +30,7 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 .\Copy-FromIncoming.ps1
 ```
 
-`Sync-IphoneSegments.ps1` only applies if your PC exposes a readable iPhone Exports path (uncommon with Apple Devices).
+**PowerShell cannot automate phone `Exports` → PC.** Apple Devices requires a manual **Save to PC**; scripts only automate copy from a **local Windows folder** you already saved into (`Copy-FromIncoming.ps1`). `Sync-IphoneSegments.ps1` works only if Explorer exposes a readable iPhone `Exports` path (uncommon). See [FEASIBILITY.md](FEASIBILITY.md).
 
 ---
 

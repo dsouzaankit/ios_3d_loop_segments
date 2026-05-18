@@ -87,6 +87,13 @@ final class SegmentExporter {
 
         let fileSize = rangeCache.contentLengthValue() ?? 0
         let streamFromPCloud = Self.shouldStreamSegments(fileBytes: fileSize)
+        if ExportDeliveryPolicy.preferStreamPerSegment {
+            logHandler(
+                "Photos-first delivery — streaming each 60s from pCloud (full passthrough; no sparse temp). " +
+                    "First Photos target ≤\(Int(ExportDeliveryPolicy.firstPhotosTargetSeconds))s; " +
+                    "then ~\(Int(ExportDeliveryPolicy.segmentPublishCadenceSeconds))s cadence."
+            )
+        }
         try Self.ensureExportDiskSpace(fileBytes: fileSize, streaming: streamFromPCloud)
 
         let durationSeconds: Double
@@ -151,9 +158,11 @@ final class SegmentExporter {
         logHandler("DLNA: 3d_op_00/01 update at most once per ~60s wall time (staging → slot; safe for players that cannot refresh mid-playback)")
 
         if streamFromPCloud {
-            logHandler(
-                "Large file (\(Self.formatBytes(fileSize))) — each 60s segment reads only that minute from pCloud (no \(Self.formatBytes(fileSize)) temp copy)"
-            )
+            if !ExportDeliveryPolicy.preferStreamPerSegment {
+                logHandler(
+                    "Large file (\(Self.formatBytes(fileSize))) — each 60s segment reads only that minute from pCloud (no \(Self.formatBytes(fileSize)) temp copy)"
+                )
+            }
             logHandler("Publishing 60s segments as each minute is read from pCloud")
             while true {
                 try checkCancelled()
@@ -190,21 +199,16 @@ final class SegmentExporter {
                     outputURL: stagingURL,
                     log: logHandler
                 )
-                try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
-
-                await waitForDLNAPublishSchedule(
+                try await publishValidatedSegment(
                     minuteIndex: minuteIndex,
-                    wallOrigin: dlnaPublishOrigin,
                     slot: slot,
+                    stagingURL: stagingURL,
+                    rangeDuration: rangeDuration,
+                    wallOrigin: dlnaPublishOrigin,
                     log: logHandler
                 )
-                try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
-                let finalURL = ExportPaths.segmentURL(index: slot)
-                await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: finalURL, log: logHandler)
-                logHandler("Ready for PC Photos sync — \(finalURL.lastPathComponent)")
 
                 lastMediaTimeMs = Int64(windowEndSeconds * 1000)
-                logHandler("DLNA slot updated — \(finalURL.lastPathComponent) (streamed from pCloud)")
                 minuteIndex += 1
             }
         } else {
@@ -302,22 +306,16 @@ final class SegmentExporter {
                     outputURL: stagingURL,
                     log: logHandler
                 )
-                try SegmentLocalReadiness.validateOutputFile(at: stagingURL, log: logHandler)
-
-                await waitForDLNAPublishSchedule(
+                try await publishValidatedSegment(
                     minuteIndex: minuteIndex,
-                    wallOrigin: dlnaPublishOrigin,
                     slot: slot,
+                    stagingURL: stagingURL,
+                    rangeDuration: rangeDuration,
+                    wallOrigin: dlnaPublishOrigin,
                     log: logHandler
                 )
-                try ExportPaths.publishSegmentToDLNA(slot: slot, log: logHandler)
-                let finalURL = ExportPaths.segmentURL(index: slot)
-                await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: finalURL, log: logHandler)
-                logHandler("Ready for PC Photos sync — \(finalURL.lastPathComponent)")
 
                 lastMediaTimeMs = Int64(windowEndSeconds * 1000)
-                logHandler("DLNA slot updated — \(finalURL.lastPathComponent)")
-
                 minuteIndex += 1
             }
 
@@ -335,11 +333,54 @@ final class SegmentExporter {
     private static let diskMarginBytes: Int64 = 384 * 1024 * 1024
     private static let streamingWorkingSetBytes: Int64 = 700 * 1024 * 1024
 
-    /// Direct AVFoundation-on-WebDAV only when there is not enough room even for a sparse partial temp file.
+    /// Stream each 60s window when Photos-first delivery is on; otherwise only when disk is too low for sparse temp.
     private static func shouldStreamSegments(fileBytes: Int64) -> Bool {
         guard fileBytes > 0 else { return false }
+        if ExportDeliveryPolicy.preferStreamPerSegment { return true }
         guard let free = freeDiskBytes() else { return false }
         return free < streamingWorkingSetBytes + diskMarginBytes
+    }
+
+    private func publishValidatedSegment(
+        minuteIndex: Int,
+        slot: Int,
+        stagingURL: URL,
+        rangeDuration: CMTime,
+        wallOrigin: CFAbsoluteTime,
+        log: @escaping (String) -> Void
+    ) async throws {
+        try await SegmentLocalReadiness.validateOutputFile(
+            at: stagingURL,
+            rangeDuration: rangeDuration,
+            log: log
+        )
+        let skipWallHold = ExportDeliveryPolicy.prioritizeFirstPhotosPublish && minuteIndex == 0
+        if !skipWallHold {
+            await waitForDLNAPublishSchedule(
+                minuteIndex: minuteIndex,
+                wallOrigin: wallOrigin,
+                slot: slot,
+                log: log
+            )
+        } else {
+            log("Photos-first — publishing slot 0 immediately (no wall-clock hold)")
+        }
+        try ExportPaths.publishSegmentToDLNA(slot: slot, log: log)
+        let finalURL = ExportPaths.segmentURL(index: slot)
+        await PhotosSegmentPublisher.publish(segmentSlot: slot, videoURL: finalURL, log: log)
+        log("Ready for PC Photos sync — \(finalURL.lastPathComponent)")
+        if minuteIndex == 0, ExportDeliveryPolicy.prioritizeFirstPhotosPublish {
+            let elapsed = CFAbsoluteTimeGetCurrent() - wallOrigin
+            log(
+                String(
+                    format: "Photos-first: %@ in library %.0fs after export start (target ≤%.0fs)",
+                    finalURL.lastPathComponent,
+                    elapsed,
+                    ExportDeliveryPolicy.firstPhotosTargetSeconds
+                )
+            )
+        }
+        log("DLNA slot \(finalURL.lastPathComponent) published (~60s wall-clock cadence)")
     }
 
     private static func hasDiskForFullCopy(fileBytes: Int64) -> Bool {

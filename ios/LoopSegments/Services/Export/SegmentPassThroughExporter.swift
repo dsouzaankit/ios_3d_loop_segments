@@ -196,13 +196,27 @@ enum SegmentPassThroughExporter {
             throw SegmentExporterError.noKeyframeInWindow
         }
 
-        let coveredSeconds = CMTimeGetSeconds(CMTimeSubtract(lastInRangePTS, rangeStart))
+        let segmentOrigin = timelineOrigin ?? rangeStart
+        let startOffsetInWindow = CMTimeGetSeconds(CMTimeSubtract(segmentOrigin, rangeStart))
+        let coveredSeconds = CMTimeGetSeconds(CMTimeSubtract(lastInRangePTS, segmentOrigin))
         let needSeconds = CMTimeGetSeconds(rangeDuration) * 0.85
+        if startOffsetInWindow > ExportDeliveryPolicy.maxKeyframeStartOffsetSeconds {
+            try? FileManager.default.removeItem(at: outputURL)
+            log(
+                String(
+                    format: "Segment starts at %@ (%.0fs into window) — need keyframe near %@",
+                    formatMediaTime(segmentOrigin),
+                    startOffsetInWindow,
+                    formatMediaTime(rangeStart)
+                )
+            )
+            throw SegmentExporterError.segmentOutputTooSmall(0)
+        }
         if inRangeVideoSamples < minInRangeVideoSamples || coveredSeconds < needSeconds {
             try? FileManager.default.removeItem(at: outputURL)
             log(
                 String(
-                    format: "Segment incomplete — %d video samples, ~%.0fs in window (need ~%d samples / ~%.0fs); download more temp data",
+                    format: "Segment incomplete — %d video samples, ~%.0fs written (need ~%d samples / ~%.0fs from first keyframe)",
                     inRangeVideoSamples,
                     coveredSeconds,
                     minInRangeVideoSamples,

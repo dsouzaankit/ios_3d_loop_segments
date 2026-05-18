@@ -179,13 +179,24 @@ enum SegmentLocalReadiness {
         }
     }
 
-    static func validateOutputFile(at url: URL, log: (String) -> Void) throws {
+    static func validateOutputFile(
+        at url: URL,
+        rangeDuration: CMTime,
+        log: (String) -> Void
+    ) async throws {
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
             .int64Value ?? 0
         guard bytes >= minOutputBytes else {
             throw SegmentExporterError.segmentOutputTooSmall(bytes)
         }
-        log("Segment size OK — \(bytes / 1024) KB")
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        let duration = try await asset.load(.duration)
+        let seconds = CMTimeGetSeconds(duration)
+        let needSeconds = CMTimeGetSeconds(rangeDuration) * 0.85
+        guard seconds.isFinite, seconds >= needSeconds else {
+            throw SegmentExporterError.segmentOutputTooSmall(bytes)
+        }
+        log(String(format: "Segment size OK — %d KB, %.1fs duration", bytes / 1024, seconds))
     }
 
     private static func probeMinContiguousBytes(
