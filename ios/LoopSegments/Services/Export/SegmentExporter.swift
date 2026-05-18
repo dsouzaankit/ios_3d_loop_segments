@@ -519,7 +519,7 @@ final class SegmentExporter {
                 return isSparseContainerOpenFailure(underlying)
             case .cancelled, .readerInterrupted, .seekPastEnd, .noVideoTrack, .unsupportedCodec,
                  .missingFormatDescription, .writerSetupFailed, .writerFailed, .writerBackpressure,
-                 .insufficientDiskSpace:
+                 .insufficientDiskSpace, .midFileTempUnreadable:
                 return false
             }
         }
