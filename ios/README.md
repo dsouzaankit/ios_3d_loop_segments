@@ -37,7 +37,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + AAC (AV1 sources are rejected at probe)
-- 60s segments, two-file rotate (`3d_op_00` / `3d_op_01`); seek jumps download to that timeline (ffmpeg `-ss` style, not from byte 0)
+- 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via `Sync-FromIPhonePhotos.ps1` (build 92+)
 - Real-time read pacing (like ffmpeg `-re`)
 - Runs until end of file or **Stop**
 
@@ -47,7 +47,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 **Save segments to Photos** copies each finished segment into the **Loop Segments** album for PC import via Apple Devices / `Sync-FromIPhonePhotos.ps1`. This path is **optional**.
 
-When **Photos is on** (default), export uses **stream-per-minute** from pCloud (full passthrough, no sparse+dense temp): first clip targets **Photos within ~72s**, then **~60s** wall-clock cadence. Turn Photos **off** to use sparse temp (saves cellular/disk, slower, can mis-map huge HEVC files).
+When **Photos is on** (default), export uses **stream-per-minute** from pCloud (full passthrough, no sparse+dense temp). Each minute overwrites **`3d_op_00.mp4`** on the phone and adds one Photos clip (**PC MTP** often shows `IMG_*.mp4` under `202605_a`). **`Sync-FromIPhonePhotos.ps1 -Watch`** copies the **newest** clip to the **older** of `3d_op_00` / `3d_op_01` on the PC (always overwrite; backward jumps in a looping DLNA player are OK). Turn Photos **off** to use sparse temp (no MTP path).
 
 | | **Exports (`3d_op_*.mp4`)** | **Photos import** |
 |---|---------------------------|-------------------|
@@ -88,7 +88,7 @@ Export and folder browse use **WebDAV only** — you do not need search for thos
 | PC save folder → DLNA library (`F:\f1_media\...`) | **Yes** — after you saved into `LoopSegmentsIncoming` (or similar): `windows\Copy-FromIncoming.ps1`, `Watch-LoopSegmentsIncoming.ps1` |
 | Live ~60s segment refresh on PC | **No** via USB — use sibling repo **`Run-SegmentCopy.ps1`** (pCloud → PC) or a future LAN pull from the phone |
 
-`Sync-IphoneSegments.ps1` only helps if Explorer shows a **readable** iPhone `…\Loop Segments\Exports` path (uncommon when you only use Apple Devices Save). `Sync-FromIPhonePhotos.ps1` is experimental (Photos/DCIM MTP), not Exports.
+`Sync-IphoneSegments.ps1` only helps if Explorer shows a **readable** iPhone `…\Loop Segments\Exports` path. **`Sync-FromIPhonePhotos.ps1 -Watch`** is the Photos/MTP path when Apple Devices is unavailable: newest phone clip → older PC DLNA slot.
 
 Details: [../WORKFLOW.md](../WORKFLOW.md) §3, [../FEASIBILITY.md](../FEASIBILITY.md).
 

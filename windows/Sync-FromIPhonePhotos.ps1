@@ -1,28 +1,24 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Copy the newest iPhone camera-roll videos (MTP) into the DLNA segment folder as 3d_op_00/01.
+  Copy the newest iPhone Photos video (MTP) into the older of the PC DLNA pair (3d_op_00 / 3d_op_01).
 
 .DESCRIPTION
-  For Loop Segments v1.2+ with "Save segments to Photos" enabled. Photos land in DCIM or
-  monthly folders (e.g. 202605_a) under Internal Storage — not as 3d_op_*.mp4.
+  For Loop Segments with "Save segments to Photos" enabled. The phone keeps one segment file
+  (3d_op_00.mp4 in Exports); each minute overwrites it and adds a new Photos clip (often IMG_*.mp4
+  under the latest month folder, e.g. 202605_a).
 
-  Uses Shell.Application + CopyHere (MTP-safe). Do NOT use Copy-Item on COM .Path values;
-  that pattern from generic snippets often fails silently.
+  Each run: take the **newest** video in the scan, always copy it, and **overwrite** the older of
+  the two PC DLNA slots (or 3d_op_00, then 3d_op_01, if a slot is missing). No dedup — backward
+  jumps in an endlessly looping DLNA player are expected.
 
-  After a successful Photos export, iOS usually writes clips into the **newest** monthly
-  folder under Internal Storage (e.g. 202605_a). By default this script searches DCIM plus
-  only that latest YYYYMM_x folder (not every old month), then picks the newest videos there.
-
-  This is NOT a live mirror: run on a schedule or after export. For stable names in app
-  storage, use Sync-IphoneSegments.ps1 when Exports is visible, or Apple Devices save +
-  Copy-FromIncoming.ps1.
+  Uses Shell.Application + CopyHere (MTP-safe). Do NOT use Copy-Item on COM .Path values.
 
 .PARAMETER Discover
   List iPhone MTP folders and newest video candidates.
 
-.PARAMETER NewestCount
-  How many recent videos to map to 3d_op_00.mp4 .. 3d_op_(N-1).mp4 (default 2).
+.PARAMETER LegacyDualMap
+  Old behavior: copy the two newest phone videos to 3d_op_00 and 3d_op_01 by date order.
 
 .PARAMETER Watch
   Repeat sync every -PollSeconds until you press Enter (run from a console window).
@@ -31,31 +27,25 @@
   Interval between syncs when -Watch is set (default 60).
 
 .PARAMETER AllMonthFolders
-  Search every YYYYMM_x folder (old behavior). Default: only DCIM + the latest month folder.
+  Search every YYYYMM_x folder. Default: only DCIM + the latest month folder.
 
 .EXAMPLE
   .\Sync-FromIPhonePhotos.ps1 -Discover
 
 .EXAMPLE
   .\Set-LoopSegmentsDestination.ps1 'D:\media\3d_fullsbs_trans'
-  .\Sync-FromIPhonePhotos.ps1
-
-.EXAMPLE
-  .\Sync-FromIPhonePhotos.ps1 -DestinationDirectory 'D:\media\3d_fullsbs_trans'
-
-.EXAMPLE
   .\Sync-FromIPhonePhotos.ps1 -Watch
 #>
 [CmdletBinding()]
 param(
     [string] $DestinationDirectory = '',
     [string] $DeviceNameMatch = 'iPhone|Apple',
-    [int] $NewestCount = 2,
     [string] $StagingDirectory = '',
     [int] $PollSeconds = 60,
     [switch] $Discover,
     [switch] $Watch,
     [switch] $AllMonthFolders,
+    [switch] $LegacyDualMap,
     [switch] $DryRun
 )
 
@@ -197,6 +187,12 @@ function Get-VideoItemsRecursive {
     return $videos
 }
 
+function Select-NewestVideo {
+    param([System.Collections.Generic.List[object]] $AllVideos)
+    if ($AllVideos.Count -eq 0) { return $null }
+    return @($AllVideos | Sort-Object { Get-ShellFolderItemDate $_ } -Descending | Select-Object -First 1)[0]
+}
+
 function Select-NewestVideosForSegments {
     param(
         [System.Collections.Generic.List[object]] $AllVideos,
@@ -213,6 +209,26 @@ function Select-NewestVideosForSegments {
     return @($AllVideos |
         Sort-Object { Get-ShellFolderItemDate $_ } -Descending |
         Select-Object -First $Count)
+}
+
+function Select-DlnaOverwriteTarget {
+    param([string] $DestinationRoot)
+    $paths = @(
+        (Join-Path $DestinationRoot $SegmentNames[0]),
+        (Join-Path $DestinationRoot $SegmentNames[1])
+    )
+    $exists = @(
+        (Test-Path -LiteralPath $paths[0] -PathType Leaf),
+        (Test-Path -LiteralPath $paths[1] -PathType Leaf)
+    )
+    if (-not $exists[0]) { return $paths[0], $SegmentNames[0], '3d_op_00 missing — initial slot' }
+    if (-not $exists[1]) { return $paths[1], $SegmentNames[1], '3d_op_01 missing — second slot' }
+    $t0 = (Get-Item -LiteralPath $paths[0]).LastWriteTimeUtc
+    $t1 = (Get-Item -LiteralPath $paths[1]).LastWriteTimeUtc
+    if ($t0 -le $t1) {
+        return $paths[0], $SegmentNames[0], 'overwrite older PC slot (3d_op_00)'
+    }
+    return $paths[1], $SegmentNames[1], 'overwrite older PC slot (3d_op_01)'
 }
 
 function Invoke-MtpCopyHere {
@@ -246,6 +262,30 @@ function Wait-ForStagedFile {
     return $null
 }
 
+function Copy-MtpVideoToPath {
+    param(
+        $Shell,
+        [string] $StagingDirectory,
+        $SourceItem,
+        [string] $FinalPath,
+        [switch] $DryRun
+    )
+    $leaf = [string]$SourceItem.Name
+    if ($DryRun) {
+        Write-Host "  Would copy to $FinalPath"
+        return
+    }
+    Get-ChildItem -LiteralPath $StagingDirectory -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    Invoke-MtpCopyHere -Shell $Shell -DestFolderPath $StagingDirectory -SourceItem $SourceItem
+    $staged = Wait-ForStagedFile -Directory $StagingDirectory -LeafName $leaf
+    if (-not $staged) {
+        throw "Timed out waiting for MTP copy of $leaf"
+    }
+    Copy-Item -LiteralPath $staged -Destination $FinalPath -Force
+    Write-Host "  -> $FinalPath"
+}
+
 function Show-DiscoverReport {
     param(
         [string] $NameMatch,
@@ -276,13 +316,12 @@ function Show-DiscoverReport {
         Write-Host ("  {0:yyyy-MM-dd HH:mm}  {1,-28}  {2}" -f $d, $_.Name, $size)
     }
     Write-Host ''
-    $segmentLike = @($all | Where-Object { [string]$_.Name -match $SegmentExportNamePattern })
-    if ($segmentLike.Count -gt 0) {
-        Write-Host "Loop Segments exports (3d_op_*.mp4) in scan: $($segmentLike.Count)"
+    $newest = Select-NewestVideo -AllVideos $all
+    if ($newest) {
+        Write-Host "Sync target: newest file $($newest.Name) -> older of PC 3d_op_00 / 3d_op_01 (always overwrite)."
     }
-    Write-Host 'Sync picks 3d_op_*.mp4 when present; otherwise newest videos in scan.'
-    Write-Host 'Maps to 3d_op_00.mp4 / 3d_op_01.mp4 on the PC DLNA folder.'
-    Write-Host 'Use -AllMonthFolders to scan every YYYYMM_x folder (older behavior).'
+    Write-Host 'DLNA player can wait ~60s until both PC slots exist.'
+    Write-Host 'Use -LegacyDualMap for old two-newest-phone-files behavior.'
     $dest = Get-LoopSegmentsDestinationDirectory -Override $DestinationDirectory
     Write-Host "DLNA destination: $dest"
     [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
@@ -308,16 +347,12 @@ function Invoke-PhotoSegmentSync {
     param(
         [string] $DestinationDirectory,
         [string] $DeviceNameMatch,
-        [int] $NewestCount,
         [string] $StagingDirectory,
         [switch] $AllMonthFolders,
+        [switch] $LegacyDualMap,
         [switch] $DryRun,
         [switch] $VerboseNotes
     )
-
-    if ($NewestCount -lt 1 -or $NewestCount -gt $SegmentNames.Count) {
-        throw "NewestCount must be 1..$($SegmentNames.Count)"
-    }
 
     $phoneFolder, $shell = Get-IPhoneRootFolder -NameMatch $DeviceNameMatch
     if (-not $phoneFolder) {
@@ -341,13 +376,6 @@ function Invoke-PhotoSegmentSync {
             throw 'No .mp4/.mov files found. Enable Save segments to Photos and finish at least one 60s segment.'
         }
 
-        $pick = Select-NewestVideosForSegments -AllVideos $allVideos -Count $NewestCount
-
-        if ($pick.Count -lt $NewestCount) {
-            Write-Warning "Only $($pick.Count) video(s) found; expected $NewestCount."
-            Write-Warning 'Finish another 60s segment on the phone (Photos export) or run again after both exist.'
-        }
-
         $destRoot = Get-LoopSegmentsDestinationDirectory -Override $DestinationDirectory
         Test-LoopSegmentsDestinationReady -Directory $destRoot
         Write-Host "DLNA destination: $destRoot"
@@ -363,28 +391,30 @@ function Invoke-PhotoSegmentSync {
             New-Item -ItemType Directory -Path $staging -Force | Out-Null
         }
 
-        $ordered = @($pick | Sort-Object { Get-ShellFolderItemDate $_ })
-        for ($i = 0; $i -lt $ordered.Count; $i++) {
-            $item = $ordered[$i]
-            $segmentName = $SegmentNames[$i]
-            $finalPath = Join-Path $destRoot $segmentName
-            Write-Host "MTP: $($item.Name) -> $segmentName"
-
-            if ($DryRun) {
-                Write-Host "  Would copy to $finalPath"
-                continue
+        if ($LegacyDualMap) {
+            $pick = Select-NewestVideosForSegments -AllVideos $allVideos -Count 2
+            if ($pick.Count -lt 2) {
+                Write-Warning "Only $($pick.Count) video(s) found; legacy mode expects 2."
             }
-
-            Get-ChildItem -LiteralPath $staging -File -ErrorAction SilentlyContinue |
-                Remove-Item -Force -ErrorAction SilentlyContinue
-            Invoke-MtpCopyHere -Shell $shell -DestFolderPath $staging -SourceItem $item
-            $staged = Wait-ForStagedFile -Directory $staging -LeafName ([string]$item.Name)
-            if (-not $staged) {
-                throw "Timed out waiting for MTP copy of $($item.Name)"
+            $ordered = @($pick | Sort-Object { Get-ShellFolderItemDate $_ })
+            for ($i = 0; $i -lt $ordered.Count; $i++) {
+                $item = $ordered[$i]
+                $segmentName = $SegmentNames[$i]
+                $finalPath = Join-Path $destRoot $segmentName
+                Write-Host "MTP (legacy): $($item.Name) -> $segmentName"
+                Copy-MtpVideoToPath -Shell $shell -StagingDirectory $staging -SourceItem $item -FinalPath $finalPath -DryRun:$DryRun
             }
-            Copy-Item -LiteralPath $staged -Destination $finalPath -Force
-            Write-Host "  -> $finalPath"
+            return
         }
+
+        $newest = Select-NewestVideo -AllVideos $allVideos
+        if (-not $newest) {
+            throw 'No video selected from iPhone scan.'
+        }
+
+        $finalPath, $segmentName, $reason = Select-DlnaOverwriteTarget -DestinationRoot $destRoot
+        Write-Host "MTP: $($newest.Name) -> $segmentName ($reason)"
+        Copy-MtpVideoToPath -Shell $shell -StagingDirectory $staging -SourceItem $newest -FinalPath $finalPath -DryRun:$DryRun
     } finally {
         if ($shell) {
             [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
@@ -400,7 +430,7 @@ if ($Discover) {
 if ($Watch) {
     if ($PollSeconds -lt 5) { throw 'PollSeconds must be at least 5.' }
     $destLabel = [System.IO.Path]::GetFullPath($DestinationDirectory)
-    Write-Host "Watch mode: sync every $PollSeconds s -> $destLabel"
+    Write-Host "Watch mode: newest phone clip -> older PC DLNA slot every $PollSeconds s -> $destLabel"
     Write-Host 'Press Enter to stop (keep this window open; iPhone unlocked on USB).'
     Write-Host ''
 
@@ -412,9 +442,9 @@ if ($Watch) {
             Invoke-PhotoSegmentSync `
                 -DestinationDirectory $DestinationDirectory `
                 -DeviceNameMatch $DeviceNameMatch `
-                -NewestCount $NewestCount `
                 -StagingDirectory $StagingDirectory `
                 -AllMonthFolders:$AllMonthFolders `
+                -LegacyDualMap:$LegacyDualMap `
                 -DryRun:$DryRun `
                 -VerboseNotes:($iteration -eq 1)
         } catch {
@@ -433,9 +463,9 @@ if ($Watch) {
 Invoke-PhotoSegmentSync `
     -DestinationDirectory $DestinationDirectory `
     -DeviceNameMatch $DeviceNameMatch `
-    -NewestCount $NewestCount `
     -StagingDirectory $StagingDirectory `
     -AllMonthFolders:$AllMonthFolders `
+    -LegacyDualMap:$LegacyDualMap `
     -DryRun:$DryRun `
     -VerboseNotes
 Write-Host 'Done.'

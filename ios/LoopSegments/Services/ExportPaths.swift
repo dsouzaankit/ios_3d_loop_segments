@@ -3,7 +3,8 @@ import Foundation
 enum ExportPaths {
     static let segmentPattern = "3d_op_%02d.mp4"
     static let segmentDurationSeconds = 60
-    static let segmentFileCount = 2
+    /// One rotating file on the phone; PC DLNA pair (`3d_op_00` / `3d_op_01`) is built by `Sync-FromIPhonePhotos.ps1`.
+    static let segmentFileCount = 1
 
     static func segmentURL(index: Int) -> URL {
         let name = String(format: segmentPattern, index % segmentFileCount)

@@ -55,7 +55,10 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("With Photos on: each 60s is streamed from pCloud (full quality, no sparse temp). First clip targets Photos within ~72s; then ~60s cadence. Turn off to use sparse temp (saves data/disk, slower).")
+                Text("With Photos on: each 60s overwrites one clip on the phone; PC sync builds 3d_op_00/01 (MTP may show IMG_*.mp4). Backward jumps in the DLNA loop are OK.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("Turn Photos off to use sparse temp (saves cellular/disk, slower).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("3d_op_*.mp4 stay in Exports until Stop or leaving the app; temp _export_source_working.mp4 is removed when export ends or on cleanup.")
@@ -66,7 +69,7 @@ struct ExportView: View {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
                 Text("1. Large files use a sparse temp copy (only bytes needed per minute, not the full file).")
-                Text("2. Segments stage in Exports, then 3d_op_00/01 publish once per ~60s wall time (DLNA-safe)")
+                Text("2. Each ~60s segment stages then publishes to 3d_op_00.mp4 on the phone (PC keeps two DLNA files via USB sync)")
                 Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -142,7 +145,7 @@ struct ExportView: View {
         status = "Downloading to temp; publishing 60s chunks for DLNA as each minute is on disk…"
         do {
             try await session.startExport(item: item, seekMs: seekMs)
-            status = "Done — 3d_op_00/01 kept in Exports (and Photos if enabled). Copy to PC, then leave the app to clear."
+            status = "Done — latest segment in Exports (and Photos if enabled). Run Photos sync on PC; leave app to clear."
         } catch SegmentExporterError.cancelled {
             status = "Stopped — segment files removed from device"
         } catch SegmentExporterError.readerInterrupted {

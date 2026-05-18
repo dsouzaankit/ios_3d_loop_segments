@@ -7,10 +7,10 @@ struct SegmentExportResult {
     let reachedEnd: Bool
 }
 
-/// Stream-copy export to two rotating 60s MP4 segments (AVFoundation, WebDAV input).
+/// Stream-copy export to one rotating 60s MP4 on the phone (AVFoundation, WebDAV input).
 final class SegmentExporter {
     static let segmentDurationSeconds = 60.0
-    static let segmentFileCount = 2
+    static var segmentFileCount: Int { ExportPaths.segmentFileCount }
 
     private let cancelLock = NSLock()
     private var isCancelled = false
@@ -155,7 +155,10 @@ final class SegmentExporter {
         var lastMediaTimeMs = seekMs
         var reachedEnd = false
 
-        logHandler("DLNA: 3d_op_00/01 update at most once per ~60s wall time (staging → slot; safe for players that cannot refresh mid-playback)")
+        logHandler(
+            "Phone export: one file \(ExportPaths.segmentURL(index: 0).lastPathComponent) per ~60s; " +
+                "PC keeps 3d_op_00/01 via Photos MTP sync (overwrite older slot)"
+        )
 
         if streamFromPCloud {
             if !ExportDeliveryPolicy.preferStreamPerSegment {
@@ -354,7 +357,8 @@ final class SegmentExporter {
             rangeDuration: rangeDuration,
             log: log
         )
-        let skipWallHold = ExportDeliveryPolicy.prioritizeFirstPhotosPublish && minuteIndex == 0
+        let skipWallHold = ExportPaths.segmentFileCount == 1
+            || (ExportDeliveryPolicy.prioritizeFirstPhotosPublish && minuteIndex == 0)
         if !skipWallHold {
             await waitForDLNAPublishSchedule(
                 minuteIndex: minuteIndex,
@@ -362,6 +366,8 @@ final class SegmentExporter {
                 slot: slot,
                 log: log
             )
+        } else if ExportPaths.segmentFileCount == 1 {
+            log("Publishing segment immediately (single phone file; PC DLNA ring via USB sync)")
         } else {
             log("Photos-first — publishing slot 0 immediately (no wall-clock hold)")
         }
@@ -380,7 +386,11 @@ final class SegmentExporter {
                 )
             )
         }
-        log("DLNA slot \(finalURL.lastPathComponent) published (~60s wall-clock cadence)")
+        if ExportPaths.segmentFileCount == 1 {
+            log("Segment \(finalURL.lastPathComponent) published (~60s cadence)")
+        } else {
+            log("DLNA slot \(finalURL.lastPathComponent) published (~60s wall-clock cadence)")
+        }
     }
 
     private static func hasDiskForFullCopy(fileBytes: Int64) -> Bool {

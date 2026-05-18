@@ -24,5 +24,11 @@ enum SegmentCleanup {
                 log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
+        for legacy in ["3d_op_01.mp4", "3d_op_01.staging.mp4"] {
+            let url = ExportPaths.exportsDirectory.appendingPathComponent(legacy)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            try? FileManager.default.removeItem(at: url)
+            log?("Removed legacy \(legacy) from Exports")
+        }
     }
 }

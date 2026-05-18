@@ -56,11 +56,12 @@ enum PhotosSegmentPublisher {
 
         do {
             try await deletePreviousAsset(slot: segmentSlot)
-            let importURL = try await photosCompatibleCopy(from: videoURL, log: log)
+            let filename = videoURL.lastPathComponent
+            let importURL = try await photosCompatibleCopy(from: videoURL, preferredFilename: filename, log: log)
             defer { try? FileManager.default.removeItem(at: importURL) }
-            let assetId = try await importVideo(url: importURL)
+            let assetId = try await importVideo(url: importURL, originalFilename: filename)
             storeAssetId(assetId, slot: segmentSlot)
-            log("Photos: saved \(videoURL.lastPathComponent) (\(bytes / 1024) KB) → Photos library")
+            log("Photos: saved as \(filename) (\(bytes / 1024) KB) → Photos library")
         } catch {
             log("Photos: failed \(videoURL.lastPathComponent) — \(describePhotosError(error))")
         }
@@ -133,15 +134,17 @@ enum PhotosSegmentPublisher {
     /// Passthrough remux for Photos only (same HEVC/H.264 — no downscale; DLNA slot file is not touched).
     private static func photosCompatibleCopy(
         from source: URL,
+        preferredFilename: String,
         log: @escaping (String) -> Void
     ) async throws -> URL {
+        let safeName = sanitizedPhotosFilename(preferredFilename)
         log("Photos: passthrough remux for library import (DLNA \(source.lastPathComponent) unchanged)")
         let asset = AVURLAsset(url: source, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
             throw PhotosPublishError.changeFailed
         }
         let dest = FileManager.default.temporaryDirectory
-            .appendingPathComponent("photos-import-\(UUID().uuidString).mp4")
+            .appendingPathComponent("LoopSegments-\(safeName)")
         try? FileManager.default.removeItem(at: dest)
         session.outputURL = dest
         session.outputFileType = .mp4
@@ -193,12 +196,15 @@ enum PhotosSegmentPublisher {
         }
     }
 
-    private static func importVideo(url: URL) async throws -> String {
+    private static func importVideo(url: URL, originalFilename: String) async throws -> String {
         var createdId: String?
+        let filename = sanitizedPhotosFilename(originalFilename)
         try await performChanges {
-            guard let request = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url) else {
-                return
-            }
+            let request = PHAssetCreationRequest.forAsset()
+            let options = PHAssetResourceCreationOptions()
+            options.originalFilename = filename
+            options.uniformTypeIdentifier = "public.mpeg-4"
+            request.addResource(with: .video, fileURL: url, options: options)
             createdId = request.placeholderForCreatedAsset?.localIdentifier
         }
 
@@ -206,6 +212,16 @@ enum PhotosSegmentPublisher {
             throw PhotosPublishError.noAssetCreated
         }
         return createdId
+    }
+
+    /// Photos uses the import file name unless `originalFilename` is set; avoid random `photos-import-<uuid>.mp4`.
+    private static func sanitizedPhotosFilename(_ name: String) -> String {
+        let base = (name as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = "3d_op_segment.mp4"
+        guard !base.isEmpty else { return fallback }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        let cleaned = String(base.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
+        return cleaned.isEmpty ? fallback : cleaned
     }
 
     private static func deletePreviousAsset(slot: Int) async throws {
