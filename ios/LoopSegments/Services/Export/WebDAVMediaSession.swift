@@ -73,8 +73,7 @@ enum WebDAVMediaSession {
                  NSURLErrorCannotConnectToHost,
                  NSURLErrorDNSLookupFailed,
                  NSURLErrorSecureConnectionFailed,
-                 NSURLErrorDataNotAllowed,
-                 NSURLErrorCancelled:
+                 NSURLErrorDataNotAllowed:
                 return true
             default:
                 break

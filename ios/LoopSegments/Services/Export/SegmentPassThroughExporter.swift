@@ -92,7 +92,8 @@ enum SegmentPassThroughExporter {
         let stallBeforeFirstSample: Double = 90
         let stallAfterStart: Double = 90
         let stallWithFewSamples: Double = 45
-        let sampleReadTimeout: Double = 120
+        /// `AVAssetReaderTrackOutput` is not thread-safe — never call `copyNextSampleBuffer` concurrently.
+        let readerQueue = DispatchQueue(label: "com.loopsegments.passthrough-reader")
 
         final class PassthroughProgress: @unchecked Sendable {
             var inRangeVideoSamples = 0
@@ -151,39 +152,12 @@ enum SegmentPassThroughExporter {
             }
 
             await Task.yield()
-            let videoSample: CMSampleBuffer?
-            do {
-                videoSample = try await ExportAsyncTimeout.run(
-                    seconds: sampleReadTimeout,
-                    operation: "Video sample read"
-                ) {
-                    await Task.detached {
-                        videoOutput.copyNextSampleBuffer()
-                    }.value
-                }
-            } catch is ExportAsyncTimeout.TimedOut {
-                log(
-                    "Reader timed out after \(Int(sampleReadTimeout))s waiting for next video sample — pCloud read may be stalled"
-                )
-                throw SegmentExporterError.readerSetupFailed
-            }
+            let videoSample = await copyNextSample(on: readerQueue, from: videoOutput)
             if videoSample != nil {
                 lastSampleAt = CFAbsoluteTimeGetCurrent()
             }
             if !skipAudio, heldAudio == nil, let audioOutput {
-                do {
-                    heldAudio = try await ExportAsyncTimeout.run(
-                        seconds: sampleReadTimeout,
-                        operation: "Audio sample read"
-                    ) {
-                        await Task.detached {
-                            audioOutput.copyNextSampleBuffer()
-                        }.value
-                    }
-                } catch is ExportAsyncTimeout.TimedOut {
-                    log("Audio sample read timed out — continuing video-only")
-                    heldAudio = nil
-                }
+                heldAudio = await copyNextSample(on: readerQueue, from: audioOutput)
             }
 
             var candidates: [(track: SegmentTrackKind, sample: CMSampleBuffer)] = []
@@ -329,6 +303,17 @@ enum SegmentPassThroughExporter {
 
         if let writerContext {
             try await writerContext.finish()
+        }
+    }
+
+    private static func copyNextSample(
+        on queue: DispatchQueue,
+        from output: AVAssetReaderTrackOutput
+    ) async -> CMSampleBuffer? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: output.copyNextSampleBuffer())
+            }
         }
     }
 

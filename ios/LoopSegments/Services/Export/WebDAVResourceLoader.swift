@@ -85,6 +85,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private let readLocalBytes: ((Int64, Int) -> Data?)?
     private let logLine: ((String) -> Void)?
     private let throughput = LoaderThroughput()
+    private let rangeFetchGate = RangeFetchGate(maxSlots: 3)
 
     private var cachedContentLength: Int64?
     private let trustedContentLength: Int64?
@@ -336,9 +337,13 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         for attempt in 1 ... 4 {
             if Task.isCancelled { throw CancellationError() }
             do {
-                let data = try await performRangeGETOnce(offset: offset, endInclusive: endInclusive)
+                let data = try await rangeFetchGate.withSlot {
+                    try await performRangeGETOnce(offset: offset, endInclusive: endInclusive)
+                }
                 storeHotCache(offset: offset, data: data)
                 return data
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 lastError = error
                 guard WebDAVMediaSession.isRetriable(error), attempt < 4 else { throw error }
@@ -581,6 +586,39 @@ private final class LoaderThroughput: @unchecked Sendable {
         guard avgElapsed >= 1.0, bytes > 0 else { return "" }
         let avg = (Double(bytes) * 8.0) / (avgElapsed * 1_000_000.0)
         return String(format: " @ %.1f Mbps avg", avg)
+    }
+}
+
+/// Limits parallel pCloud range GETs when AVFoundation issues many loader requests at once.
+private actor RangeFetchGate {
+    private let maxSlots: Int
+    private var used = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(maxSlots: Int) {
+        self.maxSlots = max(1, maxSlots)
+    }
+
+    func withSlot<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        if used < maxSlots {
+            used += 1
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            used -= 1
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }
 
