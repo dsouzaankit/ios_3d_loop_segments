@@ -51,6 +51,15 @@ struct ExportView: View {
                         }
                     }
                 ))
+                if PhotosSegmentPublisher.isEnabled {
+                    Toggle("H.264 for Photos (skip passthrough)", isOn: Binding(
+                        get: { PhotosSegmentPublisher.alwaysTranscodeH264ForPhotos },
+                        set: { PhotosSegmentPublisher.alwaysTranscodeH264ForPhotos = $0 }
+                    ))
+                    Text("On: every segment is transcoded to H.264 for Photos only (~1–3 min/segment). Off: try passthrough first; on 3302 the app transcodes. DLNA file in Exports stays full quality.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 if !photosAccessNote.isEmpty {
                     Text(photosAccessNote)
                         .font(.footnote)

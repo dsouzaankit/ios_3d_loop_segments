@@ -7,8 +7,9 @@ import Photos
 /// Uses a temporary passthrough remux only — never modifies `3d_op_*.mp4` (DLNA/USB keep full HEVC).
 enum PhotosSegmentPublisher {
     private static let enabledKey = "publishSegmentsToPhotos"
+    private static let alwaysH264Key = "photosAlwaysTranscodeH264"
     private static let assetIdsKey = "photos_segment_asset_local_ids"
-    /// Legacy visible album id (removed assets from old builds when cleaning up).
+
     static var isEnabled: Bool {
         get {
             if UserDefaults.standard.object(forKey: enabledKey) == nil {
@@ -17,6 +18,12 @@ enum PhotosSegmentPublisher {
             return UserDefaults.standard.bool(forKey: enabledKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
+    }
+
+    /// Skip passthrough remux/import; H.264 transcode only (slower, higher Photos acceptance on 8K HEVC).
+    static var alwaysTranscodeH264ForPhotos: Bool {
+        get { UserDefaults.standard.bool(forKey: alwaysH264Key) }
+        set { UserDefaults.standard.set(newValue, forKey: alwaysH264Key) }
     }
 
     @discardableResult
@@ -54,21 +61,42 @@ enum PhotosSegmentPublisher {
         }
         guard await videoIsPlayableForPhotos(url: videoURL, log: log) else { return }
 
+        let probe = await probeImportResource(url: videoURL, label: "DLNA export")
+        log("Photos: pre-import — \(probe.logLine)")
+        for hint in probe.hints {
+            log("Photos: hint — \(hint)")
+        }
+
         do {
             try await deletePreviousAsset(slot: segmentSlot)
             let filename = videoURL.lastPathComponent
-            let importURL = try await photosCompatibleCopy(from: videoURL, preferredFilename: filename, log: log)
-            defer { try? FileManager.default.removeItem(at: importURL) }
+            let useH264First = alwaysTranscodeH264ForPhotos || probe.likelyNeedsH264Transcode
+
             let assetId: String
-            do {
-                assetId = try await importVideo(url: importURL, originalFilename: filename)
-            } catch {
-                guard isPhotosInvalidResource(error) else { throw error }
-                log("Photos: passthrough import rejected (3302) — transcoding to H.264 for library only (DLNA file unchanged)…")
+            if useH264First {
+                if alwaysTranscodeH264ForPhotos {
+                    log("Photos: H.264 transcode enabled (skipping passthrough import attempt)")
+                } else {
+                    log("Photos: using H.264 transcode first (\(probe.likelyH264Reason))")
+                }
                 let h264URL = try await transcodeH264ForPhotos(from: videoURL, preferredFilename: filename, log: log)
                 defer { try? FileManager.default.removeItem(at: h264URL) }
                 assetId = try await importVideo(url: h264URL, originalFilename: filename)
-                log("Photos: H.264 transcode import OK (\(fileByteCount(h264URL) / 1024) KB)")
+                log("Photos: H.264 import OK (\(fileByteCount(h264URL) / 1024) KB)")
+            } else {
+                let importURL = try await photosCompatibleCopy(
+                    from: videoURL,
+                    preferredFilename: filename,
+                    log: log
+                )
+                defer { try? FileManager.default.removeItem(at: importURL) }
+                assetId = try await importVideoWithH264Fallback(
+                    importURL: importURL,
+                    sourceURL: videoURL,
+                    originalFilename: filename,
+                    sourceProbe: probe,
+                    log: log
+                )
             }
             storeAssetId(assetId, slot: segmentSlot)
             log("Photos: saved as \(filename) (\(bytes / 1024) KB) → Photos library")
@@ -121,6 +149,147 @@ enum PhotosSegmentPublisher {
 
     // MARK: - Private
 
+    private struct PhotosImportProbe {
+        let label: String
+        let videoCodec: String
+        let audioCodec: String
+        let dimensions: String
+        let durationSeconds: Double
+        let byteCount: Int64
+        let hints: [String]
+        let likelyNeedsH264Transcode: Bool
+        let likelyH264Reason: String
+
+        var logLine: String {
+            String(
+                format: "%@ — video %@ %@, audio %@, %.1fs, %lld KB",
+                label,
+                videoCodec,
+                dimensions,
+                audioCodec,
+                durationSeconds,
+                byteCount / 1024
+            )
+        }
+    }
+
+    private static func probeImportResource(url: URL, label: String) async -> PhotosImportProbe {
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        var videoCodec = "?"
+        var dimensions = "?"
+        var audioCodec = "none"
+        var durationSeconds = 0.0
+        var hints: [String] = []
+
+        if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
+            if let formats = try? await videoTrack.load(.formatDescriptions),
+               let first = formats.first {
+                videoCodec = CodecSupport.fourCCString(first)
+                let size = CMVideoFormatDescriptionGetDimensions(first)
+                dimensions = "\(size.width)x\(size.height)"
+                let codec = CMFormatDescriptionGetMediaSubType(first)
+                if CodecSupport.isHEVCVideo(codec) {
+                    if size.width > 1920 || size.height > 1920 {
+                        hints.append("HEVC over 1920px often gets Photos 3302 (invalidResource)")
+                    } else {
+                        hints.append("HEVC may still get 3302 on some devices — H.264 fallback exists")
+                    }
+                }
+            }
+        } else {
+            hints.append("no video track")
+        }
+
+        if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
+           let formats = try? await audioTrack.load(.formatDescriptions),
+           let first = formats.first {
+            audioCodec = CodecSupport.fourCCString(first)
+            let codec = CMFormatDescriptionGetMediaSubType(first)
+            if !isLikelyPhotosCompatibleAudio(codec) {
+                hints.append("audio \(audioCodec) may trigger 3302 — H.264 transcode re-encodes to AAC")
+            }
+        }
+
+        if let duration = try? await asset.load(.duration), duration.isNumeric {
+            durationSeconds = CMTimeGetSeconds(duration)
+            if durationSeconds < 0.5 {
+                hints.append("duration under 0.5s")
+            }
+        }
+
+        let auth = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        if auth == .limited {
+            hints.append("Photos Limited access — use Full Access in Settings")
+        }
+
+        let likelyReason: String
+        let likely: Bool
+        if CodecSupport.isHEVCVideo(fourCC(videoCodec)) {
+            if dimensions.contains("x"),
+               let dims = parseDimensions(dimensions),
+               dims.width > 1920 || dims.height > 1920 {
+                likely = true
+                likelyReason = "HEVC \(dimensions)"
+            } else {
+                likely = false
+                likelyReason = ""
+            }
+        } else if audioCodec != "none", !isLikelyPhotosCompatibleAudio(fourCC(audioCodec)) {
+            likely = true
+            likelyReason = "non-AAC audio \(audioCodec)"
+        } else {
+            likely = false
+            likelyReason = ""
+        }
+
+        return PhotosImportProbe(
+            label: label,
+            videoCodec: videoCodec,
+            audioCodec: audioCodec,
+            dimensions: dimensions,
+            durationSeconds: durationSeconds,
+            byteCount: fileByteCount(url),
+            hints: hints,
+            likelyNeedsH264Transcode: likely,
+            likelyH264Reason: likelyReason
+        )
+    }
+
+    private static func importVideoWithH264Fallback(
+        importURL: URL,
+        sourceURL: URL,
+        originalFilename: String,
+        sourceProbe: PhotosImportProbe,
+        log: @escaping (String) -> Void
+    ) async throws -> String {
+        do {
+            return try await importVideo(url: importURL, originalFilename: originalFilename)
+        } catch {
+            guard isPhotosInvalidResource(error) else { throw error }
+            let remuxProbe = await probeImportResource(url: importURL, label: "passthrough remux")
+            log("Photos: import 3302 (invalidResource) on passthrough file — \(remuxProbe.logLine)")
+            log("Photos: source was — \(sourceProbe.logLine)")
+            for hint in remuxProbe.hints where !sourceProbe.hints.contains(hint) {
+                log("Photos: 3302 hint — \(hint)")
+            }
+            if remuxProbe.hints.isEmpty, sourceProbe.hints.isEmpty {
+                log(
+                    "Photos: 3302 cause not exposed by iOS — common: HEVC/8K, audio codec, container; trying H.264 transcode"
+                )
+            }
+            log("Photos: transcoding to H.264 for library only (DLNA \(sourceURL.lastPathComponent) unchanged)…")
+            let h264URL = try await transcodeH264ForPhotos(
+                from: sourceURL,
+                preferredFilename: originalFilename,
+                log: log
+            )
+            defer { try? FileManager.default.removeItem(at: h264URL) }
+            let assetId = try await importVideo(url: h264URL, originalFilename: originalFilename)
+            log("Photos: H.264 transcode import OK (\(fileByteCount(h264URL) / 1024) KB)")
+            return assetId
+        }
+    }
+
     private static func videoIsPlayableForPhotos(url: URL, log: @escaping (String) -> Void) async -> Bool {
         let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         do {
@@ -141,7 +310,6 @@ enum PhotosSegmentPublisher {
         }
     }
 
-    /// Passthrough remux for Photos only (same HEVC/H.264 — no downscale; DLNA slot file is not touched).
     private static func photosCompatibleCopy(
         from source: URL,
         preferredFilename: String,
@@ -170,7 +338,6 @@ enum PhotosSegmentPublisher {
         return dest
     }
 
-    /// Photos-only H.264 — used when `PHPhotosError` 3302 rejects passthrough HEVC (8K/4K).
     private static func transcodeH264ForPhotos(
         from source: URL,
         preferredFilename: String,
@@ -205,6 +372,8 @@ enum PhotosSegmentPublisher {
             }
             throw PhotosPublishError.changeFailed
         }
+        let outProbe = await probeImportResource(url: dest, label: "H.264 for Photos")
+        log("Photos: transcode output — \(outProbe.logLine)")
         return dest
     }
 
@@ -212,6 +381,30 @@ enum PhotosSegmentPublisher {
         let ns = error as NSError
         guard ns.domain == PHPhotosErrorDomain || ns.domain == "PHPhotosErrorDomain" else { return false }
         return ns.code == 3302
+    }
+
+    private static func isLikelyPhotosCompatibleAudio(_ codec: FourCharCode) -> Bool {
+        codec == kAudioFormatMPEG4AAC
+            || codec == kAudioFormatMPEG4AAC_HE
+            || codec == kAudioFormatMPEG4AAC_LD
+            || codec == kAudioFormatMPEG4AAC_ELD
+    }
+
+    private static func fourCC(_ string: String) -> FourCharCode {
+        guard string.count == 4 else { return 0 }
+        var value: FourCharCode = 0
+        for byte in string.utf8.prefix(4) {
+            value = (value << 8) + FourCharCode(byte)
+        }
+        return value
+    }
+
+    private static func parseDimensions(_ text: String) -> (width: Int32, height: Int32)? {
+        let parts = text.split(separator: "x")
+        guard parts.count == 2,
+              let w = Int32(parts[0]),
+              let h = Int32(parts[1]) else { return nil }
+        return (w, h)
     }
 
     private static func runExportSession(_ session: AVAssetExportSession) async -> Bool {
@@ -229,7 +422,7 @@ enum PhotosSegmentPublisher {
             parts.append("code \(ns.code)")
             if ns.code == 3302 {
                 parts.append(
-                    "(invalidResource — app retries H.264 transcode for Photos only; DLNA 3d_op_*.mp4 stays passthrough. Try Photos Full Access.)"
+                    "(invalidResource — enable “H.264 for Photos” or use Exports/USB; DLNA file unchanged)"
                 )
             }
         }
@@ -268,7 +461,6 @@ enum PhotosSegmentPublisher {
         return createdId
     }
 
-    /// Photos uses the import file name unless `originalFilename` is set; avoid random `photos-import-<uuid>.mp4`.
     private static func sanitizedPhotosFilename(_ name: String) -> String {
         let base = (name as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = "3d_op_segment.mp4"

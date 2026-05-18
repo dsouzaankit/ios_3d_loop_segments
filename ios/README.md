@@ -52,10 +52,10 @@ When **Photos is on** (default), export **dense-fills** each minute to sparse te
 | | **Exports (`3d_op_*.mp4`)** | **Photos import** |
 |---|---------------------------|-------------------|
 | Purpose | USB → PC → DLNA (primary) | Convenience / MTP script |
-| Codec / resolution | Full **passthrough** HEVC or H.264 from source | Passthrough remux first; on **3302** → **H.264 transcode** (up to 1080p preset) for Photos only — **DLNA file never re-encoded** |
-| Reliability | Reliable once export finishes | HEVC passthrough may need H.264 fallback (slower, 1–3 min/segment) |
+| Codec / resolution | Full **passthrough** HEVC or H.264 from source | Passthrough remux first (or **H.264 for Photos** toggle); on **3302** → H.264 transcode for Photos only — **DLNA file never re-encoded** |
+| Reliability | Reliable once export finishes | Logs **pre-import probe** (codec, size, audio, hints); HEVC &gt;1080p auto-H.264 optional |
 
-**Photos 3302:** iOS often rejects programmatic import of **high‑resolution HEVC** (`PHPhotosErrorDomain` **3302**). The app then **transcodes to H.264** for the Photos copy only; `3d_op_00.mp4` in Exports stays full passthrough for DLNA. USB can also use **Files → Exports** without Photos. See [Apple HEVC support](https://support.apple.com/en-qa/116944).
+**Photos 3302:** `invalidResource` — not only HEVC; audio codec, container, and **Limited** Photos access matter too. Export log shows `Photos: pre-import` and hints. Toggle **H.264 for Photos** to skip passthrough. Fallback transcode uses up to 1080p H.264 + AAC. `3d_op_00.mp4` in Exports stays passthrough for DLNA.
 
 Turn **Save segments to Photos** off only if you do not need MTP/USB sync to PC (dense fill still runs; no Photos import).
 
