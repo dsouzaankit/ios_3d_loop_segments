@@ -157,7 +157,7 @@ struct ExportView: View {
         } catch is CancellationError, SegmentExporterError.cancelled {
             status = "Stopped — segment files removed from device"
         } catch ExportError.stillStopping {
-            errorMessage = error.localizedDescription
+            errorMessage = ExportError.stillStopping.errorDescription
             status = "Wait for the previous export to finish stopping"
         } catch SegmentExporterError.readerInterrupted {
             errorMessage = "pCloud read was interrupted (not Stop). Try seek 0 min or Wi‑Fi."
