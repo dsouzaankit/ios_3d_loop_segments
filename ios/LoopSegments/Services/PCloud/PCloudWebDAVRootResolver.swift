@@ -11,8 +11,14 @@ enum PCloudWebDAVRootResolver {
         lock.unlock()
     }
 
+    /// True when href is `/remote.php/dav/files/<user>/` (not a virtual folder like `/_My Music_/`).
+    static func isValidFilesRoot(_ href: String?) -> Bool {
+        guard let href, !href.isEmpty else { return false }
+        return isUserFilesRoot(WebDAVURLBuilder.directoryListingPath(href))
+    }
+
     static func filesRoot(credentials: WebDAVCredentials) async throws -> String {
-        if let cached = credentials.webDAVFilesRoot, !cached.isEmpty {
+        if let cached = credentials.webDAVFilesRoot, isValidFilesRoot(cached) {
             return WebDAVURLBuilder.directoryListingPath(cached)
         }
         lock.lock()
@@ -47,12 +53,14 @@ enum PCloudWebDAVRootResolver {
             }
         }
         if path != "/" {
-            return WebDAVURLBuilder.directoryListingPath(path)
+            let fallback = WebDAVURLBuilder.directoryListingPath(path)
+            if isUserFilesRoot(fallback) { return fallback }
         }
         for item in items where item.isDirectory {
-            return WebDAVURLBuilder.directoryListingPath(item.href)
+            let href = WebDAVURLBuilder.directoryListingPath(item.href)
+            if isUserFilesRoot(href) { return href }
         }
-        return "/"
+        throw WebDAVError.httpStatus(404)
     }
 
     private static func isUserFilesRoot(_ href: String) -> Bool {

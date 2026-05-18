@@ -7,7 +7,7 @@ enum PCloudSearchService {
         let statusNote: String
     }
 
-    private static let webSearchTimeoutSeconds: Double = 12
+    private static let webSearchTimeoutSeconds: Double = 20
     private static let catalogTimeoutSeconds: Double = 15
     private static let webDAVTimeoutSeconds: Double = 10
     private static let webDAVMaxFolders = 80
@@ -24,6 +24,22 @@ enum PCloudSearchService {
         }
 
         SearchDebugLog.beginSearch(query: trimmed, credentials: credentials, browsePaths: browsePaths)
+
+        guard !Task.isCancelled else {
+            SearchDebugLog.log("search: cancelled before start")
+            throw CancellationError()
+        }
+
+        let hasToken = credentials.apiAuthToken?.isEmpty == false
+        if !hasToken {
+            SearchDebugLog.log("search: tokenSaved=false — web/folder index skipped (need sign-in API token)")
+            let note = """
+            pCloud search login missing. Sign out, sign in again (correct US/Europe), then search. \
+            Browse still works; use 2FA app password if enabled.
+            """
+            SearchDebugLog.log("done: \(note)")
+            return Result(items: [], statusNote: note)
+        }
 
         var tried: [String] = []
         var apiRawCount = 0
@@ -55,10 +71,18 @@ enum PCloudSearchService {
                 return Result(items: [], statusNote: note)
             }
             SearchDebugLog.log("web search: 0 raw hits")
+        } catch is CancellationError {
+            SearchDebugLog.log("web search: cancelled")
+            throw CancellationError()
         } catch is ExportAsyncTimeout.TimedOut {
             SearchDebugLog.log("web search: timed out after \(Int(webSearchTimeoutSeconds))s")
         } catch {
             SearchDebugLog.log("web search failed: \(error.localizedDescription)")
+        }
+
+        guard !Task.isCancelled else {
+            SearchDebugLog.log("search: cancelled after web search")
+            throw CancellationError()
         }
 
         tried.append("pCloud folder index")
@@ -77,11 +101,19 @@ enum PCloudSearchService {
                 SearchDebugLog.log("done: \(note)")
                 return Result(items: catalog, statusNote: note)
             }
+        } catch is CancellationError {
+            SearchDebugLog.log("folder index: cancelled")
+            throw CancellationError()
         } catch is ExportAsyncTimeout.TimedOut {
             catalogTimedOut = true
             SearchDebugLog.log("folder index: timed out after \(Int(catalogTimeoutSeconds))s")
         } catch {
             SearchDebugLog.log("folder index failed: \(error.localizedDescription)")
+        }
+
+        guard !Task.isCancelled else {
+            SearchDebugLog.log("search: cancelled after folder index")
+            throw CancellationError()
         }
 
         tried.append("folders (WebDAV)")
@@ -97,6 +129,9 @@ enum PCloudSearchService {
                     quickRootDiscovery: true
                 )
             }
+        } catch is CancellationError {
+            SearchDebugLog.log("WebDAV walk: cancelled")
+            throw CancellationError()
         } catch is ExportAsyncTimeout.TimedOut {
             webDAVTimedOut = true
             webDAV = []
@@ -115,13 +150,13 @@ enum PCloudSearchService {
         }
 
         let empty = emptyMessage(
-                query: trimmed,
-                tried: tried,
-                apiRawCount: apiRawCount,
-                browsePaths: browsePaths,
-                webDAVTimedOut: webDAVTimedOut,
-                catalogTimedOut: catalogTimedOut
-            )
+            query: trimmed,
+            tried: tried,
+            apiRawCount: apiRawCount,
+            browsePaths: browsePaths,
+            webDAVTimedOut: webDAVTimedOut,
+            catalogTimedOut: catalogTimedOut
+        )
         SearchDebugLog.log("done: no matches — \(empty)")
         return Result(items: [], statusNote: empty)
     }

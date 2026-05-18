@@ -53,20 +53,45 @@ final class AppSession: ObservableObject {
         PCloudWebDAVRootResolver.clearCache()
     }
 
+    /// Refreshes API token / WebDAV files root before search (updates keychain + published credentials).
+    func prepareCredentialsForSearch() async -> WebDAVCredentials? {
+        guard var stored = credentials else { return nil }
+        let needsToken = stored.apiAuthToken?.isEmpty != false
+        let needsRoot = !PCloudWebDAVRootResolver.isValidFilesRoot(stored.webDAVFilesRoot)
+        if needsToken {
+            SearchDebugLog.log("search prepare: fetching pCloud API token (max 20s)…")
+            do {
+                stored = try await ExportAsyncTimeout.run(seconds: 20, operation: "pCloud API login") {
+                    try await self.enrichWithAPIAccess(stored)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                SearchDebugLog.log("search prepare: API token failed — \(error.localizedDescription)")
+            }
+        } else if needsRoot {
+            PCloudWebDAVRootResolver.clearCache()
+            stored.webDAVFilesRoot = nil
+            if let root = try? await PCloudWebDAVRootResolver.filesRoot(credentials: stored),
+               PCloudWebDAVRootResolver.isValidFilesRoot(root) {
+                stored.webDAVFilesRoot = root
+                SearchDebugLog.log("search prepare: WebDAV files root=\(root)")
+            }
+        }
+        persistCredentials(stored)
+        return credentials
+    }
+
     /// Keychain entries from before build 58 may lack API token / WebDAV root needed for search.
     private func refreshStoredAPIAccessIfNeeded() async {
-        guard var stored = credentials else { return }
-        let needsToken = stored.apiAuthToken?.isEmpty != false
-        let needsRoot = stored.webDAVFilesRoot?.isEmpty != false
-        guard needsToken || needsRoot else { return }
-        stored = (try? await enrichWithAPIAccess(stored)) ?? stored
-        if stored.apiAuthToken != credentials?.apiAuthToken
-            || stored.webDAVFilesRoot != credentials?.webDAVFilesRoot
-            || stored.region != credentials?.region {
-            credentialStore.save(stored)
-            credentials = stored
-            WebDAVMediaSession.setActiveCredentials(stored)
-        }
+        guard credentials != nil else { return }
+        _ = try? await prepareCredentialsForSearch()
+    }
+
+    private func persistCredentials(_ stored: WebDAVCredentials) {
+        credentialStore.save(stored)
+        credentials = stored
+        WebDAVMediaSession.setActiveCredentials(stored)
     }
 
     private func enrichWithAPIAccess(_ credentials: WebDAVCredentials) async throws -> WebDAVCredentials {
@@ -83,8 +108,11 @@ final class AppSession: ObservableObject {
         SearchDebugLog.log(
             "sign-in: API token saved len=\(session.token.count) host=\(session.apiHost) region=\(session.region.rawValue)"
         )
-        if let root = try? await PCloudWebDAVRootResolver.filesRoot(credentials: updated) {
+        if let root = try? await PCloudWebDAVRootResolver.filesRoot(credentials: updated),
+           PCloudWebDAVRootResolver.isValidFilesRoot(root) {
             updated.webDAVFilesRoot = root
+        } else {
+            updated.webDAVFilesRoot = nil
         }
         return updated
     }

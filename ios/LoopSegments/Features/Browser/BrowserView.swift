@@ -239,19 +239,27 @@ struct BrowserView: View {
 
     private func performSearch(query: String) async {
         SearchDebugLog.ensureReady()
-        guard let credentials = session.credentials else {
-            SearchDebugLog.log("UI: search skipped — not signed in")
-            refreshSearchDebugStatus()
-            return
-        }
-        SearchDebugLog.log("UI: search started for \"\(query)\"")
-        refreshSearchDebugStatus()
         isSearching = true
-        searchModeNote = "pCloud web search…"
+        searchModeNote = "Preparing pCloud search…"
         defer {
             isSearching = false
             refreshSearchDebugStatus()
         }
+        let credentials: WebDAVCredentials
+        do {
+            guard let prepared = try await session.prepareCredentialsForSearch() else {
+                SearchDebugLog.log("UI: search skipped — not signed in")
+                refreshSearchDebugStatus()
+                return
+            }
+            credentials = prepared
+        } catch is CancellationError {
+            SearchDebugLog.log("UI: search cancelled during login")
+            return
+        }
+        SearchDebugLog.log("UI: search started for \"\(query)\"")
+        refreshSearchDebugStatus()
+        searchModeNote = "pCloud web search…"
         do {
             let result = try await PCloudSearchService.search(
                 query: query,
