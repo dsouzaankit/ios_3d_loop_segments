@@ -302,12 +302,14 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             }
             cursor = chunkEnd + 1
             chunksDone += 1
-            if largeRequest, chunksDone - lastProgressLog >= 128 {
+            let logProgressEvery = hybridSparse ? 16 : 128
+            if (largeRequest || hybridSparse), chunksDone - lastProgressLog >= logProgressEvery {
                 lastProgressLog = chunksDone
                 let done = cursor - offset
-                let pct = Int(done * 100 / totalLength)
+                let pct = totalLength > 0 ? Int(done * 100 / totalLength) : 100
+                let via = hybridSparse ? "sparse temp" : "pCloud"
                 logLine?(
-                    "pCloud read progress — \(pct)% (\(formatBytes(done)) / \(formatBytes(totalLength)))\(throughput.speedSuffix())"
+                    "\(via) read progress — \(pct)% (\(formatBytes(done)) / \(formatBytes(totalLength)))\(throughput.speedSuffix())"
                 )
             }
             if chunksDone % 16 == 0 {

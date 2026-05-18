@@ -963,11 +963,15 @@ final class SegmentWriterContext {
         writer.startSession(atSourceTime: sourceTime)
     }
 
+    private static let writerReadyTimeoutSeconds: Double = 120
+    private static let writerReadyLogIntervalSeconds: Double = 10
+
     func append(
         _ sample: CMSampleBuffer,
         track: SegmentTrackKind,
-        isCancelled: (() -> Bool)? = nil
-    ) throws {
+        isCancelled: (() -> Bool)? = nil,
+        log: ((String) -> Void)? = nil
+    ) async throws {
         let input: AVAssetWriterInput
         switch track {
         case .video: input = videoInput
@@ -976,16 +980,27 @@ final class SegmentWriterContext {
             input = audioInput
         }
 
-        var attempts = 0
+        let waitStart = CFAbsoluteTimeGetCurrent()
+        var lastWaitLog = waitStart
         while !input.isReadyForMoreMediaData {
             if isCancelled?() == true {
                 throw SegmentExporterError.cancelled
             }
-            attempts += 1
-            if attempts > 600_000 {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - waitStart >= Self.writerReadyTimeoutSeconds {
                 throw SegmentExporterError.writerBackpressure
             }
-            Thread.sleep(forTimeInterval: 0.001)
+            if now - lastWaitLog >= Self.writerReadyLogIntervalSeconds {
+                lastWaitLog = now
+                log?(
+                    String(
+                        format: "Writer waiting for ready — %.0fs (\(track), AVAssetWriter backpressure)",
+                        now - waitStart
+                    )
+                )
+            }
+            await Task.yield()
+            try await Task.sleep(nanoseconds: 2_000_000)
         }
 
         guard input.append(sample) else {

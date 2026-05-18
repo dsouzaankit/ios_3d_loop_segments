@@ -91,6 +91,24 @@ enum SegmentPassThroughExporter {
         let stallBeforeFirstSample: Double = 90
         let stallAfterStart: Double = 90
         let stallWithFewSamples: Double = 45
+        let sampleReadTimeout: Double = 120
+
+        final class PassthroughProgress: @unchecked Sendable {
+            var inRangeVideoSamples = 0
+            var startedWriter = false
+        }
+        let progress = PassthroughProgress()
+        let heartbeat = Task {
+            while !Task.isCancelled {
+                try await Task.sleep(nanoseconds: 15_000_000_000)
+                if progress.startedWriter {
+                    log("Passthrough — \(progress.inRangeVideoSamples) video samples written so far…")
+                } else {
+                    log("Passthrough — waiting for reader / writer…")
+                }
+            }
+        }
+        defer { heartbeat.cancel() }
 
         while true {
             if isCancelled?() == true {
@@ -132,12 +150,39 @@ enum SegmentPassThroughExporter {
             }
 
             await Task.yield()
-            let videoSample = videoOutput.copyNextSampleBuffer()
+            let videoSample: CMSampleBuffer?
+            do {
+                videoSample = try await ExportAsyncTimeout.run(
+                    seconds: sampleReadTimeout,
+                    operation: "Video sample read"
+                ) {
+                    await Task.detached {
+                        videoOutput.copyNextSampleBuffer()
+                    }.value
+                }
+            } catch is ExportAsyncTimeout.TimedOut {
+                log(
+                    "Reader timed out after \(Int(sampleReadTimeout))s waiting for next video sample — pCloud read may be stalled"
+                )
+                throw SegmentExporterError.readerSetupFailed
+            }
             if videoSample != nil {
                 lastSampleAt = CFAbsoluteTimeGetCurrent()
             }
-            if heldAudio == nil {
-                heldAudio = audioOutput?.copyNextSampleBuffer()
+            if heldAudio == nil, let audioOutput {
+                do {
+                    heldAudio = try await ExportAsyncTimeout.run(
+                        seconds: sampleReadTimeout,
+                        operation: "Audio sample read"
+                    ) {
+                        await Task.detached {
+                            audioOutput.copyNextSampleBuffer()
+                        }.value
+                    }
+                } catch is ExportAsyncTimeout.TimedOut {
+                    log("Audio sample read timed out — continuing video-only")
+                    heldAudio = nil
+                }
             }
 
             var candidates: [(track: SegmentTrackKind, sample: CMSampleBuffer)] = []
@@ -196,6 +241,7 @@ enum SegmentPassThroughExporter {
                 ctx.start(at: .zero)
                 writerContext = ctx
                 startedWriter = true
+                progress.startedWriter = true
                 if skippedNonKeyframe > 0 {
                     log("Started on frame \(skippedNonKeyframe + 1) in window (HEVC sync scan)")
                 }
@@ -205,7 +251,12 @@ enum SegmentPassThroughExporter {
             let origin = timelineOrigin ?? rangeStart
             let timedSample = try SegmentSampleTiming.retimeToSegmentStart(next.sample, subtract: origin)
             do {
-                try writerContext?.append(timedSample, track: next.track, isCancelled: isCancelled)
+                try await writerContext?.append(
+                    timedSample,
+                    track: next.track,
+                    isCancelled: isCancelled,
+                    log: log
+                )
             } catch SegmentExporterError.writerFailed(let underlying) {
                 let ns = underlying as NSError
                 log(
@@ -215,6 +266,7 @@ enum SegmentPassThroughExporter {
             }
             if next.track == .video, CMTimeCompare(pts, rangeStart) >= 0 {
                 inRangeVideoSamples += 1
+                progress.inRangeVideoSamples = inRangeVideoSamples
                 lastInRangePTS = pts
             }
             if next.track == .audio {
