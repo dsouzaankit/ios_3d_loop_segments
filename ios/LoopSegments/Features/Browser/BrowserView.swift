@@ -256,6 +256,10 @@ struct BrowserView: View {
         } catch is CancellationError {
             SearchDebugLog.log("UI: search cancelled during login")
             return
+        } catch {
+            errorMessage = error.localizedDescription
+            SearchDebugLog.log("UI: search prepare failed — \(error.localizedDescription)")
+            return
         }
         SearchDebugLog.log("UI: search started for \"\(query)\"")
         refreshSearchDebugStatus()
