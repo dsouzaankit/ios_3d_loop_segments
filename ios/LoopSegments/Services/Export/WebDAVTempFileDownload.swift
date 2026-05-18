@@ -38,6 +38,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     /// Contiguous bytes downloaded from the active export window start (no holes — `regionFilledEnd` can lie).
     private var exportWindowStart: Int64 = 0
     private var exportWindowContiguousEnd: Int64 = 0
+    /// Disjoint byte spans actually written (head, dense window, EOF index may be separate).
+    private var filledRanges: [ClosedRange<Int64>] = []
     private let throughput = DownloadThroughput()
 
     init(
@@ -180,6 +182,30 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return filledSpanLocked()
+    }
+
+    /// Byte spans present on disk (sparse holes are not included).
+    func filledSpansOnDisk() -> [ClosedRange<Int64>] {
+        lock.lock()
+        defer { lock.unlock() }
+        return filledRanges
+    }
+
+    /// Reads from the temp file when every byte in `[offset, offset+length)` is in `filledRanges`.
+    func readLocalBytes(offset: Int64, length: Int) -> Data? {
+        guard length > 0, offset >= 0, offset + Int64(length) <= totalLength else { return nil }
+        lock.lock()
+        let spans = filledRanges
+        lock.unlock()
+        guard Self.rangeFullyCovered(offset: offset, length: length, spans: spans) else { return nil }
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+        do {
+            try handle.seek(toOffset: UInt64(offset))
+            return try handle.read(upToCount: length)
+        } catch {
+            return nil
+        }
     }
 
     func hasIndexTailOnDisk() -> Bool {
@@ -445,6 +471,42 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
+    private func recordFilledRange(offset: Int64, end: Int64) {
+        guard end > offset else { return }
+        filledRanges.append(offset ... (end - 1))
+        filledRanges = Self.mergeFilledRanges(filledRanges)
+    }
+
+    private static func mergeFilledRanges(_ ranges: [ClosedRange<Int64>]) -> [ClosedRange<Int64>] {
+        guard !ranges.isEmpty else { return [] }
+        let sorted = ranges.sorted { $0.lowerBound < $1.lowerBound }
+        var out: [ClosedRange<Int64>] = []
+        var current = sorted[0]
+        for span in sorted.dropFirst() {
+            if span.lowerBound <= current.upperBound + 1 {
+                current = current.lowerBound ... max(current.upperBound, span.upperBound)
+            } else {
+                out.append(current)
+                current = span
+            }
+        }
+        out.append(current)
+        return out
+    }
+
+    private static func rangeFullyCovered(offset: Int64, length: Int, spans: [ClosedRange<Int64>]) -> Bool {
+        guard length > 0 else { return true }
+        var cursor = offset
+        let end = offset + Int64(length)
+        for span in spans {
+            if span.upperBound < cursor { continue }
+            if span.lowerBound > cursor { return false }
+            cursor = min(end, span.upperBound + 1)
+            if cursor >= end { return true }
+        }
+        return false
+    }
+
     private static func keyframePrerollBytes(timelineStartSeconds: Double, totalLength: Int64) -> Int64 {
         guard timelineStartSeconds > 0.5 else { return 0 }
         let fromDuration = Int64(min(48 * 1024 * 1024, (timelineStartSeconds / 120.0) * Double(totalLength)))
@@ -473,6 +535,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private func noteWrite(offset: Int64, length: Int) {
         let end = offset + Int64(length)
         if length <= 0 { return }
+        recordFilledRange(offset: offset, end: end)
         let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
         if offset >= tailStart {
             markIndexTailIfComplete(writeEnd: end)

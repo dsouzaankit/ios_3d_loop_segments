@@ -440,18 +440,32 @@ final class SegmentExporter {
         outputURL: URL,
         log: @escaping (String) -> Void
     ) async throws {
-        let readAsset = AVURLAsset(
-            url: tempURL,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-        )
-        let midFileDenseOnly = byteRange.start >= Self.midFilePrefetchThresholdBytes
-        if midFileDenseOnly {
+        let midFileSegment = byteRange.start >= Self.midFilePrefetchThresholdBytes
+        if midFileSegment {
             log(
-                "Mid-file segment — dense-download \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)) (local temp only; no pCloud stream fallback)"
+                "Mid-file segment — dense \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)); " +
+                    "hybrid reader (local bytes + pCloud for sparse holes)"
             )
             downloader.pauseBackgroundDownload()
             try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
         }
+        let (readAsset, hybridLoader) = makePassthroughAsset(
+            downloader: downloader,
+            tempURL: tempURL,
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            trustedLength: trustedLength,
+            useHybridSparse: midFileSegment,
+            log: log
+        )
+        if let hybridLoader {
+            defer {
+                readAsset.resourceLoader.setDelegate(nil, queue: nil)
+                hybridLoader.cancelOutstandingWork()
+            }
+        }
+        let tempSourceLabel = midFileSegment ? "sparse temp + pCloud" : "temp file"
         do {
             try await SegmentPassThroughExporter.exportWindow(
                 asset: readAsset,
@@ -460,15 +474,15 @@ final class SegmentExporter {
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
                 outputURL: outputURL,
-                sourceLabel: "temp file",
+                sourceLabel: tempSourceLabel,
                 log: log
             )
         } catch {
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
-            if midFileDenseOnly {
+            if midFileSegment {
                 log(
-                    "Temp not readable (\(error.localizedDescription)) — refreshing header, index, and window on disk…"
+                    "Hybrid temp not readable (\(error.localizedDescription)) — refreshing header, index, and window…"
                 )
                 downloader.pauseBackgroundDownload()
                 try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
@@ -480,40 +494,42 @@ final class SegmentExporter {
                         rangeStart: rangeStart,
                         rangeDuration: rangeDuration,
                         outputURL: outputURL,
-                        sourceLabel: "temp file (mid-file prepared)",
+                        sourceLabel: "sparse temp + pCloud (retry)",
                         log: log
                     )
                     return
                 } catch {
-                    throw SegmentExporterError.midFileTempUnreadable(
-                        mediaTime: formatMediaTimeForLog(rangeStart),
-                        underlying: error.localizedDescription
+                    guard Self.shouldStreamFallback(after: error) else { throw error }
+                    try? FileManager.default.removeItem(at: outputURL)
+                    log(
+                        "Hybrid temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
                     )
                 }
-            }
-            log(
-                "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
-            )
-            downloader.pauseBackgroundDownload()
-            try await downloader.ensureContiguousRange(byteRange)
-            do {
-                try await SegmentPassThroughExporter.exportWindow(
-                    asset: readAsset,
-                    videoFormat: videoFormat,
-                    audioFormat: audioFormat,
-                    rangeStart: rangeStart,
-                    rangeDuration: rangeDuration,
-                    outputURL: outputURL,
-                    sourceLabel: "temp file (window filled)",
-                    log: log
-                )
-                return
-            } catch {
-                guard Self.shouldStreamFallback(after: error) else { throw error }
-                try? FileManager.default.removeItem(at: outputURL)
+            } else {
                 log(
-                    "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
+                    "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
                 )
+                downloader.pauseBackgroundDownload()
+                try await downloader.ensureContiguousRange(byteRange)
+                do {
+                    try await SegmentPassThroughExporter.exportWindow(
+                        asset: readAsset,
+                        videoFormat: videoFormat,
+                        audioFormat: audioFormat,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        outputURL: outputURL,
+                        sourceLabel: "temp file (window filled)",
+                        log: log
+                    )
+                    return
+                } catch {
+                    guard Self.shouldStreamFallback(after: error) else { throw error }
+                    try? FileManager.default.removeItem(at: outputURL)
+                    log(
+                        "Temp still not readable — streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
+                    )
+                }
             }
             downloader.pauseBackgroundDownload()
             do {
@@ -544,7 +560,7 @@ final class SegmentExporter {
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     outputURL: outputURL,
-                    sourceLabel: "temp file (after stream failure)",
+                    sourceLabel: tempSourceLabel,
                     log: log
                 )
             }
@@ -560,6 +576,43 @@ final class SegmentExporter {
         try await downloader.ensureFileHeadOnDisk()
         try await downloader.ensureIndexTailOnDisk(force: true)
         try await downloader.ensureContiguousRange(byteRange)
+    }
+
+    private func makePassthroughAsset(
+        downloader: WebDAVTempFileDownload,
+        tempURL: URL,
+        remoteURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        trustedLength: Int64,
+        useHybridSparse: Bool,
+        log: @escaping (String) -> Void
+    ) -> (AVURLAsset, WebDAVResourceLoader?) {
+        guard useHybridSparse else {
+            let asset = AVURLAsset(
+                url: tempURL,
+                options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+            )
+            return (asset, nil)
+        }
+        let loader = WebDAVResourceLoader(
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            trustedContentLength: trustedLength > 0 ? trustedLength : nil,
+            readPolicy: nil,
+            localTempURL: tempURL,
+            readLocalBytes: { offset, length in
+                downloader.readLocalBytes(offset: offset, length: length)
+            },
+            log: log
+        )
+        let asset = AVURLAsset(
+            url: loader.customAssetURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+        return (asset, loader)
     }
 
     private func formatMediaTimeForLog(_ time: CMTime) -> String {
@@ -1069,8 +1122,8 @@ enum SegmentExporterError: LocalizedError {
             """
         case .midFileTempUnreadable(let mediaTime, let underlying):
             return """
-            Could not export the \(mediaTime) minute from the temp copy (\(underlying)). \
-            Use seek 0 min first so the file header and index download, then export later minutes, or stay on Wi‑Fi with the app open until “Window on disk” appears.
+            Could not export the \(mediaTime) minute (\(underlying)). \
+            Try seek 0 min for the first segment, or stay on cellular/Wi‑Fi with the app open until passthrough completes (hybrid temp + pCloud stream were both attempted).
             """
         case .insufficientDiskSpace(let needed, let available):
             let needMB = needed / (1024 * 1024)

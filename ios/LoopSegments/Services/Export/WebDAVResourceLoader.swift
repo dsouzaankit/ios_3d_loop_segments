@@ -80,6 +80,9 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private let session: URLSession
     private let rangeCache: WebDAVRangeCache?
     private let readPolicy: StreamReadPolicy?
+    /// When set, serve dense spans from this sparse temp file and fetch holes from pCloud on demand.
+    private let localTempURL: URL?
+    private let readLocalBytes: ((Int64, Int) -> Data?)?
     private let logLine: ((String) -> Void)?
     private let throughput = LoaderThroughput()
 
@@ -116,6 +119,8 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         rangeCache: WebDAVRangeCache? = nil,
         trustedContentLength: Int64? = nil,
         readPolicy: StreamReadPolicy? = nil,
+        localTempURL: URL? = nil,
+        readLocalBytes: ((Int64, Int) -> Data?)? = nil,
         log: ((String) -> Void)? = nil
     ) {
         self.remoteURL = remoteURL
@@ -124,6 +129,8 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         self.rangeCache = rangeCache
         self.trustedContentLength = trustedContentLength
         self.readPolicy = readPolicy
+        self.localTempURL = localTempURL
+        self.readLocalBytes = readLocalBytes
         self.logLine = log
         super.init()
     }
@@ -244,8 +251,9 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             : Int64(dataRequest.requestedLength)
         guard requested > 0 else { return }
 
+        let useReadPolicy = readPolicy != nil && localTempURL == nil
         var totalLength: Int64
-        if let readPolicy {
+        if let readPolicy, useReadPolicy {
             totalLength = readPolicy.cappedLength(
                 offset: offset,
                 requested: requested,
@@ -267,11 +275,15 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         var cursor = offset
         let end = offset + totalLength - 1
         let largeRequest = totalLength > Self.maxRangeChunkBytes
+        let hybridSparse = localTempURL != nil
         if largeRequest {
+            let via = hybridSparse ? "sparse temp" : "pCloud"
             logLine?(
-                "pCloud read \(offset)-\(end) (\(formatBytes(totalLength)) of \(formatBytes(fileLength)), \(Self.maxRangeChunkBytes / 1024) KiB chunks)\(throughput.speedSuffix())"
+                "\(via) read \(offset)-\(end) (\(formatBytes(totalLength)) of \(formatBytes(fileLength)), \(Self.maxRangeChunkBytes / 1024) KiB chunks)\(throughput.speedSuffix())"
             )
-        } else {
+        } else if hybridSparse, readLocalBytes?(offset, Int(totalLength)) == nil {
+            logLine?("Sparse temp gap — pCloud range \(offset)-\(end) (\(totalLength) bytes)\(throughput.speedSuffix())")
+        } else if !hybridSparse {
             logLine?("pCloud range \(offset)-\(end) (\(totalLength) bytes)\(throughput.speedSuffix())")
         }
 
@@ -308,6 +320,9 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private func fetchRangeChunk(offset: Int64, endInclusive: Int64) async throws -> Data {
         let length = Int(endInclusive - offset + 1)
         guard length > 0 else { return Data() }
+        if let readLocalBytes, let local = readLocalBytes(offset, length), local.count == length {
+            return local
+        }
         if let cached = rangeCache?.dataForRequest(offset: offset, length: length) {
             return cached
         }
