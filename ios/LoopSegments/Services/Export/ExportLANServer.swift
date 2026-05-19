@@ -236,6 +236,16 @@ enum ExportLANServer {
         return (String(parts[0]).uppercased(), path)
     }
 
+    /// Windows WebDAV MiniRedir fails to map if GET `/` returns HTML (browser index).
+    private static func isWebDAVClient(requestHeaders: String) -> Bool {
+        let lower = requestHeaders.lowercased()
+        if lower.contains("microsoft-webdav") { return true }
+        if lower.contains("translate: f") { return true }
+        if lower.contains("\ndepth:") || lower.hasPrefix("depth:") { return true }
+        if lower.contains("user-agent:"), lower.contains("webdav") { return true }
+        return false
+    }
+
     private static func handleGET(
         path: String,
         method: String,
@@ -245,6 +255,16 @@ enum ExportLANServer {
     ) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
+            if isWebDAVClient(requestHeaders: requestHeaders) {
+                sendResponse(
+                    connection: connection,
+                    status: 403,
+                    contentType: "text/plain",
+                    body: Data("WebDAV collection — use PROPFIND or open files directly.".utf8),
+                    done: done
+                )
+                return
+            }
             sendIndexHTML(connection, done: done)
             return
         }
@@ -821,12 +841,20 @@ enum ExportLANServer {
         body: Data,
         done: @escaping () -> Void
     ) {
-        let phrase = status == 200 ? "OK" : (status == 404 ? "Not Found" : "Error")
+        let phrase: String
+        switch status {
+        case 200: phrase = "OK"
+        case 403: phrase = "Forbidden"
+        case 404: phrase = "Not Found"
+        case 405: phrase = "Method Not Allowed"
+        default: phrase = "Error"
+        }
         let header = httpResponseHeader(
             status: status,
             phrase: phrase,
             contentType: contentType,
-            contentLength: body.count
+            contentLength: body.count,
+            includeAcceptRanges: false
         )
         var data = Data(header.utf8)
         data.append(body)
