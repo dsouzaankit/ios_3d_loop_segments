@@ -10,6 +10,7 @@
   Skips overwrite when the peer slot already has the same segment (phone unchanged) so DLNA
   never has identical op_00 and op_01. Schedules a retry of that same slot after DeferRetrySeconds
   (default = PollSeconds, 60). Installs via a temp file + rename so DLNA never reads a partial MP4.
+  -Watch removes op_00.mp4 / op_01.mp4 from the PC destination and clears LAN staging when you stop.
 
   Save the phone IP from the export log (LAN export: http://...) or -Discover.
 
@@ -257,6 +258,41 @@ function Remove-LANStagingFile {
     }
 }
 
+function Remove-LANSegmentArtifacts {
+    param(
+        [string] $DestinationRoot,
+        [string] $StagingDirectory
+    )
+    $removed = @()
+    foreach ($name in $SegmentNames) {
+        $path = Join-Path $DestinationRoot $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            $removed += $name
+        }
+        $partPath = Join-Path $DestinationRoot ".$name.part"
+        if (Test-Path -LiteralPath $partPath -PathType Leaf) {
+            Remove-Item -LiteralPath $partPath -Force -ErrorAction SilentlyContinue
+            $removed += ".$name.part"
+        }
+    }
+    $stagingFile = Join-Path $StagingDirectory $RemoteSegmentName
+    if (Test-Path -LiteralPath $stagingFile -PathType Leaf) {
+        Remove-LANStagingFile -StagingFile $stagingFile
+        $removed += "$RemoteSegmentName (staging)"
+    }
+    $stateFile = Join-Path $StagingDirectory 'lan-sync-state.json'
+    if (Test-Path -LiteralPath $stateFile -PathType Leaf) {
+        Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
+        $removed += 'lan-sync-state.json'
+    }
+    if ($removed.Count -gt 0) {
+        Write-Host "Cleanup: removed $($removed -join ', ') from PC DLNA folder / LAN staging."
+    } else {
+        Write-Host 'Cleanup: no segment files found in DLNA folder or LAN staging.'
+    }
+}
+
 function Get-OlderDLNASlot {
     param([string] $DestinationRoot)
     $paths = @(
@@ -437,22 +473,29 @@ if ($Watch) {
     if ($PollSeconds -lt 5) { throw 'PollSeconds must be at least 5.' }
     Write-Host "Watch: $baseUrl -> $destRoot every $PollSeconds s"
     Write-Host 'Press Enter to stop (phone: export running, same Wi-Fi, Local Network allowed).'
+    Write-Host 'On stop: op_00.mp4 / op_01.mp4 removed from PC DLNA folder and LAN staging cleared.'
     Write-Host ''
     $iteration = 0
-    while ($true) {
-        $iteration++
-        Write-Host "--- LAN sync #$iteration  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" -ForegroundColor Cyan
-        try {
-            Invoke-LANSegmentSync -BaseUrl $baseUrl -DestinationRoot $destRoot `
-                -StagingDirectory $stagingRoot -MinSegmentBytes $MinSegmentBytes `
-                -DeferRetrySeconds $PollSeconds -DryRun:$DryRun
-        } catch {
-            Write-Warning $_.Exception.Message
+    try {
+        while ($true) {
+            $iteration++
+            Write-Host "--- LAN sync #$iteration  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" -ForegroundColor Cyan
+            try {
+                Invoke-LANSegmentSync -BaseUrl $baseUrl -DestinationRoot $destRoot `
+                    -StagingDirectory $stagingRoot -MinSegmentBytes $MinSegmentBytes `
+                    -DeferRetrySeconds $PollSeconds -DryRun:$DryRun
+            } catch {
+                Write-Warning $_.Exception.Message
+            }
+            Write-Host "Next sync in $PollSeconds s (Enter to stop)..."
+            if (Wait-ForEnterOrSeconds -Seconds $PollSeconds) {
+                Write-Host 'Stopped.'
+                break
+            }
         }
-        Write-Host "Next sync in $PollSeconds s (Enter to stop)..."
-        if (Wait-ForEnterOrSeconds -Seconds $PollSeconds) {
-            Write-Host 'Stopped.'
-            break
+    } finally {
+        if (-not $DryRun) {
+            Remove-LANSegmentArtifacts -DestinationRoot $destRoot -StagingDirectory $stagingRoot
         }
     }
     exit 0
