@@ -16,7 +16,16 @@ enum SegmentPassThroughExporter {
         log: @escaping (String) -> Void
     ) async throws {
         _ = audioFormat
-        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+        let videoTrack: AVAssetTrack?
+        do {
+            videoTrack = try await asset.loadTracks(withMediaType: .video).first
+        } catch {
+            log(
+                "Could not load video track (\(sourceLabel), \(asset.url.scheme ?? "?")://…): \(error.localizedDescription)"
+            )
+            throw error
+        }
+        guard let videoTrack else {
             throw SegmentExporterError.noVideoTrack
         }
         let rangeEnd = CMTimeAdd(rangeStart, rangeDuration)

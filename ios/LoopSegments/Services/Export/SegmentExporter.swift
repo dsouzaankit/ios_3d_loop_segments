@@ -448,16 +448,10 @@ final class SegmentExporter {
             byteRange: byteRange,
             windowDense: windowDense
         )
-        if windowDense, !useOnDiskFileURL {
-            if byteRange.start == 0 {
-                log(
-                    "Large source file — capped hybrid reader (only first \(Self.formatBytes(byteRange.length)) dense on disk; sparse tail is not in file://)"
-                )
-            } else {
-                log(
-                    "Dense window at \(Self.formatBytes(byteRange.start)) — capped hybrid reader (file:// reads zero-filled gaps)"
-                )
-            }
+        if windowDense, !useOnDiskFileURL, byteRange.start > 0 {
+            log(
+                "Dense window at \(Self.formatBytes(byteRange.start)) — capped hybrid reader (file:// reads zero-filled gaps)"
+            )
         }
         downloader.closeWriteHandleForPassthroughRead(log: log)
         do {
@@ -466,6 +460,20 @@ final class SegmentExporter {
                 useOnDiskFileURL: useOnDiskFileURL
             )
         } catch {
+            if !useOnDiskFileURL,
+               byteRange.start == 0,
+               windowDense,
+               Self.isUnsupportedAssetURLError(error) {
+                log(
+                    "Hybrid asset URL rejected (\(error.localizedDescription)) — retrying from on-disk temp file"
+                )
+                downloader.closeWriteHandleForPassthroughRead(log: log)
+                try await runPassthrough(
+                    sourceLabel: tempSourceLabel,
+                    useOnDiskFileURL: true
+                )
+                return
+            }
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
             if useOnDiskFileURL,
@@ -565,20 +573,14 @@ final class SegmentExporter {
         }
     }
 
-    /// `file://` only when byte 0..window is dense and the sparse tail past the window is small (else use hybrid).
+    /// `file://` when the first-minute window is dense at seek 0 (head + index tail on disk; sparse middle is OK for minute 0).
     private func shouldUseOnDiskFileURLForPassthrough(
         downloader: WebDAVTempFileDownload,
         byteRange: TimelineByteRange,
         windowDense: Bool
     ) -> Bool {
         guard windowDense, byteRange.start == 0, byteRange.length > 0 else { return false }
-        guard downloader.isByteRangeFullyOnDisk(byteRange) else { return false }
-        let fileLength = downloader.totalLength
-        if downloader.isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: fileLength)) {
-            return true
-        }
-        let tailGap = fileLength - byteRange.end
-        return tailGap <= 8 * 1024 * 1024
+        return downloader.isByteRangeFullyOnDisk(byteRange)
     }
 
     private func prepareMidFileTempForReader(
@@ -643,6 +645,12 @@ final class SegmentExporter {
 
     static func isWriterSampleRejection(_ error: Error) -> Bool {
         isRetriablePassthroughWriterFailure(error)
+    }
+
+    static func isUnsupportedAssetURLError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorUnsupportedURL { return true }
+        return error.localizedDescription.lowercased().contains("unsupported url")
     }
 
     static func isRetriablePassthroughWriterFailure(_ error: Error) -> Bool {

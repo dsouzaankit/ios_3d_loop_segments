@@ -148,11 +148,11 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         stateLock.unlock()
     }
 
+    /// Stable host (`export`) — real WebDAV hostnames (e.g. `webdav.pcloud.com`) make `AVURLAsset.loadTracks` fail with “unsupported URL”.
     var customAssetURL: URL {
-        let host = remoteURL.host ?? "export"
         let encodedPath = Self.percentEncodedWebDAVPath(remoteURL.path)
-        guard let url = URL(string: "\(Self.customScheme)://\(host)\(encodedPath)") else {
-            return URL(string: "\(Self.customScheme)://\(host)/")!
+        guard let url = URL(string: "\(Self.customScheme)://export\(encodedPath)") else {
+            return URL(string: "\(Self.customScheme)://export/")!
         }
         return url
     }
