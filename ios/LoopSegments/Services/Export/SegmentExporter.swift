@@ -86,73 +86,44 @@ final class SegmentExporter {
         }
 
         let fileSize = rangeCache.contentLengthValue() ?? 0
-        let streamFromPCloud = Self.shouldStreamSegments(fileBytes: fileSize)
-        if !streamFromPCloud {
+        logHandler(
+            "Dense fill — each minute downloads to temp before passthrough (hybrid reader; no direct pCloud stream export)."
+        )
+        try Self.ensureExportDiskSpace(fileBytes: fileSize)
+
+        if fileSize > Self.streamOnlyThresholdBytes {
             logHandler(
-                "Dense fill — each minute downloads to temp before passthrough (local file reader when window is on disk)."
-            )
-        } else if ExportDeliveryPolicy.preferStreamPerSegment {
-            logHandler(
-                "Streaming each 60s from pCloud (no sparse temp). " +
-                    "First segment target ≤\(Int(ExportDeliveryPolicy.firstPhotosTargetSeconds))s."
+                "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
             )
         }
-        try Self.ensureExportDiskSpace(fileBytes: fileSize, streaming: streamFromPCloud)
-
-        let durationSeconds: Double
-        let videoFormat: CMFormatDescription
-        let audioFormat: CMFormatDescription?
-
-        if streamFromPCloud {
-            logHandler("Low free space — probing codecs via pCloud stream (prefetch cache)")
-            let streamingAsset = try await openStreamingAsset(
-                inputURL: inputURL,
-                authorizationProvider: authorizationProvider,
-                rangeCache: rangeCache,
-                logHandler: logHandler
-            )
-            (durationSeconds, videoFormat, audioFormat) = try await probeStreamMetadata(
-                asset: streamingAsset,
-                log: logHandler
-            )
-            releaseStreamingProbe(streamFromPCloud: true, log: logHandler)
-        } else {
-            if fileSize > Self.streamOnlyThresholdBytes {
-                logHandler(
-                    "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
-                )
-            }
-            let downloader = try WebDAVTempFileDownload(
-                remoteURL: inputURL,
-                rangeCache: rangeCache,
-                authorizationProvider: authorizationProvider,
-                isCancelled: cancelCheck,
-                log: logHandler
-            )
-            tempDownload = downloader
-            downloader.logDownloadStarted()
-            try await downloader.ensureIndexTailOnDisk()
-            (durationSeconds, videoFormat, audioFormat) = try await probeMetadataPreferLocal(
-                fileURL: downloader.fileURL,
-                inputURL: inputURL,
-                authorizationProvider: authorizationProvider,
-                rangeCache: rangeCache,
-                log: logHandler
-            )
-        }
+        let downloader = try WebDAVTempFileDownload(
+            remoteURL: inputURL,
+            rangeCache: rangeCache,
+            authorizationProvider: authorizationProvider,
+            isCancelled: cancelCheck,
+            log: logHandler
+        )
+        tempDownload = downloader
+        downloader.logDownloadStarted()
+        try await downloader.ensureIndexTailOnDisk()
+        let (durationSeconds, videoFormat, audioFormat) = try await probeMetadataPreferLocal(
+            fileURL: downloader.fileURL,
+            inputURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            log: logHandler
+        )
 
         let durationMs = Int64(durationSeconds * 1000)
         let seekSeconds = Double(seekMs) / 1000.0
         if durationMs > 0, seekMs >= durationMs - 250 {
             throw SegmentExporterError.seekPastEnd
         }
-        if !streamFromPCloud, let downloader = tempDownload {
-            downloader.beginExport(
-                seekSeconds: seekSeconds,
-                durationSeconds: durationSeconds,
-                useBackgroundDownload: false
-            )
-        }
+        tempDownload?.beginExport(
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds,
+            useBackgroundDownload: false
+        )
 
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
@@ -167,68 +138,12 @@ final class SegmentExporter {
                 "PC keeps 3d_op_00/01 via LAN watch or USB (overwrite older slot)"
         )
 
-        if streamFromPCloud {
-            if !ExportDeliveryPolicy.preferStreamPerSegment {
-                logHandler(
-                    "Large file (\(Self.formatBytes(fileSize))) — each 60s segment reads only that minute from pCloud (no \(Self.formatBytes(fileSize)) temp copy)"
-                )
-            }
-            logHandler("Publishing 60s segments as each minute is read from pCloud")
-            while true {
-                try checkCancelled()
-                let windowStartSeconds = seekSeconds + Double(minuteIndex) * Self.segmentDurationSeconds
-                if windowStartSeconds >= durationSeconds - 0.05 {
-                    reachedEnd = true
-                    break
-                }
-                let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
-                let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
-                let rangeDuration = CMTime(
-                    seconds: windowEndSeconds - windowStartSeconds,
-                    preferredTimescale: 600
-                )
-                let slot = minuteIndex % Self.segmentFileCount
-                let stagingURL = ExportPaths.segmentStagingURL(index: slot)
-                let byteRange = WebDAVTempFileDownload.byteRangeForTimeline(
-                    totalLength: fileSize,
-                    timelineStartSeconds: windowStartSeconds,
-                    timelineEndSeconds: windowEndSeconds,
-                    durationSeconds: durationSeconds
-                )
+        guard let downloader = tempDownload else {
+            throw SegmentExporterError.readerSetupFailed
+        }
+        logHandler("Publishing 60s segments — dense fill each minute, then passthrough")
 
-                try await exportSegmentFromPCloudStream(
-                    remoteURL: inputURL,
-                    authorizationProvider: authorizationProvider,
-                    rangeCache: rangeCache,
-                    trustedLength: fileSize,
-                    byteRange: byteRange,
-                    videoFormat: videoFormat,
-                    audioFormat: audioFormat,
-                    rangeStart: rangeStart,
-                    rangeDuration: rangeDuration,
-                    outputURL: stagingURL,
-                    isCancelled: cancelCheck,
-                    log: logHandler
-                )
-                try await publishValidatedSegment(
-                    minuteIndex: minuteIndex,
-                    slot: slot,
-                    stagingURL: stagingURL,
-                    rangeDuration: rangeDuration,
-                    wallOrigin: dlnaPublishOrigin,
-                    log: logHandler
-                )
-
-                lastMediaTimeMs = Int64(windowEndSeconds * 1000)
-                minuteIndex += 1
-            }
-        } else {
-            guard let downloader = tempDownload else {
-                throw SegmentExporterError.readerSetupFailed
-            }
-            logHandler("Publishing 60s segments — dense fill each minute, then passthrough")
-
-            while true {
+        while true {
                 try checkCancelled()
 
                 let windowStartSeconds = seekSeconds + Double(minuteIndex) * Self.segmentDurationSeconds
@@ -331,11 +246,10 @@ final class SegmentExporter {
 
                 lastMediaTimeMs = Int64(windowEndSeconds * 1000)
                 minuteIndex += 1
-            }
+        }
 
-            if seekSeconds <= 0.5 {
-                try await downloader.waitUntilComplete()
-            }
+        if seekSeconds <= 0.5 {
+            try await downloader.waitUntilComplete()
         }
 
         logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
@@ -346,14 +260,6 @@ final class SegmentExporter {
     private static let streamOnlyThresholdBytes: Int64 = 1_500_000_000
     private static let diskMarginBytes: Int64 = 384 * 1024 * 1024
     private static let streamingWorkingSetBytes: Int64 = 700 * 1024 * 1024
-
-    /// Stream each 60s window when Photos-first delivery is on; otherwise only when disk is too low for sparse temp.
-    private static func shouldStreamSegments(fileBytes: Int64) -> Bool {
-        guard fileBytes > 0 else { return false }
-        if ExportDeliveryPolicy.preferStreamPerSegment { return true }
-        guard let free = freeDiskBytes() else { return false }
-        return free < streamingWorkingSetBytes + diskMarginBytes
-    }
 
     private func publishValidatedSegment(
         minuteIndex: Int,
@@ -380,7 +286,7 @@ final class SegmentExporter {
         } else if ExportPaths.segmentFileCount == 1 {
             log("Publishing segment immediately (single phone file; PC DLNA ring via USB sync)")
         } else {
-            log("Photos-first — publishing slot 0 immediately (no wall-clock hold)")
+            log("Publishing slot 0 immediately (no wall-clock hold)")
         }
         try ExportPaths.publishSegmentToDLNA(slot: slot, log: log)
         let finalURL = ExportPaths.segmentURL(index: slot)
@@ -433,9 +339,9 @@ final class SegmentExporter {
         return freeNumber.int64Value
     }
 
-    private static func ensureExportDiskSpace(fileBytes: Int64, streaming: Bool) throws {
+    private static func ensureExportDiskSpace(fileBytes: Int64) throws {
         guard let free = freeDiskBytes() else { return }
-        let needed = streaming ? streamingWorkingSetBytes : fileBytes + diskMarginBytes
+        let needed = min(max(fileBytes, 0), streamingWorkingSetBytes) + diskMarginBytes
         guard free >= needed else {
             throw SegmentExporterError.insufficientDiskSpace(needed: needed, available: max(0, free))
         }
@@ -528,7 +434,7 @@ final class SegmentExporter {
             }()
             if writerBackpressure {
                 log(
-                    "Video writer stalled with 0 samples (\(error.localizedDescription)) — filling window on disk, then pCloud stream if needed"
+                    "Video writer stalled with 0 samples (\(error.localizedDescription)) — dense-filling window, then retrying"
                 )
             } else if writerRejected {
                 log(
@@ -610,63 +516,8 @@ final class SegmentExporter {
                     log: log
                 )
                 return
-            } catch {
-                guard Self.shouldStreamFallback(after: error) else { throw error }
-                try? FileManager.default.removeItem(at: outputURL)
-            }
-            log(
-                "Streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
-            )
-            downloader.pauseBackgroundDownload()
-            do {
-                try await exportSegmentFromPCloudStream(
-                    remoteURL: remoteURL,
-                    authorizationProvider: authorizationProvider,
-                    rangeCache: rangeCache,
-                    trustedLength: trustedLength,
-                    byteRange: byteRange,
-                    videoFormat: videoFormat,
-                    audioFormat: audioFormat,
-                    rangeStart: rangeStart,
-                    rangeDuration: rangeDuration,
-                    outputURL: outputURL,
-                    isCancelled: isCancelled,
-                    log: log
-                )
-            } catch SegmentExporterError.noKeyframeInWindow, SegmentExporterError.readerInterrupted,
-                SegmentExporterError.writerFailed {
-                try? FileManager.default.removeItem(at: outputURL)
-                log(
-                    "pCloud stream failed — downloading \(Self.formatBytes(byteRange.length)) to temp and retrying locally"
-                )
-                try await downloader.ensureFileHeadOnDisk()
-                try await downloader.ensureIndexTailOnDisk()
-                try await downloader.ensureContiguousRange(byteRange)
-                windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
-                let (localAsset, localLoader) = makePassthroughAsset(
-                    downloader: downloader,
-                    tempURL: tempURL,
-                    remoteURL: remoteURL,
-                    authorizationProvider: authorizationProvider,
-                    rangeCache: rangeCache,
-                    trustedLength: trustedLength,
-                    log: log
-                )
-                defer {
-                    localAsset.resourceLoader.setDelegate(nil, queue: nil)
-                    localLoader.cancelOutstandingWork()
-                }
-                try await SegmentPassThroughExporter.exportWindow(
-                    asset: localAsset,
-                    videoFormat: videoFormat,
-                    audioFormat: audioFormat,
-                    rangeStart: rangeStart,
-                    rangeDuration: rangeDuration,
-                    outputURL: outputURL,
-                    sourceLabel: windowDense ? "dense local temp" : tempSourceLabel,
-                    isCancelled: isCancelled,
-                    log: log
-                )
+            } catch let retryError {
+                throw retryError
             }
         }
     }
@@ -750,67 +601,6 @@ final class SegmentExporter {
             }
         }
         return isSparseContainerOpenFailure(error)
-    }
-
-    private func exportSegmentFromPCloudStream(
-        remoteURL: URL,
-        authorizationProvider: @escaping WebDAVAuthorizationProvider,
-        rangeCache: WebDAVRangeCache,
-        trustedLength: Int64,
-        byteRange: TimelineByteRange,
-        videoFormat: CMFormatDescription,
-        audioFormat: CMFormatDescription?,
-        rangeStart: CMTime,
-        rangeDuration: CMTime,
-        outputURL: URL,
-        isCancelled: @escaping () -> Bool,
-        log: @escaping (String) -> Void
-    ) async throws {
-        let auth = authorizationProvider()
-        if trustedLength > 0 {
-            try await WebDAVPrefetch.prefetchStreamExportIndex(
-                remoteURL: remoteURL,
-                authorization: auth,
-                cache: rangeCache,
-                fileLength: trustedLength,
-                log: log
-            )
-        }
-        let indexTailBytes = WebDAVTempFileDownload.indexTailFetchBytes(totalLength: max(trustedLength, 1))
-        let readPolicy = StreamReadPolicy.forExportWindow(
-            fileLength: trustedLength,
-            window: byteRange,
-            indexTailBytes: indexTailBytes
-        )
-        let loader = WebDAVResourceLoader(
-            remoteURL: remoteURL,
-            authorizationProvider: authorizationProvider,
-            rangeCache: rangeCache,
-            trustedContentLength: trustedLength > 0 ? trustedLength : nil,
-            readPolicy: readPolicy,
-            log: log
-        )
-        let asset = AVURLAsset(
-            url: loader.customAssetURL,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-        )
-        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
-        defer {
-            asset.resourceLoader.setDelegate(nil, queue: nil)
-            loader.cancelOutstandingWork()
-        }
-
-        try await SegmentPassThroughExporter.exportWindow(
-            asset: asset,
-            videoFormat: videoFormat,
-            audioFormat: audioFormat,
-            rangeStart: rangeStart,
-            rangeDuration: rangeDuration,
-            outputURL: outputURL,
-            sourceLabel: "pCloud stream",
-            isCancelled: isCancelled,
-            log: log
-        )
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {
@@ -978,17 +768,13 @@ final class SegmentExporter {
         return (durationSeconds, videoFormat, audioFormat)
     }
 
-    private func releaseStreamingProbe(streamFromPCloud: Bool, log: (String) -> Void) {
+    private func releaseStreamingProbe(log: (String) -> Void) {
         guard retainedAsset != nil || retainedWebDAVLoader != nil else { return }
         retainedWebDAVLoader?.cancelOutstandingWork()
         retainedAsset?.resourceLoader.setDelegate(nil, queue: nil)
         retainedWebDAVLoader = nil
         retainedAsset = nil
-        if streamFromPCloud {
-            log("Released codec probe — segments will stream from pCloud (no full temp copy)")
-        } else {
-            log("Released codec probe — export uses local temp file")
-        }
+        log("Released codec probe — export uses sparse temp + dense fill")
     }
 
     private func videoFormatDescription(from track: AVAssetTrack) async throws -> CMFormatDescription {
@@ -1268,15 +1054,14 @@ enum SegmentExporterError: LocalizedError {
             return "Write failed: \(error.localizedDescription)"
         case .writerBackpressure:
             return """
-            Video writer not ready in time — the app will dense-fill this minute and retry (or use pCloud stream). \
-            Try seek 0 min if it keeps failing.
+            Video writer not ready in time — dense-fill this minute and retry. Try seek 0 min if it keeps failing.
             """
         case .writerAudioStall:
             return "Audio writer stalled (internal — should fall back to video-only)."
         case .midFileTempUnreadable(let mediaTime, let underlying):
             return """
             Could not export the \(mediaTime) minute (\(underlying)). \
-            Try seek 0 min for the first segment, or stay on cellular/Wi‑Fi with the app open until passthrough completes (hybrid temp + pCloud stream were both attempted).
+            Try seek 0 min for the first segment, or stay on cellular/Wi‑Fi until the minute is dense on disk.
             """
         case .insufficientDiskSpace(let needed, let available):
             let needMB = needed / (1024 * 1024)

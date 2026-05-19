@@ -9,11 +9,6 @@ enum ExportDeliveryPolicy {
     /// Reject passthrough if the first keyframe is farther than this into the 60s window.
     static let maxKeyframeStartOffsetSeconds: Double = 5
 
-    /// Stream each minute from pCloud (no sparse + dense temp). Off by default; Photos uses dense fill then library import.
-    static var preferStreamPerSegment: Bool {
-        false
-    }
-
     /// Publish first segment as soon as it is ready (no wall-clock hold). Not tied to Photos.
     static var prioritizeFirstPhotosPublish: Bool {
         true
