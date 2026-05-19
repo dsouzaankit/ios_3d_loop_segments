@@ -411,8 +411,12 @@ final class SegmentExporter {
             log("Passthrough via sparse temp + pCloud (holes fetched on demand)")
         }
 
-        func runPassthrough(sourceLabel: String, useOnDiskFileURL: Bool) async throws {
-            let (readAsset, hybridLoader) = makePassthroughAsset(
+        func runPassthrough(
+            sourceLabel: String,
+            useOnDiskFileURL: Bool,
+            forceHTTPSRangeReads: Bool = false
+        ) async throws {
+            let (readAsset, hybridLoader) = try await resolvePassthroughReadAsset(
                 downloader: downloader,
                 tempURL: tempURL,
                 remoteURL: remoteURL,
@@ -421,6 +425,7 @@ final class SegmentExporter {
                 trustedLength: trustedLength,
                 byteRange: byteRange,
                 useOnDiskFileURL: useOnDiskFileURL,
+                forceHTTPSRangeReads: forceHTTPSRangeReads,
                 log: log
             )
             if let hybridLoader {
@@ -467,6 +472,20 @@ final class SegmentExporter {
                 useOnDiskFileURL: useOnDiskFileURL
             )
         } catch {
+            if byteRange.start > 0,
+               windowDense,
+               Self.isUnsupportedAssetURLError(error) {
+                log(
+                    "Hybrid asset URL rejected (\(error.localizedDescription)) — using HTTPS byte-range reads from pCloud"
+                )
+                downloader.closeWriteHandleForPassthroughRead(log: log)
+                try await runPassthrough(
+                    sourceLabel: "\(tempSourceLabel) (HTTPS range)",
+                    useOnDiskFileURL: false,
+                    forceHTTPSRangeReads: true
+                )
+                return
+            }
             if byteRange.start == 0,
                windowDense,
                Self.isUnsupportedAssetURLError(error) {
@@ -666,8 +685,22 @@ final class SegmentExporter {
         try await downloader.ensureContiguousRange(byteRange)
     }
 
-    /// Start-of-file dense window: `file://` temp. Mid-file / sparse: hybrid with `StreamReadPolicy` (head + window + index tail only).
-    private func makePassthroughAsset(
+    private func makeHTTPSPassthroughAsset(
+        remoteURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider
+    ) -> AVURLAsset {
+        let headers = ["Authorization": authorizationProvider()]
+        return AVURLAsset(
+            url: remoteURL,
+            options: [
+                AVURLAssetHTTPHeaderFieldsKey: headers,
+                AVURLAssetPreferPreciseDurationAndTimingKey: false,
+            ]
+        )
+    }
+
+    /// Start-of-file dense window: `file://` temp. Mid-file: hybrid (capped) or HTTPS range reads if custom URL is rejected.
+    private func resolvePassthroughReadAsset(
         downloader: WebDAVTempFileDownload,
         tempURL: URL,
         remoteURL: URL,
@@ -676,8 +709,9 @@ final class SegmentExporter {
         trustedLength: Int64,
         byteRange: TimelineByteRange,
         useOnDiskFileURL: Bool,
+        forceHTTPSRangeReads: Bool,
         log: @escaping (String) -> Void
-    ) -> (AVURLAsset, WebDAVResourceLoader?) {
+    ) async throws -> (AVURLAsset, WebDAVResourceLoader?) {
         if useOnDiskFileURL {
             log("Passthrough reader: on-disk temp file (dense window at start of file)")
             let asset = AVURLAsset(
@@ -686,6 +720,13 @@ final class SegmentExporter {
             )
             return (asset, nil)
         }
+        if forceHTTPSRangeReads {
+            log(
+                "Passthrough reader: HTTPS byte-range from pCloud (reader timeRange limits the segment; dense temp not used for reads)"
+            )
+            return (makeHTTPSPassthroughAsset(remoteURL: remoteURL, authorizationProvider: authorizationProvider), nil)
+        }
+
         let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
         let readPolicy = StreamReadPolicy.forExportWindow(
             fileLength: fileLength,
@@ -712,7 +753,18 @@ final class SegmentExporter {
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
-        return (asset, loader)
+        do {
+            _ = try await asset.loadTracks(withMediaType: .video)
+            return (asset, loader)
+        } catch {
+            asset.resourceLoader.setDelegate(nil, queue: nil)
+            loader.cancelOutstandingWork()
+            guard Self.isUnsupportedAssetURLError(error) else { throw error }
+            log(
+                "Custom asset URL rejected (\(error.localizedDescription)) — using HTTPS byte-range reads from pCloud"
+            )
+            return (makeHTTPSPassthroughAsset(remoteURL: remoteURL, authorizationProvider: authorizationProvider), nil)
+        }
     }
 
     static func isWriterSampleRejection(_ error: Error) -> Bool {
