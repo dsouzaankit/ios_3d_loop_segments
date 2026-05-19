@@ -139,27 +139,27 @@ enum ExportLANServer {
     private static func receiveRequest(on connection: NWConnection, done: @escaping () -> Void) {
         performWhenReady(connection: connection, onFailure: done) {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, error in
-            defer { done() }
-            if let error {
-                connection.cancel()
-                _ = error
-                return
-            }
-            guard let data, !data.isEmpty,
-                  let text = String(data: data, encoding: .utf8) else {
-                sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8))
-                return
-            }
-            guard let line = text.split(separator: "\r\n", maxSplits: 1).first,
-                  let (method, path) = parseRequestLine(String(line)) else {
-                sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8))
-                return
-            }
-            guard method == "GET" else {
-                sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("GET only".utf8))
-                return
-            }
-            handleGET(path: path, connection: connection)
+                if let error {
+                    connection.cancel()
+                    _ = error
+                    done()
+                    return
+                }
+                guard let data, !data.isEmpty,
+                      let text = String(data: data, encoding: .utf8) else {
+                    sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
+                    return
+                }
+                guard let line = text.split(separator: "\r\n", maxSplits: 1).first,
+                      let (method, path) = parseRequestLine(String(line)) else {
+                    sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
+                    return
+                }
+                guard method == "GET" else {
+                    sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("GET only".utf8), done: done)
+                    return
+                }
+                handleGET(path: path, connection: connection, done: done)
             }
         }
     }
@@ -175,21 +175,28 @@ enum ExportLANServer {
         return (String(parts[0]).uppercased(), path)
     }
 
-    private static func handleGET(path: String, connection: NWConnection) {
+    private static func handleGET(path: String, connection: NWConnection, done: @escaping () -> Void) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
-            sendIndexHTML(connection)
+            sendIndexHTML(connection, done: done)
             return
         }
         if normalized == "status.json" {
-            sendStatusJSON(connection)
+            sendStatusJSON(connection, done: done)
             return
         }
         guard let fileURL = resolveExportFile(name: normalized) else {
-            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8))
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
         }
-        sendFile(connection: connection, fileURL: fileURL)
+        sendFile(connection: connection, fileURL: fileURL, done: done)
+    }
+
+    private static func httpResponseHeader(status: Int, phrase: String, contentType: String, contentLength: Int) -> String {
+        "HTTP/1.1 \(status) \(phrase)\r\n" +
+            "Content-Type: \(contentType)\r\n" +
+            "Content-Length: \(contentLength)\r\n" +
+            "Connection: close\r\n\r\n"
     }
 
     private static func resolveExportFile(name: String) -> URL? {
@@ -213,7 +220,7 @@ enum ExportLANServer {
         return url
     }
 
-    private static func sendIndexHTML(_ connection: NWConnection) {
+    private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         let fm = FileManager.default
         let dir = ExportPaths.exportsDirectory
         var items: [String] = []
@@ -259,11 +266,12 @@ enum ExportLANServer {
             connection: connection,
             status: 200,
             contentType: "text/html; charset=utf-8",
-            body: Data(html.utf8)
+            body: Data(html.utf8),
+            done: done
         )
     }
 
-    private static func sendStatusJSON(_ connection: NWConnection) {
+    private static func sendStatusJSON(_ connection: NWConnection, done: @escaping () -> Void) {
         let fm = FileManager.default
         let dir = ExportPaths.exportsDirectory
         var entries: [[String: Any]] = []
@@ -291,36 +299,34 @@ enum ExportLANServer {
             "files": entries,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
-            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8))
+            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return
         }
-        sendResponse(connection: connection, status: 200, contentType: "application/json", body: data)
+        sendResponse(connection: connection, status: 200, contentType: "application/json", body: data, done: done)
     }
 
-    private static func sendFile(connection: NWConnection, fileURL: URL) {
+    private static func sendFile(connection: NWConnection, fileURL: URL, done: @escaping () -> Void) {
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
               let sizeNum = attrs[.size] as? NSNumber,
               sizeNum.int64Value > 0 else {
-            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Empty or missing".utf8))
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Empty or missing".utf8), done: done)
             return
         }
         let size = sizeNum.int64Value
         let contentType = mimeType(for: fileURL)
-        let header = """
-            HTTP/1.1 200 OK\r
-            Content-Type: \(contentType)\r
-            Content-Length: \(size)\r
-            Connection: close\r
-            \r
-            """
-        guard let headerData = header.data(using: .utf8) else { return }
+        let header = httpResponseHeader(status: 200, phrase: "OK", contentType: contentType, contentLength: Int(size))
+        guard let headerData = header.data(using: .utf8) else {
+            done()
+            return
+        }
         connection.send(content: headerData, completion: .contentProcessed { error in
             if error != nil {
                 connection.cancel()
+                done()
                 return
             }
-            streamFile(connection: connection, fileURL: fileURL, offset: 0, remaining: size)
+            streamFile(connection: connection, fileURL: fileURL, offset: 0, remaining: size, done: done)
         })
     }
 
@@ -328,10 +334,12 @@ enum ExportLANServer {
         connection: NWConnection,
         fileURL: URL,
         offset: Int64,
-        remaining: Int64
+        remaining: Int64,
+        done: @escaping () -> Void
     ) {
         if remaining <= 0 {
             connection.cancel()
+            done()
             return
         }
         let chunkSize = min(remaining, 512 * 1024)
@@ -340,6 +348,7 @@ enum ExportLANServer {
             handle = try FileHandle(forReadingFrom: fileURL)
         } catch {
             connection.cancel()
+            done()
             return
         }
         defer { try? handle.close() }
@@ -348,11 +357,13 @@ enum ExportLANServer {
             let data = handle.readData(ofLength: Int(chunkSize))
             guard !data.isEmpty else {
                 connection.cancel()
+                done()
                 return
             }
             connection.send(content: data, completion: .contentProcessed { error in
                 if error != nil {
                     connection.cancel()
+                    done()
                     return
                 }
                 let sent = Int64(data.count)
@@ -360,11 +371,13 @@ enum ExportLANServer {
                     connection: connection,
                     fileURL: fileURL,
                     offset: offset + sent,
-                    remaining: remaining - sent
+                    remaining: remaining - sent,
+                    done: done
                 )
             })
         } catch {
             connection.cancel()
+            done()
         }
     }
 
@@ -372,20 +385,21 @@ enum ExportLANServer {
         connection: NWConnection,
         status: Int,
         contentType: String,
-        body: Data
+        body: Data,
+        done: @escaping () -> Void
     ) {
         let phrase = status == 200 ? "OK" : (status == 404 ? "Not Found" : "Error")
-        let header = """
-            HTTP/1.1 \(status) \(phrase)\r
-            Content-Type: \(contentType)\r
-            Content-Length: \(body.count)\r
-            Connection: close\r
-            \r
-            """
+        let header = httpResponseHeader(
+            status: status,
+            phrase: phrase,
+            contentType: contentType,
+            contentLength: body.count
+        )
         var data = Data(header.utf8)
         data.append(body)
         connection.send(content: data, completion: .contentProcessed { _ in
             connection.cancel()
+            done()
         })
     }
 
