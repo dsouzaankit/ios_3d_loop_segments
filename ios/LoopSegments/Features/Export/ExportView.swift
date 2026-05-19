@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ExportView: View {
     @EnvironmentObject private var session: AppSession
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var network = NetworkPathMonitor()
     let item: WebDAVItem
 
@@ -154,17 +155,15 @@ struct ExportView: View {
         }
         .navigationTitle("Export")
         .onAppear {
-            seekMs = ResumeStore.shared.seekMs(for: item)
-            refreshLogFromDisk()
-            ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
-            lanExportURL = ExportLANServer.baseURLString
+            applyForegroundResume()
             if PhotosSegmentPublisher.workflowEnabled, PhotosSegmentPublisher.isEnabled {
                 Task { await requestPhotosAccess() }
             }
         }
-        .onDisappear {
-            exportTask?.cancel()
-            exportTask = nil
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                applyForegroundResume()
+            }
         }
         .task(id: ExportLANServer.isEnabled) {
             guard ExportLANServer.isEnabled else {
@@ -210,8 +209,27 @@ struct ExportView: View {
         }
     }
 
+    private func applyForegroundResume() {
+        seekMs = ResumeStore.shared.seekMs(for: item)
+        if let checkpoint = ResumeStore.shared.checkpointMediaMs(for: item), checkpoint > seekMs {
+            seekMs = checkpoint
+        }
+        if session.isExportRunning {
+            if status.isEmpty || status.hasPrefix("Export paused") {
+                status = "Export running — logs refresh while app is open"
+            }
+        } else if ResumeStore.shared.exportWasInterrupted(for: item) {
+            status = "Export paused — continue from \(formatMs(seekMs)) (tap Start export)"
+        }
+        refreshLogFromDisk()
+        refreshLogHint()
+        ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
+        lanExportURL = ExportLANServer.baseURLString
+    }
+
     private func clearExportMedia() {
         guard !session.isExportRunning else { return }
+        ResumeStore.shared.finishExport(for: item)
         let count = SegmentCleanup.removeExportMedia()
         liveLogTail = ""
         status = count > 0 ? "Cleared \(count) media file(s) from Exports" : "No media files in Exports"

@@ -55,7 +55,8 @@ final class SegmentExporter {
         catalogContentLength: Int64? = nil,
         seekMs: Int64,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
-        logHandler: @escaping (String) -> Void
+        logHandler: @escaping (String) -> Void,
+        onMediaProgress: (@Sendable (Int64) -> Void)? = nil
     ) async throws -> SegmentExportResult {
         cancelLock.lock()
         isCancelled = false
@@ -359,6 +360,7 @@ final class SegmentExporter {
                 }
 
                 lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
+                onMediaProgress?(lastMediaTimeMs)
                 minuteIndex += 1
             }
 

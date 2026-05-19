@@ -19,7 +19,8 @@ final class ExportCoordinator {
     func run(
         item: WebDAVItem,
         credentials: WebDAVCredentials,
-        seekMs: Int64
+        seekMs: Int64,
+        onMediaProgress: (@Sendable (Int64) -> Void)? = nil
     ) async throws -> SegmentExportResult {
         lock.lock()
         guard !active else {
@@ -78,7 +79,8 @@ final class ExportCoordinator {
                         catalogContentLength: item.contentLength,
                         seekMs: seekMs,
                         authorizationProvider: authProvider,
-                        logHandler: logHandler
+                        logHandler: logHandler,
+                        onMediaProgress: onMediaProgress
                     )
                 }.value
             } onCancel: {

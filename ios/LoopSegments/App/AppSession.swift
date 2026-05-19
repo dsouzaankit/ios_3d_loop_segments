@@ -9,6 +9,7 @@ final class AppSession: ObservableObject {
     private(set) var userRequestedExportCancel = false
     /// Created on first export (lazy init for export stack).
     private lazy var exportCoordinator = ExportCoordinator()
+    private var activeExportItem: WebDAVItem?
 
     init() {
         credentials = credentialStore.load()
@@ -127,16 +128,36 @@ final class AppSession: ObservableObject {
 
         userRequestedExportCancel = false
         exportCoordinator.userRequestedCancel = false
+        activeExportItem = item
+        ResumeStore.shared.beginExport(for: item, seekMs: seekMs)
         isExportRunning = true
-        defer { isExportRunning = false }
+        defer {
+            isExportRunning = false
+            activeExportItem = nil
+        }
 
-        let result = try await exportCoordinator.run(
-            item: item,
-            credentials: credentials,
-            seekMs: seekMs
-        )
-        let resumeMs: Int64 = result.reachedEnd ? 0 : result.lastMediaTimeMs
-        ResumeStore.shared.saveSeekMs(resumeMs, for: item)
+        let onProgress: @Sendable (Int64) -> Void = { mediaMs in
+            Task { @MainActor in
+                ResumeStore.shared.saveCheckpoint(mediaMs: mediaMs, for: item)
+            }
+        }
+
+        do {
+            let result = try await exportCoordinator.run(
+                item: item,
+                credentials: credentials,
+                seekMs: seekMs,
+                onMediaProgress: onProgress
+            )
+            let resumeMs: Int64 = result.reachedEnd ? 0 : result.lastMediaTimeMs
+            ResumeStore.shared.saveSeekMs(resumeMs, for: item)
+            ResumeStore.shared.finishExport(for: item)
+        } catch {
+            if userRequestedExportCancel {
+                ResumeStore.shared.finishExport(for: item)
+            }
+            throw
+        }
     }
 
     func cancelExport() {
@@ -144,6 +165,9 @@ final class AppSession: ObservableObject {
         exportCoordinator.userRequestedCancel = true
         exportCoordinator.cancel()
         isExportRunning = false
+        if let item = activeExportItem {
+            ResumeStore.shared.finishExport(for: item)
+        }
     }
 }
 

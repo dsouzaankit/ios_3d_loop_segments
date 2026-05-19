@@ -5,6 +5,10 @@ struct ResumeEntry: Codable {
     var displayName: String
     var lastSeekMs: Int64
     var updatedAt: Date
+    /// True while export was interrupted or app left mid-run (cleared on successful finish or Stop).
+    var exportInProgress: Bool = false
+    /// Latest media position during an in-progress or interrupted export.
+    var checkpointMediaMs: Int64?
 }
 
 final class ResumeStore {
@@ -18,13 +22,64 @@ final class ResumeStore {
     }
 
     func saveSeekMs(_ ms: Int64, for item: WebDAVItem) {
-        var entries = load().filter { $0.fileKey != item.fileKey }
-        entries.append(ResumeEntry(
-            fileKey: item.fileKey,
-            displayName: item.name,
-            lastSeekMs: max(0, ms),
-            updatedAt: Date()
-        ))
+        upsert(item: item) { entry in
+            entry.lastSeekMs = max(0, ms)
+            entry.updatedAt = Date()
+        }
+    }
+
+    func beginExport(for item: WebDAVItem, seekMs: Int64) {
+        upsert(item: item) { entry in
+            entry.exportInProgress = true
+            entry.checkpointMediaMs = max(0, seekMs)
+            entry.updatedAt = Date()
+        }
+    }
+
+    func saveCheckpoint(mediaMs: Int64, for item: WebDAVItem) {
+        upsert(item: item) { entry in
+            entry.exportInProgress = true
+            entry.checkpointMediaMs = max(0, mediaMs)
+            entry.updatedAt = Date()
+        }
+    }
+
+    func finishExport(for item: WebDAVItem) {
+        upsert(item: item) { entry in
+            entry.exportInProgress = false
+            entry.checkpointMediaMs = nil
+            entry.updatedAt = Date()
+        }
+    }
+
+    func exportWasInterrupted(for item: WebDAVItem) -> Bool {
+        load().first { $0.fileKey == item.fileKey }?.exportInProgress == true
+    }
+
+    func checkpointMediaMs(for item: WebDAVItem) -> Int64? {
+        load().first { $0.fileKey == item.fileKey }?.checkpointMediaMs
+    }
+
+    private func upsert(item: WebDAVItem, mutate: (inout ResumeEntry) -> Void) {
+        var entries = load()
+        var entry: ResumeEntry
+        if let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) {
+            entry = entries[index]
+        } else {
+            entry = ResumeEntry(
+                fileKey: item.fileKey,
+                displayName: item.name,
+                lastSeekMs: 0,
+                updatedAt: Date()
+            )
+        }
+        entry.displayName = item.name
+        mutate(&entry)
+        if let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) {
+            entries[index] = entry
+        } else {
+            entries.append(entry)
+        }
         if let data = try? JSONEncoder().encode(entries) {
             defaults.set(data, forKey: key)
         }
