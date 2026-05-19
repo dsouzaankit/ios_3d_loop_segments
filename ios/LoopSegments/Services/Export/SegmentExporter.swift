@@ -463,7 +463,7 @@ final class SegmentExporter {
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
             if useOnDiskFileURL,
-               isSparseContainerOpenFailure(error) || isRetriablePassthroughWriterFailure(error) {
+               isSparseContainerOpenFailure(error) || Self.isRetriablePassthroughWriterFailure(error) {
                 log(
                     "On-disk passthrough failed (\(error.localizedDescription)) — retrying with capped hybrid reader"
                 )
@@ -474,7 +474,7 @@ final class SegmentExporter {
                 )
                 return
             }
-            let writerRejected = isRetriablePassthroughWriterFailure(error)
+            let writerRejected = Self.isRetriablePassthroughWriterFailure(error)
             let writerBackpressure: Bool = {
                 if case SegmentExporterError.writerBackpressure = error { return true }
                 return false
