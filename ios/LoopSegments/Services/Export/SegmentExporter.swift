@@ -453,6 +453,7 @@ final class SegmentExporter {
                 "Dense window not at file start (\(Self.formatBytes(byteRange.start))) — capped hybrid reader (file:// reads zero-filled gaps → -11800)"
             )
         }
+        downloader.closeWriteHandleForPassthroughRead(log: log)
         do {
             try await runPassthrough(
                 sourceLabel: tempSourceLabel,
@@ -461,18 +462,19 @@ final class SegmentExporter {
         } catch {
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
-            if useOnDiskFileURL, isSparseContainerOpenFailure(error) {
+            if useOnDiskFileURL,
+               isSparseContainerOpenFailure(error) || isRetriablePassthroughWriterFailure(error) {
                 log(
-                    "On-disk reader could not open sparse temp (\(error.localizedDescription)) — retrying with capped hybrid reader"
+                    "On-disk passthrough failed (\(error.localizedDescription)) — retrying with capped hybrid reader"
                 )
-                useOnDiskFileURL = false
+                downloader.closeWriteHandleForPassthroughRead(log: log)
                 try await runPassthrough(
-                    sourceLabel: "\(tempSourceLabel) (hybrid after Cannot Open)",
+                    sourceLabel: "\(tempSourceLabel) (hybrid retry)",
                     useOnDiskFileURL: false
                 )
                 return
             }
-            let writerRejected = Self.isWriterSampleRejection(error)
+            let writerRejected = isRetriablePassthroughWriterFailure(error)
             let writerBackpressure: Bool = {
                 if case SegmentExporterError.writerBackpressure = error { return true }
                 return false
@@ -482,8 +484,9 @@ final class SegmentExporter {
                     log(
                         "Writer rejected on-disk reader (\(error.localizedDescription)) — retrying with capped hybrid reader"
                     )
+                    downloader.closeWriteHandleForPassthroughRead(log: log)
                     try await runPassthrough(
-                        sourceLabel: "dense local temp (hybrid after -11800)",
+                        sourceLabel: "dense local temp (hybrid after writer error)",
                         useOnDiskFileURL: false
                     )
                     return
@@ -496,6 +499,7 @@ final class SegmentExporter {
                 try await downloader.ensureIndexTailOnDisk()
                 try await downloader.ensureContiguousRange(byteRange, force: true)
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
+                downloader.closeWriteHandleForPassthroughRead(log: log)
                 try await runPassthrough(
                     sourceLabel: windowDense ? "dense local temp (writer retry)" : "sparse temp + pCloud (writer retry)",
                     useOnDiskFileURL: false
@@ -518,6 +522,7 @@ final class SegmentExporter {
                 try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
                 useOnDiskFileURL = false
+                downloader.closeWriteHandleForPassthroughRead(log: log)
                 do {
                     try await runPassthrough(
                         sourceLabel: windowDense ? "dense local temp (hybrid retry)" : "sparse temp + pCloud (retry)",
@@ -546,6 +551,7 @@ final class SegmentExporter {
                 byteRange: byteRange,
                 windowDense: windowDense
             )
+            downloader.closeWriteHandleForPassthroughRead(log: log)
             try await runPassthrough(
                 sourceLabel: windowDense ? "dense local temp (window filled)" : "sparse temp + pCloud (window filled)",
                 useOnDiskFileURL: useOnDiskFileURL
@@ -553,14 +559,20 @@ final class SegmentExporter {
         }
     }
 
-    /// `file://` only when the dense window starts at byte 0 (no zero-filled gap between head and window).
+    /// `file://` only when byte 0..window is dense and the sparse tail past the window is small (else use hybrid).
     private func shouldUseOnDiskFileURLForPassthrough(
         downloader: WebDAVTempFileDownload,
         byteRange: TimelineByteRange,
         windowDense: Bool
     ) -> Bool {
         guard windowDense, byteRange.start == 0, byteRange.length > 0 else { return false }
-        return downloader.isByteRangeFullyOnDisk(byteRange)
+        guard downloader.isByteRangeFullyOnDisk(byteRange) else { return false }
+        let fileLength = downloader.totalLength
+        if downloader.isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: fileLength)) {
+            return true
+        }
+        let tailGap = fileLength - byteRange.end
+        return tailGap <= 8 * 1024 * 1024
     }
 
     private func prepareMidFileTempForReader(
@@ -624,14 +636,26 @@ final class SegmentExporter {
     }
 
     static func isWriterSampleRejection(_ error: Error) -> Bool {
+        isRetriablePassthroughWriterFailure(error)
+    }
+
+    static func isRetriablePassthroughWriterFailure(_ error: Error) -> Bool {
         guard case SegmentExporterError.writerFailed(let underlying) = error else { return false }
         let ns = underlying as NSError
-        if ns.domain == AVFoundationErrorDomain, ns.code == -11800 { return true }
-        return underlying.localizedDescription.lowercased().contains("could not be completed")
+        if ns.domain == AVFoundationErrorDomain {
+            switch ns.code {
+            case -11800, -11847:
+                return true
+            default:
+                break
+            }
+        }
+        let text = underlying.localizedDescription.lowercased()
+        return text.contains("could not be completed") || text.contains("operation interrupted")
     }
 
     static func isAudioWriterRejection(_ error: Error, track: SegmentTrackKind) -> Bool {
-        track == .audio && isWriterSampleRejection(error)
+        track == .audio && isRetriablePassthroughWriterFailure(error)
     }
 
     private func formatMediaTimeForLog(_ time: CMTime) -> String {

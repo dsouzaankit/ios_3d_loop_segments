@@ -113,6 +113,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     func ensureIndexTailOnDisk(force: Bool = false) async throws {
+        try ensureWriteHandleForDownload()
         lock.lock()
         let hasTail = tailOnDisk
         lock.unlock()
@@ -137,6 +138,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     func ensureFileHeadOnDisk() async throws {
+        try ensureWriteHandleForDownload()
         lock.lock()
         let hasHead = headOnDisk
         lock.unlock()
@@ -171,6 +173,25 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.unlock()
         downloadTask?.cancel()
         downloadTask = nil
+    }
+
+    func ensureWriteHandleForDownload() throws {
+        lock.lock()
+        let needsHandle = writeHandle == nil
+        lock.unlock()
+        guard needsHandle else { return }
+        writeHandle = try FileHandle(forWritingTo: fileURL)
+    }
+
+    /// AVAssetReader and an open write `FileHandle` on the same path can race (-11847 Operation Interrupted).
+    func closeWriteHandleForPassthroughRead(log: ((String) -> Void)? = nil) {
+        lock.lock()
+        let handle = writeHandle
+        writeHandle = nil
+        lock.unlock()
+        try? handle?.synchronize()
+        try? handle?.close()
+        log?("Temp file write handle closed — passthrough read")
     }
 
     func cancel() {
@@ -236,6 +257,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     /// Fill every byte in `range` from pCloud (dense on disk) so AVFoundation can open the sparse temp.
     func ensureContiguousRange(_ range: TimelineByteRange, force: Bool = false) async throws {
         guard range.length > 0 else { return }
+        try ensureWriteHandleForDownload()
         let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
         let rangeEnd = min(range.end, totalLength)
         let needLen = rangeEnd - range.start
