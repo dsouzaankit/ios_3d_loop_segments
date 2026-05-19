@@ -176,6 +176,16 @@ function Resolve-DLANTargetSlot {
     return Get-OlderDLNASlot -DestinationRoot $DestinationRoot
 }
 
+function Test-SegmentMP4Readable {
+    param([string] $Path)
+    $ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
+    if (-not $ffprobe) {
+        return $true
+    }
+    & $ffprobe.Source -v error -show_format -show_streams -i $Path 2>&1 | Out-Null
+    return $LASTEXITCODE -eq 0
+}
+
 function Install-DLANSegmentAtomic {
     param(
         [string] $SourcePath,
@@ -267,11 +277,29 @@ function Invoke-LANSegmentSync {
     }
 
     $downloadUrl = "$BaseUrl/$RemoteSegmentName"
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $stagingFile -TimeoutSec 600 -UseBasicParsing
+    $response = Invoke-WebRequest -Uri $downloadUrl -OutFile $stagingFile -TimeoutSec 600 -UseBasicParsing -PassThru
 
     $local = Get-Item -LiteralPath $stagingFile
     if ($local.Length -lt $MinSegmentBytes) {
         Write-Host "Downloaded file too small ($($local.Length) B) — skipped."
+        Remove-Item -LiteralPath $stagingFile -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    $expectedBytes = $remoteBytes
+    if ($response.Headers['Content-Length']) {
+        $expectedBytes = [int64]$response.Headers['Content-Length']
+    }
+    if ($local.Length -ne $expectedBytes) {
+        Write-Host (
+            "Download incomplete — got $($local.Length) B, expected $expectedBytes B " +
+            "(moov missing if installed). Skipped."
+        )
+        Remove-Item -LiteralPath $stagingFile -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    if (-not (Test-SegmentMP4Readable -Path $stagingFile)) {
+        Write-Host "ffprobe: $RemoteSegmentName is not a playable MP4 (moov atom missing or corrupt) — skipped."
+        Remove-Item -LiteralPath $stagingFile -Force -ErrorAction SilentlyContinue
         return $false
     }
 

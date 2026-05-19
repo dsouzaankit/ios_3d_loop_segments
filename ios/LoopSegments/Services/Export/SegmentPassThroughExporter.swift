@@ -354,6 +354,7 @@ enum SegmentPassThroughExporter {
         if let writerContext {
             try await writerContext.finish()
         }
+        exportFinishedOK = true
         log(
             "Passthrough finished — source \(ExportTimelineLog.sourceRange(start: segmentOrigin, end: segmentEndPTS)), " +
                 "segment file 0:00–\(ExportTimelineLog.wallClock(seconds: CMTimeGetSeconds(CMTimeSubtract(segmentEndPTS, segmentOrigin))))"
@@ -363,7 +364,6 @@ enum SegmentPassThroughExporter {
             segmentEnd: segmentEndPTS,
             nextSegmentStart: resolvedNextStart
         )
-        exportFinishedOK = true
     }
 
     private static func appendAudioPassthrough(

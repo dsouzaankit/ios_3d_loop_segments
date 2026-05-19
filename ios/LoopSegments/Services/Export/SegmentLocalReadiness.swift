@@ -202,13 +202,17 @@ enum SegmentLocalReadiness {
             throw SegmentExporterError.segmentOutputTooSmall(bytes)
         }
         let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        let tracks = try await asset.load(.tracks)
+        guard tracks.contains(where: { $0.mediaType == .video }) else {
+            throw SegmentExporterError.segmentOutputTooSmall(bytes)
+        }
         let duration = try await asset.load(.duration)
         let seconds = CMTimeGetSeconds(duration)
         let needSeconds = CMTimeGetSeconds(rangeDuration) * 0.85
         guard seconds.isFinite, seconds >= needSeconds else {
             throw SegmentExporterError.segmentOutputTooSmall(bytes)
         }
-        log(String(format: "Segment size OK — %d KB, %.1fs duration", bytes / 1024, seconds))
+        log(String(format: "Segment size OK — %d KB, %.1fs duration (moov/tracks readable)", bytes / 1024, seconds))
     }
 
     private static func probeMinContiguousBytes(
