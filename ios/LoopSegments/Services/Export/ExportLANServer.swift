@@ -57,7 +57,7 @@ enum ExportLANServer {
                         advertisedBaseURL = url
                         lock.unlock()
                         log("LAN export: \(url) — PC: Sync-FromPhoneLAN.ps1 -PhoneHost \(ip) -Watch")
-                        log("LAN files: open / in a browser; PC uses /status.json and /3d_op_00.mp4")
+                        log("LAN files: / status.json, /3d_op_00.mp4, /_export_source_working.mp4 (temp, while exporting)")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
                         Self.stopOnQueue(log: nil)
@@ -211,6 +211,8 @@ enum ExportLANServer {
             for slot in 0 ..< ExportPaths.segmentFileCount {
                 names.insert(ExportPaths.segmentURL(index: slot).lastPathComponent)
             }
+            // Sparse full-source temp (HTTP only while export runs — LAN server stops when export ends).
+            names.insert(ExportPaths.workingSourceURL.lastPathComponent)
             return names
         }()
         guard allowedNames.contains(name) else { return nil }

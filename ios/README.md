@@ -1,9 +1,11 @@
 https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
 
-PS P:\all_scripts\ios_3d_loop_segments\windows> .\Set-LoopSegmentsDestination.ps1 'C:\Users\dsouzaankit\Downloads\ios_3d_out'
-# PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromPhonePhotos-Watch.cmd
-PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromPhoneLAN.ps1 -Discover
-PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromPhoneLAN.ps1 -Watch
+cd P:\all_scripts\ios_3d_loop_segments\windows
+.\Set-LoopSegmentsDestination.ps1 'C:\Users\dsouzaankit\Downloads\ios_3d_out'
+# .\Sync-FromPhonePhotos-Watch.cmd
+.\Set-LoopSegmentsLANHost.ps1 10.0.100.10
+.\Sync-FromPhoneLAN.ps1 -Discover
+.\Sync-FromPhoneLAN.ps1 -Watch
 
 Notes:
 phone should be unlocked, app on foreground, screen on!
@@ -55,7 +57,7 @@ cd ..\windows
 .\Sync-FromPhoneLAN.ps1 -Watch
 ```
 
-pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/3d_op_00.mp4` on port **8765**.
+pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/` on port **8765** (`3d_op_00.mp4`, logs, and optionally `_export_source_working.mp4` — the in-progress sparse temp; only while export runs, not for `-Watch` sync).
 
 ### Export transport
 
