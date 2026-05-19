@@ -448,7 +448,7 @@ final class SegmentExporter {
         } catch {
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
-            if useOnDiskFileURL, Self.isSparseContainerOpenFailure(error) {
+            if useOnDiskFileURL, isSparseContainerOpenFailure(error) {
                 log(
                     "On-disk reader could not open sparse temp (\(error.localizedDescription)) — retrying with capped hybrid reader"
                 )
@@ -492,7 +492,7 @@ final class SegmentExporter {
                 log(
                     "Writer rejected passthrough samples (\(error.localizedDescription)) — dense-filling window, then retrying locally"
                 )
-            } else if midFileSegment, Self.isSparseContainerOpenFailure(error) {
+            } else if midFileSegment, isSparseContainerOpenFailure(error) {
                 log(
                     "Sparse temp not readable (\(error.localizedDescription)) — refreshing header, index, and window, then capped hybrid reader…"
                 )
