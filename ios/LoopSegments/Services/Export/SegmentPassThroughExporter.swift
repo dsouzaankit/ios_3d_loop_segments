@@ -29,6 +29,7 @@ enum SegmentPassThroughExporter {
             throw SegmentExporterError.noVideoTrack
         }
         let rangeEnd = CMTimeAdd(rangeStart, rangeDuration)
+        log("Passthrough — source \(ExportTimelineLog.sourceRange(start: rangeStart, end: rangeEnd))")
         let windowSeconds = CMTimeGetSeconds(rangeDuration)
         guard windowSeconds.isFinite, windowSeconds >= 0.5 else {
             log(
@@ -223,7 +224,10 @@ enum SegmentPassThroughExporter {
                 if skippedNonKeyframe > 0 {
                     log("Started on frame \(skippedNonKeyframe + 1) in window (keyframe scan)")
                 }
-                log("Segment timestamps reset to 0 (source PTS \(formatMediaTime(pts)))")
+                log(
+                    "Segment timestamps reset to 0 (first sample source PTS \(ExportTimelineLog.wallClock(pts)), " +
+                        "window \(ExportTimelineLog.sourceRange(start: rangeStart, end: rangeEnd)))"
+                )
             }
 
             let origin = timelineOrigin ?? rangeStart
@@ -309,6 +313,10 @@ enum SegmentPassThroughExporter {
         if let writerContext {
             try await writerContext.finish()
         }
+        log(
+            "Passthrough finished — source \(ExportTimelineLog.sourceRange(start: segmentOrigin, end: lastInRangePTS)) " +
+                "(segment file 0:00–\(ExportTimelineLog.wallClock(seconds: CMTimeGetSeconds(CMTimeSubtract(lastInRangePTS, segmentOrigin)))))"
+        )
         exportFinishedOK = true
     }
 

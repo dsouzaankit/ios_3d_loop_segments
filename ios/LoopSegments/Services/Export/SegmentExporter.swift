@@ -132,6 +132,13 @@ final class SegmentExporter {
 
         logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
             (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
+        )
+        if seekMs > 0 {
+            logHandler(
+                "Export seek — start at source \(ExportTimelineLog.wallClock(seconds: seekSeconds)) " +
+                    "(\(seekMs) ms into file, duration ~\(ExportTimelineLog.wallClock(seconds: durationSeconds)))"
+            )
+        }
 
         let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
@@ -198,11 +205,16 @@ final class SegmentExporter {
                         )
                     )
                 }
-                let minuteMediaLabel =
-                    "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
-                    "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
                 logHandler(
-                    "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(minuteMediaLabel)"
+                    ExportTimelineLog.processingMinute(
+                        index: minuteIndex,
+                        startSeconds: windowStartSeconds,
+                        endSeconds: windowEndSeconds
+                    )
+                )
+                logHandler(
+                    "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) " +
+                        "for \(ExportTimelineLog.sourceRange(startSeconds: windowStartSeconds, endSeconds: windowEndSeconds))"
                 )
                 let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
                 let rangeDuration = CMTime(
@@ -316,7 +328,7 @@ final class SegmentExporter {
                     skippedSegmentCount += 1
                     try? FileManager.default.removeItem(at: stagingURL)
                     logHandler(
-                        "Minute skipped (failsafe) — \(minuteMediaLabel): \(error.localizedDescription)"
+                        "Minute skipped (failsafe) — source \(ExportTimelineLog.sourceRange(startSeconds: windowStartSeconds, endSeconds: windowEndSeconds)): \(error.localizedDescription)"
                     )
                     logHandler(
                         "Continuing — next minute will dense-fill on _export_source_working.mp4 " +
@@ -466,6 +478,11 @@ final class SegmentExporter {
         log: @escaping (String) -> Void
     ) async throws {
         let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
+        let rangeEnd = CMTimeAdd(rangeStart, rangeDuration)
+        log(
+            "Export segment — source \(ExportTimelineLog.sourceRange(start: rangeStart, end: rangeEnd)) " +
+                "file bytes \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end))"
+        )
         if shouldUseRemotePassthroughForMidFile(byteRange: byteRange, downloader: downloader) {
             try await exportMidFileSegmentOverRemote(
                 downloader: downloader,
