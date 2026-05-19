@@ -94,6 +94,31 @@ function Get-FileSha256Hex {
     return $hash.Hash.ToLowerInvariant()
 }
 
+function Get-Int64Scalar {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    while ($Value -is [System.Array]) {
+        if ($Value.Count -lt 1) { return $null }
+        $Value = $Value[0]
+    }
+    return [int64]$Value
+}
+
+function Get-HttpContentLengthBytes {
+    param(
+        $Response,
+        [int64] $Fallback
+    )
+    if ($null -eq $Response) { return $Fallback }
+    try {
+        $values = $Response.Headers.GetValues('Content-Length')
+        if ($values -and $values.Count -gt 0) {
+            return Get-Int64Scalar $values[0]
+        }
+    } catch { }
+    return $Fallback
+}
+
 function Get-LANSyncState {
     param([string] $StateFile)
     if (-not (Test-Path -LiteralPath $StateFile -PathType Leaf)) { return $null }
@@ -241,13 +266,13 @@ function Invoke-LANSegmentSync {
     )
 
     $status = Get-LANStatus -BaseUrl $BaseUrl
-    $entry = @($status.files | Where-Object { $_.name -eq $RemoteSegmentName } | Select-Object -First 1)
+    $entry = $status.files | Where-Object { $_.name -eq $RemoteSegmentName } | Select-Object -First 1
     if (-not $entry) {
         Write-Host "No $RemoteSegmentName on phone yet (export still warming up)."
         return $false
     }
 
-    $remoteBytes = [int64]$entry.bytes
+    $remoteBytes = Get-Int64Scalar $entry.bytes
     if ($remoteBytes -lt $MinSegmentBytes) {
         Write-Host "$RemoteSegmentName on phone too small ($remoteBytes B) — wait for segment to finish."
         return $false
@@ -285,10 +310,7 @@ function Invoke-LANSegmentSync {
         Remove-Item -LiteralPath $stagingFile -Force -ErrorAction SilentlyContinue
         return $false
     }
-    $expectedBytes = $remoteBytes
-    if ($response.Headers['Content-Length']) {
-        $expectedBytes = [int64]$response.Headers['Content-Length']
-    }
+    $expectedBytes = Get-HttpContentLengthBytes -Response $response -Fallback $remoteBytes
     if ($local.Length -ne $expectedBytes) {
         Write-Host (
             "Download incomplete — got $($local.Length) B, expected $expectedBytes B " +
