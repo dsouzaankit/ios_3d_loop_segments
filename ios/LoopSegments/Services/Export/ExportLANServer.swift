@@ -162,11 +162,11 @@ enum ExportLANServer {
                     sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
                     return
                 }
-                guard method == "GET" else {
-                    sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("GET only".utf8), done: done)
+                guard method == "GET" || method == "HEAD" else {
+                    sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("GET or HEAD only".utf8), done: done)
                     return
                 }
-                handleGET(path: path, connection: connection, done: done)
+                handleGET(path: path, method: method, requestHeaders: text, connection: connection, done: done)
             }
         }
     }
@@ -182,7 +182,13 @@ enum ExportLANServer {
         return (String(parts[0]).uppercased(), path)
     }
 
-    private static func handleGET(path: String, connection: NWConnection, done: @escaping () -> Void) {
+    private static func handleGET(
+        path: String,
+        method: String,
+        requestHeaders: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
             sendIndexHTML(connection, done: done)
@@ -196,14 +202,75 @@ enum ExportLANServer {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
         }
-        sendFile(connection: connection, fileURL: fileURL, done: done)
+        sendFile(
+            connection: connection,
+            fileURL: fileURL,
+            method: method,
+            requestHeaders: requestHeaders,
+            done: done
+        )
     }
 
-    private static func httpResponseHeader(status: Int, phrase: String, contentType: String, contentLength: Int) -> String {
-        "HTTP/1.1 \(status) \(phrase)\r\n" +
-            "Content-Type: \(contentType)\r\n" +
-            "Content-Length: \(contentLength)\r\n" +
-            "Connection: close\r\n\r\n"
+    private static func httpResponseHeader(
+        status: Int,
+        phrase: String,
+        contentType: String,
+        contentLength: Int,
+        contentRange: String? = nil,
+        includeAcceptRanges: Bool = false
+    ) -> String {
+        var lines = [
+            "HTTP/1.1 \(status) \(phrase)",
+            "Content-Type: \(contentType)",
+            "Content-Length: \(contentLength)",
+        ]
+        if includeAcceptRanges {
+            lines.append("Accept-Ranges: bytes")
+        }
+        if let contentRange {
+            lines.append("Content-Range: \(contentRange)")
+        }
+        lines.append("Connection: close")
+        return lines.joined(separator: "\r\n") + "\r\n\r\n"
+    }
+
+    /// Parses `Range: bytes=…` for a file of `fileSize` bytes (single range only).
+    private static func parseByteRange(requestHeaders: String, fileSize: Int64) -> (start: Int64, end: Int64)? {
+        guard fileSize > 0 else { return nil }
+        let rangeLine = requestHeaders
+            .split(separator: "\r\n", omittingEmptySubsequences: true)
+            .first { $0.lowercased().hasPrefix("range:") }
+        guard let rangeLine else { return nil }
+        let value = rangeLine.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: true)
+        guard value.count == 2 else { return nil }
+        var spec = String(value[1]).trimmingCharacters(in: .whitespaces)
+        guard spec.lowercased().hasPrefix("bytes=") else { return nil }
+        spec = String(spec.dropFirst(6))
+        if let comma = spec.firstIndex(of: ",") {
+            spec = String(spec[..<comma])
+        }
+        spec = spec.trimmingCharacters(in: .whitespaces)
+        if spec.isEmpty { return nil }
+
+        if spec.hasPrefix("-") {
+            guard let suffix = Int64(spec.dropFirst()), suffix > 0 else { return nil }
+            let start = max(0, fileSize - suffix)
+            return (start, fileSize - 1)
+        }
+
+        let parts = spec.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+            .map { String($0) }
+        guard parts.count == 2, let start = Int64(parts[0]), start >= 0 else { return nil }
+        let end: Int64
+        if parts[1].isEmpty {
+            end = fileSize - 1
+        } else if let parsedEnd = Int64(parts[1]) {
+            end = min(parsedEnd, fileSize - 1)
+        } else {
+            return nil
+        }
+        guard start <= end else { return nil }
+        return (start, end)
     }
 
     private static func resolveExportFile(name: String) -> URL? {
@@ -244,7 +311,13 @@ enum ExportLANServer {
                 let escaped = name
                     .replacingOccurrences(of: "&", with: "&amp;")
                     .replacingOccurrences(of: "\"", with: "&quot;")
-                items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)</li>")
+                var note = ""
+                if name == ExportPaths.workingSourceURL.lastPathComponent {
+                    note = " — <em>sparse partial copy; use <code>op_00.mp4</code> or PC sync for playback (5K+ may hang in browser)</em>"
+                } else if name.hasSuffix(".mp4") {
+                    note = " — playable in browser (Range supported)"
+                }
+                items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
             }
         }
         let fileList = items.isEmpty
@@ -265,6 +338,7 @@ enum ExportLANServer {
             <h1>Loop Segments — LAN export</h1>
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
             <p>PC: <code>Sync-FromPhoneLAN.ps1 -Watch</code> (uses <a href="status.json">status.json</a>).</p>
+            <p><strong>Playback:</strong> use <code>op_00.mp4</code> (complete segment). <code>_export_source_working.mp4</code> is a sparse in-progress copy — browsers often hang on 5K+; VLC or the sync script is safer.</p>
             <ul>
             \(fileList)
             </ul>
@@ -313,7 +387,13 @@ enum ExportLANServer {
         sendResponse(connection: connection, status: 200, contentType: "application/json", body: data, done: done)
     }
 
-    private static func sendFile(connection: NWConnection, fileURL: URL, done: @escaping () -> Void) {
+    private static func sendFile(
+        connection: NWConnection,
+        fileURL: URL,
+        method: String,
+        requestHeaders: String,
+        done: @escaping () -> Void
+    ) {
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
               let sizeNum = attrs[.size] as? NSNumber,
@@ -321,13 +401,58 @@ enum ExportLANServer {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Empty or missing".utf8), done: done)
             return
         }
-        let size = sizeNum.int64Value
+        let fileSize = sizeNum.int64Value
         let contentType = mimeType(for: fileURL)
-        let header = httpResponseHeader(status: 200, phrase: "OK", contentType: contentType, contentLength: Int(size))
+
+        let byteStart: Int64
+        let byteEnd: Int64
+        let status: Int
+        let phrase: String
+        if let range = parseByteRange(requestHeaders: requestHeaders, fileSize: fileSize) {
+            byteStart = range.start
+            byteEnd = range.end
+            status = 206
+            phrase = "Partial Content"
+        } else if requestHeaders.split(separator: "\r\n").contains(where: { $0.lowercased().hasPrefix("range:") }) {
+            sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
+            return
+        } else {
+            byteStart = 0
+            byteEnd = fileSize - 1
+            status = 200
+            phrase = "OK"
+        }
+
+        let bodyLength = byteEnd - byteStart + 1
+        guard bodyLength > 0, bodyLength <= fileSize else {
+            sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
+            return
+        }
+
+        let contentRange = status == 206
+            ? "bytes \(byteStart)-\(byteEnd)/\(fileSize)"
+            : nil
+        let header = httpResponseHeader(
+            status: status,
+            phrase: phrase,
+            contentType: contentType,
+            contentLength: Int(bodyLength),
+            contentRange: contentRange,
+            includeAcceptRanges: true
+        )
         guard let headerData = header.data(using: .utf8) else {
             done()
             return
         }
+
+        if method == "HEAD" {
+            connection.send(content: headerData, completion: .contentProcessed { _ in
+                connection.cancel()
+                done()
+            })
+            return
+        }
+
         connection.send(content: headerData, completion: .contentProcessed { error in
             if error != nil {
                 connection.cancel()
@@ -352,8 +477,8 @@ enum ExportLANServer {
             streamFile(
                 connection: connection,
                 handle: handle,
-                offset: 0,
-                remaining: size,
+                offset: byteStart,
+                remaining: bodyLength,
                 done: done
             )
         })

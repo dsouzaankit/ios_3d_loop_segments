@@ -57,7 +57,7 @@ cd ..\windows
 .\Sync-FromPhoneLAN.ps1 -Watch
 ```
 
-pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/` on port **8765** (`op_00.mp4`, logs, and `_export_source_working.mp4` from the last export until a new one overwrites it).
+pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/` on port **8765** (`op_00.mp4`, logs, and `_export_source_working.mp4` from the last export until a new one overwrites it). **Browser playback:** use `op_00.mp4` (full segment). `_export_source_working.mp4` is a sparse partial copy — browsers often hang on **5K+**; use VLC, ffplay, or `Sync-FromPhoneLAN.ps1` (build **145+** adds HTTP **Range** so browsers can seek without downloading the whole file).
 
 ### Export transport
 
