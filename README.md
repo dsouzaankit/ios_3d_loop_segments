@@ -6,15 +6,15 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 | Automated today | Not automated today |
 |-----------------|---------------------|
-| pCloud → phone `op_00.mp4`; PC pair via `Sync-FromPhoneLAN.ps1 -Watch` (Wi‑Fi) | Apple Devices manual save; Photos/MTP path deactivated in app |
-| **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Live 60s refresh on PC via USB |
+| pCloud → phone `op_00.mp4`; PC pair via `Sync-FromPhoneLAN.ps1 -Watch` (Wi‑Fi) | Apple Devices manual save to DLNA folder (one-off) |
+| **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Legacy Photos/USB PowerShell sync scripts (removed from `windows/`) |
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
 
 | Step | Device | Connection |
 |------|--------|------------|
 | Export from pCloud | iPhone | Cellular (Wi‑Fi off OK) |
-| Copy `op_*.mp4` | iPhone → PC | USB |
+| Copy `op_*.mp4` | iPhone → PC | Wi‑Fi (`Sync-FromPhoneLAN.ps1`) or manual USB |
 | Play on TV | PC → LAN | WLAN (DLNA server on Windows) |
 
 Full guide: **[WORKFLOW.md](WORKFLOW.md)**
@@ -23,14 +23,15 @@ Full guide: **[WORKFLOW.md](WORKFLOW.md)**
 
 ## Windows (after iPhone export)
 
-**Apple Devices** → save `op_*.mp4` to `F:\f1_media\3d_fullsbs_trans` (simplest), or save to `Documents\LoopSegmentsIncoming` then:
+**Live PC sync:** **Serve Exports on Wi‑Fi** on the phone, then:
 
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Copy-FromIncoming.ps1
+.\Set-LoopSegmentsLANHost.ps1 <phone-ip>   # once, from export log
+.\Sync-FromPhoneLAN.ps1 -Watch
 ```
 
-**Live PC sync:** **Serve Exports on Wi‑Fi** on the phone, then `windows\Sync-FromPhoneLAN.ps1 -Watch` (see [ios/README.md](ios/README.md)). **Apple Devices** manual save to `F:\f1_media\...` or `LoopSegmentsIncoming` + `Copy-FromIncoming.ps1` still works. Photos import is off in the app (`PhotosSegmentPublisher.workflowEnabled = false`); legacy `Sync-FromIPhonePhotos.ps1` remains if you re-enable it in source.
+Or **Apple Devices** → **Loop Segments → Exports** → save `op_00.mp4` directly to `F:\f1_media\3d_fullsbs_trans`. See [ios/README.md](ios/README.md).
 
 ---
 
@@ -48,12 +49,12 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 
 | Path | Role |
 |------|------|
-| [WORKFLOW.md](WORKFLOW.md) | Step-by-step cellular / USB / DLNA |
+| [WORKFLOW.md](WORKFLOW.md) | Step-by-step cellular / LAN / DLNA |
 | [DESIGN.md](DESIGN.md) | Architecture |
 | [ios/](ios/) | Loop Segments iPhone app |
-| [windows/Sync-FromIPhonePhotos.ps1](windows/Sync-FromIPhonePhotos.ps1) | Photos MTP → PC `op_00/01` (watch mode) |
-| [windows/Sync-IphoneSegments.ps1](windows/Sync-IphoneSegments.ps1) | Exports USB → DLNA (if path visible) |
-| [windows/Register-UsbSyncTask.ps1](windows/Register-UsbSyncTask.ps1) | Logon sync task |
+| [windows/Sync-FromPhoneLAN.ps1](windows/Sync-FromPhoneLAN.ps1) | Wi‑Fi pull `op_00.mp4` → PC DLNA pair |
+| [windows/Set-LoopSegmentsLANHost.ps1](windows/Set-LoopSegmentsLANHost.ps1) | Save phone LAN IP |
+| [windows/Set-LoopSegmentsDestination.ps1](windows/Set-LoopSegmentsDestination.ps1) | Save PC DLNA folder |
 | [codemagic.yaml](codemagic.yaml) | Cloud iOS build |
 
 PotPlayer registry resume and **PC-side** `Run-SegmentCopy.ps1` are **not** part of this repo.

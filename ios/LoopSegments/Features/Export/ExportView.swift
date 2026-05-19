@@ -94,7 +94,7 @@ struct ExportView: View {
                     Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (op_00.mp4). First segment can take a few minutes on large files.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("PC sync: Sync-FromIPhonePhotos.ps1 (Photos MTP) or Sync-FromPhoneLAN.ps1 (Wi‑Fi).")
+                    Text("PC sync: Sync-FromPhoneLAN.ps1 -Watch (Wi‑Fi) or Apple Devices → Exports → Save to PC.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

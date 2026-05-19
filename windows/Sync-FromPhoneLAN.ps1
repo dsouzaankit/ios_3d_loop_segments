@@ -6,7 +6,7 @@
 .DESCRIPTION
   While export runs on the phone, Loop Segments serves Documents/Exports on Wi-Fi
   (default http://<phone-ip>:8765/). This script downloads the segment and copies it
-  to the older of op_00.mp4 / op_01.mp4 on the PC — same ring logic as Photos MTP.
+  to the older of op_00.mp4 / op_01.mp4 on the PC (DLNA ring buffer).
   Skips overwrite when the peer slot already has the same segment (phone unchanged) so DLNA
   never has identical op_00 and op_01. Schedules a retry of that same slot after DeferRetrySeconds
   (default = PollSeconds, 60). Installs via a temp file + rename so DLNA never reads a partial MP4.

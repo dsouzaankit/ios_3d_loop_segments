@@ -35,18 +35,18 @@ sequenceDiagram
     iOS->>PC: HTTPS GET (WebDAV URL + Basic auth)
     iOS->>iOS: Real-time read + stream copy, 60s × 2 files
     iOS->>Files: Write op_00/01.mp4
-    User->>Win: USB cable (or manual copy)
-    Win->>Win: Optional: Sync-IphoneSegments.ps1 → F:\f1_media\3d_fullsbs_trans
+    User->>Win: Wi‑Fi (Sync-FromPhoneLAN.ps1) or manual USB copy
+    Win->>Win: op_00/01 → F:\f1_media\3d_fullsbs_trans
     TV->>DLNA: Browse library
     DLNA->>Win: Serve segment MP4s from library folder
 ```
 
-**Division of labor:** iPhone **produces** segments on **cellular** (pCloud WebDAV); **USB** copies files to the PC; Windows **DLNA on WLAN** serves the library folder. **Personal Hotspot is not used** — the PC never routes through the phone for internet or streaming.
+**Division of labor:** iPhone **produces** segments on **cellular** (pCloud WebDAV); **Wi‑Fi LAN sync** (or manual USB) copies to the PC; Windows **DLNA on WLAN** serves the library folder. **Personal Hotspot is not used** — the PC never routes through the phone for internet or streaming.
 
 | Traffic | Path |
 |---------|------|
 | pCloud download / remux | iPhone → cellular (or Wi‑Fi if enabled) |
-| Segment files to PC | USB mass storage / Apple Devices file sharing |
+| Segment files to PC | Wi‑Fi LAN pull (`Sync-FromPhoneLAN.ps1`) or Apple Devices manual save |
 | LAN playback | PC DLNA server → WLAN → TV |
 
 See [WORKFLOW.md](WORKFLOW.md) for operator steps.
@@ -168,7 +168,7 @@ On Windows, when the device is trusted and unlocked:
 This PC → Apple iPhone → Files → <App Name> → Exports
 ```
 
-(or equivalent path in Apple Devices / Explorer). User or **`Sync-IphoneSegments.ps1`** copies `op_*.mp4` into `F:\f1_media\3d_fullsbs_trans` for DLNA.
+(or equivalent path in Apple Devices / Explorer). **`Sync-FromPhoneLAN.ps1`** copies `op_00.mp4` into the PC DLNA pair, or the user saves manually via Apple Devices.
 
 ### Resume model (replaces PotPlayer)
 
@@ -187,28 +187,27 @@ This PC → Apple iPhone → Files → <App Name> → Exports
 
 ---
 
-## Windows integration (DLNA + USB)
+## Windows integration (DLNA + LAN)
 
 ### DLNA server
 
 Keep existing setup: library root = `F:\f1_media\3d_fullsbs_trans` (or your production path). Media server indexes `op_00.mp4` and `op_01.mp4` as a **rolling buffer** of ~2 minutes from the current position.
 
-**This repo’s Windows folder does not run ffmpeg.** Idle-stop / Wi‑Fi upload heuristics from the legacy `Run-SegmentCopy.ps1` pipeline are **not** part of the iPhone → USB → DLNA workflow.
+**This repo’s Windows folder does not run ffmpeg.** Idle-stop / Wi‑Fi upload heuristics from the legacy `Run-SegmentCopy.ps1` pipeline are **not** part of this workflow.
 
-### `Sync-IphoneSegments.ps1`
+### `Sync-FromPhoneLAN.ps1`
 
-- Trigger: scheduled task on logon, or manual after USB connect.
-- Source: iPhone **Exports** folder (`op_00.mp4`, `op_01.mp4`).
-- Dest: `F:\f1_media\3d_fullsbs_trans` (overwrite in place).
-- Optional: only copy if dest older than source (compare size/mtime).
+- Phone serves `Documents/Exports/op_00.mp4` on Wi‑Fi (port **8765**) while the app is open.
+- PC script polls and copies to the older of `op_00.mp4` / `op_01.mp4` in the DLNA folder (atomic install, ffprobe check).
+- Config: `Set-LoopSegmentsLANHost.ps1`, `Set-LoopSegmentsDestination.ps1`.
 
 ### LAN playback path
 
 ```text
-[iOS export] → USB → [PC folder] → [Windows DLNA] → [TV / receiver / PotPlayer DLNA]
+[iOS export] → Wi‑Fi → [PC DLNA folder] → [Windows DLNA] → [TV / receiver / PotPlayer DLNA]
 ```
 
-Phone can be unplugged after copy. For **live** DLNA while exporting, PC must read from the iPhone mount directly (fragile: cable, unlock, trust); **copy-then-serve** is more reliable.
+Manual fallback: Apple Devices → save `op_00.mp4` to the DLNA folder.
 
 ---
 
@@ -250,7 +249,10 @@ ios_3d_loop_segments/
       Services/Export/
       Resources/Info.plist
   windows/
-    Sync-IphoneSegments.ps1 # optional USB → F:\f1_media\3d_fullsbs_trans
+    Sync-FromPhoneLAN.ps1    # Wi‑Fi → PC DLNA pair
+    Set-LoopSegmentsLANHost.ps1
+    Set-LoopSegmentsDestination.ps1
+    LoopSegments-Config.ps1
 ```
 
 ---
@@ -262,10 +264,10 @@ ios_3d_loop_segments/
 | **1** | WebDAV login + folder browser + Keychain |
 | **2** | AVFoundation export: WebDAV → `op_%02d.mp4`, stream copy, 60s × 2 |
 | **3** | Export UI, resume store, single-job lock, logs |
-| **4** | Files/USB visibility + `Sync-IphoneSegments.ps1` |
+| **4** | Files/USB visibility + `Sync-FromPhoneLAN.ps1` |
 | **5** | Polish: duration probe, seek clamp, cellular warning, BG export |
 
-Windows folder: **USB sync only** (`Sync-IphoneSegments.ps1`, `Register-UsbSyncTask.ps1`). No PC ffmpeg, no pCloud WebDAV on PC.
+Windows folder: **LAN sync** (`Sync-FromPhoneLAN.ps1`). No PC ffmpeg, no pCloud WebDAV on PC.
 
 ---
 
@@ -275,7 +277,7 @@ Windows folder: **USB sync only** (`Sync-IphoneSegments.ps1`, `Register-UsbSyncT
 |------|------------|
 | iOS kills long export | BG tasks; user keeps app foreground for long runs; shorter test files first |
 | WebDAV + seek slow | Keyframe-aligned seek; show “buffering” state |
-| USB path varies by Windows version | Document path; sync script searches `Exports` under app name |
+| USB path varies by Windows version | Prefer LAN sync; document Apple Devices manual save path |
 | 3D SBS huge files | Stream copy only; warn on cellular |
 | 2FA blocks WebDAV | In-app instructions; app password if pCloud adds support |
 

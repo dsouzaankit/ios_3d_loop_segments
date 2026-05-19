@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Save the PC DLNA folder used by Sync-FromIPhonePhotos.ps1 and related scripts.
+  Save the PC DLNA folder used by Sync-FromPhoneLAN.ps1.
 
 .EXAMPLE
   .\Set-LoopSegmentsDestination.ps1 'D:\media\3d_fullsbs_trans'
@@ -42,6 +42,7 @@ if (-not (Test-Path -LiteralPath $full -PathType Container)) {
 Set-Content -LiteralPath $configFile -Value $full -Encoding UTF8 -NoNewline
 Write-Host "Saved: $configFile"
 Write-Host ''
-Write-Host 'Test Photos MTP sync:'
-Write-Host '  .\Sync-FromIPhonePhotos.ps1 -Discover'
-Write-Host '  .\Sync-FromIPhonePhotos.ps1'
+Write-Host 'Test LAN sync:'
+Write-Host '  .\Set-LoopSegmentsLANHost.ps1 <phone-ip>'
+Write-Host '  .\Sync-FromPhoneLAN.ps1 -Discover'
+Write-Host '  .\Sync-FromPhoneLAN.ps1 -Watch'

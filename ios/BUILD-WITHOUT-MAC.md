@@ -23,7 +23,7 @@ You still need **something running macOS once** (or in the cloud) to **compile**
 ### What you need
 
 1. **Free Apple ID** ([appleid.apple.com](https://appleid.apple.com)) — not the paid Developer Program
-2. **Windows PC** + USB cable (same PC you use for `Sync-IphoneSegments.ps1`)
+2. **Windows PC** on the same Wi‑Fi as the phone (for `Sync-FromPhoneLAN.ps1`)
 3. **iTunes** from Apple’s website (required for **Sideloadly** — see below; not the Microsoft Store app)
 4. A signed **`.ipa`** file (see [Get an IPA without a Mac](#get-an-ipa-without-a-mac) below)
 5. **Sideloadly** or **AltStore** on Windows
@@ -155,7 +155,7 @@ Quick reference:
 
 **Still shows Build 1.0.5?** GitHub IPA was not rebuilt — push latest `main` and run **Actions → ios-build → Run workflow**, then reinstall the new artifact.
 
-Then follow [WORKFLOW.md](../WORKFLOW.md): export → USB → `Sync-IphoneSegments.ps1` → DLNA on WLAN.
+Then follow [WORKFLOW.md](../WORKFLOW.md): export → `Sync-FromPhoneLAN.ps1 -Watch` → DLNA on WLAN.
 
 ---
 
@@ -237,4 +237,4 @@ Segment export uses **AVFoundation** on the phone, not embedded ffmpeg (ffmpeg-k
 
 ## After install
 
-[WORKFLOW.md](../WORKFLOW.md): cellular export → USB → `..\windows\Sync-IphoneSegments.ps1` → DLNA on WLAN.
+[WORKFLOW.md](../WORKFLOW.md): cellular export → `..\windows\Sync-FromPhoneLAN.ps1` → DLNA on WLAN.

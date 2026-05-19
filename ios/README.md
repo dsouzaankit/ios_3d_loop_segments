@@ -77,8 +77,6 @@ Export needs enough free space for the sparse shell plus one minute’s dense wi
 
 The Photos import sub-workflow is **off** (`PhotosSegmentPublisher.workflowEnabled = false` in source). Re-enable there to restore the export UI and library sync.
 
-Legacy PC path: `Sync-FromIPhonePhotos.ps1 -Watch` (MTP / Internal Storage). Not used when Photos workflow is disabled.
-
 ## Search: `tokenSaved=false` / no API token
 
 WebDAV browse and export work without the REST token. **Search** needs `userinfo?getauth=1` to return an `auth` field.
@@ -98,32 +96,21 @@ Export and folder browse use **WebDAV only** — you do not need search for thos
 
 [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) — GitHub Actions / Codemagic.
 
-## Windows sync (USB → DLNA)
+## Windows sync (LAN → DLNA)
 
-**`Documents/Exports/op_*.mp4` is the full-quality DLNA source on the phone.** Apple does **not** expose that folder to PowerShell as a live USB drive path. You copy to the PC with **Apple Devices → Loop Segments → Exports → Save to PC** (manual folder pick each session, or a remembered Windows path).
+**`Documents/Exports/op_00.mp4` is the full-quality DLNA source on the phone.**
 
-| Step | PowerShell can automate? |
-|------|---------------------------|
-| Phone **Exports** → PC (USB) | **No** — Apple limitation; not scriptable via `Sync-IphoneSegments.ps1` in the usual Apple Devices workflow |
-| PC save folder → DLNA library (`F:\f1_media\...`) | **Yes** — after you saved into `LoopSegmentsIncoming` (or similar): `windows\Copy-FromIncoming.ps1`, `Watch-LoopSegmentsIncoming.ps1` |
-| Live ~60s segment refresh on PC | **Yes (LAN)** — **`Sync-FromPhoneLAN.ps1 -Watch`** with **Serve Exports on Wi‑Fi** on (port **8765**; server stays up between exports) |
-
-**LAN (build 103+, persistent build 136+):** Phone on Wi‑Fi serves `http://<phone-ip>:8765/op_00.mp4` while the app is open (pCloud can stay on cellular). PC script copies to the older DLNA slot — no USB, no Photos.
+| Step | PowerShell |
+|------|------------|
+| Phone **Exports** → PC | **`Sync-FromPhoneLAN.ps1 -Watch`** (Wi‑Fi, port **8765**; **Serve Exports on Wi‑Fi** on) |
+| Manual USB | **Apple Devices** → Loop Segments → Exports → Save to PC (pick DLNA folder) |
 
 ```powershell
 cd ..\windows
+.\Set-LoopSegmentsDestination.ps1 'F:\f1_media\3d_fullsbs_trans'   # once
 .\Set-LoopSegmentsLANHost.ps1 192.168.1.42   # IP from export log
 .\Sync-FromPhoneLAN.ps1 -Discover
 .\Sync-FromPhoneLAN.ps1 -Watch
 ```
 
-`Sync-IphoneSegments.ps1` only helps if Explorer shows a **readable** iPhone `…\Loop Segments\Exports` path. **`Sync-FromIPhonePhotos.ps1`** remains in `windows/` for legacy MTP use if you re-enable Photos in the app.
-
 Details: [../WORKFLOW.md](../WORKFLOW.md) §3, [../FEASIBILITY.md](../FEASIBILITY.md).
-
-After a manual Apple Devices save into an incoming folder:
-
-```powershell
-cd ..\windows
-.\Copy-FromIncoming.ps1
-```
