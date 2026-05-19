@@ -630,11 +630,15 @@ final class SegmentExporter {
         return (asset, loader)
     }
 
-    private static func isWriterSampleRejection(_ error: Error) -> Bool {
+    static func isWriterSampleRejection(_ error: Error) -> Bool {
         guard case SegmentExporterError.writerFailed(let underlying) = error else { return false }
         let ns = underlying as NSError
         if ns.domain == AVFoundationErrorDomain, ns.code == -11800 { return true }
         return underlying.localizedDescription.lowercased().contains("could not be completed")
+    }
+
+    static func isAudioWriterRejection(_ error: Error, track: SegmentTrackKind) -> Bool {
+        track == .audio && isWriterSampleRejection(error)
     }
 
     private func formatMediaTimeForLog(_ time: CMTime) -> String {

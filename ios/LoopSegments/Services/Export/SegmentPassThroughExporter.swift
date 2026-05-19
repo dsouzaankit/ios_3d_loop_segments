@@ -247,7 +247,17 @@ enum SegmentPassThroughExporter {
                 log(
                     "Writer append failed (\(next.track)) at source \(formatMediaTime(pts)) — \(underlying.localizedDescription) (domain \(ns.domain) \(ns.code))"
                 )
-                throw SegmentExporterError.writerFailed(underlying)
+                let rejection = SegmentExporterError.writerFailed(underlying)
+                if SegmentExporter.isAudioWriterRejection(rejection, track: next.track) {
+                    log(
+                        "Audio rejected by AVAssetWriter — continuing video-only for this segment (DLNA may have no audio)"
+                    )
+                    writerContext?.abandonAudio()
+                    skipAudio = true
+                    heldAudio = nil
+                    continue
+                }
+                throw rejection
             }
             if next.track == .video, CMTimeCompare(pts, rangeStart) >= 0 {
                 inRangeVideoSamples += 1
