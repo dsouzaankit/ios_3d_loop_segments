@@ -87,7 +87,7 @@ final class SegmentExporter {
 
         let fileSize = rangeCache.contentLengthValue() ?? 0
         logHandler(
-            "Dense fill — each minute downloads to temp before passthrough (hybrid reader; no direct pCloud stream export)."
+            "Dense fill — each minute downloads to temp before passthrough (mid-file uses capped hybrid reader; seek 0 uses on-disk file when dense)."
         )
         try Self.ensureExportDiskSpace(fileBytes: fileSize)
 
@@ -406,6 +406,7 @@ final class SegmentExporter {
                 authorizationProvider: authorizationProvider,
                 rangeCache: rangeCache,
                 trustedLength: trustedLength,
+                byteRange: byteRange,
                 useOnDiskFileURL: useOnDiskFileURL,
                 log: log
             )
@@ -429,14 +430,35 @@ final class SegmentExporter {
         }
 
         let tempSourceLabel = windowDense ? "dense local temp" : "sparse temp + pCloud"
+        var useOnDiskFileURL = shouldUseOnDiskFileURLForPassthrough(
+            downloader: downloader,
+            byteRange: byteRange,
+            windowDense: windowDense
+        )
+        if windowDense, !useOnDiskFileURL {
+            log(
+                "Mid-file sparse temp — capped hybrid reader for passthrough (file:// hits zero-filled gaps and Cannot Open)"
+            )
+        }
         do {
             try await runPassthrough(
                 sourceLabel: tempSourceLabel,
-                useOnDiskFileURL: windowDense
+                useOnDiskFileURL: useOnDiskFileURL
             )
         } catch {
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
+            if useOnDiskFileURL, Self.isSparseContainerOpenFailure(error) {
+                log(
+                    "On-disk reader could not open sparse temp (\(error.localizedDescription)) — retrying with capped hybrid reader"
+                )
+                useOnDiskFileURL = false
+                try await runPassthrough(
+                    sourceLabel: "\(tempSourceLabel) (hybrid after Cannot Open)",
+                    useOnDiskFileURL: false
+                )
+                return
+            }
             let writerRejected = Self.isWriterSampleRejection(error)
             let writerBackpressure: Bool = {
                 if case SegmentExporterError.writerBackpressure = error { return true }
@@ -451,9 +473,14 @@ final class SegmentExporter {
                 try await downloader.ensureIndexTailOnDisk()
                 try await downloader.ensureContiguousRange(byteRange, force: true)
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
+                useOnDiskFileURL = shouldUseOnDiskFileURLForPassthrough(
+                    downloader: downloader,
+                    byteRange: byteRange,
+                    windowDense: windowDense
+                )
                 try await runPassthrough(
                     sourceLabel: windowDense ? "dense local temp (writer retry)" : "sparse temp + pCloud (writer retry)",
-                    useOnDiskFileURL: windowDense
+                    useOnDiskFileURL: useOnDiskFileURL
                 )
                 return
             }
@@ -465,17 +492,18 @@ final class SegmentExporter {
                 log(
                     "Writer rejected passthrough samples (\(error.localizedDescription)) — dense-filling window, then retrying locally"
                 )
-            } else if midFileSegment {
+            } else if midFileSegment, Self.isSparseContainerOpenFailure(error) {
                 log(
-                    "Hybrid temp not readable (\(error.localizedDescription)) — refreshing header, index, and window…"
+                    "Sparse temp not readable (\(error.localizedDescription)) — refreshing header, index, and window, then capped hybrid reader…"
                 )
                 downloader.pauseBackgroundDownload()
                 try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
+                useOnDiskFileURL = false
                 do {
                     try await runPassthrough(
-                        sourceLabel: windowDense ? "dense local temp (retry)" : "sparse temp + pCloud (retry)",
-                        useOnDiskFileURL: windowDense
+                        sourceLabel: windowDense ? "dense local temp (hybrid retry)" : "sparse temp + pCloud (retry)",
+                        useOnDiskFileURL: false
                     )
                     return
                 } catch {
@@ -495,11 +523,26 @@ final class SegmentExporter {
             try await downloader.ensureIndexTailOnDisk()
             try await downloader.ensureContiguousRange(byteRange)
             windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
+            useOnDiskFileURL = shouldUseOnDiskFileURLForPassthrough(
+                downloader: downloader,
+                byteRange: byteRange,
+                windowDense: windowDense
+            )
             try await runPassthrough(
                 sourceLabel: windowDense ? "dense local temp (window filled)" : "sparse temp + pCloud (window filled)",
-                useOnDiskFileURL: windowDense
+                useOnDiskFileURL: useOnDiskFileURL
             )
         }
+    }
+
+    /// `file://` on a sparse temp only works when the dense window starts near 0; mid-file gaps are zero-filled and break AVFoundation open.
+    private func shouldUseOnDiskFileURLForPassthrough(
+        downloader: WebDAVTempFileDownload,
+        byteRange: TimelineByteRange,
+        windowDense: Bool
+    ) -> Bool {
+        guard windowDense else { return false }
+        return byteRange.start < Self.midFilePrefetchThresholdBytes
     }
 
     private func prepareMidFileTempForReader(
@@ -513,7 +556,7 @@ final class SegmentExporter {
         try await downloader.ensureContiguousRange(byteRange)
     }
 
-    /// Dense window: read the temp file directly. Sparse: hybrid loader (holes filled from pCloud; `file://` alone reads zeros).
+    /// Start-of-file dense window: `file://` temp. Mid-file / sparse: hybrid with `StreamReadPolicy` (head + window + index tail only).
     private func makePassthroughAsset(
         downloader: WebDAVTempFileDownload,
         tempURL: URL,
@@ -521,23 +564,33 @@ final class SegmentExporter {
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
         trustedLength: Int64,
+        byteRange: TimelineByteRange,
         useOnDiskFileURL: Bool,
         log: @escaping (String) -> Void
     ) -> (AVURLAsset, WebDAVResourceLoader?) {
         if useOnDiskFileURL {
-            log("Passthrough reader: on-disk temp file (dense window — no hybrid range reads)")
+            log("Passthrough reader: on-disk temp file (dense window at start of file)")
             let asset = AVURLAsset(
                 url: tempURL,
                 options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
             )
             return (asset, nil)
         }
+        let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
+        let readPolicy = StreamReadPolicy.forExportWindow(
+            fileLength: fileLength,
+            window: byteRange,
+            indexTailBytes: WebDAVTempFileDownload.indexTailFetchBytes(totalLength: fileLength)
+        )
+        log(
+            "Passthrough reader: hybrid with capped reads — head, window \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)), MP4 index at EOF (no full-file pull)"
+        )
         let loader = WebDAVResourceLoader(
             remoteURL: remoteURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
-            trustedContentLength: trustedLength > 0 ? trustedLength : nil,
-            readPolicy: nil,
+            trustedContentLength: fileLength > 0 ? fileLength : nil,
+            readPolicy: readPolicy,
             localTempURL: tempURL,
             readLocalBytes: { offset, length in
                 downloader.readLocalBytes(offset: offset, length: length)

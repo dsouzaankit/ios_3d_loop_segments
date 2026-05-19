@@ -252,17 +252,17 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             : Int64(dataRequest.requestedLength)
         guard requested > 0 else { return }
 
-        let useReadPolicy = readPolicy != nil && localTempURL == nil
         var totalLength: Int64
-        if let readPolicy, useReadPolicy {
+        if let readPolicy {
             totalLength = readPolicy.cappedLength(
                 offset: offset,
                 requested: requested,
                 requestsAllDataToEndOfResource: dataRequest.requestsAllDataToEndOfResource
             )
-            if dataRequest.requestsAllDataToEndOfResource, requested > totalLength, requested > 16 * 1024 * 1024 {
+            if dataRequest.requestsAllDataToEndOfResource, requested > totalLength {
+                let via = localTempURL != nil ? "hybrid" : "pCloud"
                 logLine?(
-                    "pCloud read capped \(formatBytes(requested)) → \(formatBytes(totalLength)) at \(formatBytes(offset)) (AVFoundation asked for EOF)"
+                    "\(via) read capped \(formatBytes(requested)) → \(formatBytes(totalLength)) at \(formatBytes(offset)) (AVFoundation asked for EOF)"
                 )
             }
         } else if dataRequest.requestsAllDataToEndOfResource {
