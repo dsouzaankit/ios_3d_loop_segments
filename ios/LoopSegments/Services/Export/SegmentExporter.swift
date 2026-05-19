@@ -693,7 +693,7 @@ final class SegmentExporter {
         return AVURLAsset(
             url: remoteURL,
             options: [
-                AVURLAssetHTTPHeaderFieldsKey: headers,
+                "AVURLAssetHTTPHeaderFieldsKey": headers,
                 AVURLAssetPreferPreciseDurationAndTimingKey: false,
             ]
         )
