@@ -96,9 +96,18 @@ Export and folder browse use **WebDAV only** — you do not need search for thos
 |------|---------------------------|
 | Phone **Exports** → PC (USB) | **No** — Apple limitation; not scriptable via `Sync-IphoneSegments.ps1` in the usual Apple Devices workflow |
 | PC save folder → DLNA library (`F:\f1_media\...`) | **Yes** — after you saved into `LoopSegmentsIncoming` (or similar): `windows\Copy-FromIncoming.ps1`, `Watch-LoopSegmentsIncoming.ps1` |
-| Live ~60s segment refresh on PC | **No** via USB — use sibling repo **`Run-SegmentCopy.ps1`** (pCloud → PC) or a future LAN pull from the phone |
+| Live ~60s segment refresh on PC | **Yes (LAN)** — **`Sync-FromPhoneLAN.ps1 -Watch`** while export runs and **Serve Exports on Wi‑Fi** is on (port **8765**) |
 
-`Sync-IphoneSegments.ps1` only helps if Explorer shows a **readable** iPhone `…\Loop Segments\Exports` path. **`Sync-FromIPhonePhotos.ps1 -Watch`** is the Photos/MTP path when Apple Devices is unavailable: newest phone clip → older PC DLNA slot.
+**LAN (build 103+):** Phone on Wi‑Fi serves `http://<phone-ip>:8765/3d_op_00.mp4` during export (pCloud can stay on cellular). PC script copies to the older DLNA slot — no USB, no Photos.
+
+```powershell
+cd ..\windows
+.\Set-LoopSegmentsLANHost.ps1 192.168.1.42   # IP from export log
+.\Sync-FromPhoneLAN.ps1 -Discover
+.\Sync-FromPhoneLAN.ps1 -Watch
+```
+
+`Sync-IphoneSegments.ps1` only helps if Explorer shows a **readable** iPhone `…\Loop Segments\Exports` path. **`Sync-FromIPhonePhotos.ps1 -Watch`** is the Photos/MTP alternative.
 
 Details: [../WORKFLOW.md](../WORKFLOW.md) §3, [../FEASIBILITY.md](../FEASIBILITY.md).
 

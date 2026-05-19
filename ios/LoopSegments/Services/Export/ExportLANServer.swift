@@ -1,0 +1,350 @@
+import Darwin
+import Foundation
+import Network
+
+/// Serves `Documents/Exports/` on the LAN while export runs (Path B — PC pull without USB/Photos).
+enum ExportLANServer {
+    static let defaultPort: UInt16 = 8765
+    private static let enabledKey = "serveExportsOnLAN"
+
+    static var isEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: enabledKey) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: enabledKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
+    }
+
+    private static let lock = NSLock()
+    private static var listener: NWListener?
+    private static var connections: [ObjectIdentifier: NWConnection] = [:]
+    private static let queue = DispatchQueue(label: "com.loopsegments.lan-server")
+    private static var advertisedBaseURL: String?
+
+    static var baseURLString: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return advertisedBaseURL
+    }
+
+    static func start(log: @escaping (String) -> Void) {
+        guard isEnabled else { return }
+        lock.lock()
+        if listener != nil {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        queue.async {
+            do {
+                let port = NWEndpoint.Port(rawValue: defaultPort)!
+                let params = NWParameters.tcp
+                params.allowLocalEndpointReuse = true
+                let nwListener = try NWListener(using: params, on: port)
+                lock.lock()
+                listener = nwListener
+                lock.unlock()
+
+                nwListener.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:
+                        let ip = Self.primaryLANIPv4Address() ?? "?"
+                        let url = "http://\(ip):\(defaultPort)/"
+                        lock.lock()
+                        advertisedBaseURL = url
+                        lock.unlock()
+                        log("LAN export: \(url) — PC: Sync-FromPhoneLAN.ps1 -PhoneHost \(ip) -Watch")
+                        log("LAN files: 3d_op_00.mp4, export_latest.txt, export_progress.txt, GET /status.json")
+                    case .failed(let error):
+                        log("LAN export server failed: \(error.localizedDescription)")
+                        Self.stopOnQueue(log: nil)
+                    case .cancelled:
+                        break
+                    default:
+                        break
+                    }
+                }
+
+                nwListener.newConnectionHandler = { connection in
+                    connection.start(queue: queue)
+                    let id = ObjectIdentifier(connection)
+                    lock.lock()
+                    connections[id] = connection
+                    lock.unlock()
+                    Self.receiveRequest(on: connection) { [id] in
+                        lock.lock()
+                        connections.removeValue(forKey: id)
+                        lock.unlock()
+                    }
+                }
+
+                nwListener.start(queue: queue)
+            } catch {
+                log("LAN export server could not start: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    static func stop(log: ((String) -> Void)? = nil) {
+        queue.async {
+            stopOnQueue(log: log)
+        }
+    }
+
+    private static func stopOnQueue(log: ((String) -> Void)?) {
+        lock.lock()
+        let nwListener = listener
+        listener = nil
+        advertisedBaseURL = nil
+        let open = connections.values
+        connections.removeAll()
+        lock.unlock()
+
+        for connection in open {
+            connection.cancel()
+        }
+        nwListener?.cancel()
+        log?("LAN export server stopped")
+    }
+
+    // MARK: - HTTP
+
+    private static func receiveRequest(on connection: NWConnection, done: @escaping () -> Void) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, error in
+            defer { done() }
+            if let error {
+                connection.cancel()
+                _ = error
+                return
+            }
+            guard let data, !data.isEmpty,
+                  let text = String(data: data, encoding: .utf8) else {
+                sendResponse(connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8))
+                return
+            }
+            guard let line = text.split(separator: "\r\n", maxSplits: 1).first,
+                  let (method, path) = parseRequestLine(String(line)) else {
+                sendResponse(connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8))
+                return
+            }
+            guard method == "GET" else {
+                sendResponse(connection, status: 405, contentType: "text/plain", body: Data("GET only".utf8))
+                return
+            }
+            handleGET(path: path, connection: connection)
+        }
+    }
+
+    private static func parseRequestLine(_ line: String) -> (String, String)? {
+        let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 2 else { return nil }
+        var path = String(parts[1])
+        if let query = path.firstIndex(of: "?") {
+            path = String(path[..<query])
+        }
+        if path.isEmpty { path = "/" }
+        return (String(parts[0]).uppercased(), path)
+    }
+
+    private static func handleGET(path: String, connection: NWConnection) {
+        let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        if normalized.isEmpty || normalized == "status.json" {
+            sendStatusJSON(connection)
+            return
+        }
+        guard let fileURL = resolveExportFile(name: normalized) else {
+            sendResponse(connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8))
+            return
+        }
+        sendFile(connection, fileURL: fileURL)
+    }
+
+    private static func resolveExportFile(name: String) -> URL? {
+        guard !name.contains("/"), !name.contains("..") else { return nil }
+        let allowedNames: Set<String> = {
+            var names: Set<String> = [
+                ExportPaths.latestLogTextURL.lastPathComponent,
+                ExportPaths.latestLogURL.lastPathComponent,
+                ExportPaths.exportProgressURL.lastPathComponent,
+                "status.json",
+            ]
+            for slot in 0 ..< ExportPaths.segmentFileCount {
+                names.insert(ExportPaths.segmentURL(index: slot).lastPathComponent)
+            }
+            return names
+        }()
+        guard allowedNames.contains(name) else { return nil }
+        if name == "status.json" { return nil }
+        let url = ExportPaths.exportsDirectory.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    private static func sendStatusJSON(_ connection: NWConnection) {
+        let fm = FileManager.default
+        let dir = ExportPaths.exportsDirectory
+        var entries: [[String: Any]] = []
+        if let names = try? fm.contentsOfDirectory(atPath: dir.path) {
+            for name in names.sorted() {
+                guard resolveExportFile(name: name) != nil || name.hasSuffix(".mp4") || name.hasSuffix(".txt") else {
+                    continue
+                }
+                let url = dir.appendingPathComponent(name)
+                var dict: [String: Any] = ["name": name]
+                if let attrs = try? fm.attributesOfItem(atPath: url.path) {
+                    if let size = attrs[.size] as? NSNumber {
+                        dict["bytes"] = size.int64Value
+                    }
+                    if let modified = attrs[.modificationDate] as? Date {
+                        dict["modified"] = ISO8601DateFormatter().string(from: modified)
+                    }
+                }
+                entries.append(dict)
+            }
+        }
+        let payload: [String: Any] = [
+            "exportsDirectory": "Exports",
+            "port": Int(defaultPort),
+            "files": entries,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+            sendResponse(connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8))
+            return
+        }
+        sendResponse(connection, status: 200, contentType: "application/json", body: data)
+    }
+
+    private static func sendFile(connection: NWConnection, fileURL: URL) {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
+              let sizeNum = attrs[.size] as? NSNumber,
+              sizeNum.int64Value > 0 else {
+            sendResponse(connection, status: 404, contentType: "text/plain", body: Data("Empty or missing".utf8))
+            return
+        }
+        let size = sizeNum.int64Value
+        let contentType = mimeType(for: fileURL)
+        let header = """
+            HTTP/1.1 200 OK\r
+            Content-Type: \(contentType)\r
+            Content-Length: \(size)\r
+            Connection: close\r
+            \r
+            """
+        guard let headerData = header.data(using: .utf8) else { return }
+        connection.send(content: headerData, completion: .contentProcessed { error in
+            if error != nil {
+                connection.cancel()
+                return
+            }
+            streamFile(connection, fileURL: fileURL, offset: 0, remaining: size)
+        })
+    }
+
+    private static func streamFile(
+        connection: NWConnection,
+        fileURL: URL,
+        offset: Int64,
+        remaining: Int64
+    ) {
+        if remaining <= 0 {
+            connection.cancel()
+            return
+        }
+        let chunkSize = min(remaining, 512 * 1024)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: fileURL)
+        } catch {
+            connection.cancel()
+            return
+        }
+        defer { try? handle.close() }
+        do {
+            try handle.seek(toOffset: UInt64(offset))
+            let data = handle.readData(ofLength: Int(chunkSize))
+            guard !data.isEmpty else {
+                connection.cancel()
+                return
+            }
+            connection.send(content: data, completion: .contentProcessed { error in
+                if error != nil {
+                    connection.cancel()
+                    return
+                }
+                let sent = Int64(data.count)
+                streamFile(connection, fileURL: fileURL, offset: offset + sent, remaining: remaining - sent)
+            })
+        } catch {
+            connection.cancel()
+        }
+    }
+
+    private static func sendResponse(
+        connection: NWConnection,
+        status: Int,
+        contentType: String,
+        body: Data
+    ) {
+        let phrase = status == 200 ? "OK" : (status == 404 ? "Not Found" : "Error")
+        let header = """
+            HTTP/1.1 \(status) \(phrase)\r
+            Content-Type: \(contentType)\r
+            Content-Length: \(body.count)\r
+            Connection: close\r
+            \r
+            """
+        var data = Data(header.utf8)
+        data.append(body)
+        connection.send(content: data, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
+    }
+
+    private static func mimeType(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "mp4", "m4v": return "video/mp4"
+        case "txt", "log": return "text/plain; charset=utf-8"
+        case "json": return "application/json"
+        default: return "application/octet-stream"
+        }
+    }
+
+    // MARK: - IPv4
+
+    private static func primaryLANIPv4Address() -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+
+        var candidates: [(name: String, address: String)] = []
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let interface = ptr.pointee
+            let family = interface.ifa_addr.pointee.sa_family
+            guard family == UInt8(AF_INET) else { continue }
+            let name = String(cString: interface.ifa_name)
+            guard name == "en0" || name.hasPrefix("en") else { continue }
+            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(
+                interface.ifa_addr,
+                socklen_t(interface.ifa_addr.pointee.sa_len),
+                &hostname,
+                socklen_t(hostname.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            )
+            guard result == 0 else { continue }
+            let ip = String(cString: hostname)
+            if ip.hasPrefix("127.") || ip == "0.0.0.0" { continue }
+            candidates.append((name, ip))
+        }
+        if let en0 = candidates.first(where: { $0.name == "en0" })?.address {
+            return en0
+        }
+        return candidates.first?.address
+    }
+}

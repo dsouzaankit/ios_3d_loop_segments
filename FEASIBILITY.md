@@ -31,13 +31,13 @@ Use the existing sibling pipeline:
 
 This repo’s iPhone app is optional (e.g. export when the PC is off).
 
-### B. **iPhone export + PC pulls over Wi‑Fi** (not built yet)
+### B. **iPhone export + PC pulls over Wi‑Fi** (built)
 
-While export runs, the app would serve `Exports/` on the **LAN** (HTTP); a small Windows script copies into `F:\f1_media\...` every N seconds.
+While export runs, the app serves `Exports/` on the **LAN** (`http://<phone-ip>:8765/`); **`windows\Sync-FromPhoneLAN.ps1 -Watch`** copies into the DLNA folder every ~60s.
 
-- Same phone cellular export you wanted
-- No USB, no Apple Devices
-- Requires **new app + PC script** (roadmap)
+- Same phone cellular export you wanted; **Wi‑Fi/LAN** only for phone ↔ PC
+- No USB, no Apple Devices, no Photos required
+- Toggle **Serve Exports on Wi‑Fi** in Export; allow **Local Network** when iOS prompts
 
 ### C. **iPhone export + one manual copy per session** (marginal)
 
@@ -51,8 +51,9 @@ If you only need files on the PC **after** export finishes (not live during expo
 
 | Your goal | Use |
 |-----------|-----|
-| Automated DLNA buffer on PC | **A — `Run-SegmentCopy.ps1` on PC** |
-| Cellular-only, no PC on the network | **B — build LAN sync** (or accept **C**) |
+| Automated DLNA buffer on PC (no phone) | **A — `Run-SegmentCopy.ps1` on PC** |
+| Phone export + PC on LAN | **B — `Sync-FromPhoneLAN.ps1 -Watch`** |
+| Cellular for pCloud + PC on same LAN | **B — `Sync-FromPhoneLAN.ps1 -Watch`** |
 | Current repo as-is (USB + Apple Devices) | **Not feasible** for live rotating segments |
 
 ## De-scope note

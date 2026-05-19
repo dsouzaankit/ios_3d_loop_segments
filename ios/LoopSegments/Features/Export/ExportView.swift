@@ -11,6 +11,7 @@ struct ExportView: View {
     @State private var logHint = ""
     @State private var photosAccessNote = ""
     @State private var liveLogTail = ""
+    @State private var lanExportURL: String?
     @State private var exportTask: Task<Void, Never>?
 
     var body: some View {
@@ -22,9 +23,23 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Tip: Settings → Cellular → Loop Segments → On. Wi‑Fi can stay off to avoid hotspot.")
+                Text("Tip: Settings → Cellular → Loop Segments → On. Wi‑Fi/LAN can stay on for PC sync while pCloud uses cellular.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            Section("LAN export (PC sync)") {
+                Toggle("Serve Exports on Wi‑Fi while exporting", isOn: Binding(
+                    get: { ExportLANServer.isEnabled },
+                    set: { ExportLANServer.isEnabled = $0 }
+                ))
+                Text("Phone and PC on same LAN. Export log shows http://<phone-ip>:8765/ — run Sync-FromPhoneLAN.ps1 -Watch on PC. No USB or Photos required.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if let lanExportURL {
+                    Text(lanExportURL)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                }
             }
             Section("File") {
                 Text(item.name)
@@ -68,7 +83,7 @@ struct ExportView: View {
                 Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (3d_op_00.mp4). First segment can take a few minutes on large files.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("PC sync: Sync-FromIPhonePhotos.ps1 -Watch copies newest MTP clip to older DLNA slot (3d_op_00/01).")
+                Text("PC sync: Sync-FromIPhonePhotos.ps1 (Photos MTP) or Sync-FromPhoneLAN.ps1 (Wi‑Fi, no Photos).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("3d_op_*.mp4 stay in Exports until Stop or leaving the app; temp _export_source_working.mp4 is removed when export ends or on cleanup.")
@@ -129,12 +144,17 @@ struct ExportView: View {
             exportTask = nil
         }
         .task(id: session.isExportRunning) {
-            guard session.isExportRunning else { return }
+            guard session.isExportRunning else {
+                lanExportURL = nil
+                return
+            }
             while session.isExportRunning, !Task.isCancelled {
                 refreshLogFromDisk()
+                lanExportURL = ExportLANServer.baseURLString
                 try? await Task.sleep(for: .seconds(2))
             }
             refreshLogFromDisk()
+            lanExportURL = nil
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }

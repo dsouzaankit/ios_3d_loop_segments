@@ -47,7 +47,12 @@ final class ExportCoordinator {
         }
 
         BackgroundTaskKeeper.begin()
-        defer { BackgroundTaskKeeper.end() }
+        defer {
+            ExportLANServer.stop(log: logHandler)
+            BackgroundTaskKeeper.end()
+        }
+
+        ExportLANServer.start(log: logHandler)
 
         logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
         logHandler("Logs: export_latest.txt, \(logWriter.sessionLogFileName), export_progress.txt (in Exports)")
