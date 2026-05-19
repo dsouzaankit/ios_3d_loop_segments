@@ -198,7 +198,6 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         pauseBackgroundDownload()
         try? writeHandle?.close()
         writeHandle = nil
-        ExportPaths.removeWorkingSourceCopy()
     }
 
     func filledSpan() -> TimelineByteRange {

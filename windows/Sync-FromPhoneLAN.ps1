@@ -1,12 +1,12 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Pull 3d_op_00.mp4 from Loop Segments LAN export into the older PC DLNA slot.
+  Pull op_00.mp4 from Loop Segments LAN export into the older PC DLNA slot.
 
 .DESCRIPTION
   While export runs on the phone, Loop Segments serves Documents/Exports on Wi-Fi
   (default http://<phone-ip>:8765/). This script downloads the segment and copies it
-  to the older of 3d_op_00.mp4 / 3d_op_01.mp4 on the PC — same ring logic as Photos MTP.
+  to the older of op_00.mp4 / op_01.mp4 on the PC — same ring logic as Photos MTP.
 
   Save the phone IP from the export log (LAN export: http://...) or -Discover.
 
@@ -45,8 +45,8 @@ param(
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\LoopSegments-Config.ps1"
 
-$SegmentNames = @('3d_op_00.mp4', '3d_op_01.mp4')
-$RemoteSegmentName = '3d_op_00.mp4'
+$SegmentNames = @('op_00.mp4', 'op_01.mp4')
+$RemoteSegmentName = 'op_00.mp4'
 
 function Get-LoopSegmentsLANHostConfigPath {
     Join-Path $PSScriptRoot 'loop-segments-lan-host.txt'
@@ -95,14 +95,14 @@ function Get-OlderDLNASlot {
         (Test-Path -LiteralPath $paths[0] -PathType Leaf),
         (Test-Path -LiteralPath $paths[1] -PathType Leaf)
     )
-    if (-not $exists[0]) { return $paths[0], $SegmentNames[0], '3d_op_00 missing — initial slot' }
-    if (-not $exists[1]) { return $paths[1], $SegmentNames[1], '3d_op_01 missing — second slot' }
+    if (-not $exists[0]) { return $paths[0], $SegmentNames[0], 'op_00 missing — initial slot' }
+    if (-not $exists[1]) { return $paths[1], $SegmentNames[1], 'op_01 missing — second slot' }
     $t0 = (Get-Item -LiteralPath $paths[0]).LastWriteTimeUtc
     $t1 = (Get-Item -LiteralPath $paths[1]).LastWriteTimeUtc
     if ($t0 -le $t1) {
-        return $paths[0], $SegmentNames[0], 'overwrite older PC slot (3d_op_00)'
+        return $paths[0], $SegmentNames[0], 'overwrite older PC slot (op_00)'
     }
-    return $paths[1], $SegmentNames[1], 'overwrite older PC slot (3d_op_01)'
+    return $paths[1], $SegmentNames[1], 'overwrite older PC slot (op_01)'
 }
 
 function Invoke-LANSegmentSync {

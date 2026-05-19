@@ -10,7 +10,7 @@ Greenfield design for an **iOS app** that logs into **pCloud**, browses media vi
 |----------|----------------|
 | pCloud login + folder browser | PotPlayer `RememberFiles` / registry seek |
 | WebDAV-backed media → **AVFoundation** export | **PC-side ffmpeg** / `Run-SegmentCopy.ps1` |
-| Stream-copy segments: `3d_op_00.mp4` / `3d_op_01.mp4` | Re-encoding (unless required for a codec) |
+| Stream-copy segments: `op_00.mp4` / `op_01.mp4` | Re-encoding (unless required for a codec) |
 | Seek resume in **app storage** (path or stable file id) | iOS DLNA server |
 | Export folder visible in **Files** + USB to PC | PC Wi‑Fi DLNA idle kill (ffmpeg exit 125) |
 | **Windows:** USB sync + existing DLNA server | Full pCloud sync client on PC |
@@ -34,7 +34,7 @@ sequenceDiagram
     User->>iOS: Pick video + optional seek
     iOS->>PC: HTTPS GET (WebDAV URL + Basic auth)
     iOS->>iOS: Real-time read + stream copy, 60s × 2 files
-    iOS->>Files: Write 3d_op_00/01.mp4
+    iOS->>Files: Write op_00/01.mp4
     User->>Win: USB cable (or manual copy)
     Win->>Win: Optional: Sync-IphoneSegments.ps1 → F:\f1_media\3d_fullsbs_trans
     TV->>DLNA: Browse library
@@ -63,7 +63,7 @@ Implemented with **AVFoundation** (`AVAssetReader` / `AVAssetWriter`), not embed
 | Real-time pacing | App throttles reads (replaces ffmpeg `-re`) |
 | Stream copy | Passthrough when codec fits MP4 (H.264, HEVC, AV1 + AAC) |
 | Segment length | 60s per file |
-| File count | 2 files, overwrite: `3d_op_00.mp4`, `3d_op_01.mp4` |
+| File count | 2 files, overwrite: `op_00.mp4`, `op_01.mp4` |
 | WebDAV auth | Custom `AVAssetResourceLoader` + `Authorization` header |
 
 **Concurrency:** one active export job; reject or queue a second start with clear UI.
@@ -129,7 +129,7 @@ pCloud REST (`api.pcloud.com` / `eapi.pcloud.com`) can improve login (`userinfo`
 │  └─ SegmentExporter (AVFoundation)                      │
 ├─────────────────────────────────────────────────────────┤
 │  On-disk layout (app container)                         │
-│  Documents/Exports/3d_op_%02d.mp4   ← DLNA-facing names   │
+│  Documents/Exports/op_%02d.mp4   ← DLNA-facing names   │
 │  Documents/Exports/logs/…  (same USB tree as segments)   │
 │  Caches/…                                               │
 └─────────────────────────────────────────────────────────┘
@@ -151,8 +151,8 @@ Use **App Documents** subfolder shared with Files and USB:
 
 ```text
 Documents/Exports/
-  3d_op_00.mp4
-  3d_op_01.mp4
+  op_00.mp4
+  op_01.mp4
   export_state.json   # optional: last path, seek ms, job id
 ```
 
@@ -168,7 +168,7 @@ On Windows, when the device is trusted and unlocked:
 This PC → Apple iPhone → Files → <App Name> → Exports
 ```
 
-(or equivalent path in Apple Devices / Explorer). User or **`Sync-IphoneSegments.ps1`** copies `3d_op_*.mp4` into `F:\f1_media\3d_fullsbs_trans` for DLNA.
+(or equivalent path in Apple Devices / Explorer). User or **`Sync-IphoneSegments.ps1`** copies `op_*.mp4` into `F:\f1_media\3d_fullsbs_trans` for DLNA.
 
 ### Resume model (replaces PotPlayer)
 
@@ -191,14 +191,14 @@ This PC → Apple iPhone → Files → <App Name> → Exports
 
 ### DLNA server
 
-Keep existing setup: library root = `F:\f1_media\3d_fullsbs_trans` (or your production path). Media server indexes `3d_op_00.mp4` and `3d_op_01.mp4` as a **rolling buffer** of ~2 minutes from the current position.
+Keep existing setup: library root = `F:\f1_media\3d_fullsbs_trans` (or your production path). Media server indexes `op_00.mp4` and `op_01.mp4` as a **rolling buffer** of ~2 minutes from the current position.
 
 **This repo’s Windows folder does not run ffmpeg.** Idle-stop / Wi‑Fi upload heuristics from the legacy `Run-SegmentCopy.ps1` pipeline are **not** part of the iPhone → USB → DLNA workflow.
 
 ### `Sync-IphoneSegments.ps1`
 
 - Trigger: scheduled task on logon, or manual after USB connect.
-- Source: iPhone **Exports** folder (`3d_op_00.mp4`, `3d_op_01.mp4`).
+- Source: iPhone **Exports** folder (`op_00.mp4`, `op_01.mp4`).
 - Dest: `F:\f1_media\3d_fullsbs_trans` (overwrite in place).
 - Optional: only copy if dest older than source (compare size/mtime).
 
@@ -260,7 +260,7 @@ ios_3d_loop_segments/
 | Phase | Deliverable |
 |-------|-------------|
 | **1** | WebDAV login + folder browser + Keychain |
-| **2** | AVFoundation export: WebDAV → `3d_op_%02d.mp4`, stream copy, 60s × 2 |
+| **2** | AVFoundation export: WebDAV → `op_%02d.mp4`, stream copy, 60s × 2 |
 | **3** | Export UI, resume store, single-job lock, logs |
 | **4** | Files/USB visibility + `Sync-IphoneSegments.ps1` |
 | **5** | Polish: duration probe, seek clamp, cellular warning, BG export |

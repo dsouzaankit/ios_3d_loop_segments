@@ -42,7 +42,7 @@ function Test-LoopSegmentsDestinationReady {
 DLNA destination drive '$letter' is not available on this PC.
   Configured path: $Directory
 
-Save your real DLNA folder (where 3d_op_00.mp4 / 3d_op_01.mp4 live), for example:
+Save your real DLNA folder (where op_00.mp4 / op_01.mp4 live), for example:
   D:\media\3d_fullsbs_trans
 
 Run once:

@@ -13,6 +13,8 @@ struct ExportView: View {
     @State private var liveLogTail = ""
     @State private var lanExportURL: String?
     @State private var exportTask: Task<Void, Never>?
+    @State private var showClearMediaConfirm = false
+    @State private var showClearLogsConfirm = false
 
     var body: some View {
         Form {
@@ -28,11 +30,19 @@ struct ExportView: View {
                     .foregroundStyle(.secondary)
             }
             Section("LAN export (PC sync)") {
-                Toggle("Serve Exports on Wi‑Fi while exporting", isOn: Binding(
+                Toggle("Serve Exports on Wi‑Fi", isOn: Binding(
                     get: { ExportLANServer.isEnabled },
-                    set: { ExportLANServer.isEnabled = $0 }
+                    set: { enabled in
+                        ExportLANServer.isEnabled = enabled
+                        if enabled {
+                            ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
+                        } else {
+                            ExportLANServer.stop(log: nil)
+                            lanExportURL = nil
+                        }
+                    }
                 ))
-                Text("Phone and PC on same LAN. Export log shows http://<phone-ip>:8765/ — run Sync-FromPhoneLAN.ps1 -Watch on PC. No USB or Photos required.")
+                Text("Phone and PC on same LAN. Stays on while the app is open (not only during export). Run Sync-FromPhoneLAN.ps1 -Watch on PC.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if let lanExportURL {
@@ -81,7 +91,7 @@ struct ExportView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (3d_op_00.mp4). First segment can take a few minutes on large files.")
+                    Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (op_00.mp4). First segment can take a few minutes on large files.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Text("PC sync: Sync-FromIPhonePhotos.ps1 (Photos MTP) or Sync-FromPhoneLAN.ps1 (Wi‑Fi).")
@@ -93,7 +103,7 @@ struct ExportView: View {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
                 Text("1. Large files: sparse temp shell; each minute dense-fills only that window from pCloud (not the full file).")
-                Text("2. Passthrough to 3d_op_00.mp4; PC pulls via Sync-FromPhoneLAN.ps1 -Watch (or USB / Apple Devices)")
+                Text("2. Passthrough to op_00.mp4; PC pulls via Sync-FromPhoneLAN.ps1 -Watch (or USB / Apple Devices)")
                 Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -105,6 +115,19 @@ struct ExportView: View {
                 }
                 Text("3. Or Apple Devices → Loop Segments → Exports → Save to PC")
                 Text("4. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Exports folder") {
+                Button("Clear media", role: .destructive) {
+                    showClearMediaConfirm = true
+                }
+                .disabled(session.isExportRunning)
+                Button("Clear logs", role: .destructive) {
+                    showClearLogsConfirm = true
+                }
+                .disabled(session.isExportRunning)
+                Text("Media: op_*.mp4, staging, _export_source_working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -133,6 +156,8 @@ struct ExportView: View {
         .onAppear {
             seekMs = ResumeStore.shared.seekMs(for: item)
             refreshLogFromDisk()
+            ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
+            lanExportURL = ExportLANServer.baseURLString
             if PhotosSegmentPublisher.workflowEnabled, PhotosSegmentPublisher.isEnabled {
                 Task { await requestPhotosAccess() }
             }
@@ -141,24 +166,64 @@ struct ExportView: View {
             exportTask?.cancel()
             exportTask = nil
         }
-        .task(id: session.isExportRunning) {
-            guard session.isExportRunning else {
+        .task(id: ExportLANServer.isEnabled) {
+            guard ExportLANServer.isEnabled else {
                 lanExportURL = nil
                 return
             }
-            while session.isExportRunning, !Task.isCancelled {
-                refreshLogFromDisk()
+            ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
+            while ExportLANServer.isEnabled, !Task.isCancelled {
+                if session.isExportRunning {
+                    refreshLogFromDisk()
+                }
                 lanExportURL = ExportLANServer.baseURLString
                 try? await Task.sleep(for: .seconds(2))
             }
-            refreshLogFromDisk()
-            lanExportURL = nil
+            if !ExportLANServer.isEnabled {
+                lanExportURL = nil
+            }
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
         }
+        .confirmationDialog(
+            "Clear export media?",
+            isPresented: $showClearMediaConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Clear media", role: .destructive) { clearExportMedia() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes segment MP4s and temp source from Exports. Photos library is unchanged.")
+        }
+        .confirmationDialog(
+            "Clear export logs?",
+            isPresented: $showClearLogsConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Clear logs", role: .destructive) { clearExportLogs() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes export and search log files from Exports. loop_segments_ok.txt is kept.")
+        }
+    }
+
+    private func clearExportMedia() {
+        guard !session.isExportRunning else { return }
+        let count = SegmentCleanup.removeExportMedia()
+        liveLogTail = ""
+        status = count > 0 ? "Cleared \(count) media file(s) from Exports" : "No media files in Exports"
+        refreshLogHint()
+    }
+
+    private func clearExportLogs() {
+        guard !session.isExportRunning else { return }
+        let count = ExportPaths.clearExportLogs()
+        liveLogTail = ""
+        status = count > 0 ? "Cleared \(count) log file(s) from Exports" : "No log files in Exports"
+        refreshLogHint()
     }
 
     private func requestPhotosAccess() async {
@@ -182,7 +247,7 @@ struct ExportView: View {
             try await session.startExport(item: item, seekMs: seekMs)
             status = PhotosSegmentPublisher.workflowEnabled && PhotosSegmentPublisher.isEnabled
                 ? "Done — latest segment in Exports (and Photos). Run Photos sync on PC; leave app to clear."
-                : "Done — latest segment in Exports. Run Sync-FromPhoneLAN.ps1 -Watch on PC; leave app to clear."
+                : "Done — latest segment in Exports. Sync-FromPhoneLAN.ps1 -Watch works while LAN serve is on."
         } catch is CancellationError, SegmentExporterError.cancelled {
             status = "Stopped — segment files removed from device"
         } catch ExportError.stillStopping {

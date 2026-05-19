@@ -1,9 +1,9 @@
 import Foundation
 
 enum ExportPaths {
-    static let segmentPattern = "3d_op_%02d.mp4"
+    static let segmentPattern = "op_%02d.mp4"
     static let segmentDurationSeconds = 60
-    /// One rotating file on the phone; PC DLNA pair (`3d_op_00` / `3d_op_01`) via `Sync-FromPhoneLAN.ps1` or USB.
+    /// One rotating file on the phone; PC DLNA pair (`op_00` / `op_01`) via `Sync-FromPhoneLAN.ps1` or USB.
     static let segmentFileCount = 1
 
     static func segmentURL(index: Int) -> URL {
@@ -11,10 +11,11 @@ enum ExportPaths {
         return exportsDirectory.appendingPathComponent(name)
     }
 
-    /// Finished segment before wall-clock publish to `3d_op_*.mp4` (DLNA must not see partial slot files).
+    /// Finished segment before wall-clock publish to `op_*.mp4` (DLNA must not see partial slot files).
     static func segmentStagingURL(index: Int) -> URL {
-        let name = String(format: "3d_op_%02d.staging.mp4", index % segmentFileCount)
-        return exportsDirectory.appendingPathComponent(name)
+        let finalName = String(format: segmentPattern, index % segmentFileCount)
+        let stagingName = finalName.replacingOccurrences(of: ".mp4", with: ".staging.mp4")
+        return exportsDirectory.appendingPathComponent(stagingName)
     }
 
     /// Replace DLNA slot atomically after staging + wall-clock schedule (one update per ~60s).
@@ -63,7 +64,7 @@ enum ExportPaths {
         exportsDirectory.appendingPathComponent("export_progress.txt")
     }
 
-    /// Full remote MP4 while downloading; removed with segment cleanup (Stop / background / export end).
+    /// Sparse full-source temp; replaced when a new export creates the file (not removed on export end).
     static var workingSourceURL: URL {
         exportsDirectory.appendingPathComponent("_export_source_working.mp4")
     }
@@ -82,36 +83,67 @@ enum ExportPaths {
         }
     }
 
-    /// Remove prior export log snapshots so `export_latest.txt` / `export_progress.txt` only reflect this run.
-    static func clearLogsForNewExport(log: ((String) -> Void)? = nil) {
+    /// Export + search logs under `Exports/` (keeps `loop_segments_ok.txt`).
+    @discardableResult
+    static func clearExportLogs(log: ((String) -> Void)? = nil) -> Int {
         _ = exportsDirectory
         _ = logsDirectory
         let fm = FileManager.default
+        var removed = 0
 
         for url in [latestLogTextURL, latestLogURL, exportProgressURL] {
             guard fm.fileExists(atPath: url.path) else { continue }
             do {
                 try fm.removeItem(at: url)
+                removed += 1
                 log?("Cleared \(url.lastPathComponent)")
             } catch {
                 log?("Could not clear \(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
 
+        let searchDebug = exportsDirectory.appendingPathComponent("search_debug.txt")
+        if fm.fileExists(atPath: searchDebug.path) {
+            do {
+                try fm.removeItem(at: searchDebug)
+                removed += 1
+                log?("Cleared \(searchDebug.lastPathComponent)")
+            } catch {
+                log?("Could not clear \(searchDebug.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
         if let names = try? fm.contentsOfDirectory(atPath: exportsDirectory.path) {
             for name in names where name.hasPrefix("export_session_") {
                 let url = exportsDirectory.appendingPathComponent(name)
-                try? fm.removeItem(at: url)
-                log?("Cleared \(name)")
+                do {
+                    try fm.removeItem(at: url)
+                    removed += 1
+                    log?("Cleared \(name)")
+                } catch {
+                    log?("Could not clear \(name): \(error.localizedDescription)")
+                }
             }
         }
 
         if let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) {
             for name in names where name.hasPrefix("export_") {
                 let url = logsDirectory.appendingPathComponent(name)
-                try? fm.removeItem(at: url)
+                do {
+                    try fm.removeItem(at: url)
+                    removed += 1
+                    log?("Cleared logs/\(name)")
+                } catch {
+                    log?("Could not clear logs/\(name): \(error.localizedDescription)")
+                }
             }
         }
+        return removed
+    }
+
+    /// Remove prior export log snapshots so `export_latest.txt` / `export_progress.txt` only reflect this run.
+    static func clearLogsForNewExport(log: ((String) -> Void)? = nil) {
+        _ = clearExportLogs(log: log)
     }
 
     /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).
@@ -119,7 +151,6 @@ enum ExportPaths {
         _ = exportsDirectory
         _ = logsDirectory
         SearchDebugLog.ensureReady()
-        _ = removeWorkingSourceCopy()
         let probe = exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
         let text = "Loop Segments \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") \(ISO8601DateFormatter().string(from: Date()))\n"
         if let data = text.data(using: .utf8) {

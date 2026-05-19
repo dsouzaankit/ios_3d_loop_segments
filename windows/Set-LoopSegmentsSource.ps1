@@ -13,7 +13,7 @@
 
 .EXAMPLE
   .\Set-LoopSegmentsSource.ps1
-  # Prompts for path; tests that 3d_op_*.mp4 or export_latest.txt is visible
+  # Prompts for path; tests that op_*.mp4 or export_latest.txt is visible
 #>
 [CmdletBinding()]
 param(
@@ -35,13 +35,13 @@ if (-not (Test-Path -LiteralPath $full -PathType Container)) {
     throw "Not a folder: $full"
 }
 
-$hasSegment = @('3d_op_00.mp4', '3d_op_01.mp4') | Where-Object {
+$hasSegment = @('op_00.mp4', 'op_01.mp4') | Where-Object {
     Test-Path -LiteralPath (Join-Path $full $_) -PathType Leaf
 }
 $hasLog = (Test-Path -LiteralPath (Join-Path $full 'export_latest.txt') -PathType Leaf)
 
 if (-not $hasSegment -and -not $hasLog) {
-    Write-Warning "No 3d_op_*.mp4 or export_latest.txt in this folder yet. Path saved anyway."
+    Write-Warning "No op_*.mp4 or export_latest.txt in this folder yet. Path saved anyway."
 }
 
 Set-Content -LiteralPath $configFile -Value $full -Encoding UTF8 -NoNewline

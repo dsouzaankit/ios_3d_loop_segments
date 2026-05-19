@@ -1,15 +1,15 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Copy the newest iPhone Photos video (MTP) into the older of the PC DLNA pair (3d_op_00 / 3d_op_01).
+  Copy the newest iPhone Photos video (MTP) into the older of the PC DLNA pair (op_00 / op_01).
 
 .DESCRIPTION
   For Loop Segments with "Save segments to Photos" enabled. The phone keeps one segment file
-  (3d_op_00.mp4 in Exports); each minute overwrites it and adds a new Photos clip (often IMG_*.mp4
+  (op_00.mp4 in Exports); each minute overwrites it and adds a new Photos clip (often IMG_*.mp4
   under the latest month folder, e.g. 202605_a).
 
   Each run: take the **newest** video in the scan, always copy it, and **overwrite** the older of
-  the two PC DLNA slots (or 3d_op_00, then 3d_op_01, if a slot is missing). No dedup — backward
+  the two PC DLNA slots (or op_00, then op_01, if a slot is missing). No dedup — backward
   jumps in an endlessly looping DLNA player are expected.
 
   Uses Shell.Application + CopyHere (MTP-safe). Do NOT use Copy-Item on COM .Path values.
@@ -18,7 +18,7 @@
   List iPhone MTP folders and newest video candidates.
 
 .PARAMETER LegacyDualMap
-  Old behavior: copy the two newest phone videos to 3d_op_00 and 3d_op_01 by date order.
+  Old behavior: copy the two newest phone videos to op_00 and op_01 by date order.
 
 .PARAMETER Watch
   Repeat sync every -PollSeconds until you press Enter (run from a console window).
@@ -56,8 +56,8 @@ if ([string]::IsNullOrWhiteSpace($DestinationDirectory)) {
 }
 
 $VideoExtensions = @('.mp4', '.mov', '.m4v')
-$SegmentNames = @('3d_op_00.mp4', '3d_op_01.mp4')
-$SegmentExportNamePattern = '^3d_op_\d{2}\.mp4$'
+$SegmentNames = @('op_00.mp4', 'op_01.mp4')
+$SegmentExportNamePattern = '^op_\d{2}\.mp4$'
 
 # Shell FileOperation flags (FOF_*)
 $CopyHereFlags = 0x14  # FOF_NOCONFIRMATION | FOF_NOERRORUI
@@ -221,14 +221,14 @@ function Select-DlnaOverwriteTarget {
         (Test-Path -LiteralPath $paths[0] -PathType Leaf),
         (Test-Path -LiteralPath $paths[1] -PathType Leaf)
     )
-    if (-not $exists[0]) { return $paths[0], $SegmentNames[0], '3d_op_00 missing — initial slot' }
-    if (-not $exists[1]) { return $paths[1], $SegmentNames[1], '3d_op_01 missing — second slot' }
+    if (-not $exists[0]) { return $paths[0], $SegmentNames[0], 'op_00 missing — initial slot' }
+    if (-not $exists[1]) { return $paths[1], $SegmentNames[1], 'op_01 missing — second slot' }
     $t0 = (Get-Item -LiteralPath $paths[0]).LastWriteTimeUtc
     $t1 = (Get-Item -LiteralPath $paths[1]).LastWriteTimeUtc
     if ($t0 -le $t1) {
-        return $paths[0], $SegmentNames[0], 'overwrite older PC slot (3d_op_00)'
+        return $paths[0], $SegmentNames[0], 'overwrite older PC slot (op_00)'
     }
-    return $paths[1], $SegmentNames[1], 'overwrite older PC slot (3d_op_01)'
+    return $paths[1], $SegmentNames[1], 'overwrite older PC slot (op_01)'
 }
 
 function Invoke-MtpCopyHere {
@@ -318,7 +318,7 @@ function Show-DiscoverReport {
     Write-Host ''
     $newest = Select-NewestVideo -AllVideos $all
     if ($newest) {
-        Write-Host "Sync target: newest file $($newest.Name) -> older of PC 3d_op_00 / 3d_op_01 (always overwrite)."
+        Write-Host "Sync target: newest file $($newest.Name) -> older of PC op_00 / op_01 (always overwrite)."
     }
     Write-Host 'DLNA player can wait ~60s until both PC slots exist.'
     Write-Host 'Use -LegacyDualMap for old two-newest-phone-files behavior.'

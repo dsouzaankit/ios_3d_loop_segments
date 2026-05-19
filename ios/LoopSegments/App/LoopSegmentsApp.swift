@@ -7,6 +7,7 @@ struct LoopSegmentsApp: App {
 
     init() {
         ExportPaths.ensureExportDirectories()
+        ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
     }
 
     var body: some Scene {

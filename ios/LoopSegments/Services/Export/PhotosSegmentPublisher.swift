@@ -4,7 +4,7 @@ import Foundation
 import Photos
 
 /// Publishes finished segment MP4s to the Photos library (optional; off by default — use LAN export to PC).
-/// Uses a temporary passthrough remux only — never modifies `3d_op_*.mp4` (DLNA/USB keep full HEVC).
+/// Uses a temporary passthrough remux only — never modifies `op_*.mp4` (DLNA/USB keep full HEVC).
 enum PhotosSegmentPublisher {
     /// Master switch — set `true` to re-enable Photos import UI and library sync.
     static let workflowEnabled = false
@@ -520,7 +520,7 @@ enum PhotosSegmentPublisher {
 
     private static func sanitizedPhotosFilename(_ name: String) -> String {
         let base = (name as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallback = "3d_op_segment.mp4"
+        let fallback = "op_segment.mp4"
         guard !base.isEmpty else { return fallback }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
         let cleaned = String(base.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })

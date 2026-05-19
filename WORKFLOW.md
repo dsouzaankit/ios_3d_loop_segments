@@ -8,14 +8,14 @@ Three separate networks. **No Personal Hotspot** required for the iPhone path be
 ┌─────────────────────────────────────────────────────────────────┐
 │  iPhone (cellular LTE/5G only — Wi‑Fi off is OK for export)      │
 │    Loop Segments app → pCloud WebDAV (internet)                 │
-│    Dense-fill each 60s from pCloud → Exports/3d_op_00.mp4       │
+│    Dense-fill each 60s from pCloud → Exports/op_00.mp4       │
 │    Optional: each segment → Photos (MTP shows IMG_*.mp4 on PC)   │
 └────────────────────────────┬────────────────────────────────────┘
                              │ USB (Exports and/or Photos)
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Windows PC                                                     │
-│    Sync-FromIPhonePhotos.ps1 -Watch → 3d_op_00/01 (DLNA pair)  │
+│    Sync-FromIPhonePhotos.ps1 -Watch → op_00/01 (DLNA pair)  │
 │    DLNA media server → WLAN → TV / receiver / PotPlayer         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -44,8 +44,8 @@ Install via **TestFlight** or sideload (AltStore, etc.) with an Apple Developer 
 2. Optional: turn **Wi‑Fi off** to force cellular-only pCloud access (no hotspot).
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
-5. Keep the app in the foreground. On phone: **Files → Loop Segments → Exports** should show `3d_op_00.mp4` updating each ~60s of **media** time (first segment can take several minutes on large moov-at-end HEVC while the minute **dense-downloads**).
-6. **Photos (default on, build 93+):** each minute is **dense-filled** to sparse temp on the phone, passthrough-copied to `3d_op_00.mp4`, then imported to the **Loop Segments** album. iOS does not write **DCIM**; Windows MTP often lists clips as `IMG_*.mp4` under monthly folders (`202605_a`, etc.). **Exports** still has full passthrough. Photos may fail with **3302** on some HEVC — see [ios/README.md](ios/README.md#photos-library-optional--not-required-for-dlna). Turning Photos off still uses dense fill but skips library import (no MTP path without Photos).
+5. Keep the app in the foreground. On phone: **Files → Loop Segments → Exports** should show `op_00.mp4` updating each ~60s of **media** time (first segment can take several minutes on large moov-at-end HEVC while the minute **dense-downloads**).
+6. **Photos (default on, build 93+):** each minute is **dense-filled** to sparse temp on the phone, passthrough-copied to `op_00.mp4`, then imported to the **Loop Segments** album. iOS does not write **DCIM**; Windows MTP often lists clips as `IMG_*.mp4` under monthly folders (`202605_a`, etc.). **Exports** still has full passthrough. Photos may fail with **3302** on some HEVC — see [ios/README.md](ios/README.md#photos-library-optional--not-required-for-dlna). Turning Photos off still uses dense fill but skips library import (no MTP path without Photos).
 
 Large files on cellular: first segment waits for index + dense window (`Downloading window … (dense fill)` → `Window on disk` in `export_latest.txt`). Later minutes reuse the same sparse temp shell; export does not keep up with live TV wall clock on slow LTE — OK if the DLNA player **loops** the PC pair.
 
@@ -57,7 +57,7 @@ Apple Devices does **not** mount the iPhone app as a drive path. You **manually*
 
 **Photos path:** Apple Devices → import photos/videos → look for recent items from the **Loop Segments** album, or browse Internal Storage photo folders. Still manual per save/import — rotating segments do not auto-update the PC DLNA folder.
 
-**MTP script (no Apple Devices):** `windows\Sync-FromIPhonePhotos.ps1` scans **This PC → Apple iPhone → Internal Storage** (latest month folder + DCIM). Each run copies the **newest** phone video and overwrites the **older** of the PC DLNA files `3d_op_00.mp4` / `3d_op_01.mp4` (ring buffer; backward time jumps in a looping player are OK). Run `-Discover` first. **Watch:** `.\Sync-FromIPhonePhotos.ps1 -Watch` or `Sync-FromIPhonePhotos-Watch.cmd`. `-LegacyDualMap` restores the old “two newest → 00/01 by date” behavior. Assume only your export clips are newest in that folder.
+**MTP script (no Apple Devices):** `windows\Sync-FromIPhonePhotos.ps1` scans **This PC → Apple iPhone → Internal Storage** (latest month folder + DCIM). Each run copies the **newest** phone video and overwrites the **older** of the PC DLNA files `op_00.mp4` / `op_01.mp4` (ring buffer; backward time jumps in a looping player are OK). Run `-Discover` first. **Watch:** `.\Sync-FromIPhonePhotos.ps1 -Watch` or `Sync-FromIPhonePhotos-Watch.cmd`. `-LegacyDualMap` restores the old “two newest → 00/01 by date” behavior. Assume only your export clips are newest in that folder.
 
 ### Simplest (one step)
 
@@ -65,7 +65,7 @@ When Apple Devices asks where to save, pick your **DLNA library folder** directl
 
 `F:\f1_media\3d_fullsbs_trans`
 
-Save `3d_op_00.mp4` and `3d_op_01.mp4` there. Done — no extra script.
+Save `op_00.mp4` and `op_01.mp4` there. Done — no extra script.
 
 ### Automation (what is and is not automated)
 
@@ -113,7 +113,7 @@ Only if Windows exposes a readable iPhone `Exports` path (uncommon with Apple De
 
 1. PC connected to the same **WLAN** as the TV/player (not via iPhone hotspot).
 2. Windows **media streaming** (or your existing DLNA server) publishes `F:\f1_media\3d_fullsbs_trans`.
-3. Open the library on the TV; play the rotating `3d_op_*.mp4` entries.
+3. Open the library on the TV; play the rotating `op_*.mp4` entries.
 
 ---
 
@@ -123,7 +123,7 @@ Only if Windows exposes a readable iPhone `Exports` path (uncommon with Apple De
 
 | Where to look | What you should see |
 |---------------|---------------------|
-| **iPhone → Files → On My iPhone → Loop Segments → Exports** | `3d_op_00.mp4`, `export_latest.txt`, `loop_segments_ok.txt` (always check here first) |
+| **iPhone → Files → On My iPhone → Loop Segments → Exports** | `op_00.mp4`, `export_latest.txt`, `loop_segments_ok.txt` (always check here first) |
 | **Apple Devices** → **Loop Segments** → **Exports** → **Save to PC** (you pick the Windows folder) | **Normal path** — not automatable by Apple; save to `F:\f1_media\...` or incoming + `Copy-FromIncoming.ps1` |
 | **Explorer → This PC → Apple iPhone → Internal Storage** | Often **only** Photos (`202605_a`, …) — not the app |
 
@@ -132,7 +132,7 @@ If Explorer never shows **Loop Segments**:
 1. Install/update **[Apple Devices](https://apps.microsoft.com/detail/9NP83LWLPZ9K)** (or iTunes for drivers).
 2. Open the **Apple Devices** app → select iPhone → look for **Files** or apps list → **Loop Segments**.
 3. On the phone, confirm exports exist in **Files** (step above).
-4. Copy files manually: in **Files**, select `3d_op_*.mp4` → **Share** → save to **iCloud Drive** / **OneDrive** / email to PC (workaround when USB app folders don’t mount).
+4. Copy files manually: in **Files**, select `op_*.mp4` → **Share** → save to **iCloud Drive** / **OneDrive** / email to PC (workaround when USB app folders don’t mount).
 
 `Sync-IphoneSegments.ps1` only works when Windows exposes  
 `…\Loop Segments\Exports` (or you paste that path into `-SourceRoot`).
@@ -151,7 +151,7 @@ If Explorer never shows **Loop Segments**:
 | PC can’t see iPhone | Unlock phone, replug USB, open **Apple Devices** app; if Exports vanished during export, **stop export**, unlock, then browse again. Copy path from Explorer → `-SourceRoot` |
 | Network timed out on export | Strong cellular; keep app foreground; try Wi‑Fi; read `Exports/export_latest.txt` |
 | Sync can’t find Exports | Use `-SourceRoot` from Explorer address bar |
-| DLNA empty | Confirm `3d_op_00.mp4` and `3d_op_01.mp4` in `F:\f1_media\3d_fullsbs_trans` |
+| DLNA empty | Confirm `op_00.mp4` and `op_01.mp4` in `F:\f1_media\3d_fullsbs_trans` |
 | pCloud fails on phone | Approve WebDAV 2FA email; check cellular permission for app |
 | Export fails on phone | `.\Sync-IphoneSegments.ps1` also copies logs → `%USERPROFILE%\Documents\LoopSegmentsLogs\export_latest.txt` (Windows USB often hides logs on the phone) |
 

@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 $configFile = Get-LoopSegmentsDestinationConfigPath
 
 if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
-    Write-Host 'Enter the folder your DLNA server uses for 3d_op_00.mp4 and 3d_op_01.mp4.'
+    Write-Host 'Enter the folder your DLNA server uses for op_00.mp4 and op_01.mp4.'
     Write-Host "(Default in docs is F:\f1_media\3d_fullsbs_trans — use your actual drive/path.)"
     $DestinationPath = Read-Host 'DLNA destination folder'
 }

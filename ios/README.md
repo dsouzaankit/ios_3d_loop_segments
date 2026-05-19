@@ -1,8 +1,7 @@
 https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
 
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Set-LoopSegmentsDestination.ps1 'C:\Users\dsouzaankit\Downloads\ios_3d_out'
-# .\Sync-FromPhonePhotos-Watch.cmd
+.\Set-LoopSegmentsDestination.ps1 'D:\ios\loop_segs_out'
 .\Set-LoopSegmentsLANHost.ps1 10.0.100.10
 .\Sync-FromPhoneLAN.ps1 -Discover
 .\Sync-FromPhoneLAN.ps1 -Watch
@@ -15,7 +14,7 @@ phone should be unlocked, app on foreground, screen on!
 
 **Cellular → pCloud WebDAV → segment export → LAN (or USB) → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
 
-Build **1.0.6+** uses **AVFoundation** stream copy to `3d_op_00.mp4` / `3d_op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
+Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
 ## Open in Xcode (requires macOS or cloud CI)
 
@@ -40,15 +39,15 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
-- 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via **`Sync-FromPhoneLAN.ps1 -Watch`** (build 103+) or USB. **Dense fill** per minute is the default (sparse temp shell, not a full 17 GB copy); see transport table below for large-file exceptions.
+- 60s segments; phone keeps **one** file (`op_00.mp4`); PC DLNA pair via **`Sync-FromPhoneLAN.ps1 -Watch`** (build 103+) or USB. **Dense fill** per minute is the default (sparse temp shell, not a full 17 GB copy); see transport table below for large-file exceptions.
 - Real-time read pacing (like ffmpeg `-re`)
-- Runs until end of file or **Stop**; **per-minute failsafe** (build 130+) skips a failed minute and continues dense-filling `_export_source_working.mp4` (served on LAN during export)
+- Runs until end of file or **Stop**; **per-minute failsafe** (build 130+) skips a failed minute and continues dense-filling `_export_source_working.mp4` (kept on disk and LAN until the next export replaces it)
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 ## PC sync (primary — LAN)
 
-1. On the phone: **Serve Exports on Wi‑Fi while exporting** (export screen).
+1. On the phone: **Serve Exports on Wi‑Fi** (export screen; stays on while the app is open).
 2. On the PC (same LAN):
 
 ```powershell
@@ -57,13 +56,13 @@ cd ..\windows
 .\Sync-FromPhoneLAN.ps1 -Watch
 ```
 
-pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/` on port **8765** (`3d_op_00.mp4`, logs, and optionally `_export_source_working.mp4` — the in-progress sparse temp; only while export runs, not for `-Watch` sync).
+pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/` on port **8765** (`op_00.mp4`, logs, and `_export_source_working.mp4` from the last export until a new one overwrites it).
 
 ### Export transport
 
 | Mode | When | Behavior |
 |------|------|----------|
-| **Dense fill** (default) | Source **&lt; ~1.5 GB**, or large file **first minute at seek 0** | Sparse temp once; **one dense pCloud download per minute window**; `file://` passthrough → `3d_op_00.mp4` |
+| **Dense fill** (default) | Source **&lt; ~1.5 GB**, or large file **first minute at seek 0** | Sparse temp once; **one dense pCloud download per minute window**; `file://` passthrough → `op_00.mp4` |
 | **Remote passthrough** | Sparse temp, minute **not** at file byte 0, source **&lt; ~1.5 GB** or **H.264** | **Capped pCloud reads** → HTTPS → export session; then dense + local if needed. |
 | **Large HEVC mid-file** | **≥ ~1.5 GB**, HEVC, minute not at byte 0 (e.g. seek **30:00**) | **Dense-fill ~1 GB window** → **local export session** (remote passthrough skipped; matches seek‑0 minute‑1 success). |
 | **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
@@ -100,15 +99,15 @@ Export and folder browse use **WebDAV only** — you do not need search for thos
 
 ## Windows sync (USB → DLNA)
 
-**`Documents/Exports/3d_op_*.mp4` is the full-quality DLNA source on the phone.** Apple does **not** expose that folder to PowerShell as a live USB drive path. You copy to the PC with **Apple Devices → Loop Segments → Exports → Save to PC** (manual folder pick each session, or a remembered Windows path).
+**`Documents/Exports/op_*.mp4` is the full-quality DLNA source on the phone.** Apple does **not** expose that folder to PowerShell as a live USB drive path. You copy to the PC with **Apple Devices → Loop Segments → Exports → Save to PC** (manual folder pick each session, or a remembered Windows path).
 
 | Step | PowerShell can automate? |
 |------|---------------------------|
 | Phone **Exports** → PC (USB) | **No** — Apple limitation; not scriptable via `Sync-IphoneSegments.ps1` in the usual Apple Devices workflow |
 | PC save folder → DLNA library (`F:\f1_media\...`) | **Yes** — after you saved into `LoopSegmentsIncoming` (or similar): `windows\Copy-FromIncoming.ps1`, `Watch-LoopSegmentsIncoming.ps1` |
-| Live ~60s segment refresh on PC | **Yes (LAN)** — **`Sync-FromPhoneLAN.ps1 -Watch`** while export runs and **Serve Exports on Wi‑Fi** is on (port **8765**) |
+| Live ~60s segment refresh on PC | **Yes (LAN)** — **`Sync-FromPhoneLAN.ps1 -Watch`** with **Serve Exports on Wi‑Fi** on (port **8765**; server stays up between exports) |
 
-**LAN (build 103+):** Phone on Wi‑Fi serves `http://<phone-ip>:8765/3d_op_00.mp4` during export (pCloud can stay on cellular). PC script copies to the older DLNA slot — no USB, no Photos.
+**LAN (build 103+, persistent build 136+):** Phone on Wi‑Fi serves `http://<phone-ip>:8765/op_00.mp4` while the app is open (pCloud can stay on cellular). PC script copies to the older DLNA slot — no USB, no Photos.
 
 ```powershell
 cd ..\windows

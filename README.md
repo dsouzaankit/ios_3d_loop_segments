@@ -6,7 +6,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 | Automated today | Not automated today |
 |-----------------|---------------------|
-| pCloud → phone `3d_op_00.mp4`; PC pair via `Sync-FromPhoneLAN.ps1 -Watch` (Wi‑Fi) | Apple Devices manual save; Photos/MTP path deactivated in app |
+| pCloud → phone `op_00.mp4`; PC pair via `Sync-FromPhoneLAN.ps1 -Watch` (Wi‑Fi) | Apple Devices manual save; Photos/MTP path deactivated in app |
 | **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Live 60s refresh on PC via USB |
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
@@ -14,7 +14,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 | Step | Device | Connection |
 |------|--------|------------|
 | Export from pCloud | iPhone | Cellular (Wi‑Fi off OK) |
-| Copy `3d_op_*.mp4` | iPhone → PC | USB |
+| Copy `op_*.mp4` | iPhone → PC | USB |
 | Play on TV | PC → LAN | WLAN (DLNA server on Windows) |
 
 Full guide: **[WORKFLOW.md](WORKFLOW.md)**
@@ -23,7 +23,7 @@ Full guide: **[WORKFLOW.md](WORKFLOW.md)**
 
 ## Windows (after iPhone export)
 
-**Apple Devices** → save `3d_op_*.mp4` to `F:\f1_media\3d_fullsbs_trans` (simplest), or save to `Documents\LoopSegmentsIncoming` then:
+**Apple Devices** → save `op_*.mp4` to `F:\f1_media\3d_fullsbs_trans` (simplest), or save to `Documents\LoopSegmentsIncoming` then:
 
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
@@ -40,8 +40,6 @@ Sources: [`ios/`](ios/). Install on your phone: **[ios/BUILD-WITHOUT-MAC.md](ios
 
 Export uses **AVFoundation** on device (no embedded ffmpeg). **iOS 26.x:** **1.0.5+** to launch; **1.1.0** for export and fixed logs. Rebuild IPA from GitHub Actions if the phone still shows 1.0.5.
 
-**Experimental:** [ios-ffmpeg/](ios-ffmpeg/) — same workflow with embedded **FFmpeg-iOS** SPM ([kewlbear/FFmpeg-iOS](https://github.com/kewlbear/FFmpeg-iOS); not retired ffmpeg-kit). Separate bundle ID; verify on your iOS version.
-
 On phone: **Settings → Cellular → Loop Segments → On**.
 
 ---
@@ -53,7 +51,7 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [WORKFLOW.md](WORKFLOW.md) | Step-by-step cellular / USB / DLNA |
 | [DESIGN.md](DESIGN.md) | Architecture |
 | [ios/](ios/) | Loop Segments iPhone app |
-| [windows/Sync-FromIPhonePhotos.ps1](windows/Sync-FromIPhonePhotos.ps1) | Photos MTP → PC `3d_op_00/01` (watch mode) |
+| [windows/Sync-FromIPhonePhotos.ps1](windows/Sync-FromIPhonePhotos.ps1) | Photos MTP → PC `op_00/01` (watch mode) |
 | [windows/Sync-IphoneSegments.ps1](windows/Sync-IphoneSegments.ps1) | Exports USB → DLNA (if path visible) |
 | [windows/Register-UsbSyncTask.ps1](windows/Register-UsbSyncTask.ps1) | Logon sync task |
 | [codemagic.yaml](codemagic.yaml) | Cloud iOS build |

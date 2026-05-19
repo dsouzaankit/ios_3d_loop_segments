@@ -70,7 +70,7 @@ Write-Host "From (Apple Devices save target): $incoming"
 Write-Host "To (DLNA library): $destRoot"
 
 $copied = 0
-foreach ($name in @('3d_op_00.mp4', '3d_op_01.mp4', 'export_latest.txt')) {
+foreach ($name in @('op_00.mp4', 'op_01.mp4', 'export_latest.txt')) {
   $src = Join-Path $incoming $name
   $dst = Join-Path $destRoot $name
   if (Copy-IfNewer -SourcePath $src -DestPath $dst -DryRun:$DryRun) { $copied++ }
@@ -90,7 +90,7 @@ if (Test-Path -LiteralPath $logsDir -PathType Container) {
 }
 
 if ($copied -eq 0) {
-    Write-Host 'Nothing to copy — save 3d_op_*.mp4 from Apple Devices into the incoming folder first.'
+    Write-Host 'Nothing to copy — save op_*.mp4 from Apple Devices into the incoming folder first.'
 } else {
     Write-Host 'Done.'
 }

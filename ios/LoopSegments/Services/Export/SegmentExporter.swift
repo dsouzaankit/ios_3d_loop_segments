@@ -65,7 +65,6 @@ final class SegmentExporter {
             tempDownload = nil
             retainedWebDAVLoader = nil
             retainedAsset = nil
-            ExportPaths.removeWorkingSourceCopy(log: logHandler)
         }
 
 
@@ -130,8 +129,9 @@ final class SegmentExporter {
             useBackgroundDownload: false
         )
 
-        logHandler("Video codec \(CodecSupport.fourCCString(videoFormat))" +
-            (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio"))
+        logHandler(
+            "Video codec \(CodecSupport.fourCCString(videoFormat))" +
+                (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio")
         )
         if seekMs > 0 {
             logHandler(
@@ -147,7 +147,7 @@ final class SegmentExporter {
 
         logHandler(
             "Phone export: one file \(ExportPaths.segmentURL(index: 0).lastPathComponent) per ~60s; " +
-                "PC keeps 3d_op_00/01 via LAN watch or USB (overwrite older slot)"
+                "PC keeps op_00/01 via LAN watch or USB (overwrite older slot)"
         )
 
         guard let downloader = tempDownload else {
@@ -155,7 +155,7 @@ final class SegmentExporter {
         }
         logHandler(
             "Publishing 60s segments — dense fill each minute, then passthrough " +
-                "(per-minute failsafe: skip on error and continue; _export_source_working.mp4 on LAN during export)"
+                "(per-minute failsafe: skip on error and continue; _export_source_working.mp4 on LAN when serve is on)"
         )
 
         var skippedSegmentCount = 0
@@ -332,7 +332,7 @@ final class SegmentExporter {
                     )
                     logHandler(
                         "Continuing — next minute will dense-fill on _export_source_working.mp4 " +
-                            "(LAN :8765 while export runs)"
+                            "(LAN :8765 when serve is on)"
                     )
                 }
 

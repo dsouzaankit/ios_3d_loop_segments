@@ -231,7 +231,7 @@ cd ios && xcodegen generate && open LoopSegments.xcodeproj
 
 ## Export note
 
-Segment export uses **AVFoundation** on the phone, not embedded ffmpeg (ffmpeg-kit does not load on iOS 26). The Windows side only copies finished `3d_op_*.mp4` files — see [../WORKFLOW.md](../WORKFLOW.md).
+Segment export uses **AVFoundation** on the phone, not embedded ffmpeg (ffmpeg-kit does not load on iOS 26). The Windows side only copies finished `op_*.mp4` files — see [../WORKFLOW.md](../WORKFLOW.md).
 
 ---
 

@@ -47,12 +47,9 @@ final class ExportCoordinator {
         }
 
         BackgroundTaskKeeper.begin()
-        defer {
-            ExportLANServer.stop(log: logHandler)
-            BackgroundTaskKeeper.end()
-        }
+        defer { BackgroundTaskKeeper.end() }
 
-        ExportLANServer.start(log: logHandler)
+        ExportLANServer.ensureRunning(log: logHandler)
 
         logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
         logHandler("Logs: export_latest.txt, \(logWriter.sessionLogFileName), export_progress.txt (in Exports)")
@@ -87,7 +84,7 @@ final class ExportCoordinator {
             } onCancel: {
                 self.exporter.cancel()
             }
-            logHandler("Export finished — 3d_op_*.mp4 kept for USB/Photos; temp source copy removed from Exports")
+            logHandler("Export finished — op_*.mp4 and _export_source_working.mp4 kept on LAN until next export")
             if PhotosSegmentPublisher.isEnabled {
                 logHandler("Photos: syncing finished segments to library…")
                 await PhotosSegmentPublisher.publishAllSegmentsFromExports(log: logHandler)
@@ -96,7 +93,7 @@ final class ExportCoordinator {
                 let suffix = result.reachedEnd ? "end of file" : "stopped"
                 logHandler(
                     "Failsafe: \(result.skippedSegmentCount) minute(s) skipped; " +
-                        "\(suffix); partial 3d_op_*.mp4 on LAN/USB"
+                        "\(suffix); partial op_*.mp4 on LAN/USB"
                 )
                 logWriter.finish(
                     status: result.reachedEnd
@@ -110,7 +107,7 @@ final class ExportCoordinator {
         } catch SegmentExporterError.cancelled {
             if userRequestedCancel {
                 await SegmentCleanup.removeAllSegments(log: logHandler)
-                logHandler("Cleanup: removed 3d_op_*.mp4 and temp source copy from Exports")
+                logHandler("Cleanup: removed op_*.mp4 from Exports (_export_source_working.mp4 kept until next export)")
                 logWriter.finish(status: "cancelled")
                 throw SegmentExporterError.cancelled
             }

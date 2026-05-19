@@ -1,6 +1,6 @@
 import UIKit
 
-/// Extends allowed runtime while FFmpeg segment export runs (screen can lock briefly).
+/// Extends allowed runtime while segment export runs (screen can lock briefly).
 enum BackgroundTaskKeeper {
     private static var taskId: UIBackgroundTaskIdentifier = .invalid
 

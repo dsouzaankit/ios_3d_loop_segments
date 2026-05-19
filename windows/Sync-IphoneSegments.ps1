@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Copy 3d_op_00.mp4 / 3d_op_01.mp4 from iPhone Exports (USB) into the Windows DLNA segment folder.
+  Copy op_00.mp4 / op_01.mp4 from iPhone Exports (USB) into the Windows DLNA segment folder.
 
 .PARAMETER Discover
   List iPhone / Exports paths Windows can see (use when auto-detect fails).
@@ -41,7 +41,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$SegmentNames = @('3d_op_00.mp4', '3d_op_01.mp4')
+$SegmentNames = @('op_00.mp4', 'op_01.mp4')
 $SourceConfigFile = Join-Path $PSScriptRoot 'loop-segments-source.txt'
 
 if ([string]::IsNullOrWhiteSpace($SourceRoot) -and (Test-Path -LiteralPath $SourceConfigFile -PathType Leaf)) {
@@ -223,7 +223,7 @@ function Show-DiscoverReport {
         Write-Host ''
         Write-Host 'Checklist:'
         Write-Host '  1. USB cable, iPhone unlocked, Trust This Computer'
-        Write-Host '  2. On iPhone: Files -> On My iPhone -> Loop Segments -> Exports (3d_op_*.mp4)'
+        Write-Host '  2. On iPhone: Files -> On My iPhone -> Loop Segments -> Exports (op_*.mp4)'
         Write-Host '  3. Folders like 202605_a under Internal Storage are PHOTOS only — not this app'
         Write-Host '  4. On PC: open Apple Devices app -> iPhone -> Files / File Sharing -> Loop Segments'
         Write-Host '  5. If Explorer shows Loop Segments\Exports, copy address bar path:'

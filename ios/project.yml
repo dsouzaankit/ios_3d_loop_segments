@@ -7,8 +7,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-# FFmpeg-Kit removed from link step — embedded binaries crashed on launch on iOS 26.x.
-# Export: AVFoundation on device (no ffmpeg SPM — ffmpeg-kit crashes on iOS 26).
+# Export: AVFoundation on device (no embedded ffmpeg).
 targets:
   LoopSegments:
     type: application
@@ -23,5 +22,5 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.loopsegments.app
         MARKETING_VERSION: "1.2.6"
-        CURRENT_PROJECT_VERSION: "135"
+        CURRENT_PROJECT_VERSION: "138"
         TARGETED_DEVICE_FAMILY: "1,2"

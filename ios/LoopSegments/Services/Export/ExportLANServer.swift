@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import Network
 
-/// Serves `Documents/Exports/` on the LAN while export runs (Path B — PC pull without USB/Photos).
+/// Serves `Documents/Exports/` on the LAN when enabled (Path B — PC pull without USB/Photos).
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
     private static let enabledKey = "serveExportsOnLAN"
@@ -57,7 +57,8 @@ enum ExportLANServer {
                         advertisedBaseURL = url
                         lock.unlock()
                         log("LAN export: \(url) — PC: Sync-FromPhoneLAN.ps1 -PhoneHost \(ip) -Watch")
-                        log("LAN files: / status.json, /3d_op_00.mp4, /_export_source_working.mp4 (temp, while exporting)")
+                        let segmentName = ExportPaths.segmentURL(index: 0).lastPathComponent
+                        log("LAN files: / status.json, /\(segmentName), /_export_source_working.mp4 (last export temp, if present)")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
                         Self.stopOnQueue(log: nil)
@@ -211,7 +212,6 @@ enum ExportLANServer {
             for slot in 0 ..< ExportPaths.segmentFileCount {
                 names.insert(ExportPaths.segmentURL(index: slot).lastPathComponent)
             }
-            // Sparse full-source temp (HTTP only while export runs — LAN server stops when export ends).
             names.insert(ExportPaths.workingSourceURL.lastPathComponent)
             return names
         }()
