@@ -1050,7 +1050,7 @@ final class SegmentWriterContext {
         let waitStart = CFAbsoluteTimeGetCurrent()
         var lastWaitLog = waitStart
         while true {
-            if tryAppendIfReady(sample, track: track) {
+            if try tryAppendIfReady(sample, track: track) {
                 return
             }
             if isCancelled?() == true {
