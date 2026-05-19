@@ -15,7 +15,7 @@ enum SegmentPassThroughExporter {
         isCancelled: (() -> Bool)? = nil,
         log: @escaping (String) -> Void
     ) async throws {
-        _ = audioFormat
+        let includeAudio = audioFormat != nil
         let videoTrack: AVAssetTrack?
         do {
             videoTrack = try await asset.loadTracks(withMediaType: .video).first
@@ -73,9 +73,10 @@ enum SegmentPassThroughExporter {
         try? FileManager.default.removeItem(at: outputURL)
         let label = sourceLabel.lowercased()
         let denseLocal = label.contains("dense local temp")
+        let tracksNote = includeAudio ? "video+aac passthrough" : "video-only"
         log(
             "Staging \(outputURL.lastPathComponent) via \(sourceLabel) " +
-                "(media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)), video-only" +
+                "(media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)), \(tracksNote)" +
                 (denseLocal ? ", full window on disk" : "") + ")"
         )
 
@@ -212,7 +213,7 @@ enum SegmentPassThroughExporter {
                 let ctx = try SegmentWriterContext(
                     outputURL: outputURL,
                     videoFormat: writerFormat,
-                    audioFormat: nil,
+                    audioFormat: includeAudio ? audioFormat : nil,
                     videoTransform: videoTransform,
                     realTime: false
                 )
@@ -290,10 +291,105 @@ enum SegmentPassThroughExporter {
             throw SegmentExporterError.segmentOutputTooSmall(0)
         }
 
+        if includeAudio, let writerContext {
+            let segmentOrigin = timelineOrigin ?? rangeStart
+            await appendAudioPassthrough(
+                asset: asset,
+                readerStart: readerStart,
+                rangeStart: rangeStart,
+                rangeEnd: rangeEnd,
+                segmentOrigin: segmentOrigin,
+                writerContext: writerContext,
+                sourceLabel: sourceLabel,
+                isCancelled: isCancelled,
+                log: log
+            )
+        }
+
         if let writerContext {
             try await writerContext.finish()
         }
         exportFinishedOK = true
+    }
+
+    private static func appendAudioPassthrough(
+        asset: AVURLAsset,
+        readerStart: CMTime,
+        rangeStart: CMTime,
+        rangeEnd: CMTime,
+        segmentOrigin: CMTime,
+        writerContext: SegmentWriterContext,
+        sourceLabel: String,
+        isCancelled: (() -> Bool)?,
+        log: @escaping (String) -> Void
+    ) async {
+        guard let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first else {
+            log("No audio track on source — finishing video-only segment (\(sourceLabel))")
+            writerContext.abandonAudio()
+            return
+        }
+        let audioReader: AVAssetReader
+        do {
+            audioReader = try AVAssetReader(asset: asset)
+        } catch {
+            log("Audio reader could not open (\(sourceLabel)) — video-only segment")
+            writerContext.abandonAudio()
+            return
+        }
+        defer { audioReader.cancelReading() }
+        audioReader.timeRange = CMTimeRange(start: readerStart, end: rangeEnd)
+        let audioOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+        audioOutput.alwaysCopiesSampleData = true
+        guard audioReader.canAdd(audioOutput) else {
+            log("Audio reader output not added — video-only segment")
+            writerContext.abandonAudio()
+            return
+        }
+        audioReader.add(audioOutput)
+        guard audioReader.startReading() else {
+            log("Audio reader could not start (\(sourceLabel)) — video-only segment")
+            writerContext.abandonAudio()
+            return
+        }
+        let queue = DispatchQueue(label: "com.loopsegments.passthrough-audio")
+        var audioSamples = 0
+        while let sample = await copyNextSample(on: queue, from: audioOutput) {
+            if isCancelled?() == true { return }
+            if audioReader.status == .failed { break }
+            let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+            if CMTimeCompare(pts, rangeStart) < 0 { continue }
+            if CMTimeCompare(pts, rangeEnd) >= 0 { break }
+            do {
+                let timed = try SegmentSampleTiming.retimeToSegmentStart(sample, subtract: segmentOrigin)
+                try await writerContext.append(
+                    timed,
+                    track: .audio,
+                    isCancelled: isCancelled,
+                    log: log
+                )
+                audioSamples += 1
+            } catch SegmentExporterError.writerAudioStall {
+                log("Audio writer stalled (\(sourceLabel)) — video-only segment")
+                writerContext.abandonAudio()
+                return
+            } catch SegmentExporterError.writerFailed(let underlying) {
+                log(
+                    "Audio passthrough failed (\(sourceLabel)): \(underlying.localizedDescription) — video-only segment"
+                )
+                writerContext.abandonAudio()
+                return
+            } catch {
+                log("Audio passthrough error (\(sourceLabel)) — video-only segment")
+                writerContext.abandonAudio()
+                return
+            }
+        }
+        if audioSamples > 0 {
+            log("Audio passthrough — \(audioSamples) AAC samples muxed (aligned to video segment start)")
+        } else {
+            log("No audio samples in window — video-only segment")
+            writerContext.abandonAudio()
+        }
     }
 
     /// Fallback when manual reader/writer returns -11800 on a fully local file (Apple-maintained passthrough mux).
