@@ -14,8 +14,8 @@ enum ExportDeliveryPolicy {
         false
     }
 
-    /// Publish first segment to Photos/DLNA as soon as it is ready (no wall-clock hold).
+    /// Publish first segment as soon as it is ready (no wall-clock hold). Not tied to Photos.
     static var prioritizeFirstPhotosPublish: Bool {
-        PhotosSegmentPublisher.isEnabled
+        true
     }
 }

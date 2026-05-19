@@ -52,7 +52,11 @@ enum SegmentPassThroughExporter {
         }
 
         try? FileManager.default.removeItem(at: outputURL)
-        log("Staging \(outputURL.lastPathComponent) via \(sourceLabel) (media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)), video-only)")
+        log(
+            "Staging \(outputURL.lastPathComponent) via \(sourceLabel) " +
+                "(media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)), video-only" +
+                (denseLocal ? ", full window on disk" : "") + ")"
+        )
 
         var writerContext: SegmentWriterContext?
         var startedWriter = false
@@ -63,6 +67,7 @@ enum SegmentPassThroughExporter {
         var lastInRangePTS = rangeStart
         let label = sourceLabel.lowercased()
         let relaxKeyframeGating = label.contains("pcloud stream") || label.contains("sparse temp + pcloud")
+        let denseLocal = label.contains("dense local temp")
         let maxKeyframeScan = relaxKeyframeGating ? 2400 : 480
         let earliestStart = relaxKeyframeGating
             ? CMTimeSubtract(
