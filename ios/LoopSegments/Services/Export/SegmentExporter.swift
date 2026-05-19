@@ -5,6 +5,8 @@ import Foundation
 struct SegmentExportResult {
     let lastMediaTimeMs: Int64
     let reachedEnd: Bool
+    /// Minutes that failed after retries; export continued and dense-filled later windows when possible.
+    let skippedSegmentCount: Int
 }
 
 /// Stream-copy export to one rotating 60s MP4 on the phone (AVFoundation, WebDAV input).
@@ -144,8 +146,13 @@ final class SegmentExporter {
         guard let downloader = tempDownload else {
             throw SegmentExporterError.readerSetupFailed
         }
-        logHandler("Publishing 60s segments — dense fill each minute, then passthrough")
+        logHandler(
+            "Publishing 60s segments — dense fill each minute, then passthrough " +
+                "(per-minute failsafe: skip on error and continue; _export_source_working.mp4 on LAN during export)"
+        )
 
+        var skippedSegmentCount = 0
+        var publishedSegmentCount = 0
         while true {
                 try checkCancelled()
 
@@ -191,14 +198,20 @@ final class SegmentExporter {
                         )
                     )
                 }
+                let minuteMediaLabel =
+                    "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
+                    "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
                 logHandler(
-                    "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60))"
+                    "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) for \(minuteMediaLabel)"
                 )
                 let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
                 let rangeDuration = CMTime(
                     seconds: windowEndSeconds - windowStartSeconds,
                     preferredTimescale: 600
                 )
+                let slot = minuteIndex % Self.segmentFileCount
+                let stagingURL = ExportPaths.segmentStagingURL(index: slot)
+                do {
                 let midFileRemotePassthrough = shouldUseRemotePassthroughForMidFile(
                     byteRange: byteRange,
                     downloader: downloader
@@ -270,9 +283,6 @@ final class SegmentExporter {
                     )
                 }
 
-                let slot = minuteIndex % Self.segmentFileCount
-                let stagingURL = ExportPaths.segmentStagingURL(index: slot)
-
                 try await exportSegmentFromTempOrStream(
                     downloader: downloader,
                     tempURL: downloader.fileURL,
@@ -297,6 +307,22 @@ final class SegmentExporter {
                     wallOrigin: dlnaPublishOrigin,
                     log: logHandler
                 )
+                publishedSegmentCount += 1
+                } catch {
+                    try checkCancelled()
+                    if !Self.shouldSkipMinuteAndContinue(after: error) {
+                        throw error
+                    }
+                    skippedSegmentCount += 1
+                    try? FileManager.default.removeItem(at: stagingURL)
+                    logHandler(
+                        "Minute skipped (failsafe) — \(minuteMediaLabel): \(error.localizedDescription)"
+                    )
+                    logHandler(
+                        "Continuing — next minute will dense-fill on _export_source_working.mp4 " +
+                            "(LAN :8765 while export runs)"
+                    )
+                }
 
                 lastMediaTimeMs = Int64(windowEndSeconds * 1000)
                 minuteIndex += 1
@@ -306,8 +332,20 @@ final class SegmentExporter {
             try await downloader.waitUntilComplete()
         }
 
-        logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
-        return SegmentExportResult(lastMediaTimeMs: lastMediaTimeMs, reachedEnd: reachedEnd)
+        if skippedSegmentCount > 0 {
+            logHandler(
+                "Export finished — \(publishedSegmentCount) segment(s) published, " +
+                    "\(skippedSegmentCount) minute(s) skipped; see log above. " +
+                    (reachedEnd ? "Reached end of file." : "Export stopped before EOF.")
+            )
+        } else {
+            logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
+        }
+        return SegmentExportResult(
+            lastMediaTimeMs: lastMediaTimeMs,
+            reachedEnd: reachedEnd,
+            skippedSegmentCount: skippedSegmentCount
+        )
     }
 
     /// Files above this or that do not fit on disk are exported by range reads (no full temp copy).
@@ -1213,6 +1251,22 @@ final class SegmentExporter {
     /// At seek 0, dense-fill bytes after the minute window so `file://` passthrough does not read zero-filled mdat.
     private static let seekZeroDenseEntireFileMaxBytes: Int64 = 1024 * 1024 * 1024
     private static let seekZeroDenseTailMaxBytes: Int64 = 256 * 1024 * 1024
+
+    /// Per-minute failsafe: keep dense-filling the sparse temp and serving it on LAN; do not abort the whole export.
+    private static func shouldSkipMinuteAndContinue(after error: Error) -> Bool {
+        if let exportError = error as? SegmentExporterError {
+            switch exportError {
+            case .cancelled, .readerInterrupted, .seekPastEnd, .noVideoTrack,
+                 .unsupportedCodec, .missingFormatDescription, .insufficientDiskSpace:
+                return false
+            case .readerSetupFailed, .readerFailed, .writerSetupFailed, .writerFailed,
+                 .writerBackpressure, .writerAudioStall, .noKeyframeInWindow,
+                 .timelineByteWindowMismatch, .segmentOutputTooSmall, .midFileTempUnreadable:
+                return true
+            }
+        }
+        return true
+    }
 
     private static func shouldStreamFallback(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {

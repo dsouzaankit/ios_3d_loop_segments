@@ -42,7 +42,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + AAC (AV1 sources are rejected at probe)
 - 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via **`Sync-FromPhoneLAN.ps1 -Watch`** (build 103+) or USB. **Dense fill** per minute is the default (sparse temp shell, not a full 17 GB copy); see transport table below for large-file exceptions.
 - Real-time read pacing (like ffmpeg `-re`)
-- Runs until end of file or **Stop**
+- Runs until end of file or **Stop**; **per-minute failsafe** (build 130+) skips a failed minute and continues dense-filling `_export_source_working.mp4` (served on LAN during export)
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 

@@ -92,7 +92,20 @@ final class ExportCoordinator {
                 logHandler("Photos: syncing finished segments to library…")
                 await PhotosSegmentPublisher.publishAllSegmentsFromExports(log: logHandler)
             }
-            logWriter.finish(status: result.reachedEnd ? "completed (end of file)" : "stopped")
+            if result.skippedSegmentCount > 0 {
+                let suffix = result.reachedEnd ? "end of file" : "stopped"
+                logHandler(
+                    "Failsafe: \(result.skippedSegmentCount) minute(s) skipped; " +
+                        "\(suffix); partial 3d_op_*.mp4 on LAN/USB"
+                )
+                logWriter.finish(
+                    status: result.reachedEnd
+                        ? "completed (\(result.skippedSegmentCount) minutes skipped)"
+                        : "stopped (\(result.skippedSegmentCount) minutes skipped)"
+                )
+            } else {
+                logWriter.finish(status: result.reachedEnd ? "completed (end of file)" : "stopped")
+            }
             return result
         } catch SegmentExporterError.cancelled {
             if userRequestedCancel {
