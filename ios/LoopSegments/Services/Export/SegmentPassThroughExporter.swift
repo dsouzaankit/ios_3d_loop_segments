@@ -89,7 +89,7 @@ enum SegmentPassThroughExporter {
         let tracksNote = includeAudio ? "video+aac passthrough" : "video-only"
         log(
             "Staging \(outputURL.lastPathComponent) via \(sourceLabel) " +
-                "(media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)), \(tracksNote)" +
+                "(media \(formatMediaTime(rangeStart))–\(formatMediaTime(nominalEnd)), \(tracksNote)" +
                 (denseLocal ? ", full window on disk" : "") + ")"
         )
 
