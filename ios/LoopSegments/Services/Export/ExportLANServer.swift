@@ -29,6 +29,12 @@ enum ExportLANServer {
         return advertisedBaseURL
     }
 
+    /// Start the listener when the user preference is on (idempotent).
+    static func ensureRunning(log: @escaping (String) -> Void = { _ in }) {
+        guard isEnabled else { return }
+        start(log: log)
+    }
+
     static func start(log: @escaping (String) -> Void) {
         guard isEnabled else { return }
         lock.lock()
