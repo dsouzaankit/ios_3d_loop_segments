@@ -153,6 +153,19 @@ final class SegmentExporter {
                 }
 
                 let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
+                let windowSeconds = windowEndSeconds - windowStartSeconds
+                if windowSeconds < 0.5 {
+                    logHandler(
+                        String(
+                            format: "End of file — segment window %.1fs at %d:%02d (nothing left to export)",
+                            windowSeconds,
+                            Int(windowStartSeconds / 60),
+                            Int(windowStartSeconds) % 60
+                        )
+                    )
+                    reachedEnd = true
+                    break
+                }
                 let byteRange = downloader.byteRangeForTimeline(
                     timelineStartSeconds: windowStartSeconds,
                     timelineEndSeconds: windowEndSeconds,
@@ -437,7 +450,7 @@ final class SegmentExporter {
         )
         if windowDense, !useOnDiskFileURL {
             log(
-                "Mid-file sparse temp — capped hybrid reader for passthrough (file:// hits zero-filled gaps and Cannot Open)"
+                "Dense window not at file start (\(Self.formatBytes(byteRange.start))) — capped hybrid reader (file:// reads zero-filled gaps → -11800)"
             )
         }
         do {
@@ -465,22 +478,27 @@ final class SegmentExporter {
                 return false
             }()
             if writerRejected, windowDense {
+                if useOnDiskFileURL {
+                    log(
+                        "Writer rejected on-disk reader (\(error.localizedDescription)) — retrying with capped hybrid reader"
+                    )
+                    try await runPassthrough(
+                        sourceLabel: "dense local temp (hybrid after -11800)",
+                        useOnDiskFileURL: false
+                    )
+                    return
+                }
                 log(
-                    "Writer rejected passthrough (\(error.localizedDescription)) — re-downloading window, then on-disk file reader"
+                    "Writer rejected passthrough (\(error.localizedDescription)) — re-downloading window, then capped hybrid reader"
                 )
                 downloader.pauseBackgroundDownload()
                 try await downloader.ensureFileHeadOnDisk()
                 try await downloader.ensureIndexTailOnDisk()
                 try await downloader.ensureContiguousRange(byteRange, force: true)
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
-                useOnDiskFileURL = shouldUseOnDiskFileURLForPassthrough(
-                    downloader: downloader,
-                    byteRange: byteRange,
-                    windowDense: windowDense
-                )
                 try await runPassthrough(
                     sourceLabel: windowDense ? "dense local temp (writer retry)" : "sparse temp + pCloud (writer retry)",
-                    useOnDiskFileURL: useOnDiskFileURL
+                    useOnDiskFileURL: false
                 )
                 return
             }
@@ -535,14 +553,14 @@ final class SegmentExporter {
         }
     }
 
-    /// `file://` on a sparse temp only works when the dense window starts near 0; mid-file gaps are zero-filled and break AVFoundation open.
+    /// `file://` only when the dense window starts at byte 0 (no zero-filled gap between head and window).
     private func shouldUseOnDiskFileURLForPassthrough(
         downloader: WebDAVTempFileDownload,
         byteRange: TimelineByteRange,
         windowDense: Bool
     ) -> Bool {
-        guard windowDense else { return false }
-        return byteRange.start < Self.midFilePrefetchThresholdBytes
+        guard windowDense, byteRange.start == 0, byteRange.length > 0 else { return false }
+        return downloader.isByteRangeFullyOnDisk(byteRange)
     }
 
     private func prepareMidFileTempForReader(

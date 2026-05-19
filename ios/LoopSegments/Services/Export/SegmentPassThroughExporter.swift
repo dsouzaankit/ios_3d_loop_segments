@@ -20,6 +20,13 @@ enum SegmentPassThroughExporter {
             throw SegmentExporterError.noVideoTrack
         }
         let rangeEnd = CMTimeAdd(rangeStart, rangeDuration)
+        let windowSeconds = CMTimeGetSeconds(rangeDuration)
+        guard windowSeconds.isFinite, windowSeconds >= 0.5 else {
+            log(
+                "Segment window too short (\(String(format: "%.2f", windowSeconds))s at \(formatMediaTime(rangeStart))) — file may be at end"
+            )
+            throw SegmentExporterError.segmentOutputTooSmall(0)
+        }
 
         let reader: AVAssetReader
         do {
