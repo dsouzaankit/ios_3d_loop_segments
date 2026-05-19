@@ -6,11 +6,13 @@ enum HEVCSyncSample {
   static func isReliableSyncPoint(
     _ sample: CMSampleBuffer,
     videoFormat: CMFormatDescription,
-    strictHEVCNALScan: Bool = true
+    strictHEVCNALScan: Bool = true,
+    strictH264IDR: Bool = true
   ) -> Bool {
     let codec = CMFormatDescriptionGetMediaSubType(videoFormat)
     guard CodecSupport.isHEVCVideo(codec) else {
-      return containsH264IDRNAL(sample)
+      if containsH264IDRNAL(sample) { return true }
+      return strictH264IDR ? false : isSyncFromAttachments(sample)
     }
     if isSyncFromAttachments(sample) {
       return true

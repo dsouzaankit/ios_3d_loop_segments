@@ -419,6 +419,24 @@ final class SegmentExporter {
             useOnDiskFileURL: Bool,
             forceHTTPSRangeReads: Bool = false
         ) async throws {
+            if useOnDiskFileURL, isFullSourceOnDisk(downloader: downloader) {
+                log(
+                    "Passthrough via AVAssetExportSession (full \(Self.formatBytes(downloader.totalLength)) file on disk)"
+                )
+                let fileAsset = AVURLAsset(
+                    url: tempURL,
+                    options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+                )
+                try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                    asset: fileAsset,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    sourceLabel: "\(sourceLabel) (export session)",
+                    log: log
+                )
+                return
+            }
             let (readAsset, hybridLoader) = try await resolvePassthroughReadAsset(
                 downloader: downloader,
                 tempURL: tempURL,
@@ -461,7 +479,9 @@ final class SegmentExporter {
                 "Dense window at \(Self.formatBytes(byteRange.start)) — capped hybrid reader (file:// reads zero-filled gaps)"
             )
         }
-        if windowDense, useOnDiskFileURL, byteRange.start == 0 {
+        if windowDense,
+           CMTimeGetSeconds(rangeStart) < 0.5,
+           !isFullSourceOnDisk(downloader: downloader) {
             try await ensureSeekZeroRemainderOnDiskIfBeneficial(
                 downloader: downloader,
                 byteRange: byteRange,
@@ -475,6 +495,24 @@ final class SegmentExporter {
                 useOnDiskFileURL: useOnDiskFileURL
             )
         } catch {
+            if isFullSourceOnDisk(downloader: downloader),
+               case SegmentExporterError.noKeyframeInWindow = error {
+                log("Manual passthrough found no keyframe — trying AVAssetExportSession")
+                downloader.closeWriteHandleForPassthroughRead(log: log)
+                let fileAsset = AVURLAsset(
+                    url: tempURL,
+                    options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+                )
+                try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                    asset: fileAsset,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    sourceLabel: "\(tempSourceLabel) (export session after keyframe scan)",
+                    log: log
+                )
+                return
+            }
             if byteRange.start > 0,
                windowDense,
                Self.isUnsupportedAssetURLError(error) {
@@ -680,13 +718,17 @@ final class SegmentExporter {
         try await downloader.ensureContiguousRange(tail)
     }
 
-    /// `file://` when the first-minute window is dense at seek 0 (head + index tail on disk; sparse middle is OK for minute 0).
+    /// `file://` when the minute window is dense; prefer full-file check so later minutes use the complete temp.
     private func shouldUseOnDiskFileURLForPassthrough(
         downloader: WebDAVTempFileDownload,
         byteRange: TimelineByteRange,
         windowDense: Bool
     ) -> Bool {
-        guard windowDense, byteRange.start == 0, byteRange.length > 0 else { return false }
+        guard windowDense, byteRange.length > 0 else { return false }
+        if isFullSourceOnDisk(downloader: downloader) {
+            return true
+        }
+        guard byteRange.start == 0 else { return false }
         return downloader.isByteRangeFullyOnDisk(byteRange)
     }
 
@@ -729,7 +771,7 @@ final class SegmentExporter {
         log: @escaping (String) -> Void
     ) async throws -> (AVURLAsset, WebDAVResourceLoader?) {
         if useOnDiskFileURL {
-            log("Passthrough reader: on-disk temp file (dense window at start of file)")
+            log("Passthrough reader: on-disk temp file")
             let asset = AVURLAsset(
                 url: tempURL,
                 options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]

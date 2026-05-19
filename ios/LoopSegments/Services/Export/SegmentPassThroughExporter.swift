@@ -177,10 +177,12 @@ enum SegmentPassThroughExporter {
                     skippedBeforeRange += 1
                     continue
                 }
+                let strictH264IDR = CMTimeGetSeconds(rangeStart) < 1.0
                 let hasSync = HEVCSyncSample.isReliableSyncPoint(
                     videoSample,
                     videoFormat: videoFormat,
-                    strictHEVCNALScan: true
+                    strictHEVCNALScan: true,
+                    strictH264IDR: strictH264IDR
                 )
                 if !hasSync {
                     skippedNonKeyframe += 1
