@@ -1,8 +1,9 @@
 https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
 
 PS P:\all_scripts\ios_3d_loop_segments\windows> .\Set-LoopSegmentsDestination.ps1 'C:\Users\dsouzaankit\Downloads\ios_3d_out'
-PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromIPhonePhotos-Watch.cmd
-PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromIPhonePhotos.ps1
+# PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromPhonePhotos-Watch.cmd
+PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromPhoneLAN.ps1 -Discover
+PS P:\all_scripts\ios_3d_loop_segments\windows> .\Sync-FromPhoneLAN.ps1 -Watch
 
 Notes:
 phone should be unlocked, app on foreground, screen on!
@@ -10,7 +11,7 @@ phone should be unlocked, app on foreground, screen on!
 
 # Loop Segments (iOS)
 
-**Cellular → pCloud WebDAV → segment export → USB → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
+**Cellular → pCloud WebDAV → segment export → LAN (or USB) → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `3d_op_00.mp4` / `3d_op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
@@ -37,37 +38,37 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + AAC (AV1 sources are rejected at probe)
-- 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via `Sync-FromIPhonePhotos.ps1` (build 92+). **Build 93+:** Photos on = **dense fill** per minute (not pCloud stream export).
+- 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via **`Sync-FromPhoneLAN.ps1 -Watch`** (build 103+) or USB. **Dense fill** per minute from pCloud (not full-file temp) unless disk is very low.
 - Real-time read pacing (like ffmpeg `-re`)
 - Runs until end of file or **Stop**
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
-## Photos library (optional — not required for DLNA)
+## PC sync (primary — LAN)
 
-**Save segments to Photos** copies each finished segment into the **Loop Segments** album for PC import via Apple Devices / `Sync-FromIPhonePhotos.ps1`. This path is **optional**.
+1. On the phone: **Serve Exports on Wi‑Fi while exporting** (export screen).
+2. On the PC (same LAN):
 
-When **Photos is on** (default), export **dense-fills** each minute to sparse temp, passthroughs to **`3d_op_00.mp4`**, then imports to Photos (**PC MTP** often shows `IMG_*.mp4` under `202605_a`). First segment is slower than stream-export but more reliable on large moov-at-end HEVC. **`Sync-FromIPhonePhotos.ps1 -Watch`** copies the **newest** clip to the **older** of `3d_op_00` / `3d_op_01` on the PC. Low disk may still force pCloud stream (see export log).
+```powershell
+cd ..\windows
+.\Set-LoopSegmentsLANHost.ps1 192.168.1.42   # IP from export log
+.\Sync-FromPhoneLAN.ps1 -Watch
+```
 
-| | **Exports (`3d_op_*.mp4`)** | **Photos import** |
-|---|---------------------------|-------------------|
-| Purpose | USB → PC → DLNA (primary) | Convenience / MTP script |
-| Codec / resolution | Full **passthrough** HEVC or H.264 from source | Passthrough remux first (or **H.264 for Photos** toggle); on **3302** → H.264 transcode for Photos only — **DLNA file never re-encoded** |
-| Reliability | Reliable once export finishes | Logs **pre-import probe** (codec, size, audio, hints); HEVC &gt;1080p auto-H.264 optional |
+pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/3d_op_00.mp4` on port **8765**.
 
-**Photos 3302:** `invalidResource` — not only HEVC; audio codec, container, and **Limited** Photos access matter too. Export log shows `Photos: pre-import` and hints. Toggle **H.264 for Photos** to skip passthrough. Fallback transcode uses up to 1080p H.264 + AAC. `3d_op_00.mp4` in Exports stays passthrough for DLNA.
-
-Turn **Save segments to Photos** off only if you do not need MTP/USB sync to PC (dense fill still runs; no Photos import).
-
-### Export transport (build 93+)
+### Export transport
 
 | Mode | When | Behavior |
 |------|------|----------|
-| **Dense + Photos** (default) | Photos toggle **on** | Sparse temp shell once; **one dense pCloud download per minute**; passthrough → `3d_op_00.mp4` → Photos import |
-| **Dense, no Photos** | Photos toggle **off** | Same dense fill; no library import (use Exports if PC can see it) |
+| **Dense fill** (default) | Enough free disk | Sparse temp shell once; **one dense pCloud download per minute**; passthrough → `3d_op_00.mp4` |
 | **pCloud stream** | Very low free disk | Fallback only — see `export_latest.txt` |
 
-No background prefetch + duplicate dense fill on the same minute (removed in build 93).
+## Photos library (deactivated in app)
+
+The Photos import sub-workflow is **off** (`PhotosSegmentPublisher.workflowEnabled = false` in source). Re-enable there to restore the export UI and library sync.
+
+Legacy PC path: `Sync-FromIPhonePhotos.ps1 -Watch` (MTP / Internal Storage). Not used when Photos workflow is disabled.
 
 ## Search: `tokenSaved=false` / no API token
 
@@ -107,7 +108,7 @@ cd ..\windows
 .\Sync-FromPhoneLAN.ps1 -Watch
 ```
 
-`Sync-IphoneSegments.ps1` only helps if Explorer shows a **readable** iPhone `…\Loop Segments\Exports` path. **`Sync-FromIPhonePhotos.ps1 -Watch`** is the Photos/MTP alternative.
+`Sync-IphoneSegments.ps1` only helps if Explorer shows a **readable** iPhone `…\Loop Segments\Exports` path. **`Sync-FromIPhonePhotos.ps1`** remains in `windows/` for legacy MTP use if you re-enable Photos in the app.
 
 Details: [../WORKFLOW.md](../WORKFLOW.md) §3, [../FEASIBILITY.md](../FEASIBILITY.md).
 

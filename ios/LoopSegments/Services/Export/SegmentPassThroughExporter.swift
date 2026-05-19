@@ -69,6 +69,8 @@ enum SegmentPassThroughExporter {
         log("Staging \(outputURL.lastPathComponent) via \(sourceLabel) (media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)))")
 
         var writerContext: SegmentWriterContext?
+        var pendingSamples: [(track: SegmentTrackKind, sample: CMSampleBuffer, sourcePTS: CMTime)] = []
+        let maxPendingSamples = 24
         var heldAudio: CMSampleBuffer?
         var skipAudio = false
         var startedWriter = false
@@ -99,6 +101,48 @@ enum SegmentPassThroughExporter {
             var inRangeVideoSamples = 0
             var startedWriter = false
         }
+        func flushPendingSamples() async throws {
+            while let head = pendingSamples.first {
+                guard let ctx = writerContext else { return }
+                do {
+                    if try ctx.tryAppendIfReady(head.sample, track: head.track) {
+                        pendingSamples.removeFirst()
+                        if head.track == .video, CMTimeCompare(head.sourcePTS, rangeStart) >= 0 {
+                            inRangeVideoSamples += 1
+                            progress.inRangeVideoSamples = inRangeVideoSamples
+                            lastInRangePTS = head.sourcePTS
+                        }
+                        if head.track == .audio {
+                            heldAudio = nil
+                        }
+                    } else {
+                        return
+                    }
+                } catch SegmentExporterError.writerAudioStall {
+                    log(
+                        "Audio writer stalled — continuing video-only for this segment (DLNA may have no audio track)"
+                    )
+                    ctx.abandonAudio()
+                    skipAudio = true
+                    heldAudio = nil
+                    pendingSamples.removeAll { $0.track == .audio }
+                } catch SegmentExporterError.writerFailed(let underlying) {
+                    let rejection = SegmentExporterError.writerFailed(underlying)
+                    if SegmentExporter.isAudioWriterRejection(rejection, track: head.track) {
+                        log(
+                            "Audio rejected by AVAssetWriter — continuing video-only for this segment (DLNA may have no audio)"
+                        )
+                        ctx.abandonAudio()
+                        skipAudio = true
+                        heldAudio = nil
+                        pendingSamples.removeAll { $0.track == .audio }
+                    } else {
+                        throw rejection
+                    }
+                }
+            }
+        }
+
         let progress = PassthroughProgress()
         let heartbeat = Task {
             while !Task.isCancelled {
@@ -151,6 +195,10 @@ enum SegmentPassThroughExporter {
                 )
             }
 
+            if startedWriter, !pendingSamples.isEmpty {
+                try await flushPendingSamples()
+            }
+
             await Task.yield()
             let videoSample = await copyNextSample(on: readerQueue, from: videoOutput)
             if videoSample != nil {
@@ -193,20 +241,20 @@ enum SegmentPassThroughExporter {
                     skippedBeforeRange += 1
                     continue
                 }
-                let requireSync = skippedNonKeyframe < maxKeyframeScan
                 let hasSync = HEVCSyncSample.isReliableSyncPoint(
                     next.sample,
                     videoFormat: videoFormat,
-                    strictHEVCNALScan: !relaxKeyframeGating
+                    strictHEVCNALScan: true
                 )
-                if requireSync, !hasSync {
+                if !hasSync {
                     skippedNonKeyframe += 1
+                    if skippedNonKeyframe >= maxKeyframeScan {
+                        log(
+                            "No HEVC sync in \(maxKeyframeScan) frames at \(formatMediaTime(rangeStart)) — dense-download this minute or try seek 0 min"
+                        )
+                        throw SegmentExporterError.noKeyframeInWindow
+                    }
                     continue
-                }
-                if !hasSync, relaxKeyframeGating {
-                    log(
-                        "Starting on in-range frame without confirmed HEVC sync (\(skippedNonKeyframe + 1) frames scanned, \(sourceLabel))"
-                    )
                 }
                 timelineOrigin = pts
                 let ctx = try SegmentWriterContext(
@@ -219,6 +267,11 @@ enum SegmentPassThroughExporter {
                 writerContext = ctx
                 startedWriter = true
                 progress.startedWriter = true
+                if relaxKeyframeGating, audioFormat != nil {
+                    log("Sparse/hybrid passthrough — video-only segment (avoids audio writer stall on holey temp)")
+                    ctx.abandonAudio()
+                    skipAudio = true
+                }
                 if skippedNonKeyframe > 0 {
                     log("Started on frame \(skippedNonKeyframe + 1) in window (HEVC sync scan)")
                 }
@@ -227,46 +280,31 @@ enum SegmentPassThroughExporter {
 
             let origin = timelineOrigin ?? rangeStart
             let timedSample = try SegmentSampleTiming.retimeToSegmentStart(next.sample, subtract: origin)
-            do {
-                try await writerContext?.append(
-                    timedSample,
-                    track: next.track,
-                    isCancelled: isCancelled,
-                    log: log
-                )
-            } catch SegmentExporterError.writerAudioStall {
-                log(
-                    "Audio writer stalled — continuing video-only for this segment (DLNA may have no audio track)"
-                )
-                writerContext?.abandonAudio()
-                skipAudio = true
-                heldAudio = nil
-                continue
-            } catch SegmentExporterError.writerFailed(let underlying) {
-                let ns = underlying as NSError
-                log(
-                    "Writer append failed (\(next.track)) at source \(formatMediaTime(pts)) — \(underlying.localizedDescription) (domain \(ns.domain) \(ns.code))"
-                )
-                let rejection = SegmentExporterError.writerFailed(underlying)
-                if SegmentExporter.isAudioWriterRejection(rejection, track: next.track) {
-                    log(
-                        "Audio rejected by AVAssetWriter — continuing video-only for this segment (DLNA may have no audio)"
-                    )
-                    writerContext?.abandonAudio()
-                    skipAudio = true
-                    heldAudio = nil
-                    continue
-                }
-                throw rejection
+            pendingSamples.append((next.track, timedSample, sourcePTS: pts))
+            if pendingSamples.count > maxPendingSamples {
+                log("Writer backpressure — \(maxPendingSamples) samples queued; dense-download this minute or retry")
+                throw SegmentExporterError.writerBackpressure
             }
-            if next.track == .video, CMTimeCompare(pts, rangeStart) >= 0 {
+            try await flushPendingSamples()
+        }
+
+        while let head = pendingSamples.first {
+            guard let ctx = writerContext else { break }
+            try await ctx.append(
+                head.sample,
+                track: head.track,
+                isCancelled: isCancelled,
+                log: log
+            )
+            if head.track == .video, CMTimeCompare(head.sourcePTS, rangeStart) >= 0 {
                 inRangeVideoSamples += 1
                 progress.inRangeVideoSamples = inRangeVideoSamples
-                lastInRangePTS = pts
+                lastInRangePTS = head.sourcePTS
             }
-            if next.track == .audio {
+            if head.track == .audio {
                 heldAudio = nil
             }
+            pendingSamples.removeFirst()
         }
 
         guard startedWriter else {

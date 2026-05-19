@@ -26,7 +26,11 @@ enum SegmentSampleTiming {
         guard status == noErr else { return sample }
 
         for index in 0 ..< Int(entryCount) {
-            timing[index].presentationTimeStamp = CMTimeSubtract(timing[index].presentationTimeStamp, origin)
+            var pts = CMTimeSubtract(timing[index].presentationTimeStamp, origin)
+            if pts.seconds < 0 || (index == 0 && pts.seconds < 0.001) {
+                pts = .zero
+            }
+            timing[index].presentationTimeStamp = pts
             if CMTIME_IS_VALID(timing[index].decodeTimeStamp) {
                 var dts = CMTimeSubtract(timing[index].decodeTimeStamp, origin)
                 if dts.seconds < 0 {

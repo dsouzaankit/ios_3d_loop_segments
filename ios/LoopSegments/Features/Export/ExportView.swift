@@ -56,45 +56,44 @@ struct ExportView: View {
                     }
                 }
             }
-            Section("Photos (optional — PC sync)") {
-                Toggle("Save segments to Photos", isOn: Binding(
-                    get: { PhotosSegmentPublisher.isEnabled },
-                    set: { newValue in
-                        PhotosSegmentPublisher.isEnabled = newValue
-                        if newValue {
-                            Task { await requestPhotosAccess() }
+            if PhotosSegmentPublisher.workflowEnabled {
+                Section("Photos (optional — PC sync)") {
+                    Toggle("Save segments to Photos", isOn: Binding(
+                        get: { PhotosSegmentPublisher.isEnabled },
+                        set: { newValue in
+                            PhotosSegmentPublisher.isEnabled = newValue
+                            if newValue {
+                                Task { await requestPhotosAccess() }
+                            }
                         }
-                    }
-                ))
-                if PhotosSegmentPublisher.isEnabled {
-                    Toggle("H.264 for Photos (skip passthrough)", isOn: Binding(
-                        get: { PhotosSegmentPublisher.alwaysTranscodeH264ForPhotos },
-                        set: { PhotosSegmentPublisher.alwaysTranscodeH264ForPhotos = $0 }
                     ))
-                    Text("On: every segment is transcoded to H.264 for Photos only (~1–3 min/segment). Off: try passthrough first; on 3302 the app transcodes. DLNA file in Exports stays full quality.")
+                    if PhotosSegmentPublisher.isEnabled {
+                        Toggle("H.264 for Photos (skip passthrough)", isOn: Binding(
+                            get: { PhotosSegmentPublisher.alwaysTranscodeH264ForPhotos },
+                            set: { PhotosSegmentPublisher.alwaysTranscodeH264ForPhotos = $0 }
+                        ))
+                        Text("On: every segment is transcoded to H.264 for Photos only (~1–3 min/segment). Off: try passthrough first; on 3302 the app transcodes. DLNA file in Exports stays full quality.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    if !photosAccessNote.isEmpty {
+                        Text(photosAccessNote)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (3d_op_00.mp4). First segment can take a few minutes on large files.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("PC sync: Sync-FromIPhonePhotos.ps1 (Photos MTP) or Sync-FromPhoneLAN.ps1 (Wi‑Fi).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                if !photosAccessNote.isEmpty {
-                    Text(photosAccessNote)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (3d_op_00.mp4). First segment can take a few minutes on large files.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("PC sync: Sync-FromIPhonePhotos.ps1 (Photos MTP) or Sync-FromPhoneLAN.ps1 (Wi‑Fi, no Photos).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("3d_op_*.mp4 stay in Exports until Stop or leaving the app; temp _export_source_working.mp4 is removed when export ends or on cleanup.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
                 Text("1. Large files: sparse temp shell; each minute dense-fills only that window from pCloud (not the full file).")
-                Text("2. Passthrough to 3d_op_00.mp4, then Photos if enabled; PC builds 3d_op_00/01 via MTP watch")
+                Text("2. Passthrough to 3d_op_00.mp4; PC pulls via Sync-FromPhoneLAN.ps1 -Watch (or USB / Apple Devices)")
                 Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -104,9 +103,8 @@ struct ExportView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                Text("3. With Photos on: PC can pick newest videos from Internal Storage (202605_a, etc.)")
-                Text("4. Or Apple Devices → Loop Segments → Exports → Save to PC")
-                Text("5. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
+                Text("3. Or Apple Devices → Loop Segments → Exports → Save to PC")
+                Text("4. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -135,7 +133,7 @@ struct ExportView: View {
         .onAppear {
             seekMs = ResumeStore.shared.seekMs(for: item)
             refreshLogFromDisk()
-            if PhotosSegmentPublisher.isEnabled {
+            if PhotosSegmentPublisher.workflowEnabled, PhotosSegmentPublisher.isEnabled {
                 Task { await requestPhotosAccess() }
             }
         }
@@ -176,13 +174,15 @@ struct ExportView: View {
     }
 
     private func startExport() async {
-        if PhotosSegmentPublisher.isEnabled {
+        if PhotosSegmentPublisher.workflowEnabled, PhotosSegmentPublisher.isEnabled {
             await requestPhotosAccess()
         }
         status = "Downloading to temp; publishing 60s chunks for DLNA as each minute is on disk…"
         do {
             try await session.startExport(item: item, seekMs: seekMs)
-            status = "Done — latest segment in Exports (and Photos if enabled). Run Photos sync on PC; leave app to clear."
+            status = PhotosSegmentPublisher.workflowEnabled && PhotosSegmentPublisher.isEnabled
+                ? "Done — latest segment in Exports (and Photos). Run Photos sync on PC; leave app to clear."
+                : "Done — latest segment in Exports. Run Sync-FromPhoneLAN.ps1 -Watch on PC; leave app to clear."
         } catch is CancellationError, SegmentExporterError.cancelled {
             status = "Stopped — segment files removed from device"
         } catch ExportError.stillStopping {

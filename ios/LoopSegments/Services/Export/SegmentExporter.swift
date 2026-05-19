@@ -165,7 +165,7 @@ final class SegmentExporter {
 
         logHandler(
             "Phone export: one file \(ExportPaths.segmentURL(index: 0).lastPathComponent) per ~60s; " +
-                "PC keeps 3d_op_00/01 via Photos MTP sync (overwrite older slot)"
+                "PC keeps 3d_op_00/01 via LAN watch or USB (overwrite older slot)"
         )
 
         if streamFromPCloud {
@@ -497,7 +497,15 @@ final class SegmentExporter {
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
             let writerRejected = Self.isWriterSampleRejection(error)
-            if writerRejected {
+            let writerBackpressure: Bool = {
+                if case SegmentExporterError.writerBackpressure = error { return true }
+                return false
+            }()
+            if writerBackpressure {
+                log(
+                    "Video writer stalled with 0 samples (\(error.localizedDescription)) — filling window on disk, then pCloud stream if needed"
+                )
+            } else if writerRejected {
                 log(
                     "Writer rejected passthrough samples (\(error.localizedDescription)) — likely sparse-hole reads; retrying via pCloud stream"
                 )
@@ -525,10 +533,14 @@ final class SegmentExporter {
                     try? FileManager.default.removeItem(at: outputURL)
                 }
             }
-            if !writerRejected {
-                log(
-                    "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
-                )
+            if writerBackpressure || !writerRejected {
+                if writerBackpressure {
+                    log("Dense-filling this minute’s byte window before retrying passthrough…")
+                } else {
+                    log(
+                        "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
+                    )
+                }
                 downloader.pauseBackgroundDownload()
                 try await downloader.ensureContiguousRange(byteRange)
                 do {
@@ -659,10 +671,10 @@ final class SegmentExporter {
                 return false
             case .readerFailed(let underlying):
                 return isSparseContainerOpenFailure(underlying)
-            case .writerFailed:
+            case .writerFailed, .writerBackpressure:
                 return true
             case .cancelled, .readerInterrupted, .seekPastEnd, .noVideoTrack, .unsupportedCodec,
-                 .missingFormatDescription, .writerSetupFailed, .writerBackpressure, .writerAudioStall,
+                 .missingFormatDescription, .writerSetupFailed, .writerAudioStall,
                  .insufficientDiskSpace, .midFileTempUnreadable:
                 return false
             }
@@ -984,8 +996,10 @@ final class SegmentWriterContext {
     }
 
     private static let writerVideoReadyTimeoutSeconds: Double = 120
+    private static let writerVideoFirstSampleReadyTimeoutSeconds: Double = 25
     private static let writerAudioReadyTimeoutSeconds: Double = 25
     private static let writerReadyLogIntervalSeconds: Double = 10
+    private var videoSamplesAppended = 0
 
     /// Stop accepting audio samples; writer keeps video track open.
     func abandonAudio() {
@@ -994,26 +1008,51 @@ final class SegmentWriterContext {
         audioInput.markAsFinished()
     }
 
+    /// Returns false when the writer is not ready yet (caller should keep pumping the reader).
+    func tryAppendIfReady(
+        _ sample: CMSampleBuffer,
+        track: SegmentTrackKind
+    ) throws -> Bool {
+        let input: AVAssetWriterInput
+        switch track {
+        case .video: input = videoInput
+        case .audio:
+            guard let audioInput, !audioAbandoned else { return true }
+            input = audioInput
+        }
+        guard input.isReadyForMoreMediaData else { return false }
+        guard input.append(sample) else {
+            let err = writer.error ?? NSError(domain: "SegmentWriter", code: -1)
+            throw SegmentExporterError.writerFailed(err)
+        }
+        if track == .video {
+            videoSamplesAppended += 1
+        }
+        return true
+    }
+
     func append(
         _ sample: CMSampleBuffer,
         track: SegmentTrackKind,
         isCancelled: (() -> Bool)? = nil,
         log: ((String) -> Void)? = nil
     ) async throws {
-        let input: AVAssetWriterInput
+        let readyTimeout: Double
         switch track {
-        case .video: input = videoInput
         case .audio:
-            guard let audioInput, !audioAbandoned else { return }
-            input = audioInput
+            readyTimeout = Self.writerAudioReadyTimeoutSeconds
+        case .video:
+            readyTimeout = videoSamplesAppended == 0
+                ? Self.writerVideoFirstSampleReadyTimeoutSeconds
+                : Self.writerVideoReadyTimeoutSeconds
         }
 
-        let readyTimeout = track == .audio
-            ? Self.writerAudioReadyTimeoutSeconds
-            : Self.writerVideoReadyTimeoutSeconds
         let waitStart = CFAbsoluteTimeGetCurrent()
         var lastWaitLog = waitStart
-        while !input.isReadyForMoreMediaData {
+        while true {
+            if tryAppendIfReady(sample, track: track) {
+                return
+            }
             if isCancelled?() == true {
                 throw SegmentExporterError.cancelled
             }
@@ -1035,11 +1074,6 @@ final class SegmentWriterContext {
             }
             await Task.yield()
             try await Task.sleep(nanoseconds: 2_000_000)
-        }
-
-        guard input.append(sample) else {
-            let err = writer.error ?? NSError(domain: "SegmentWriter", code: -1)
-            throw SegmentExporterError.writerFailed(err)
         }
     }
 

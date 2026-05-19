@@ -3,31 +3,45 @@ import CoreMedia
 import Foundation
 import Photos
 
-/// Publishes finished segment MP4s to the Photos library (visible for Recents and PC import).
+/// Publishes finished segment MP4s to the Photos library (optional; off by default — use LAN export to PC).
 /// Uses a temporary passthrough remux only — never modifies `3d_op_*.mp4` (DLNA/USB keep full HEVC).
 enum PhotosSegmentPublisher {
+    /// Master switch — set `true` to re-enable Photos import UI and library sync.
+    static let workflowEnabled = false
+
     private static let enabledKey = "publishSegmentsToPhotos"
     private static let alwaysH264Key = "photosAlwaysTranscodeH264"
     private static let assetIdsKey = "photos_segment_asset_local_ids"
 
     static var isEnabled: Bool {
         get {
+            guard workflowEnabled else { return false }
             if UserDefaults.standard.object(forKey: enabledKey) == nil {
-                return true
+                return false
             }
             return UserDefaults.standard.bool(forKey: enabledKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
+        set {
+            guard workflowEnabled else { return }
+            UserDefaults.standard.set(newValue, forKey: enabledKey)
+        }
     }
 
     /// Skip passthrough remux/import; H.264 transcode only (slower, higher Photos acceptance on 8K HEVC).
     static var alwaysTranscodeH264ForPhotos: Bool {
-        get { UserDefaults.standard.bool(forKey: alwaysH264Key) }
-        set { UserDefaults.standard.set(newValue, forKey: alwaysH264Key) }
+        get {
+            guard workflowEnabled else { return false }
+            return UserDefaults.standard.bool(forKey: alwaysH264Key)
+        }
+        set {
+            guard workflowEnabled else { return }
+            UserDefaults.standard.set(newValue, forKey: alwaysH264Key)
+        }
     }
 
     @discardableResult
     static func ensureAccess(log: ((String) -> Void)? = nil) async -> Bool {
+        guard workflowEnabled else { return false }
         let status = await requestAuthorizationIfNeeded()
         switch status {
         case .authorized:
@@ -48,7 +62,7 @@ enum PhotosSegmentPublisher {
 
     @discardableResult
     static func publish(segmentSlot: Int, videoURL: URL, log: @escaping (String) -> Void) async -> Bool {
-        guard isEnabled else { return false }
+        guard workflowEnabled, isEnabled else { return false }
         guard await ensureAccess(log: log) else { return false }
 
         let bytes = fileByteCount(videoURL)
@@ -109,7 +123,7 @@ enum PhotosSegmentPublisher {
     }
 
     static func publishAllSegmentsFromExports(log: @escaping (String) -> Void) async {
-        guard isEnabled else { return }
+        guard workflowEnabled, isEnabled else { return }
         guard await ensureAccess(log: log) else { return }
         for slot in 0 ..< ExportPaths.segmentFileCount {
             let url = ExportPaths.segmentURL(index: slot)
@@ -119,6 +133,7 @@ enum PhotosSegmentPublisher {
     }
 
     static func removeAllPublished(log: ((String) -> Void)? = nil) async {
+        guard workflowEnabled else { return }
         let ids = loadAssetIds()
         guard !ids.isEmpty else { return }
 

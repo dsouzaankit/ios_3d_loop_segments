@@ -1,6 +1,6 @@
 import Foundation
 
-/// Export timing and transport when delivering segments to Photos (and DLNA).
+/// Export timing and transport for DLNA (and optional Photos when `PhotosSegmentPublisher.workflowEnabled`).
 enum ExportDeliveryPolicy {
     /// Target wall time for first segment in Photos after export start.
     static let firstPhotosTargetSeconds: Double = 72

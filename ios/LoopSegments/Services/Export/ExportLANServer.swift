@@ -57,7 +57,7 @@ enum ExportLANServer {
                         advertisedBaseURL = url
                         lock.unlock()
                         log("LAN export: \(url) — PC: Sync-FromPhoneLAN.ps1 -PhoneHost \(ip) -Watch")
-                        log("LAN files: 3d_op_00.mp4, export_latest.txt, export_progress.txt, GET /status.json")
+                        log("LAN files: open / in a browser; PC uses /status.json and /3d_op_00.mp4")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
                         Self.stopOnQueue(log: nil)
@@ -112,8 +112,33 @@ enum ExportLANServer {
 
     // MARK: - HTTP
 
+    private static func performWhenReady(
+        connection: NWConnection,
+        onFailure: @escaping () -> Void,
+        work: @escaping () -> Void
+    ) {
+        if connection.state == .ready {
+            work()
+            return
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                connection.stateUpdateHandler = nil
+                work()
+            case .failed, .cancelled:
+                connection.stateUpdateHandler = nil
+                connection.cancel()
+                onFailure()
+            default:
+                break
+            }
+        }
+    }
+
     private static func receiveRequest(on connection: NWConnection, done: @escaping () -> Void) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, error in
+        performWhenReady(connection: connection, onFailure: done) {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, error in
             defer { done() }
             if let error {
                 connection.cancel()
@@ -135,6 +160,7 @@ enum ExportLANServer {
                 return
             }
             handleGET(path: path, connection: connection)
+            }
         }
     }
 
@@ -151,7 +177,11 @@ enum ExportLANServer {
 
     private static func handleGET(path: String, connection: NWConnection) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        if normalized.isEmpty || normalized == "status.json" {
+        if normalized.isEmpty {
+            sendIndexHTML(connection)
+            return
+        }
+        if normalized == "status.json" {
             sendStatusJSON(connection)
             return
         }
@@ -181,6 +211,56 @@ enum ExportLANServer {
         let url = ExportPaths.exportsDirectory.appendingPathComponent(name)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
+    }
+
+    private static func sendIndexHTML(_ connection: NWConnection) {
+        let fm = FileManager.default
+        let dir = ExportPaths.exportsDirectory
+        var items: [String] = []
+        if let names = try? fm.contentsOfDirectory(atPath: dir.path) {
+            for name in names.sorted() {
+                guard resolveExportFile(name: name) != nil else { continue }
+                let url = dir.appendingPathComponent(name)
+                var sizeNote = ""
+                if let attrs = try? fm.attributesOfItem(atPath: url.path),
+                   let size = attrs[.size] as? NSNumber, size.int64Value > 0 {
+                    sizeNote = " (\(size.int64Value / 1024) KB)"
+                }
+                let escaped = name
+                    .replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "\"", with: "&quot;")
+                items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)</li>")
+            }
+        }
+        let fileList = items.isEmpty
+            ? "<li><em>No export files yet — start export on the phone.</em></li>"
+            : items.joined()
+        let html = """
+            <!DOCTYPE html>
+            <html lang="en"><head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Loop Segments — LAN export</title>
+            <style>
+            body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
+            code { font-size: 0.9em; }
+            ul { padding-left: 1.25rem; }
+            </style>
+            </head><body>
+            <h1>Loop Segments — LAN export</h1>
+            <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
+            <p>PC: <code>Sync-FromPhoneLAN.ps1 -Watch</code> (uses <a href="status.json">status.json</a>).</p>
+            <ul>
+            \(fileList)
+            </ul>
+            </body></html>
+            """
+        sendResponse(
+            connection: connection,
+            status: 200,
+            contentType: "text/html; charset=utf-8",
+            body: Data(html.utf8)
+        )
     }
 
     private static func sendStatusJSON(_ connection: NWConnection) {

@@ -6,7 +6,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 | Automated today | Not automated today |
 |-----------------|---------------------|
-| pCloud → phone `3d_op_00.mp4` + Photos; PC pair via `Sync-FromIPhonePhotos.ps1 -Watch` | Apple Devices manual save; live wall-clock sync to PC |
+| pCloud → phone `3d_op_00.mp4`; PC pair via `Sync-FromPhoneLAN.ps1 -Watch` (Wi‑Fi) | Apple Devices manual save; Photos/MTP path deactivated in app |
 | **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Live 60s refresh on PC via USB |
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
@@ -30,7 +30,7 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 .\Copy-FromIncoming.ps1
 ```
 
-**Without Apple Devices:** enable **Save segments to Photos** on the phone, USB, then `windows\Sync-FromIPhonePhotos.ps1 -Watch` → your DLNA folder (see [WORKFLOW.md](WORKFLOW.md)). **Apple Devices** manual save to `F:\f1_media\...` or `LoopSegmentsIncoming` + `Copy-FromIncoming.ps1` still works. `Sync-IphoneSegments.ps1` only if Explorer shows `Loop Segments\Exports`. Export on phone uses **dense fill per minute** (build 93+), not pCloud stream-while-mux. See [ios/README.md](ios/README.md) and [FEASIBILITY.md](FEASIBILITY.md).
+**Live PC sync:** **Serve Exports on Wi‑Fi** on the phone, then `windows\Sync-FromPhoneLAN.ps1 -Watch` (see [ios/README.md](ios/README.md)). **Apple Devices** manual save to `F:\f1_media\...` or `LoopSegmentsIncoming` + `Copy-FromIncoming.ps1` still works. Photos import is off in the app (`PhotosSegmentPublisher.workflowEnabled = false`); legacy `Sync-FromIPhonePhotos.ps1` remains if you re-enable it in source.
 
 ---
 
