@@ -446,6 +446,7 @@ final class SegmentExporter {
         byteRange: TimelineByteRange
     ) -> Bool {
         downloader.isRangeFilled(byteRange)
+            && downloader.isByteRangeFullyOnDisk(byteRange)
             && downloader.hasHeadOnDisk()
             && downloader.hasIndexTailOnDisk()
     }
@@ -475,6 +476,13 @@ final class SegmentExporter {
             try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
         }
 
+        downloader.pauseBackgroundDownload()
+        if !isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
+            try await downloader.ensureFileHeadOnDisk()
+            try await downloader.ensureIndexTailOnDisk()
+            try await downloader.ensureContiguousRange(byteRange)
+        }
+
         var windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
         if windowDense {
             log(
@@ -491,14 +499,11 @@ final class SegmentExporter {
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
             trustedLength: trustedLength,
-            useHybridSparse: !windowDense,
             log: log
         )
-        if let hybridLoader {
-            defer {
-                readAsset.resourceLoader.setDelegate(nil, queue: nil)
-                hybridLoader.cancelOutstandingWork()
-            }
+        defer {
+            readAsset.resourceLoader.setDelegate(nil, queue: nil)
+            hybridLoader.cancelOutstandingWork()
         }
         let tempSourceLabel = windowDense ? "dense local temp" : "sparse temp + pCloud"
         do {
@@ -527,7 +532,7 @@ final class SegmentExporter {
                 )
             } else if writerRejected {
                 log(
-                    "Writer rejected passthrough samples (\(error.localizedDescription)) — likely sparse-hole reads; retrying via pCloud stream"
+                    "Writer rejected passthrough samples (\(error.localizedDescription)) — dense-filling window, then retrying locally"
                 )
             } else if midFileSegment {
                 log(
@@ -543,14 +548,11 @@ final class SegmentExporter {
                     authorizationProvider: authorizationProvider,
                     rangeCache: rangeCache,
                     trustedLength: trustedLength,
-                    useHybridSparse: !windowDense,
                     log: log
                 )
-                if let retryLoader {
-                    defer {
-                        retryAsset.resourceLoader.setDelegate(nil, queue: nil)
-                        retryLoader.cancelOutstandingWork()
-                    }
+                defer {
+                    retryAsset.resourceLoader.setDelegate(nil, queue: nil)
+                    retryLoader.cancelOutstandingWork()
                 }
                 do {
                     try await SegmentPassThroughExporter.exportWindow(
@@ -570,50 +572,47 @@ final class SegmentExporter {
                     try? FileManager.default.removeItem(at: outputURL)
                 }
             }
-            if writerBackpressure || !writerRejected {
-                if writerBackpressure {
-                    log("Dense-filling this minute’s byte window before retrying passthrough…")
-                } else {
-                    log(
-                        "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
-                    )
-                }
-                downloader.pauseBackgroundDownload()
-                try await downloader.ensureContiguousRange(byteRange)
-                windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
-                let (filledAsset, filledLoader) = makePassthroughAsset(
-                    downloader: downloader,
-                    tempURL: tempURL,
-                    remoteURL: remoteURL,
-                    authorizationProvider: authorizationProvider,
-                    rangeCache: rangeCache,
-                    trustedLength: trustedLength,
-                    useHybridSparse: !windowDense,
+            if writerBackpressure {
+                log("Dense-filling this minute’s byte window before retrying passthrough…")
+            } else if !writerRejected {
+                log(
+                    "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
+                )
+            }
+            downloader.pauseBackgroundDownload()
+            try await downloader.ensureFileHeadOnDisk()
+            try await downloader.ensureIndexTailOnDisk()
+            try await downloader.ensureContiguousRange(byteRange)
+            windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
+            let (filledAsset, filledLoader) = makePassthroughAsset(
+                downloader: downloader,
+                tempURL: tempURL,
+                remoteURL: remoteURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                trustedLength: trustedLength,
+                log: log
+            )
+            defer {
+                filledAsset.resourceLoader.setDelegate(nil, queue: nil)
+                filledLoader.cancelOutstandingWork()
+            }
+            do {
+                try await SegmentPassThroughExporter.exportWindow(
+                    asset: filledAsset,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    sourceLabel: windowDense ? "dense local temp (window filled)" : "sparse temp + pCloud (window filled)",
+                    isCancelled: isCancelled,
                     log: log
                 )
-                if let filledLoader {
-                    defer {
-                        filledAsset.resourceLoader.setDelegate(nil, queue: nil)
-                        filledLoader.cancelOutstandingWork()
-                    }
-                }
-                do {
-                    try await SegmentPassThroughExporter.exportWindow(
-                        asset: filledAsset,
-                        videoFormat: videoFormat,
-                        audioFormat: audioFormat,
-                        rangeStart: rangeStart,
-                        rangeDuration: rangeDuration,
-                        outputURL: outputURL,
-                        sourceLabel: windowDense ? "dense local temp (window filled)" : "sparse temp + pCloud (window filled)",
-                        isCancelled: isCancelled,
-                        log: log
-                    )
-                    return
-                } catch {
-                    guard Self.shouldStreamFallback(after: error) else { throw error }
-                    try? FileManager.default.removeItem(at: outputURL)
-                }
+                return
+            } catch {
+                guard Self.shouldStreamFallback(after: error) else { throw error }
+                try? FileManager.default.removeItem(at: outputURL)
             }
             log(
                 "Streaming this 60s window from pCloud (capped reads, not full \(Self.formatBytes(trustedLength)))"
@@ -640,6 +639,8 @@ final class SegmentExporter {
                 log(
                     "pCloud stream failed — downloading \(Self.formatBytes(byteRange.length)) to temp and retrying locally"
                 )
+                try await downloader.ensureFileHeadOnDisk()
+                try await downloader.ensureIndexTailOnDisk()
                 try await downloader.ensureContiguousRange(byteRange)
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
                 let (localAsset, localLoader) = makePassthroughAsset(
@@ -649,14 +650,11 @@ final class SegmentExporter {
                     authorizationProvider: authorizationProvider,
                     rangeCache: rangeCache,
                     trustedLength: trustedLength,
-                    useHybridSparse: !windowDense,
                     log: log
                 )
-                if let localLoader {
-                    defer {
-                        localAsset.resourceLoader.setDelegate(nil, queue: nil)
-                        localLoader.cancelOutstandingWork()
-                    }
+                defer {
+                    localAsset.resourceLoader.setDelegate(nil, queue: nil)
+                    localLoader.cancelOutstandingWork()
                 }
                 try await SegmentPassThroughExporter.exportWindow(
                     asset: localAsset,
@@ -684,6 +682,7 @@ final class SegmentExporter {
         try await downloader.ensureContiguousRange(byteRange)
     }
 
+    /// Sparse temp always uses the hybrid loader — a direct `file://` URL reads holes as zero bytes and breaks passthrough.
     private func makePassthroughAsset(
         downloader: WebDAVTempFileDownload,
         tempURL: URL,
@@ -691,16 +690,8 @@ final class SegmentExporter {
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
         trustedLength: Int64,
-        useHybridSparse: Bool,
         log: @escaping (String) -> Void
-    ) -> (AVURLAsset, WebDAVResourceLoader?) {
-        guard useHybridSparse else {
-            let asset = AVURLAsset(
-                url: tempURL,
-                options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-            )
-            return (asset, nil)
-        }
+    ) -> (AVURLAsset, WebDAVResourceLoader) {
         let loader = WebDAVResourceLoader(
             remoteURL: remoteURL,
             authorizationProvider: authorizationProvider,

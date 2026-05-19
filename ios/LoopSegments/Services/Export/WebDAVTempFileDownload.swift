@@ -241,9 +241,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let needLen = rangeEnd - range.start
 
         lock.lock()
-        let alreadyDense = exportWindowStart == range.start && exportWindowContiguousEnd >= rangeEnd
+        let contiguousMarked = exportWindowStart == range.start && exportWindowContiguousEnd >= rangeEnd
+        let bytesOnDisk = Self.rangeFullyCovered(
+            offset: range.start,
+            length: Int(needLen),
+            spans: filledRanges
+        )
         lock.unlock()
-        if alreadyDense {
+        if contiguousMarked, bytesOnDisk {
             lock.lock()
             exportWindowStart = range.start
             exportWindowContiguousEnd = max(exportWindowContiguousEnd, rangeEnd)
@@ -361,6 +366,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         defer { lock.unlock() }
         guard exportWindowStart == range.start else { return false }
         return exportWindowContiguousEnd >= range.end
+    }
+
+    /// True when every byte in `range` was written to the sparse temp (not just `exportWindowContiguousEnd`).
+    func isByteRangeFullyOnDisk(_ range: TimelineByteRange) -> Bool {
+        lock.lock()
+        let spans = filledRanges
+        lock.unlock()
+        guard range.length > 0, range.length <= Int64.max else { return range.length == 0 }
+        return Self.rangeFullyCovered(offset: range.start, length: Int(range.length), spans: spans)
     }
 
     private func beginTrackingExportWindow(_ range: TimelineByteRange) {
