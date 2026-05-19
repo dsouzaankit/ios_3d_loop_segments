@@ -64,7 +64,8 @@ pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/`
 | Mode | When | Behavior |
 |------|------|----------|
 | **Dense fill** (default) | Source **&lt; ~1.5 GB**, or large file **first minute at seek 0** | Sparse temp once; **one dense pCloud download per minute window**; `file://` passthrough → `3d_op_00.mp4` |
-| **Remote passthrough** | Sparse temp, minute **not** at file byte 0 (preset seek e.g. 10:00, or minute 2+ at seek 0 on huge files) | **Capped pCloud reads** → HTTPS manual → HTTPS export session; if all fail, **dense-fill that minute’s window** and use **local export session** (same pattern as minute 1 at seek 0). Files **≥ ~1.5 GB** try remote paths before downloading the ~1 GB window. |
+| **Remote passthrough** | Sparse temp, minute **not** at file byte 0, source **&lt; ~1.5 GB** or **H.264** | **Capped pCloud reads** → HTTPS → export session; then dense + local if needed. |
+| **Large HEVC mid-file** | **≥ ~1.5 GB**, HEVC, minute not at byte 0 (e.g. seek **30:00**) | **Dense-fill ~1 GB window** → **local export session** (remote passthrough skipped; matches seek‑0 minute‑1 success). |
 | **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
 | **Hybrid (capped)** | Mid-file on **smaller** large sources where custom URL + sparse temp still opens | Head + dense window + MP4 index at EOF; falls back to HTTPS if reader fails |
 

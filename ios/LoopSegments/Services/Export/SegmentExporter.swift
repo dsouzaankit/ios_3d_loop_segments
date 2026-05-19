@@ -203,9 +203,20 @@ final class SegmentExporter {
                     byteRange: byteRange,
                     downloader: downloader
                 )
+                let largeHEVCDenseLocal = midFileRemotePassthrough
+                    && fileSize >= Self.streamOnlyThresholdBytes
+                    && Self.isHEVCFormat(videoFormat)
                 let skipDenseMidFileRemote = midFileRemotePassthrough
                     && fileSize >= Self.streamOnlyThresholdBytes
-                if skipDenseMidFileRemote {
+                    && !Self.isHEVCFormat(videoFormat)
+                if largeHEVCDenseLocal {
+                    logHandler(
+                        "Large HEVC (\(Self.formatBytes(fileSize))) — dense fill + local export for " +
+                            "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
+                            "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) " +
+                            "(~\(Self.formatBytes(byteRange.length)); remote passthrough skipped on multi‑GB HEVC)"
+                    )
+                } else if skipDenseMidFileRemote {
                     logHandler(
                         "Large sparse file (\(Self.formatBytes(fileSize))) — remote passthrough for " +
                             "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
@@ -220,8 +231,7 @@ final class SegmentExporter {
                             "(sparse hybrid reader skipped)"
                     )
                 }
-                if skipDenseMidFileRemote {
-                } else {
+                if !skipDenseMidFileRemote {
                     logHandler(
                         "Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…"
                     )
@@ -800,6 +810,26 @@ final class SegmentExporter {
         log: @escaping (String) -> Void
     ) async throws {
         let fileLength = trustedLength > 0 ? trustedLength : 0
+        if fileLength >= Self.streamOnlyThresholdBytes, Self.isHEVCFormat(videoFormat) {
+            log(
+                "Large HEVC mid-file — dense window + local export session " +
+                    "(remote reader/export session not used on \(Self.formatBytes(fileLength)) sources)"
+            )
+            try await exportMidFileSegmentViaDenseLocalTemp(
+                downloader: downloader,
+                tempURL: tempURL,
+                byteRange: byteRange,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                videoFormat: videoFormat,
+                audioFormat: audioFormat,
+                isCancelled: isCancelled,
+                priorError: nil,
+                log: log
+            )
+            return
+        }
         var lastError: Error?
         do {
             log(
@@ -1176,6 +1206,10 @@ final class SegmentExporter {
     }
 
     private static let midFilePrefetchThresholdBytes: Int64 = 32 * 1024 * 1024
+
+    private static func isHEVCFormat(_ format: CMFormatDescription) -> Bool {
+        CodecSupport.isHEVCVideo(CMFormatDescriptionGetMediaSubType(format))
+    }
     /// At seek 0, dense-fill bytes after the minute window so `file://` passthrough does not read zero-filled mdat.
     private static let seekZeroDenseEntireFileMaxBytes: Int64 = 1024 * 1024 * 1024
     private static let seekZeroDenseTailMaxBytes: Int64 = 256 * 1024 * 1024
