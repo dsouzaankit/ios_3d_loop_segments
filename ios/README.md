@@ -40,7 +40,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + AAC (AV1 sources are rejected at probe)
-- 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via **`Sync-FromPhoneLAN.ps1 -Watch`** (build 103+) or USB. **Dense fill** per minute from pCloud (not full-file temp) unless disk is very low.
+- 60s segments; phone keeps **one** file (`3d_op_00.mp4`); PC DLNA pair via **`Sync-FromPhoneLAN.ps1 -Watch`** (build 103+) or USB. **Dense fill** per minute is the default (sparse temp shell, not a full 17 GB copy); see transport table below for large-file exceptions.
 - Real-time read pacing (like ffmpeg `-re`)
 - Runs until end of file or **Stop**
 
@@ -63,8 +63,14 @@ pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/`
 
 | Mode | When | Behavior |
 |------|------|----------|
-| **Dense fill** (default) | Enough free disk | Sparse temp shell once; **one dense pCloud download per minute**; passthrough → `3d_op_00.mp4` |
-| **pCloud stream** | Very low free disk | Fallback only — see `export_latest.txt` |
+| **Dense fill** (default) | Source **&lt; ~1.5 GB**, or large file **first minute at seek 0** | Sparse temp once; **one dense pCloud download per minute window**; `file://` passthrough → `3d_op_00.mp4` |
+| **HTTPS passthrough** | Source **≥ ~1.5 GB**, sparse temp, minute **not** at file byte 0 (minute 2+ at seek 0, or preset seek e.g. 10:00) | **No dense window download**; manual `AVAssetReader` on **HTTPS WebDAV** for that 60s (`AVAssetExportSession` on remote HEVC often fails with -11838). Avoids hybrid reader failures on multi‑GB sparse files. |
+| **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
+| **Hybrid (capped)** | Mid-file on **smaller** large sources where custom URL + sparse temp still opens | Head + dense window + MP4 index at EOF; falls back to HTTPS if reader fails |
+
+Export needs enough free space for the sparse shell plus one minute’s dense window (or HTTPS range reads). Check `export_latest.txt` for which path ran.
+
+**Not** a full-file download to the phone and **not** the old ffmpeg stream-export path — still one ~60s segment at a time, still passthrough on device, still LAN/USB to PC.
 
 ## Photos library (deactivated in app)
 

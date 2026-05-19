@@ -92,7 +92,7 @@ enum SegmentPassThroughExporter {
         var skippedNonKeyframe = 0
         var inRangeVideoSamples = 0
         var lastInRangePTS = rangeStart
-        let relaxKeyframeGating = label.contains("sparse temp + pcloud")
+        let relaxKeyframeGating = label.lowercased().contains("pcloud")
         let maxKeyframeScan = relaxKeyframeGating ? 2400 : 480
         let earliestStart = relaxKeyframeGating
             ? CMTimeSubtract(
