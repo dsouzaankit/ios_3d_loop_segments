@@ -64,7 +64,7 @@ pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/`
 | Mode | When | Behavior |
 |------|------|----------|
 | **Dense fill** (default) | Source **&lt; ~1.5 GB**, or large file **first minute at seek 0** | Sparse temp once; **one dense pCloud download per minute window**; `file://` passthrough → `3d_op_00.mp4` |
-| **HTTPS passthrough** | Source **≥ ~1.5 GB**, sparse temp, minute **not** at file byte 0 (minute 2+ at seek 0, or preset seek e.g. 10:00) | **No dense window download**; manual `AVAssetReader` on **HTTPS WebDAV** for that 60s (`AVAssetExportSession` on remote HEVC often fails with -11838). Avoids hybrid reader failures on multi‑GB sparse files. |
+| **Remote passthrough** | Sparse temp, minute **not** at file byte 0 (preset seek e.g. 10:00, or minute 2+ at seek 0 on huge files) | Skips hybrid (sparse `file://` often fails). **Capped `loopsegments://` reads from pCloud** for head + minute window + index; then HTTPS manual; then export session. Files **≥ ~1.5 GB** skip the dense window download; smaller files may still dense-fill first. |
 | **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
 | **Hybrid (capped)** | Mid-file on **smaller** large sources where custom URL + sparse temp still opens | Head + dense window + MP4 index at EOF; falls back to HTTPS if reader fails |
 

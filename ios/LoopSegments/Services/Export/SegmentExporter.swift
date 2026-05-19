@@ -199,18 +199,28 @@ final class SegmentExporter {
                     seconds: windowEndSeconds - windowStartSeconds,
                     preferredTimescale: 600
                 )
-                let httpsOnlyLargeSparse = prefersHTTPSPassthroughForSparseLargeFile(
-                    fileLength: fileSize,
+                let midFileRemotePassthrough = shouldUseRemotePassthroughForMidFile(
                     byteRange: byteRange,
                     downloader: downloader
                 )
-                if httpsOnlyLargeSparse {
+                let skipDenseMidFileRemote = midFileRemotePassthrough
+                    && fileSize >= Self.streamOnlyThresholdBytes
+                if skipDenseMidFileRemote {
                     logHandler(
-                        "Large sparse file (\(Self.formatBytes(fileSize))) — HTTPS passthrough for " +
+                        "Large sparse file (\(Self.formatBytes(fileSize))) — remote passthrough for " +
                             "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
                             "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) " +
                             "(pCloud range reads for this 60s; skipping ~\(Self.formatBytes(byteRange.length)) dense download)"
                     )
+                } else if midFileRemotePassthrough {
+                    logHandler(
+                        "Mid-file segment — remote passthrough from pCloud for " +
+                            "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
+                            "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) " +
+                            "(sparse hybrid reader skipped)"
+                    )
+                }
+                if skipDenseMidFileRemote {
                 } else {
                     logHandler(
                         "Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…"
@@ -219,8 +229,8 @@ final class SegmentExporter {
                     try await downloader.ensureIndexTailOnDisk()
                     try await downloader.ensureContiguousRange(byteRange)
                 }
-                if httpsOnlyLargeSparse {
-                    // export session reads ranges from pCloud; no dense window on sparse temp
+                if skipDenseMidFileRemote {
+                    // remote passthrough reads ranges from pCloud; no dense window on sparse temp
                 } else if downloader.isRangeFilled(byteRange),
                           downloader.hasHeadOnDisk(),
                           downloader.hasIndexTailOnDisk() {
@@ -408,20 +418,18 @@ final class SegmentExporter {
         log: @escaping (String) -> Void
     ) async throws {
         let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
-        if prefersHTTPSPassthroughForSparseLargeFile(
-            fileLength: fileLength,
-            byteRange: byteRange,
-            downloader: downloader
-        ) {
-            try await exportLargeSparseSegmentOverHTTPS(
+        if shouldUseRemotePassthroughForMidFile(byteRange: byteRange, downloader: downloader) {
+            try await exportMidFileSegmentOverRemote(
                 remoteURL: remoteURL,
                 authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                trustedLength: fileLength,
+                byteRange: byteRange,
                 videoFormat: videoFormat,
                 audioFormat: audioFormat,
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
                 outputURL: outputURL,
-                fileLength: fileLength,
                 isCancelled: isCancelled,
                 log: log
             )
@@ -577,30 +585,21 @@ final class SegmentExporter {
                 let reason = Self.isUnsupportedAssetURLError(error)
                     ? "custom asset URL rejected"
                     : "hybrid reader could not open"
-                let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
-                if fileLength >= Self.streamOnlyThresholdBytes {
-                    log("\(reason.capitalized) — HTTPS passthrough from pCloud")
-                    downloader.closeWriteHandleForPassthroughRead(log: log)
-                    try await exportLargeSparseSegmentOverHTTPS(
-                        remoteURL: remoteURL,
-                        authorizationProvider: authorizationProvider,
-                        videoFormat: videoFormat,
-                        audioFormat: audioFormat,
-                        rangeStart: rangeStart,
-                        rangeDuration: rangeDuration,
-                        outputURL: outputURL,
-                        fileLength: fileLength,
-                        isCancelled: isCancelled,
-                        log: log
-                    )
-                    return
-                }
-                log("\(reason.capitalized) — using HTTPS passthrough from pCloud")
+                log("\(reason.capitalized) — remote passthrough from pCloud")
                 downloader.closeWriteHandleForPassthroughRead(log: log)
-                try await runPassthrough(
-                    sourceLabel: "\(tempSourceLabel) (HTTPS range)",
-                    useOnDiskFileURL: false,
-                    forceHTTPSRangeReads: true
+                try await exportMidFileSegmentOverRemote(
+                    remoteURL: remoteURL,
+                    authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
+                    trustedLength: trustedLength > 0 ? trustedLength : downloader.totalLength,
+                    byteRange: byteRange,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    isCancelled: isCancelled,
+                    log: log
                 )
                 return
             }
@@ -770,38 +769,71 @@ final class SegmentExporter {
         return downloader.isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: length))
     }
 
-    /// Multi‑GB sparse temps: hybrid/`file://` readers fail after minute 1 at seek 0; read this minute from pCloud over HTTPS.
-    private func prefersHTTPSPassthroughForSparseLargeFile(
-        fileLength: Int64,
+    /// Mid-file on a sparse temp: hybrid/`file://` often fails (Operation Stopped); read this minute from pCloud.
+    private func shouldUseRemotePassthroughForMidFile(
         byteRange: TimelineByteRange,
         downloader: WebDAVTempFileDownload
     ) -> Bool {
-        guard fileLength >= Self.streamOnlyThresholdBytes else { return false }
-        if isFullSourceOnDisk(downloader: downloader) { return false }
-        if byteRange.start == 0 { return false }
-        return true
+        guard byteRange.start > 0 else { return false }
+        return !isFullSourceOnDisk(downloader: downloader)
     }
 
-    /// Remote HEVC: manual `AVAssetReader` on HTTPS WebDAV first; `AVAssetExportSession` often returns -11838 on large sources.
-    private func exportLargeSparseSegmentOverHTTPS(
+    /// Mid-file export: capped `loopsegments://` reads from pCloud, then HTTPS manual, then export session.
+    private func exportMidFileSegmentOverRemote(
         remoteURL: URL,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        trustedLength: Int64,
+        byteRange: TimelineByteRange,
         videoFormat: CMFormatDescription,
         audioFormat: CMFormatDescription?,
         rangeStart: CMTime,
         rangeDuration: CMTime,
         outputURL: URL,
-        fileLength: Int64,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
     ) async throws {
+        let fileLength = trustedLength > 0 ? trustedLength : 0
+        var lastError: Error?
+        do {
+            log(
+                "Mid-file passthrough — capped pCloud reads (head, window \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)), index tail)"
+            )
+            let (asset, loader) = makeRemoteCappedPassthroughAsset(
+                remoteURL: remoteURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                fileLength: fileLength,
+                byteRange: byteRange,
+                log: log
+            )
+            defer {
+                asset.resourceLoader.setDelegate(nil, queue: nil)
+                loader.cancelOutstandingWork()
+            }
+            _ = try await asset.loadTracks(withMediaType: .video)
+            try await SegmentPassThroughExporter.exportWindow(
+                asset: asset,
+                videoFormat: videoFormat,
+                audioFormat: audioFormat,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "capped pCloud range",
+                isCancelled: isCancelled,
+                log: log
+            )
+            return
+        } catch {
+            lastError = error
+            guard Self.shouldTryExportSessionAfterHTTPSManualFailure(error) else { throw error }
+            log(
+                "Capped pCloud reader failed (\(error.localizedDescription)) — trying HTTPS URL passthrough"
+            )
+        }
         let httpsAsset = makeHTTPSPassthroughAsset(
             remoteURL: remoteURL,
             authorizationProvider: authorizationProvider
-        )
-        log(
-            "Large sparse segment on \(Self.formatBytes(fileLength)) — manual HTTPS passthrough " +
-                "(pCloud byte ranges; sparse temp not used for samples)"
         )
         do {
             try await SegmentPassThroughExporter.exportWindow(
@@ -817,19 +849,60 @@ final class SegmentExporter {
             )
             return
         } catch {
+            lastError = error
             guard Self.shouldTryExportSessionAfterHTTPSManualFailure(error) else { throw error }
             log(
                 "HTTPS manual passthrough failed (\(error.localizedDescription)) — trying AVAssetExportSession"
             )
         }
-        try await SegmentPassThroughExporter.exportWindowViaExportSession(
-            asset: httpsAsset,
-            rangeStart: rangeStart,
-            rangeDuration: rangeDuration,
-            outputURL: outputURL,
-            sourceLabel: "HTTPS export session",
+        do {
+            try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                asset: httpsAsset,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "HTTPS export session",
+                log: log
+            )
+        } catch {
+            if let lastError {
+                log(
+                    "All remote passthrough paths failed (last: \(lastError.localizedDescription))"
+                )
+            }
+            throw error
+        }
+    }
+
+    private func makeRemoteCappedPassthroughAsset(
+        remoteURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        fileLength: Int64,
+        byteRange: TimelineByteRange,
+        log: @escaping (String) -> Void
+    ) -> (AVURLAsset, WebDAVResourceLoader) {
+        let readPolicy = StreamReadPolicy.forExportWindow(
+            fileLength: fileLength,
+            window: byteRange,
+            indexTailBytes: WebDAVTempFileDownload.indexTailFetchBytes(totalLength: fileLength)
+        )
+        let loader = WebDAVResourceLoader(
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            trustedContentLength: fileLength > 0 ? fileLength : nil,
+            readPolicy: readPolicy,
+            localTempURL: nil,
+            readLocalBytes: nil,
             log: log
         )
+        let asset = AVURLAsset(
+            url: loader.customAssetURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+        return (asset, loader)
     }
 
     private static func shouldTryExportSessionAfterHTTPSManualFailure(_ error: Error) -> Bool {
