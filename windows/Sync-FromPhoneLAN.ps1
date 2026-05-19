@@ -216,14 +216,28 @@ function Install-DLANSegmentAtomic {
         [string] $SourcePath,
         [string] $DestPath
     )
+    $srcFull = [System.IO.Path]::GetFullPath($SourcePath)
+    $dstFull = [System.IO.Path]::GetFullPath($DestPath)
+    if ($srcFull -eq $dstFull) {
+        return
+    }
     $parent = Split-Path -Parent $DestPath
     $leaf = Split-Path -Leaf $DestPath
     $tempPath = Join-Path $parent ".$leaf.part"
-    if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
-        Remove-Item -LiteralPath $tempPath -Force
+    foreach ($path in @($tempPath, $DestPath)) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -Force
+        }
     }
     Copy-Item -LiteralPath $SourcePath -Destination $tempPath -Force
     Move-Item -LiteralPath $tempPath -Destination $DestPath -Force
+}
+
+function Remove-LANStagingFile {
+    param([string] $StagingFile)
+    if (Test-Path -LiteralPath $StagingFile -PathType Leaf) {
+        Remove-Item -LiteralPath $StagingFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-OlderDLNASlot {
@@ -301,6 +315,8 @@ function Invoke-LANSegmentSync {
         New-Item -ItemType Directory -Path $DestinationRoot -Force | Out-Null
     }
 
+    # PS 5.1 -OutFile fails if the path already exists (common after a prior skip/install).
+    Remove-LANStagingFile -StagingFile $stagingFile
     $downloadUrl = "$BaseUrl/$RemoteSegmentName"
     $response = Invoke-WebRequest -Uri $downloadUrl -OutFile $stagingFile -TimeoutSec 600 -UseBasicParsing -PassThru
 
@@ -332,6 +348,7 @@ function Invoke-LANSegmentSync {
             Write-Host "$destName already has this segment (SHA256 $checksum) — skipped."
             Register-LANSyncDefer -StateFile $stateFile -DestName $destName -Reason 'dest_unchanged' `
                 -DeferRetrySeconds $DeferRetrySeconds -Bytes $local.Length -Checksum $checksum
+            Remove-LANStagingFile -StagingFile $stagingFile
             return $false
         }
     }
@@ -344,12 +361,14 @@ function Invoke-LANSegmentSync {
             )
             Register-LANSyncDefer -StateFile $stateFile -DestName $destName -Reason 'peer_has_segment' `
                 -DeferRetrySeconds $DeferRetrySeconds -Bytes $local.Length -Checksum $checksum
+            Remove-LANStagingFile -StagingFile $stagingFile
             return $false
         }
     }
 
     Install-DLANSegmentAtomic -SourcePath $stagingFile -DestPath $destPath
     Write-LANSyncState -StateFile $stateFile -Bytes $local.Length -Checksum $checksum -DestName $destName
+    Remove-LANStagingFile -StagingFile $stagingFile
 
     Write-Host "Copied -> $destPath ($($local.Length) bytes, SHA256 $checksum)"
     return $true
