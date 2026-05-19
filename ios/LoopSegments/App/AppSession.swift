@@ -152,11 +152,11 @@ final class AppSession: ObservableObject {
             let resumeMs: Int64 = result.reachedEnd ? 0 : result.lastMediaTimeMs
             ResumeStore.shared.saveSeekMs(resumeMs, for: item)
             ResumeStore.shared.finishExport(for: item)
-        } catch {
+        } catch let error {
             if userRequestedExportCancel {
                 ResumeStore.shared.finishExport(for: item)
             }
-            throw
+            throw error
         }
     }
 
