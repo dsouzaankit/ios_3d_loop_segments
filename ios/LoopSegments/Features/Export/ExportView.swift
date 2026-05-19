@@ -16,6 +16,7 @@ struct ExportView: View {
     @State private var exportTask: Task<Void, Never>?
     @State private var showClearMediaConfirm = false
     @State private var showClearLogsConfirm = false
+    @State private var showAutoLockHelp = false
 
     var body: some View {
         Form {
@@ -104,10 +105,13 @@ struct ExportView: View {
                 Text("Keep Loop Segments open on this screen. The app keeps the display on while export runs; leaving the app or locking the phone can stop export.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Button("Open Auto-Lock in Settings") {
-                    ExportAutoLockCoordinator.openAutoLockSettings()
+                Button("Open Display in Settings") {
+                    Task {
+                        _ = await ExportAutoLockCoordinator.openAutoLockSettings()
+                        showAutoLockHelp = true
+                    }
                 }
-                Text("Optional: set Auto-Lock to Never only if you must switch apps or lock the phone during a long run. Not required if you stay here.")
+                Text("Optional: Auto-Lock → Never only if you must leave the app during a long run. Path: \(ExportAutoLockCoordinator.manualPath).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -217,6 +221,14 @@ struct ExportView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Removes export and search log files from Exports. loop_segments_ok.txt is kept.")
+        }
+        .alert("Auto-Lock", isPresented: $showAutoLockHelp) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(
+                "If Settings did not open to Auto-Lock, go to \(ExportAutoLockCoordinator.manualPath). " +
+                    "On recent iOS versions Apple often only opens the Settings app — the path above is required."
+            )
         }
     }
 

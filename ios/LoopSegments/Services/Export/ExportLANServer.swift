@@ -188,9 +188,41 @@ enum ExportLANServer {
             sendOptions(connection: connection, done: done)
         case "PROPFIND":
             sendPropfind(path: path, requestHeaders: requestHeaders, connection: connection, done: done)
+        case "LOCK":
+            sendLock(connection: connection, done: done)
+        case "UNLOCK":
+            sendNoContent(connection: connection, done: done)
         default:
-            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Read-only: GET, HEAD, OPTIONS, PROPFIND".utf8), done: done)
+            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Read-only: GET, HEAD, OPTIONS, PROPFIND, LOCK, UNLOCK".utf8), done: done)
         }
+    }
+
+    private static func requestBaseURL(from requestHeaders: String) -> String {
+        for line in requestHeaders.split(separator: "\r\n", omittingEmptySubsequences: true) {
+            guard line.lowercased().hasPrefix("host:") else { continue }
+            let host = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: true)
+            guard host.count == 2 else { continue }
+            let hostValue = String(host[1]).trimmingCharacters(in: .whitespaces)
+            guard !hostValue.isEmpty else { continue }
+            return "http://\(hostValue)"
+        }
+        lock.lock()
+        let advertised = advertisedBaseURL?.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        lock.unlock()
+        if let advertised, !advertised.isEmpty {
+            return advertised
+        }
+        return "http://127.0.0.1:\(defaultPort)"
+    }
+
+    private static func absoluteDAVHref(path: String, baseURL: String) -> String {
+        let p = normalizedDAVPath(path)
+        var base = baseURL
+        if base.hasSuffix("/") { base.removeLast() }
+        if p == "/" { return "\(base)/" }
+        let encoded = p.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? p
+        let suffix = encoded.hasPrefix("/") ? encoded : "/\(encoded)"
+        return "\(base)\(suffix)"
     }
 
     private static func parseRequestLine(_ line: String) -> (String, String)? {
@@ -354,19 +386,13 @@ enum ExportLANServer {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    private static func davHref(forPath path: String) -> String {
-        let p = normalizedDAVPath(path)
-        if p == "/" { return "/" }
-        let encoded = p.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? p
-        return encoded.hasPrefix("/") ? encoded : "/\(encoded)"
-    }
-
     private static func propfindEntryXML(
         href: String,
         isCollection: Bool,
         displayName: String,
         size: Int64?,
-        modified: Date?
+        modified: Date?,
+        contentType: String? = nil
     ) -> String {
         var prop = ""
         if isCollection {
@@ -376,12 +402,13 @@ enum ExportLANServer {
             if let size, size > 0 {
                 prop += "<D:getcontentlength>\(size)</D:getcontentlength>"
             }
+            if let contentType, !contentType.isEmpty {
+                prop += "<D:getcontenttype>\(xmlEscape(contentType))</D:getcontenttype>"
+            }
         }
         prop += "<D:displayname>\(xmlEscape(displayName))</D:displayname>"
         if let modified {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime]
-            prop += "<D:getlastmodified>\(xmlEscape(formatter.string(from: modified)))</D:getlastmodified>"
+            prop += "<D:getlastmodified>\(xmlEscape(httpDate(modified)))</D:getlastmodified>"
         }
         return """
             <D:response>
@@ -394,16 +421,64 @@ enum ExportLANServer {
             """
     }
 
+    private static func httpDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        return formatter.string(from: date)
+    }
+
     private static func sendOptions(connection: NWConnection, done: @escaping () -> Void) {
         let header = [
             "HTTP/1.1 200 OK",
             "DAV: 1, 2",
             "MS-Author-Via: DAV",
-            "Allow: GET, HEAD, OPTIONS, PROPFIND",
-            "Public: GET, HEAD, OPTIONS, PROPFIND",
+            "Allow: GET, HEAD, OPTIONS, PROPFIND, LOCK, UNLOCK",
+            "Public: GET, HEAD, OPTIONS, PROPFIND, LOCK, UNLOCK",
             "Content-Length: 0",
             "Connection: close",
         ].joined(separator: "\r\n") + "\r\n\r\n"
+        connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in
+            connection.cancel()
+            done()
+        })
+    }
+
+    private static func sendLock(connection: NWConnection, done: @escaping () -> Void) {
+        let token = "opaquelocktoken:loopsegments"
+        let bodyText = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <D:prop xmlns:D="DAV:">
+            <D:lockdiscovery>
+            <D:activelock>
+            <D:locktype><D:write/></D:locktype>
+            <D:lockscope><D:exclusive/></D:lockscope>
+            <D:depth>Infinity</D:depth>
+            <D:timeout>Second-3600</D:timeout>
+            </D:activelock>
+            </D:lockdiscovery>
+            </D:prop>
+            """
+        let body = Data(bodyText.utf8)
+        let header = [
+            "HTTP/1.1 200 OK",
+            "Content-Type: application/xml; charset=utf-8",
+            "Content-Length: \(body.count)",
+            "Lock-Token: <\(token)>",
+            "DAV: 1, 2",
+            "Connection: close",
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        var data = Data(header.utf8)
+        data.append(body)
+        connection.send(content: data, completion: .contentProcessed { _ in
+            connection.cancel()
+            done()
+        })
+    }
+
+    private static func sendNoContent(connection: NWConnection, done: @escaping () -> Void) {
+        let header = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in
             connection.cancel()
             done()
@@ -418,6 +493,7 @@ enum ExportLANServer {
     ) {
         let davPath = normalizedDAVPath(path)
         let depth = parseDepth(requestHeaders: requestHeaders)
+        let baseURL = requestBaseURL(from: requestHeaders)
         var responses: [String] = []
 
         if let name = fileName(fromDAVPath: davPath) {
@@ -431,17 +507,18 @@ enum ExportLANServer {
             let modified = attrs?[.modificationDate] as? Date
             responses.append(
                 propfindEntryXML(
-                    href: davHref(forPath: davPath),
+                    href: absoluteDAVHref(path: davPath, baseURL: baseURL),
                     isCollection: false,
                     displayName: name,
                     size: size,
-                    modified: modified
+                    modified: modified,
+                    contentType: mimeType(for: fileURL)
                 )
             )
         } else {
             responses.append(
                 propfindEntryXML(
-                    href: "/",
+                    href: absoluteDAVHref(path: "/", baseURL: baseURL),
                     isCollection: true,
                     displayName: "Exports",
                     size: nil,
@@ -452,11 +529,12 @@ enum ExportLANServer {
                 for entry in listExportFiles() {
                     responses.append(
                         propfindEntryXML(
-                            href: davHref(forPath: "/\(entry.name)"),
+                            href: absoluteDAVHref(path: "/\(entry.name)", baseURL: baseURL),
                             isCollection: false,
                             displayName: entry.name,
                             size: entry.size,
-                            modified: entry.modified
+                            modified: entry.modified,
+                            contentType: mimeType(for: entry.url)
                         )
                     )
                 }

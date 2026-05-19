@@ -1,5 +1,13 @@
 https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
 
+# read-only webdav
+cd P:\all_scripts\ios_3d_loop_segments\windows
+# onetime pwsh admin
+Start-Process pwsh -Verb RunAs -ArgumentList "-NoExit", "-Command", "Set-Location '$PWD'"
+.\Set-LoopSegmentsLANHost.ps1 10.0.100.10   # your phone IP
+.\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient   # once, admin, if mapping fails
+.\Map-LoopSegmentsWebDAV.ps1
+
 cd P:\all_scripts\ios_3d_loop_segments\windows
 .\Set-LoopSegmentsDestination.ps1 'D:\ios\loop_segs_out'
 .\Set-LoopSegmentsLANHost.ps1 10.0.100.10
@@ -67,8 +75,9 @@ pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/`
 
 ```powershell
 .\Set-LoopSegmentsLANHost.ps1 192.168.1.42
-.\Map-LoopSegmentsWebDAV.ps1              # maps L: to http://<phone>:8765/
-.\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient   # once per PC if HTTP mapping fails
+.\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient   # once per PC (admin): WebClient + AuthForwardServerList
+.\Map-LoopSegmentsWebDAV.ps1 -TestOnly             # HTTP + PROPFIND check before mapping
+.\Map-LoopSegmentsWebDAV.ps1                       # maps L: to http://<phone>:8765/
 ```
 
 Read-only; phone must stay on the LAN with **Serve Exports** enabled. For hands-off DLNA copy, keep using **`Sync-FromPhoneLAN.ps1 -Watch`**.
