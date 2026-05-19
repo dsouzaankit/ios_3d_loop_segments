@@ -218,7 +218,7 @@ enum SegmentPassThroughExporter {
                 writerContext = ctx
                 startedWriter = true
                 if skippedNonKeyframe > 0 {
-                    log("Started on frame \(skippedNonKeyframe + 1) in window (HEVC sync scan)")
+                    log("Started on frame \(skippedNonKeyframe + 1) in window (keyframe scan)")
                 }
                 log("Segment timestamps reset to 0 (source PTS \(formatMediaTime(pts)))")
             }

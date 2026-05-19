@@ -509,30 +509,32 @@ final class SegmentExporter {
             if useOnDiskFileURL,
                byteRange.start == 0,
                Self.isRetriablePassthroughWriterFailure(error) {
-                if isFullSourceOnDisk(downloader: downloader) {
+                if !isFullSourceOnDisk(downloader: downloader) {
                     log(
-                        "On-disk passthrough failed (\(error.localizedDescription)) — retrying with capped hybrid reader"
+                        "On-disk passthrough failed (\(error.localizedDescription)) — dense-filling remainder after window"
                     )
-                    try await Task.sleep(nanoseconds: 400_000_000)
-                    downloader.closeWriteHandleForPassthroughRead(log: log)
+                    try await ensureSeekZeroRemainderOnDiskIfBeneficial(
+                        downloader: downloader,
+                        byteRange: byteRange,
+                        log: log
+                    )
+                }
+                downloader.closeWriteHandleForPassthroughRead(log: log)
+                if isFullSourceOnDisk(downloader: downloader) {
+                    log("Retrying on-disk passthrough (full source file on disk)")
                     try await runPassthrough(
-                        sourceLabel: "\(tempSourceLabel) (hybrid after on-disk writer error)",
-                        useOnDiskFileURL: false
+                        sourceLabel: "\(tempSourceLabel) (full file on disk)",
+                        useOnDiskFileURL: true
                     )
                     return
                 }
                 log(
-                    "On-disk passthrough failed (\(error.localizedDescription)) — dense-filling file tail, then retrying on-disk"
+                    "On-disk passthrough failed (\(error.localizedDescription)) — sparse gap after window; using capped hybrid reader"
                 )
-                try await ensureSeekZeroRemainderOnDiskIfBeneficial(
-                    downloader: downloader,
-                    byteRange: byteRange,
-                    log: log
-                )
-                downloader.closeWriteHandleForPassthroughRead(log: log)
+                try await Task.sleep(nanoseconds: 400_000_000)
                 try await runPassthrough(
-                    sourceLabel: "\(tempSourceLabel) (full file on disk)",
-                    useOnDiskFileURL: true
+                    sourceLabel: "\(tempSourceLabel) (hybrid after on-disk writer error)",
+                    useOnDiskFileURL: false
                 )
                 return
             }
@@ -805,8 +807,8 @@ final class SegmentExporter {
 
     private static let midFilePrefetchThresholdBytes: Int64 = 32 * 1024 * 1024
     /// At seek 0, dense-fill bytes after the minute window so `file://` passthrough does not read zero-filled mdat.
-    private static let seekZeroDenseEntireFileMaxBytes: Int64 = 200 * 1024 * 1024
-    private static let seekZeroDenseTailMaxBytes: Int64 = 100 * 1024 * 1024
+    private static let seekZeroDenseEntireFileMaxBytes: Int64 = 1024 * 1024 * 1024
+    private static let seekZeroDenseTailMaxBytes: Int64 = 256 * 1024 * 1024
 
     private static func shouldStreamFallback(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {
