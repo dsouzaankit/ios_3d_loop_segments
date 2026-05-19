@@ -224,7 +224,7 @@ final class SegmentExporter {
                     && !Self.isHEVCFormat(videoFormat)
                 if largeHEVCDenseLocal {
                     logHandler(
-                        "Large HEVC (\(Self.formatBytes(fileSize))) — dense fill + local export for " +
+                        "Large HEVC (\(Self.formatBytes(fileSize))) — dense fill + capped hybrid for " +
                             "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
                             "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) " +
                             "(~\(Self.formatBytes(byteRange.length)); remote passthrough skipped on multi‑GB HEVC)"
@@ -850,8 +850,8 @@ final class SegmentExporter {
         let fileLength = trustedLength > 0 ? trustedLength : 0
         if fileLength >= Self.streamOnlyThresholdBytes, Self.isHEVCFormat(videoFormat) {
             log(
-                "Large HEVC mid-file — dense window + local export session " +
-                    "(remote reader/export session not used on \(Self.formatBytes(fileLength)) sources)"
+                "Large HEVC mid-file — dense window + capped hybrid export " +
+                    "(sparse file:// skipped on \(Self.formatBytes(fileLength)) sources)"
             )
             try await exportMidFileSegmentViaDenseLocalTemp(
                 downloader: downloader,
@@ -1018,27 +1018,76 @@ final class SegmentExporter {
             "Dense window on disk — \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)) (head + index present)"
         )
         downloader.closeWriteHandleForPassthroughRead(log: log)
-        let fileAsset = AVURLAsset(
-            url: tempURL,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-        )
-        do {
-            try await SegmentPassThroughExporter.exportWindowViaExportSession(
-                asset: fileAsset,
-                rangeStart: rangeStart,
-                rangeDuration: rangeDuration,
-                outputURL: outputURL,
-                sourceLabel: "dense local temp (export session)",
-                log: log
-            )
-            return
-        } catch {
-            log(
-                "Local export session failed (\(error.localizedDescription)) — capped hybrid (dense window + pCloud)"
-            )
-        }
         let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
-        let (hybridAsset, hybridLoader) = makeCappedPassthroughAsset(
+        var lastError: Error? = priorError
+
+        log("Trying capped hybrid — dense window on disk + pCloud for head/index")
+        if try await tryExportViaCappedAsset(
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            fileLength: fileLength,
+            byteRange: byteRange,
+            downloader: downloader,
+            videoFormat: videoFormat,
+            audioFormat: audioFormat,
+            rangeStart: rangeStart,
+            rangeDuration: rangeDuration,
+            outputURL: outputURL,
+            sourceLabel: "dense window hybrid (pCloud)",
+            isCancelled: isCancelled,
+            log: log
+        ) {
+            return
+        }
+
+        log("Capped hybrid failed — trying remote-only capped pCloud reads")
+        if try await tryExportViaCappedAsset(
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            fileLength: fileLength,
+            byteRange: byteRange,
+            downloader: nil,
+            videoFormat: videoFormat,
+            audioFormat: audioFormat,
+            rangeStart: rangeStart,
+            rangeDuration: rangeDuration,
+            outputURL: outputURL,
+            sourceLabel: "capped pCloud range",
+            isCancelled: isCancelled,
+            log: log
+        ) {
+            return
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        throw SegmentExporterError.midFileTempUnreadable(
+            mediaTime: formatMediaTimeForLog(rangeStart),
+            underlying: "capped hybrid and remote passthrough failed after dense fill"
+        )
+    }
+
+    @discardableResult
+    private func tryExportViaCappedAsset(
+        remoteURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        fileLength: Int64,
+        byteRange: TimelineByteRange,
+        downloader: WebDAVTempFileDownload?,
+        videoFormat: CMFormatDescription,
+        audioFormat: CMFormatDescription?,
+        rangeStart: CMTime,
+        rangeDuration: CMTime,
+        outputURL: URL,
+        sourceLabel: String,
+        isCancelled: @escaping () -> Bool,
+        log: @escaping (String) -> Void
+    ) async throws -> Bool {
+        let (asset, loader) = makeCappedPassthroughAsset(
             remoteURL: remoteURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
@@ -1048,28 +1097,42 @@ final class SegmentExporter {
             log: log
         )
         defer {
-            hybridAsset.resourceLoader.setDelegate(nil, queue: nil)
-            hybridLoader.cancelOutstandingWork()
+            asset.resourceLoader.setDelegate(nil, queue: nil)
+            loader.cancelOutstandingWork()
         }
+        _ = try await asset.loadTracks(withMediaType: .video)
         do {
-            _ = try await hybridAsset.loadTracks(withMediaType: .video)
             try await SegmentPassThroughExporter.exportWindow(
-                asset: hybridAsset,
+                asset: asset,
                 videoFormat: videoFormat,
                 audioFormat: audioFormat,
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
                 outputURL: outputURL,
-                sourceLabel: "dense window hybrid (pCloud)",
+                sourceLabel: sourceLabel,
                 isCancelled: isCancelled,
                 log: log
             )
-            return
+            return true
         } catch {
-            if let priorError {
-                throw priorError
+            guard Self.shouldTryExportSessionAfterHTTPSManualFailure(error) else { throw error }
+            log(
+                "\(sourceLabel) manual failed (\(error.localizedDescription)) — export session on same asset"
+            )
+            do {
+                try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                    asset: asset,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    sourceLabel: "\(sourceLabel) (export session)",
+                    log: log
+                )
+                return true
+            } catch {
+                log("\(sourceLabel) export session failed (\(error.localizedDescription))")
+                return false
             }
-            throw error
         }
     }
 
