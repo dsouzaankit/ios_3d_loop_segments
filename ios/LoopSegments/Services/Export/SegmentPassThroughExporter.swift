@@ -225,12 +225,21 @@ enum SegmentPassThroughExporter {
 
             let origin = timelineOrigin ?? rangeStart
             let timedSample = try SegmentSampleTiming.retimeToSegmentStart(videoSample, subtract: origin)
-            try await writerContext?.append(
-                timedSample,
-                track: .video,
-                isCancelled: isCancelled,
-                log: log
-            )
+            do {
+                try await writerContext?.append(
+                    timedSample,
+                    track: .video,
+                    isCancelled: isCancelled,
+                    log: log
+                )
+            } catch SegmentExporterError.writerFailed(let underlying) {
+                let ns = underlying as NSError
+                log(
+                    "Video writer append failed (\(sourceLabel)): \(underlying.localizedDescription) " +
+                        "(\(ns.domain) \(ns.code))"
+                )
+                throw SegmentExporterError.writerFailed(underlying)
+            }
             if CMTimeCompare(pts, rangeStart) >= 0 {
                 inRangeVideoSamples += 1
                 lastInRangePTS = pts
@@ -283,6 +292,58 @@ enum SegmentPassThroughExporter {
             try await writerContext.finish()
         }
         exportFinishedOK = true
+    }
+
+    /// Fallback when manual reader/writer returns -11800 on a fully local file (Apple-maintained passthrough mux).
+    static func exportWindowViaExportSession(
+        asset: AVURLAsset,
+        rangeStart: CMTime,
+        rangeDuration: CMTime,
+        outputURL: URL,
+        sourceLabel: String,
+        log: @escaping (String) -> Void
+    ) async throws {
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+            throw SegmentExporterError.writerSetupFailed
+        }
+        try? FileManager.default.removeItem(at: outputURL)
+        session.outputURL = outputURL
+        session.outputFileType = .mp4
+        session.timeRange = CMTimeRange(start: rangeStart, duration: rangeDuration)
+        session.shouldOptimizeForNetworkUse = false
+        log(
+            "Staging \(outputURL.lastPathComponent) via AVAssetExportSession passthrough " +
+                "(\(sourceLabel), media \(formatMediaTime(rangeStart))–\(formatMediaTime(CMTimeAdd(rangeStart, rangeDuration))))"
+        )
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            session.exportAsynchronously {
+                continuation.resume()
+            }
+        }
+        switch session.status {
+        case .completed:
+            let bytes = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? NSNumber)?
+                .int64Value ?? 0
+            guard bytes > 0 else {
+                throw SegmentExporterError.segmentOutputTooSmall(0)
+            }
+            log("AVAssetExportSession passthrough finished (\(formatBytes(bytes)))")
+        case .failed:
+            let err = session.error ?? NSError(domain: "AVAssetExportSession", code: -1)
+            log("AVAssetExportSession failed (\(sourceLabel)): \(err.localizedDescription)")
+            throw SegmentExporterError.writerFailed(err)
+        case .cancelled:
+            throw SegmentExporterError.cancelled
+        default:
+            throw SegmentExporterError.writerSetupFailed
+        }
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        if bytes >= 1024 * 1024 {
+            return String(format: "%.1f MB", Double(bytes) / 1_048_576.0)
+        }
+        return "\(bytes) B"
     }
 
     private static func copyNextSample(

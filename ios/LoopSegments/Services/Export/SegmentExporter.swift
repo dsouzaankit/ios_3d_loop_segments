@@ -117,6 +117,9 @@ final class SegmentExporter {
         let durationMs = Int64(durationSeconds * 1000)
         let seekSeconds = Double(seekMs) / 1000.0
         if durationMs > 0, seekMs >= durationMs - 250 {
+            logHandler(
+                "Seek \(formatSeekMs(seekMs)) is at or past file duration (~\(formatSeekMs(durationMs))) — choose 0 min or a shorter start preset"
+            )
             throw SegmentExporterError.seekPastEnd
         }
         tempDownload?.beginExport(
@@ -521,10 +524,20 @@ final class SegmentExporter {
                 }
                 downloader.closeWriteHandleForPassthroughRead(log: log)
                 if isFullSourceOnDisk(downloader: downloader) {
-                    log("Retrying on-disk passthrough (full source file on disk)")
-                    try await runPassthrough(
-                        sourceLabel: "\(tempSourceLabel) (full file on disk)",
-                        useOnDiskFileURL: true
+                    log(
+                        "On-disk writer rejected samples (\(error.localizedDescription)) — trying AVAssetExportSession passthrough"
+                    )
+                    let fileAsset = AVURLAsset(
+                        url: tempURL,
+                        options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+                    )
+                    try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                        asset: fileAsset,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        outputURL: outputURL,
+                        sourceLabel: "\(tempSourceLabel) (export session)",
+                        log: log
                     )
                     return
                 }
@@ -539,6 +552,7 @@ final class SegmentExporter {
                 return
             }
             if useOnDiskFileURL,
+               byteRange.start > 0,
                isSparseContainerOpenFailure(error) || Self.isRetriablePassthroughWriterFailure(error) {
                 log(
                     "On-disk passthrough failed (\(error.localizedDescription)) — retrying with capped hybrid reader"
@@ -796,6 +810,13 @@ final class SegmentExporter {
 
     static func isAudioWriterRejection(_ error: Error, track: SegmentTrackKind) -> Bool {
         track == .audio && isRetriablePassthroughWriterFailure(error)
+    }
+
+    private func formatSeekMs(_ ms: Int64) -> String {
+        let totalSec = max(0, ms / 1000)
+        let min = totalSec / 60
+        let sec = totalSec % 60
+        return String(format: "%d:%02d", min, sec)
     }
 
     private func formatMediaTimeForLog(_ time: CMTime) -> String {

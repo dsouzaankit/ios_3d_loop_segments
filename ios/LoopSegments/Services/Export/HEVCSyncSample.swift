@@ -8,12 +8,12 @@ enum HEVCSyncSample {
     videoFormat: CMFormatDescription,
     strictHEVCNALScan: Bool = true
   ) -> Bool {
-    if isSyncFromAttachments(sample) {
-      return true
-    }
     let codec = CMFormatDescriptionGetMediaSubType(videoFormat)
     guard CodecSupport.isHEVCVideo(codec) else {
       return containsH264IDRNAL(sample)
+    }
+    if isSyncFromAttachments(sample) {
+      return true
     }
     if !strictHEVCNALScan {
       return true
