@@ -995,11 +995,8 @@ final class SegmentWriterContext {
         writer.startSession(atSourceTime: sourceTime)
     }
 
-    private static let writerVideoReadyTimeoutSeconds: Double = 120
-    private static let writerVideoFirstSampleReadyTimeoutSeconds: Double = 25
-    private static let writerAudioReadyTimeoutSeconds: Double = 25
+    private static let writerReadyTimeoutSeconds: Double = 30
     private static let writerReadyLogIntervalSeconds: Double = 10
-    private var videoSamplesAppended = 0
 
     /// Stop accepting audio samples; writer keeps video track open.
     func abandonAudio() {
@@ -1008,56 +1005,28 @@ final class SegmentWriterContext {
         audioInput.markAsFinished()
     }
 
-    /// Returns false when the writer is not ready yet (caller should keep pumping the reader).
-    func tryAppendIfReady(
-        _ sample: CMSampleBuffer,
-        track: SegmentTrackKind
-    ) throws -> Bool {
-        let input: AVAssetWriterInput
-        switch track {
-        case .video: input = videoInput
-        case .audio:
-            guard let audioInput, !audioAbandoned else { return true }
-            input = audioInput
-        }
-        guard input.isReadyForMoreMediaData else { return false }
-        guard input.append(sample) else {
-            let err = writer.error ?? NSError(domain: "SegmentWriter", code: -1)
-            throw SegmentExporterError.writerFailed(err)
-        }
-        if track == .video {
-            videoSamplesAppended += 1
-        }
-        return true
-    }
-
     func append(
         _ sample: CMSampleBuffer,
         track: SegmentTrackKind,
         isCancelled: (() -> Bool)? = nil,
         log: ((String) -> Void)? = nil
     ) async throws {
-        let readyTimeout: Double
+        let input: AVAssetWriterInput
         switch track {
+        case .video: input = videoInput
         case .audio:
-            readyTimeout = Self.writerAudioReadyTimeoutSeconds
-        case .video:
-            readyTimeout = videoSamplesAppended == 0
-                ? Self.writerVideoFirstSampleReadyTimeoutSeconds
-                : Self.writerVideoReadyTimeoutSeconds
+            guard let audioInput, !audioAbandoned else { return }
+            input = audioInput
         }
 
         let waitStart = CFAbsoluteTimeGetCurrent()
         var lastWaitLog = waitStart
-        while true {
-            if try tryAppendIfReady(sample, track: track) {
-                return
-            }
+        while !input.isReadyForMoreMediaData {
             if isCancelled?() == true {
                 throw SegmentExporterError.cancelled
             }
             let now = CFAbsoluteTimeGetCurrent()
-            if now - waitStart >= readyTimeout {
+            if now - waitStart >= Self.writerReadyTimeoutSeconds {
                 if track == .audio {
                     throw SegmentExporterError.writerAudioStall
                 }
@@ -1067,13 +1036,18 @@ final class SegmentWriterContext {
                 lastWaitLog = now
                 log?(
                     String(
-                        format: "Writer waiting for ready — %.0fs (\(track), AVAssetWriter backpressure)",
+                        format: "Writer waiting for ready — %.0fs (\(track))",
                         now - waitStart
                     )
                 )
             }
             await Task.yield()
-            try await Task.sleep(nanoseconds: 2_000_000)
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        guard input.append(sample) else {
+            let err = writer.error ?? NSError(domain: "SegmentWriter", code: -1)
+            throw SegmentExporterError.writerFailed(err)
         }
     }
 
@@ -1224,8 +1198,8 @@ enum SegmentExporterError: LocalizedError {
             return "Write failed: \(error.localizedDescription)"
         case .writerBackpressure:
             return """
-            Video writer timed out (often sparse temp / pCloud read stall). \
-            Try seek 0 min, keep the app open on Wi‑Fi, and wait for “Window on disk” before later minutes.
+            Video writer not ready in time — the app will dense-fill this minute and retry (or use pCloud stream). \
+            Try seek 0 min if it keeps failing.
             """
         case .writerAudioStall:
             return "Audio writer stalled (internal — should fall back to video-only)."

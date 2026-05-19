@@ -15,10 +15,10 @@ enum SegmentPassThroughExporter {
         isCancelled: (() -> Bool)? = nil,
         log: @escaping (String) -> Void
     ) async throws {
+        _ = audioFormat
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw SegmentExporterError.noVideoTrack
         }
-        let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
         let rangeEnd = CMTimeAdd(rangeStart, rangeDuration)
 
         let reader: AVAssetReader
@@ -33,10 +33,7 @@ enum SegmentPassThroughExporter {
             rangeStart,
             CMTime(seconds: readerLeadInSeconds, preferredTimescale: rangeStart.timescale)
         )
-        reader.timeRange = CMTimeRange(
-            start: readerStart,
-            end: rangeEnd
-        )
+        reader.timeRange = CMTimeRange(start: readerStart, end: rangeEnd)
 
         let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
         videoOutput.alwaysCopiesSampleData = false
@@ -44,17 +41,6 @@ enum SegmentPassThroughExporter {
             throw SegmentExporterError.readerSetupFailed
         }
         reader.add(videoOutput)
-
-        var audioOutput: AVAssetReaderTrackOutput?
-        if let audioTrack {
-            let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
-            output.alwaysCopiesSampleData = false
-            guard reader.canAdd(output) else {
-                throw SegmentExporterError.readerSetupFailed
-            }
-            reader.add(output)
-            audioOutput = output
-        }
 
         guard reader.startReading() else {
             if let readerError = reader.error {
@@ -66,13 +52,9 @@ enum SegmentPassThroughExporter {
         }
 
         try? FileManager.default.removeItem(at: outputURL)
-        log("Staging \(outputURL.lastPathComponent) via \(sourceLabel) (media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)))")
+        log("Staging \(outputURL.lastPathComponent) via \(sourceLabel) (media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)), video-only)")
 
         var writerContext: SegmentWriterContext?
-        var pendingSamples: [(track: SegmentTrackKind, sample: CMSampleBuffer, sourcePTS: CMTime)] = []
-        let maxPendingSamples = 24
-        var heldAudio: CMSampleBuffer?
-        var skipAudio = false
         var startedWriter = false
         var timelineOrigin: CMTime?
         var skippedBeforeRange = 0
@@ -94,61 +76,13 @@ enum SegmentPassThroughExporter {
         let stallBeforeFirstSample: Double = 90
         let stallAfterStart: Double = 90
         let stallWithFewSamples: Double = 45
-        /// `AVAssetReaderTrackOutput` is not thread-safe — never call `copyNextSampleBuffer` concurrently.
         let readerQueue = DispatchQueue(label: "com.loopsegments.passthrough-reader")
 
-        final class PassthroughProgress: @unchecked Sendable {
-            var inRangeVideoSamples = 0
-            var startedWriter = false
-        }
-        func flushPendingSamples() async throws {
-            while let head = pendingSamples.first {
-                guard let ctx = writerContext else { return }
-                do {
-                    if try ctx.tryAppendIfReady(head.sample, track: head.track) {
-                        pendingSamples.removeFirst()
-                        if head.track == .video, CMTimeCompare(head.sourcePTS, rangeStart) >= 0 {
-                            inRangeVideoSamples += 1
-                            progress.inRangeVideoSamples = inRangeVideoSamples
-                            lastInRangePTS = head.sourcePTS
-                        }
-                        if head.track == .audio {
-                            heldAudio = nil
-                        }
-                    } else {
-                        return
-                    }
-                } catch SegmentExporterError.writerAudioStall {
-                    log(
-                        "Audio writer stalled — continuing video-only for this segment (DLNA may have no audio track)"
-                    )
-                    ctx.abandonAudio()
-                    skipAudio = true
-                    heldAudio = nil
-                    pendingSamples.removeAll { $0.track == .audio }
-                } catch SegmentExporterError.writerFailed(let underlying) {
-                    let rejection = SegmentExporterError.writerFailed(underlying)
-                    if SegmentExporter.isAudioWriterRejection(rejection, track: head.track) {
-                        log(
-                            "Audio rejected by AVAssetWriter — continuing video-only for this segment (DLNA may have no audio)"
-                        )
-                        ctx.abandonAudio()
-                        skipAudio = true
-                        heldAudio = nil
-                        pendingSamples.removeAll { $0.track == .audio }
-                    } else {
-                        throw rejection
-                    }
-                }
-            }
-        }
-
-        let progress = PassthroughProgress()
         let heartbeat = Task {
             while !Task.isCancelled {
                 try await Task.sleep(nanoseconds: 15_000_000_000)
-                if progress.startedWriter {
-                    log("Passthrough — \(progress.inRangeVideoSamples) video samples written so far…")
+                if startedWriter {
+                    log("Passthrough — \(inRangeVideoSamples) video samples written so far…")
                 } else {
                     log("Passthrough — waiting for reader / writer…")
                 }
@@ -195,24 +129,8 @@ enum SegmentPassThroughExporter {
                 )
             }
 
-            if startedWriter, !pendingSamples.isEmpty {
-                try await flushPendingSamples()
-            }
-
             await Task.yield()
-            let videoSample = await copyNextSample(on: readerQueue, from: videoOutput)
-            if videoSample != nil {
-                lastSampleAt = CFAbsoluteTimeGetCurrent()
-            }
-            if !skipAudio, heldAudio == nil, let audioOutput {
-                heldAudio = await copyNextSample(on: readerQueue, from: audioOutput)
-            }
-
-            var candidates: [(track: SegmentTrackKind, sample: CMSampleBuffer)] = []
-            if let videoSample { candidates.append((.video, videoSample)) }
-            if let heldAudio { candidates.append((.audio, heldAudio)) }
-
-            if candidates.isEmpty {
+            guard let videoSample = await copyNextSample(on: readerQueue, from: videoOutput) else {
                 if !startedWriter {
                     log(
                         "Reader ended — \(skippedBeforeRange) samples before \(formatMediaTime(rangeStart)), " +
@@ -221,28 +139,16 @@ enum SegmentPassThroughExporter {
                 }
                 break
             }
+            lastSampleAt = CFAbsoluteTimeGetCurrent()
 
-            guard let next = selectNextCandidate(
-                candidates,
-                inRangeVideoSamples: inRangeVideoSamples,
-                skipAudio: skipAudio,
-                videoFirstUntil: minInRangeVideoSamples
-            ) else {
-                break
-            }
-
-            let pts = CMSampleBufferGetPresentationTimeStamp(next.sample)
+            let pts = CMSampleBufferGetPresentationTimeStamp(videoSample)
             if !startedWriter {
-                if next.track == .audio {
-                    heldAudio = nil
-                    continue
-                }
                 if CMTimeCompare(pts, earliestStart) < 0 {
                     skippedBeforeRange += 1
                     continue
                 }
                 let hasSync = HEVCSyncSample.isReliableSyncPoint(
-                    next.sample,
+                    videoSample,
                     videoFormat: videoFormat,
                     strictHEVCNALScan: true
                 )
@@ -260,18 +166,12 @@ enum SegmentPassThroughExporter {
                 let ctx = try SegmentWriterContext(
                     outputURL: outputURL,
                     videoFormat: videoFormat,
-                    audioFormat: audioFormat,
+                    audioFormat: nil,
                     realTime: false
                 )
                 ctx.start(at: .zero)
                 writerContext = ctx
                 startedWriter = true
-                progress.startedWriter = true
-                if relaxKeyframeGating, audioFormat != nil {
-                    log("Sparse/hybrid passthrough — video-only segment (avoids audio writer stall on holey temp)")
-                    ctx.abandonAudio()
-                    skipAudio = true
-                }
                 if skippedNonKeyframe > 0 {
                     log("Started on frame \(skippedNonKeyframe + 1) in window (HEVC sync scan)")
                 }
@@ -279,32 +179,17 @@ enum SegmentPassThroughExporter {
             }
 
             let origin = timelineOrigin ?? rangeStart
-            let timedSample = try SegmentSampleTiming.retimeToSegmentStart(next.sample, subtract: origin)
-            pendingSamples.append((next.track, timedSample, sourcePTS: pts))
-            if pendingSamples.count > maxPendingSamples {
-                log("Writer backpressure — \(maxPendingSamples) samples queued; dense-download this minute or retry")
-                throw SegmentExporterError.writerBackpressure
-            }
-            try await flushPendingSamples()
-        }
-
-        while let head = pendingSamples.first {
-            guard let ctx = writerContext else { break }
-            try await ctx.append(
-                head.sample,
-                track: head.track,
+            let timedSample = try SegmentSampleTiming.retimeToSegmentStart(videoSample, subtract: origin)
+            try await writerContext?.append(
+                timedSample,
+                track: .video,
                 isCancelled: isCancelled,
                 log: log
             )
-            if head.track == .video, CMTimeCompare(head.sourcePTS, rangeStart) >= 0 {
+            if CMTimeCompare(pts, rangeStart) >= 0 {
                 inRangeVideoSamples += 1
-                progress.inRangeVideoSamples = inRangeVideoSamples
-                lastInRangePTS = head.sourcePTS
+                lastInRangePTS = pts
             }
-            if head.track == .audio {
-                heldAudio = nil
-            }
-            pendingSamples.removeFirst()
         }
 
         guard startedWriter else {
@@ -363,26 +248,6 @@ enum SegmentPassThroughExporter {
                 continuation.resume(returning: output.copyNextSampleBuffer())
             }
         }
-    }
-
-    private static func selectNextCandidate(
-        _ candidates: [(track: SegmentTrackKind, sample: CMSampleBuffer)],
-        inRangeVideoSamples: Int,
-        skipAudio: Bool,
-        videoFirstUntil: Int
-    ) -> (track: SegmentTrackKind, sample: CMSampleBuffer)? {
-        guard !candidates.isEmpty else { return nil }
-        if skipAudio {
-            return candidates.first { $0.track == .video }
-        }
-        if inRangeVideoSamples < videoFirstUntil,
-           let video = candidates.first(where: { $0.track == .video }) {
-            return video
-        }
-        return candidates.min(by: {
-            CMSampleBufferGetPresentationTimeStamp($0.sample) <
-                CMSampleBufferGetPresentationTimeStamp($1.sample)
-        })
     }
 
     private static func formatMediaTime(_ time: CMTime) -> String {
