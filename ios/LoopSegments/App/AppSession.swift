@@ -131,7 +131,9 @@ final class AppSession: ObservableObject {
         activeExportItem = item
         ResumeStore.shared.beginExport(for: item, seekMs: seekMs)
         isExportRunning = true
+        ExportAutoLockCoordinator.exportDidStart()
         defer {
+            ExportAutoLockCoordinator.exportDidEnd()
             isExportRunning = false
             activeExportItem = nil
         }

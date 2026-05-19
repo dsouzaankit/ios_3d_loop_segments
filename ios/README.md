@@ -7,8 +7,8 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 .\Sync-FromPhoneLAN.ps1 -Watch
 
 Notes:
-phone must be unlocked, app on foreground, screen on:
-  Settings > Display & Brightness > Auto-Lock > Never!
+phone must be unlocked, app in foreground, screen on:
+  Optional: Settings > Display & Brightness > Auto-Lock > Never!
 
 
 # Loop Segments (iOS)
@@ -58,6 +58,20 @@ cd ..\windows
 ```
 
 pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/` on port **8765** (`op_00.mp4`, logs, and `_export_source_working.mp4` from the last export until a new one overwrites it). **Browser playback:** use `op_00.mp4` (full segment). `_export_source_working.mp4` is a sparse partial copy — browsers often hang on **5K+**; use VLC, ffplay, or `Sync-FromPhoneLAN.ps1` (build **145+** adds HTTP **Range** so browsers can seek without downloading the whole file).
+
+### SMB vs WebDAV (network folder on PC)
+
+**True SMB** (`\\phone\share`) is **not** possible on iOS: there is no supported in-app SMB server API, and embedding one would be large, fragile, and a poor fit for the sandbox.
+
+**WebDAV** on the same port (**8765**, build **146+**) is the supported alternative — Windows can map a drive letter:
+
+```powershell
+.\Set-LoopSegmentsLANHost.ps1 192.168.1.42
+.\Map-LoopSegmentsWebDAV.ps1              # maps L: to http://<phone>:8765/
+.\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient   # once per PC if HTTP mapping fails
+```
+
+Read-only; phone must stay on the LAN with **Serve Exports** enabled. For hands-off DLNA copy, keep using **`Sync-FromPhoneLAN.ps1 -Watch`**.
 
 ### Export transport
 

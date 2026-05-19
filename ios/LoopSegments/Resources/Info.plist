@@ -32,7 +32,7 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Loop Segments serves finished segment files on your Wi‑Fi network so your PC can copy them for DLNA.</string>
+	<string>Loop Segments serves Exports on your Wi‑Fi network (HTTP/WebDAV) so your PC can copy or map segment files for DLNA.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Loop Segments saves 60s segment videos to your Photos library so you can import them on a PC.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -42,6 +42,12 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 	</dict>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>App-Prefs</string>
+		<string>App-prefs</string>
+		<string>prefs</string>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -2,7 +2,8 @@ import Darwin
 import Foundation
 import Network
 
-/// Serves `Documents/Exports/` on the LAN when enabled (Path B — PC pull without USB/Photos).
+/// Serves `Documents/Exports/` on the LAN when enabled (HTTP + read-only WebDAV).
+/// True SMB is not available on iOS; WebDAV lets Windows map a drive letter to the same folder.
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
     private static let enabledKey = "serveExportsOnLAN"
@@ -62,9 +63,9 @@ enum ExportLANServer {
                         lock.lock()
                         advertisedBaseURL = url
                         lock.unlock()
-                        log("LAN export: \(url) — PC: Sync-FromPhoneLAN.ps1 -PhoneHost \(ip) -Watch")
+                        log("LAN export: \(url) — PC: Sync-FromPhoneLAN.ps1 -Watch or Map-LoopSegmentsWebDAV.ps1")
                         let segmentName = ExportPaths.segmentURL(index: 0).lastPathComponent
-                        log("LAN files: / status.json, /\(segmentName), /_export_source_working.mp4 (last export temp, if present)")
+                        log("LAN: HTTP + WebDAV read-only — /\(segmentName), logs, _export_source_working.mp4 (not SMB)")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
                         Self.stopOnQueue(log: nil)
@@ -162,12 +163,33 @@ enum ExportLANServer {
                     sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
                     return
                 }
-                guard method == "GET" || method == "HEAD" else {
-                    sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("GET or HEAD only".utf8), done: done)
-                    return
-                }
-                handleGET(path: path, method: method, requestHeaders: text, connection: connection, done: done)
+                handleRequest(
+                    method: method,
+                    path: path,
+                    requestHeaders: text,
+                    connection: connection,
+                    done: done
+                )
             }
+        }
+    }
+
+    private static func handleRequest(
+        method: String,
+        path: String,
+        requestHeaders: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        switch method {
+        case "GET", "HEAD":
+            handleGET(path: path, method: method, requestHeaders: requestHeaders, connection: connection, done: done)
+        case "OPTIONS":
+            sendOptions(connection: connection, done: done)
+        case "PROPFIND":
+            sendPropfind(path: path, requestHeaders: requestHeaders, connection: connection, done: done)
+        default:
+            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Read-only: GET, HEAD, OPTIONS, PROPFIND".utf8), done: done)
         }
     }
 
@@ -273,6 +295,196 @@ enum ExportLANServer {
         return (start, end)
     }
 
+    private struct ExportFileEntry {
+        let name: String
+        let url: URL
+        let size: Int64
+        let modified: Date?
+    }
+
+    private static func listExportFiles() -> [ExportFileEntry] {
+        let fm = FileManager.default
+        let dir = ExportPaths.exportsDirectory
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
+        var entries: [ExportFileEntry] = []
+        for name in names.sorted() {
+            guard resolveExportFile(name: name) != nil else { continue }
+            let url = dir.appendingPathComponent(name)
+            let attrs = try? fm.attributesOfItem(atPath: url.path)
+            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            let modified = attrs?[.modificationDate] as? Date
+            entries.append(ExportFileEntry(name: name, url: url, size: size, modified: modified))
+        }
+        return entries
+    }
+
+    private static func parseDepth(requestHeaders: String) -> Int {
+        let line = requestHeaders
+            .split(separator: "\r\n", omittingEmptySubsequences: true)
+            .first { $0.lowercased().hasPrefix("depth:") }
+        guard let line else { return 1 }
+        let value = line.split(separator: ":", maxSplits: 1).dropFirst().joined()
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        if value == "0" { return 0 }
+        if value == "infinity" { return 2 }
+        return 1
+    }
+
+    private static func normalizedDAVPath(_ path: String) -> String {
+        var p = path.hasPrefix("/") ? path : "/\(path)"
+        while p.count > 1, p.hasSuffix("/") {
+            p.removeLast()
+        }
+        return p
+    }
+
+    private static func fileName(fromDAVPath path: String) -> String? {
+        let p = normalizedDAVPath(path)
+        guard p != "/" else { return nil }
+        let name = (p as NSString).lastPathComponent
+        return name.isEmpty ? nil : name
+    }
+
+    private static func xmlEscape(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    private static func davHref(forPath path: String) -> String {
+        let p = normalizedDAVPath(path)
+        if p == "/" { return "/" }
+        let encoded = p.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? p
+        return encoded.hasPrefix("/") ? encoded : "/\(encoded)"
+    }
+
+    private static func propfindEntryXML(
+        href: String,
+        isCollection: Bool,
+        displayName: String,
+        size: Int64?,
+        modified: Date?
+    ) -> String {
+        var prop = ""
+        if isCollection {
+            prop += "<D:resourcetype><D:collection/></D:resourcetype>"
+        } else {
+            prop += "<D:resourcetype/>"
+            if let size, size > 0 {
+                prop += "<D:getcontentlength>\(size)</D:getcontentlength>"
+            }
+        }
+        prop += "<D:displayname>\(xmlEscape(displayName))</D:displayname>"
+        if let modified {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            prop += "<D:getlastmodified>\(xmlEscape(formatter.string(from: modified)))</D:getlastmodified>"
+        }
+        return """
+            <D:response>
+            <D:href>\(xmlEscape(href))</D:href>
+            <D:propstat>
+            <D:prop>\(prop)</D:prop>
+            <D:status>HTTP/1.1 200 OK</D:status>
+            </D:propstat>
+            </D:response>
+            """
+    }
+
+    private static func sendOptions(connection: NWConnection, done: @escaping () -> Void) {
+        let header = [
+            "HTTP/1.1 200 OK",
+            "DAV: 1, 2",
+            "MS-Author-Via: DAV",
+            "Allow: GET, HEAD, OPTIONS, PROPFIND",
+            "Public: GET, HEAD, OPTIONS, PROPFIND",
+            "Content-Length: 0",
+            "Connection: close",
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in
+            connection.cancel()
+            done()
+        })
+    }
+
+    private static func sendPropfind(
+        path: String,
+        requestHeaders: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        let davPath = normalizedDAVPath(path)
+        let depth = parseDepth(requestHeaders: requestHeaders)
+        var responses: [String] = []
+
+        if let name = fileName(fromDAVPath: davPath) {
+            guard let fileURL = resolveExportFile(name: name) else {
+                sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+                return
+            }
+            let fm = FileManager.default
+            let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
+            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            let modified = attrs?[.modificationDate] as? Date
+            responses.append(
+                propfindEntryXML(
+                    href: davHref(forPath: davPath),
+                    isCollection: false,
+                    displayName: name,
+                    size: size,
+                    modified: modified
+                )
+            )
+        } else {
+            responses.append(
+                propfindEntryXML(
+                    href: "/",
+                    isCollection: true,
+                    displayName: "Exports",
+                    size: nil,
+                    modified: nil
+                )
+            )
+            if depth != 0 {
+                for entry in listExportFiles() {
+                    responses.append(
+                        propfindEntryXML(
+                            href: davHref(forPath: "/\(entry.name)"),
+                            isCollection: false,
+                            displayName: entry.name,
+                            size: entry.size,
+                            modified: entry.modified
+                        )
+                    )
+                }
+            }
+        }
+
+        let bodyText = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <D:multistatus xmlns:D="DAV:">
+            \(responses.joined())
+            </D:multistatus>
+            """
+        let body = Data(bodyText.utf8)
+        let header = [
+            "HTTP/1.1 207 Multi-Status",
+            "Content-Type: application/xml; charset=utf-8",
+            "Content-Length: \(body.count)",
+            "DAV: 1, 2",
+            "Connection: close",
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        var data = Data(header.utf8)
+        data.append(body)
+        connection.send(content: data, completion: .contentProcessed { _ in
+            connection.cancel()
+            done()
+        })
+    }
+
     private static func resolveExportFile(name: String) -> URL? {
         guard !name.contains("/"), !name.contains("..") else { return nil }
         let allowedNames: Set<String> = {
@@ -296,17 +508,12 @@ enum ExportLANServer {
     }
 
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        let fm = FileManager.default
-        let dir = ExportPaths.exportsDirectory
         var items: [String] = []
-        if let names = try? fm.contentsOfDirectory(atPath: dir.path) {
-            for name in names.sorted() {
-                guard resolveExportFile(name: name) != nil else { continue }
-                let url = dir.appendingPathComponent(name)
+        for entry in listExportFiles() {
+                let name = entry.name
                 var sizeNote = ""
-                if let attrs = try? fm.attributesOfItem(atPath: url.path),
-                   let size = attrs[.size] as? NSNumber, size.int64Value > 0 {
-                    sizeNote = " (\(size.int64Value / 1024) KB)"
+                if entry.size > 0 {
+                    sizeNote = " (\(entry.size / 1024) KB)"
                 }
                 let escaped = name
                     .replacingOccurrences(of: "&", with: "&amp;")
@@ -318,7 +525,6 @@ enum ExportLANServer {
                     note = " — playable in browser (Range supported)"
                 }
                 items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
-            }
         }
         let fileList = items.isEmpty
             ? "<li><em>No export files yet — start export on the phone.</em></li>"
@@ -337,7 +543,7 @@ enum ExportLANServer {
             </head><body>
             <h1>Loop Segments — LAN export</h1>
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
-            <p>PC: <code>Sync-FromPhoneLAN.ps1 -Watch</code> (uses <a href="status.json">status.json</a>).</p>
+            <p>PC: <code>Sync-FromPhoneLAN.ps1 -Watch</code> or map a drive with <code>Map-LoopSegmentsWebDAV.ps1</code> (WebDAV, not SMB).</p>
             <p><strong>Playback:</strong> use <code>op_00.mp4</code> (complete segment). <code>_export_source_working.mp4</code> is a sparse in-progress copy — browsers often hang on 5K+; VLC or the sync script is safer.</p>
             <ul>
             \(fileList)

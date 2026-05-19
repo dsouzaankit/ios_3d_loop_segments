@@ -43,7 +43,7 @@ struct ExportView: View {
                         }
                     }
                 ))
-                Text("Phone and PC on same LAN. Stays on while the app is open (not only during export). Run Sync-FromPhoneLAN.ps1 -Watch on PC.")
+                Text("Phone and PC on same LAN (HTTP + WebDAV on port 8765 — not SMB). Sync-FromPhoneLAN.ps1 -Watch or Map-LoopSegmentsWebDAV.ps1 on PC.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if let lanExportURL {
@@ -99,6 +99,17 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+            }
+            Section("During export") {
+                Text("Keep Loop Segments open on this screen. The app keeps the display on while export runs; leaving the app or locking the phone can stop export.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Open Auto-Lock in Settings") {
+                    ExportAutoLockCoordinator.openAutoLockSettings()
+                }
+                Text("Optional: set Auto-Lock to Never only if you must switch apps or lock the phone during a long run. Not required if you stay here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             Section("Output (USB → PC → DLNA)") {
                 Text(ExportPaths.exportsDirectory.path)
