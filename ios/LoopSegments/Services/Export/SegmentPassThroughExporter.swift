@@ -225,8 +225,8 @@ enum SegmentPassThroughExporter {
                     log("Started on frame \(skippedNonKeyframe + 1) in window (keyframe scan)")
                 }
                 log(
-                    "Segment timestamps reset to 0 (first sample source PTS \(ExportTimelineLog.wallClock(pts)), " +
-                        "window \(ExportTimelineLog.sourceRange(start: rangeStart, end: rangeEnd)))"
+                    "Segment timestamps reset to 0 — first sample source PTS \(ExportTimelineLog.wallClock(pts)), " +
+                        "window \(ExportTimelineLog.sourceRange(start: rangeStart, end: rangeEnd))"
                 )
             }
 
@@ -314,8 +314,8 @@ enum SegmentPassThroughExporter {
             try await writerContext.finish()
         }
         log(
-            "Passthrough finished — source \(ExportTimelineLog.sourceRange(start: segmentOrigin, end: lastInRangePTS)) " +
-                "(segment file 0:00–\(ExportTimelineLog.wallClock(seconds: CMTimeGetSeconds(CMTimeSubtract(lastInRangePTS, segmentOrigin)))))"
+            "Passthrough finished — source \(ExportTimelineLog.sourceRange(start: segmentOrigin, end: lastInRangePTS)), " +
+                "segment file 0:00–\(ExportTimelineLog.wallClock(seconds: CMTimeGetSeconds(CMTimeSubtract(lastInRangePTS, segmentOrigin))))"
         )
         exportFinishedOK = true
     }

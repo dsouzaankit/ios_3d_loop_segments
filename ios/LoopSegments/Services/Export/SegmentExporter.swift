@@ -135,8 +135,8 @@ final class SegmentExporter {
         )
         if seekMs > 0 {
             logHandler(
-                "Export seek — start at source \(ExportTimelineLog.wallClock(seconds: seekSeconds)) " +
-                    "(\(seekMs) ms into file, duration ~\(ExportTimelineLog.wallClock(seconds: durationSeconds)))"
+                "Export seek — start at source \(ExportTimelineLog.wallClock(seconds: seekSeconds)), " +
+                    "duration ~\(ExportTimelineLog.wallClock(seconds: durationSeconds))"
             )
         }
 
