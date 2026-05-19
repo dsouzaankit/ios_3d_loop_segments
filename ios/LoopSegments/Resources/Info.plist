@@ -42,5 +42,16 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 	</dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Loop Segments export reader</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>loopsegments</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

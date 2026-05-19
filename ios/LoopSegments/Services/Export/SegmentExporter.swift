@@ -453,6 +453,13 @@ final class SegmentExporter {
                 "Dense window at \(Self.formatBytes(byteRange.start)) — capped hybrid reader (file:// reads zero-filled gaps)"
             )
         }
+        if windowDense, useOnDiskFileURL, byteRange.start == 0 {
+            try await ensureSeekZeroRemainderOnDiskIfBeneficial(
+                downloader: downloader,
+                byteRange: byteRange,
+                log: log
+            )
+        }
         downloader.closeWriteHandleForPassthroughRead(log: log)
         do {
             try await runPassthrough(
@@ -460,12 +467,16 @@ final class SegmentExporter {
                 useOnDiskFileURL: useOnDiskFileURL
             )
         } catch {
-            if !useOnDiskFileURL,
-               byteRange.start == 0,
+            if byteRange.start == 0,
                windowDense,
                Self.isUnsupportedAssetURLError(error) {
                 log(
-                    "Hybrid asset URL rejected (\(error.localizedDescription)) — retrying from on-disk temp file"
+                    "Hybrid asset URL rejected (\(error.localizedDescription)) — dense-filling file tail, then on-disk passthrough"
+                )
+                try await ensureSeekZeroRemainderOnDiskIfBeneficial(
+                    downloader: downloader,
+                    byteRange: byteRange,
+                    log: log
                 )
                 downloader.closeWriteHandleForPassthroughRead(log: log)
                 try await runPassthrough(
@@ -476,6 +487,24 @@ final class SegmentExporter {
             }
             guard Self.shouldStreamFallback(after: error) else { throw error }
             try? FileManager.default.removeItem(at: outputURL)
+            if useOnDiskFileURL,
+               byteRange.start == 0,
+               Self.isRetriablePassthroughWriterFailure(error) {
+                log(
+                    "On-disk passthrough failed (\(error.localizedDescription)) — dense-filling file tail, then retrying on-disk"
+                )
+                try await ensureSeekZeroRemainderOnDiskIfBeneficial(
+                    downloader: downloader,
+                    byteRange: byteRange,
+                    log: log
+                )
+                downloader.closeWriteHandleForPassthroughRead(log: log)
+                try await runPassthrough(
+                    sourceLabel: "\(tempSourceLabel) (full file on disk)",
+                    useOnDiskFileURL: true
+                )
+                return
+            }
             if useOnDiskFileURL,
                isSparseContainerOpenFailure(error) || Self.isRetriablePassthroughWriterFailure(error) {
                 log(
@@ -571,6 +600,31 @@ final class SegmentExporter {
                 useOnDiskFileURL: useOnDiskFileURL
             )
         }
+    }
+
+    private func ensureSeekZeroRemainderOnDiskIfBeneficial(
+        downloader: WebDAVTempFileDownload,
+        byteRange: TimelineByteRange,
+        log: @escaping (String) -> Void
+    ) async throws {
+        guard byteRange.start == 0 else { return }
+        let fileLength = downloader.totalLength
+        guard fileLength > byteRange.end else { return }
+        let tail = TimelineByteRange(start: byteRange.end, end: fileLength)
+        guard !downloader.isByteRangeFullyOnDisk(tail) else { return }
+        let tailBytes = fileLength - byteRange.end
+        let shouldFill = fileLength <= Self.seekZeroDenseEntireFileMaxBytes
+            || tailBytes <= Self.seekZeroDenseTailMaxBytes
+        guard shouldFill else {
+            log(
+                "Seek 0 — leaving \(Self.formatBytes(tailBytes)) sparse after window (file too large for full tail fill; hybrid if needed)"
+            )
+            return
+        }
+        log(
+            "Seek 0 — dense-filling \(Self.formatBytes(tailBytes)) after window (\(Self.formatBytes(fileLength)) file on disk for passthrough)"
+        )
+        try await downloader.ensureContiguousRange(tail)
     }
 
     /// `file://` when the first-minute window is dense at seek 0 (head + index tail on disk; sparse middle is OK for minute 0).
@@ -680,6 +734,9 @@ final class SegmentExporter {
     }
 
     private static let midFilePrefetchThresholdBytes: Int64 = 32 * 1024 * 1024
+    /// At seek 0, dense-fill bytes after the minute window so `file://` passthrough does not read zero-filled mdat.
+    private static let seekZeroDenseEntireFileMaxBytes: Int64 = 200 * 1024 * 1024
+    private static let seekZeroDenseTailMaxBytes: Int64 = 100 * 1024 * 1024
 
     private static func shouldStreamFallback(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {

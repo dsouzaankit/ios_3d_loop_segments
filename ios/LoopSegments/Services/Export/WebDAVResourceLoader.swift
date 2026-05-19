@@ -69,7 +69,8 @@ struct StreamReadPolicy {
 
 /// Serves HTTPS WebDAV media to `AVURLAsset` with Basic auth and byte-range reads.
 final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
-    static let customScheme = "loopsegments-webdav"
+    /// Short scheme (no hyphen); register in Info.plist. `loopsegments-webdav` + dotted hosts fail `loadTracks` on recent iOS.
+    static let customScheme = "loopsegments"
     private static let maxRangeChunkBytes: Int64 = 2 * 1024 * 1024
     private static let hotCacheMaxBytes = 4 * 1024 * 1024
 
@@ -148,13 +149,17 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         stateLock.unlock()
     }
 
-    /// Stable host (`export`) — real WebDAV hostnames (e.g. `webdav.pcloud.com`) make `AVURLAsset.loadTracks` fail with “unsupported URL”.
     var customAssetURL: URL {
-        let encodedPath = Self.percentEncodedWebDAVPath(remoteURL.path)
-        guard let url = URL(string: "\(Self.customScheme)://export\(encodedPath)") else {
-            return URL(string: "\(Self.customScheme)://export/")!
-        }
-        return url
+        var components = URLComponents()
+        components.scheme = Self.customScheme
+        components.host = "127.0.0.1"
+        components.path = Self.percentEncodedWebDAVPath(remoteURL.path)
+        if let url = components.url { return url }
+        var fallback = URLComponents()
+        fallback.scheme = Self.customScheme
+        fallback.host = "127.0.0.1"
+        fallback.path = "/"
+        return fallback.url!
     }
 
     /// Spaces and other characters in WebDAV paths break `URLComponents.url`; never fall back to `https://` for `AVURLAsset`.
