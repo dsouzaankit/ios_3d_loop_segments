@@ -149,12 +149,23 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     var customAssetURL: URL {
-        var components = URLComponents(url: remoteURL, resolvingAgainstBaseURL: false)
-            ?? URLComponents()
-        components.scheme = Self.customScheme
-        components.host = remoteURL.host ?? components.host
-        components.path = remoteURL.path.isEmpty ? "/" : remoteURL.path
-        return components.url ?? remoteURL
+        let host = remoteURL.host ?? "export"
+        let encodedPath = Self.percentEncodedWebDAVPath(remoteURL.path)
+        guard let url = URL(string: "\(Self.customScheme)://\(host)\(encodedPath)") else {
+            return URL(string: "\(Self.customScheme)://\(host)/")!
+        }
+        return url
+    }
+
+    /// Spaces and other characters in WebDAV paths break `URLComponents.url`; never fall back to `https://` for `AVURLAsset`.
+    private static func percentEncodedWebDAVPath(_ path: String) -> String {
+        let normalized = path.isEmpty ? "/" : (path.hasPrefix("/") ? path : "/\(path)")
+        guard normalized != "/" else { return "/" }
+        let segments = normalized.split(separator: "/").map(String.init)
+        guard !segments.isEmpty else { return "/" }
+        return "/" + segments.map { segment in
+            segment.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? segment
+        }.joined(separator: "/")
     }
 
     func resourceLoader(

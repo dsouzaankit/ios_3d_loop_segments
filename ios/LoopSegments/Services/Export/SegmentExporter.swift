@@ -449,9 +449,15 @@ final class SegmentExporter {
             windowDense: windowDense
         )
         if windowDense, !useOnDiskFileURL {
-            log(
-                "Dense window not at file start (\(Self.formatBytes(byteRange.start))) — capped hybrid reader (file:// reads zero-filled gaps → -11800)"
-            )
+            if byteRange.start == 0 {
+                log(
+                    "Large source file — capped hybrid reader (only first \(Self.formatBytes(byteRange.length)) dense on disk; sparse tail is not in file://)"
+                )
+            } else {
+                log(
+                    "Dense window at \(Self.formatBytes(byteRange.start)) — capped hybrid reader (file:// reads zero-filled gaps)"
+                )
+            }
         }
         downloader.closeWriteHandleForPassthroughRead(log: log)
         do {
