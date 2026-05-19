@@ -10,7 +10,7 @@
   Skips overwrite when the peer slot already has the same segment (phone unchanged) so DLNA
   never has identical op_00 and op_01. Schedules a retry of that same slot after DeferRetrySeconds
   (default = PollSeconds, 60). Installs via a temp file + rename so DLNA never reads a partial MP4.
-  -Watch removes op_00.mp4 / op_01.mp4 from the PC destination and clears LAN staging when you stop.
+  -Watch removes op_00.mp4 / op_01.mp4 from the PC destination when you stop (Enter), close the window (X), or Ctrl+C.
 
   Save the phone IP from the export log (LAN export: http://...) or -Discover.
 
@@ -293,6 +293,154 @@ function Remove-LANSegmentArtifacts {
     }
 }
 
+function Get-LANWatchSessionPath {
+    param([string] $StagingDirectory)
+    return Join-Path $StagingDirectory 'lan-watch-session.json'
+}
+
+function Get-LANWatchCleanupScriptPath {
+    param([string] $StagingDirectory)
+    return Join-Path $StagingDirectory 'lan-watch-cleanup.ps1'
+}
+
+function New-LANWatchCleanupScript {
+    param(
+        [string] $CleanupScriptPath,
+        [string] $DestinationRoot,
+        [string] $StagingDirectory
+    )
+    $destEsc = $DestinationRoot.Replace("'", "''")
+    $stagingEsc = $StagingDirectory.Replace("'", "''")
+    $selfEsc = $CleanupScriptPath.Replace("'", "''")
+    @"
+`$ErrorActionPreference = 'SilentlyContinue'
+foreach (`$name in @('op_00.mp4', 'op_01.mp4')) {
+    Remove-Item -LiteralPath (Join-Path '$destEsc' `$name) -Force
+    Remove-Item -LiteralPath (Join-Path '$destEsc' ".$name.part") -Force
+}
+Remove-Item -LiteralPath (Join-Path '$stagingEsc' 'op_00.mp4') -Force
+Remove-Item -LiteralPath (Join-Path '$stagingEsc' 'lan-sync-state.json') -Force
+Remove-Item -LiteralPath (Join-Path '$stagingEsc' 'lan-watch-session.json') -Force
+Remove-Item -LiteralPath '$selfEsc' -Force
+"@ | Set-Content -LiteralPath $CleanupScriptPath -Encoding UTF8
+}
+
+function Start-LANWatchCleanupProcess {
+    param([string] $CleanupScriptPath)
+    if (-not (Test-Path -LiteralPath $CleanupScriptPath -PathType Leaf)) {
+        return
+    }
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-WindowStyle', 'Hidden',
+        '-File', $CleanupScriptPath
+    ) -WindowStyle Hidden | Out-Null
+}
+
+function Register-LANWatchConsoleHook {
+    param([string] $CleanupScriptPath)
+    if (-not ('LanWatchConsoleHook' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+public static class LanWatchConsoleHook {
+    public static string CleanupScriptPath = "";
+    public delegate bool HandlerDelegate(int signal);
+  public static HandlerDelegate Handler = OnSignal;
+    private static bool OnSignal(int signal) {
+        try {
+            if (string.IsNullOrEmpty(CleanupScriptPath)) return false;
+            var psi = new ProcessStartInfo {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + CleanupScriptPath + "\"",
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+            Process.Start(psi);
+        } catch { }
+        return false;
+    }
+    [DllImport("Kernel32", SetLastError = true)]
+    public static extern bool SetConsoleCtrlHandler(HandlerDelegate handler, bool add);
+}
+'@
+    }
+    [LanWatchConsoleHook]::CleanupScriptPath = $CleanupScriptPath
+    [void][LanWatchConsoleHook]::SetConsoleCtrlHandler([LanWatchConsoleHook]::Handler, $true)
+}
+
+function Invoke-PendingLANWatchCleanup {
+    param([string] $StagingDirectory)
+    $sessionPath = Get-LANWatchSessionPath -StagingDirectory $StagingDirectory
+    if (-not (Test-Path -LiteralPath $sessionPath -PathType Leaf)) {
+        return
+    }
+    $session = $null
+    try {
+        $session = Get-Content -LiteralPath $sessionPath -Raw | ConvertFrom-Json
+    } catch {
+        Remove-Item -LiteralPath $sessionPath -Force -ErrorAction SilentlyContinue
+        return
+    }
+    $alive = $false
+    if ($null -ne $session.pid) {
+        $alive = $null -ne (Get-Process -Id ([int]$session.pid) -ErrorAction SilentlyContinue)
+    }
+    if ($alive) {
+        return
+    }
+    Write-Host 'Previous -Watch ended without cleanup (closed window?) — removing segment files...'
+    $cleanupPath = Get-LANWatchCleanupScriptPath -StagingDirectory $StagingDirectory
+    if (Test-Path -LiteralPath $cleanupPath -PathType Leaf) {
+        Start-LANWatchCleanupProcess -CleanupScriptPath $cleanupPath
+        Start-Sleep -Milliseconds 800
+    } elseif ($session.destinationRoot -and $session.stagingDirectory) {
+        Remove-LANSegmentArtifacts -DestinationRoot $session.destinationRoot -StagingDirectory $session.stagingDirectory
+        Remove-Item -LiteralPath $sessionPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Start-LANWatchSession {
+    param(
+        [string] $DestinationRoot,
+        [string] $StagingDirectory
+    )
+    if (-not (Test-Path -LiteralPath $StagingDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $StagingDirectory -Force | Out-Null
+    }
+    $cleanupPath = Get-LANWatchCleanupScriptPath -StagingDirectory $StagingDirectory
+    New-LANWatchCleanupScript -CleanupScriptPath $cleanupPath -DestinationRoot $DestinationRoot `
+        -StagingDirectory $StagingDirectory
+    $sessionPath = Get-LANWatchSessionPath -StagingDirectory $StagingDirectory
+    @{
+        pid = $PID
+        destinationRoot = $DestinationRoot
+        stagingDirectory = $StagingDirectory
+        startedAt = (Get-Date).ToUniversalTime().ToString('o')
+    } | ConvertTo-Json | Set-Content -LiteralPath $sessionPath -Encoding UTF8
+    Register-LANWatchConsoleHook -CleanupScriptPath $cleanupPath
+    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -MessageData $cleanupPath -Action {
+        Start-LANWatchCleanupProcess -CleanupScriptPath $Event.MessageData
+    }
+}
+
+function Complete-LANWatchSession {
+    param(
+        [string] $DestinationRoot,
+        [string] $StagingDirectory,
+        [switch] $SkipArtifactRemoval
+    )
+    $sessionPath = Get-LANWatchSessionPath -StagingDirectory $StagingDirectory
+    $cleanupPath = Get-LANWatchCleanupScriptPath -StagingDirectory $StagingDirectory
+    if (-not $SkipArtifactRemoval) {
+        Remove-LANSegmentArtifacts -DestinationRoot $DestinationRoot -StagingDirectory $StagingDirectory
+    }
+    Remove-Item -LiteralPath $sessionPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $cleanupPath -Force -ErrorAction SilentlyContinue
+}
+
 function Get-OlderDLNASlot {
     param([string] $DestinationRoot)
     $paths = @(
@@ -445,6 +593,10 @@ if ([string]::IsNullOrWhiteSpace($StagingDirectory)) {
 }
 $stagingRoot = [System.IO.Path]::GetFullPath($StagingDirectory)
 
+if ($Watch -and -not $DryRun) {
+    Invoke-PendingLANWatchCleanup -StagingDirectory $stagingRoot
+}
+
 if ($Discover) {
     Write-Host "LAN base: $baseUrl"
     try {
@@ -473,8 +625,11 @@ if ($Watch) {
     if ($PollSeconds -lt 5) { throw 'PollSeconds must be at least 5.' }
     Write-Host "Watch: $baseUrl -> $destRoot every $PollSeconds s"
     Write-Host 'Press Enter to stop (phone: export running, same Wi-Fi, Local Network allowed).'
-    Write-Host 'On stop: op_00.mp4 / op_01.mp4 removed from PC DLNA folder and LAN staging cleared.'
+    Write-Host 'On stop (Enter, X, or Ctrl+C): op_00.mp4 / op_01.mp4 removed from PC DLNA folder; LAN staging cleared.'
     Write-Host ''
+    if (-not $DryRun) {
+        Start-LANWatchSession -DestinationRoot $destRoot -StagingDirectory $stagingRoot
+    }
     $iteration = 0
     try {
         while ($true) {
@@ -495,7 +650,7 @@ if ($Watch) {
         }
     } finally {
         if (-not $DryRun) {
-            Remove-LANSegmentArtifacts -DestinationRoot $destRoot -StagingDirectory $stagingRoot
+            Complete-LANWatchSession -DestinationRoot $destRoot -StagingDirectory $stagingRoot
         }
     }
     exit 0
