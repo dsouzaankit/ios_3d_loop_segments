@@ -199,13 +199,31 @@ final class SegmentExporter {
                     seconds: windowEndSeconds - windowStartSeconds,
                     preferredTimescale: 600
                 )
-                logHandler("Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…")
-                try await downloader.ensureFileHeadOnDisk()
-                try await downloader.ensureIndexTailOnDisk()
-                try await downloader.ensureContiguousRange(byteRange)
-                if downloader.isRangeFilled(byteRange),
-                   downloader.hasHeadOnDisk(),
-                   downloader.hasIndexTailOnDisk() {
+                let httpsOnlyLargeSparse = prefersHTTPSExportSessionForSparseLargeFile(
+                    fileLength: fileSize,
+                    byteRange: byteRange,
+                    downloader: downloader
+                )
+                if httpsOnlyLargeSparse {
+                    logHandler(
+                        "Large sparse file (\(Self.formatBytes(fileSize))) — AVAssetExportSession via HTTPS for " +
+                            "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
+                            "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) " +
+                            "(skipping ~\(Self.formatBytes(byteRange.length)) dense download; hybrid cannot open multi‑GB sparse readers)"
+                    )
+                } else {
+                    logHandler(
+                        "Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…"
+                    )
+                    try await downloader.ensureFileHeadOnDisk()
+                    try await downloader.ensureIndexTailOnDisk()
+                    try await downloader.ensureContiguousRange(byteRange)
+                }
+                if httpsOnlyLargeSparse {
+                    // export session reads ranges from pCloud; no dense window on sparse temp
+                } else if downloader.isRangeFilled(byteRange),
+                          downloader.hasHeadOnDisk(),
+                          downloader.hasIndexTailOnDisk() {
                     logHandler(
                         "Dense window + MP4 head/index on disk — skipping readiness probe " +
                             "(AVAssetReader preflight often reports 0 samples on sparse HEVC)"
@@ -389,6 +407,31 @@ final class SegmentExporter {
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
     ) async throws {
+        let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
+        if prefersHTTPSExportSessionForSparseLargeFile(
+            fileLength: fileLength,
+            byteRange: byteRange,
+            downloader: downloader
+        ) {
+            log(
+                "Large sparse segment on \(Self.formatBytes(fileLength)) source — AVAssetExportSession via HTTPS " +
+                    "(hybrid sparse temp cannot open multi‑GB readers)"
+            )
+            let httpsAsset = makeHTTPSPassthroughAsset(
+                remoteURL: remoteURL,
+                authorizationProvider: authorizationProvider
+            )
+            try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                asset: httpsAsset,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "HTTPS export session",
+                log: log
+            )
+            return
+        }
+
         let midFileSegment = byteRange.start >= Self.midFilePrefetchThresholdBytes
         if midFileSegment {
             log(
@@ -433,27 +476,6 @@ final class SegmentExporter {
                     rangeDuration: rangeDuration,
                     outputURL: outputURL,
                     sourceLabel: "\(sourceLabel) (export session)",
-                    log: log
-                )
-                return
-            }
-            let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
-            if byteRange.start >= Self.midFilePrefetchThresholdBytes,
-               fileLength >= Self.streamOnlyThresholdBytes {
-                log(
-                    "Large mid-file segment on \(Self.formatBytes(fileLength)) source — AVAssetExportSession via HTTPS " +
-                        "(hybrid sparse temp cannot open multi‑GB readers)"
-                )
-                let httpsAsset = makeHTTPSPassthroughAsset(
-                    remoteURL: remoteURL,
-                    authorizationProvider: authorizationProvider
-                )
-                try await SegmentPassThroughExporter.exportWindowViaExportSession(
-                    asset: httpsAsset,
-                    rangeStart: rangeStart,
-                    rangeDuration: rangeDuration,
-                    outputURL: outputURL,
-                    sourceLabel: "\(sourceLabel) (HTTPS export session)",
                     log: log
                 )
                 return
@@ -559,6 +581,24 @@ final class SegmentExporter {
                 let reason = Self.isUnsupportedAssetURLError(error)
                     ? "custom asset URL rejected"
                     : "hybrid reader could not open"
+                let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
+                if fileLength >= Self.streamOnlyThresholdBytes {
+                    log("\(reason.capitalized) — AVAssetExportSession via HTTPS from pCloud")
+                    downloader.closeWriteHandleForPassthroughRead(log: log)
+                    let httpsAsset = makeHTTPSPassthroughAsset(
+                        remoteURL: remoteURL,
+                        authorizationProvider: authorizationProvider
+                    )
+                    try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                        asset: httpsAsset,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        outputURL: outputURL,
+                        sourceLabel: "\(tempSourceLabel) (HTTPS export session after hybrid failure)",
+                        log: log
+                    )
+                    return
+                }
                 log("\(reason.capitalized) — using HTTPS passthrough from pCloud")
                 downloader.closeWriteHandleForPassthroughRead(log: log)
                 try await runPassthrough(
@@ -732,6 +772,18 @@ final class SegmentExporter {
         let length = downloader.totalLength
         guard length > 0 else { return false }
         return downloader.isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: length))
+    }
+
+    /// Multi‑GB sparse temps: hybrid/`file://` readers fail after minute 1 at seek 0; export session over HTTPS instead.
+    private func prefersHTTPSExportSessionForSparseLargeFile(
+        fileLength: Int64,
+        byteRange: TimelineByteRange,
+        downloader: WebDAVTempFileDownload
+    ) -> Bool {
+        guard fileLength >= Self.streamOnlyThresholdBytes else { return false }
+        if isFullSourceOnDisk(downloader: downloader) { return false }
+        if byteRange.start == 0 { return false }
+        return true
     }
 
     private func ensureSeekZeroRemainderOnDiskIfBeneficial(
