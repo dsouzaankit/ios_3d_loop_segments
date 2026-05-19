@@ -52,6 +52,8 @@ enum SegmentPassThroughExporter {
         }
 
         try? FileManager.default.removeItem(at: outputURL)
+        let label = sourceLabel.lowercased()
+        let denseLocal = label.contains("dense local temp")
         log(
             "Staging \(outputURL.lastPathComponent) via \(sourceLabel) " +
                 "(media \(formatMediaTime(rangeStart))–\(formatMediaTime(rangeEnd)), video-only" +
@@ -65,9 +67,7 @@ enum SegmentPassThroughExporter {
         var skippedNonKeyframe = 0
         var inRangeVideoSamples = 0
         var lastInRangePTS = rangeStart
-        let label = sourceLabel.lowercased()
         let relaxKeyframeGating = label.contains("pcloud stream") || label.contains("sparse temp + pcloud")
-        let denseLocal = label.contains("dense local temp")
         let maxKeyframeScan = relaxKeyframeGating ? 2400 : 480
         let earliestStart = relaxKeyframeGating
             ? CMTimeSubtract(
