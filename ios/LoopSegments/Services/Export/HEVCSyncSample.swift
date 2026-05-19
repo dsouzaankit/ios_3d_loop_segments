@@ -13,7 +13,7 @@ enum HEVCSyncSample {
     }
     let codec = CMFormatDescriptionGetMediaSubType(videoFormat)
     guard CodecSupport.isHEVCVideo(codec) else {
-      return true
+      return containsH264IDRNAL(sample)
     }
     if !strictHEVCNALScan {
       return true
@@ -23,7 +23,7 @@ enum HEVCSyncSample {
 
   private static func isSyncFromAttachments(_ sample: CMSampleBuffer) -> Bool {
     guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[AnyHashable: Any]] else {
-      return true
+      return false
     }
     for dict in attachments {
       if let notSync = dict[AnyHashable(kCMSampleAttachmentKey_NotSync)] as? Bool, notSync {
@@ -64,6 +64,39 @@ enum HEVCSyncSample {
       let header = UInt8(bitPattern: dataPointer[offset])
       let nalType = (header >> 1) & 0x3F
       if randomAccessTypes.contains(nalType) {
+        return true
+      }
+      offset += nalSize
+    }
+    return false
+  }
+
+  /// Length-prefixed MP4 H.264: IDR slice NAL unit type 5.
+  private static func containsH264IDRNAL(_ sample: CMSampleBuffer) -> Bool {
+    guard let block = CMSampleBufferGetDataBuffer(sample) else { return false }
+    var length = 0
+    var dataPointer: UnsafeMutablePointer<Int8>?
+    guard CMBlockBufferGetDataPointer(
+      block,
+      atOffset: 0,
+      lengthAtOffsetOut: nil,
+      totalLengthOut: &length,
+      dataPointerOut: &dataPointer
+    ) == noErr, let dataPointer, length >= 5 else {
+      return false
+    }
+
+    var offset = 0
+    while offset + 4 < length {
+      let nalSize =
+        (Int(dataPointer[offset]) << 24)
+        | (Int(dataPointer[offset + 1]) << 16)
+        | (Int(dataPointer[offset + 2]) << 8)
+        | Int(dataPointer[offset + 3])
+      offset += 4
+      guard nalSize > 0, offset + nalSize <= length else { break }
+      let nalType = UInt8(bitPattern: dataPointer[offset]) & 0x1F
+      if nalType == 5 {
         return true
       }
       offset += nalSize

@@ -37,6 +37,8 @@ enum SegmentPassThroughExporter {
             throw SegmentExporterError.segmentOutputTooSmall(0)
         }
 
+        let videoTransform = (try? await videoTrack.load(.preferredTransform)) ?? .identity
+
         let reader: AVAssetReader
         do {
             reader = try AVAssetReader(asset: asset)
@@ -44,6 +46,7 @@ enum SegmentPassThroughExporter {
             log("Reader could not open (\(sourceLabel)): \(error.localizedDescription)")
             throw SegmentExporterError.readerFailed(error)
         }
+        defer { reader.cancelReading() }
         let readerLeadInSeconds = min(45.0, max(0, CMTimeGetSeconds(rangeStart)))
         let readerStart = CMTimeSubtract(
             rangeStart,
@@ -52,7 +55,7 @@ enum SegmentPassThroughExporter {
         reader.timeRange = CMTimeRange(start: readerStart, end: rangeEnd)
 
         let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
-        videoOutput.alwaysCopiesSampleData = false
+        videoOutput.alwaysCopiesSampleData = true
         guard reader.canAdd(videoOutput) else {
             throw SegmentExporterError.readerSetupFailed
         }
@@ -77,6 +80,12 @@ enum SegmentPassThroughExporter {
         )
 
         var writerContext: SegmentWriterContext?
+        var exportFinishedOK = false
+        defer {
+            if !exportFinishedOK {
+                writerContext?.cancelIfNeeded()
+            }
+        }
         var startedWriter = false
         var timelineOrigin: CMTime?
         var skippedBeforeRange = 0
@@ -177,7 +186,7 @@ enum SegmentPassThroughExporter {
                     skippedNonKeyframe += 1
                     if skippedNonKeyframe >= maxKeyframeScan {
                         log(
-                            "No HEVC sync in \(maxKeyframeScan) frames at \(formatMediaTime(rangeStart)) — dense-download this minute or try seek 0 min"
+                            "No keyframe in \(maxKeyframeScan) frames at \(formatMediaTime(rangeStart)) — dense-download this minute or try seek 0 min"
                         )
                         throw SegmentExporterError.noKeyframeInWindow
                     }
@@ -202,6 +211,7 @@ enum SegmentPassThroughExporter {
                     outputURL: outputURL,
                     videoFormat: writerFormat,
                     audioFormat: nil,
+                    videoTransform: videoTransform,
                     realTime: false
                 )
                 ctx.start(at: .zero)
@@ -272,6 +282,7 @@ enum SegmentPassThroughExporter {
         if let writerContext {
             try await writerContext.finish()
         }
+        exportFinishedOK = true
     }
 
     private static func copyNextSample(

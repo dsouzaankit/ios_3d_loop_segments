@@ -490,6 +490,18 @@ final class SegmentExporter {
             if useOnDiskFileURL,
                byteRange.start == 0,
                Self.isRetriablePassthroughWriterFailure(error) {
+                if isFullSourceOnDisk(downloader: downloader) {
+                    log(
+                        "On-disk passthrough failed (\(error.localizedDescription)) — retrying with capped hybrid reader"
+                    )
+                    try await Task.sleep(nanoseconds: 400_000_000)
+                    downloader.closeWriteHandleForPassthroughRead(log: log)
+                    try await runPassthrough(
+                        sourceLabel: "\(tempSourceLabel) (hybrid after on-disk writer error)",
+                        useOnDiskFileURL: false
+                    )
+                    return
+                }
                 log(
                     "On-disk passthrough failed (\(error.localizedDescription)) — dense-filling file tail, then retrying on-disk"
                 )
@@ -600,6 +612,12 @@ final class SegmentExporter {
                 useOnDiskFileURL: useOnDiskFileURL
             )
         }
+    }
+
+    private func isFullSourceOnDisk(downloader: WebDAVTempFileDownload) -> Bool {
+        let length = downloader.totalLength
+        guard length > 0 else { return false }
+        return downloader.isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: length))
     }
 
     private func ensureSeekZeroRemainderOnDiskIfBeneficial(
@@ -966,6 +984,7 @@ final class SegmentWriterContext {
         outputURL: URL,
         videoFormat: CMFormatDescription,
         audioFormat: CMFormatDescription?,
+        videoTransform: CGAffineTransform = .identity,
         realTime: Bool = true
     ) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
@@ -976,6 +995,9 @@ final class SegmentWriterContext {
             sourceFormatHint: videoFormat
         )
         videoInput.expectsMediaDataInRealTime = realTime
+        if videoTransform != .identity {
+            videoInput.transform = videoTransform
+        }
 
         if let audioFormat {
             audioInput = AVAssetWriterInput(
@@ -1004,6 +1026,13 @@ final class SegmentWriterContext {
     func start(at sourceTime: CMTime) {
         writer.startWriting()
         writer.startSession(atSourceTime: sourceTime)
+    }
+
+    /// Release a failed writer so the output path can be deleted and retried (-11847 if left in `.writing`).
+    func cancelIfNeeded() {
+        guard writer.status == .writing else { return }
+        videoInput.markAsFinished()
+        writer.cancelWriting()
     }
 
     private static let writerReadyTimeoutSeconds: Double = 30
