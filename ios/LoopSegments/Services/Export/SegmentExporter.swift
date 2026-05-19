@@ -437,7 +437,28 @@ final class SegmentExporter {
                 )
                 return
             }
-            let (readAsset, hybridLoader) = try await resolvePassthroughReadAsset(
+            let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
+            if byteRange.start >= Self.midFilePrefetchThresholdBytes,
+               fileLength >= Self.streamOnlyThresholdBytes {
+                log(
+                    "Large mid-file segment on \(Self.formatBytes(fileLength)) source — AVAssetExportSession via HTTPS " +
+                        "(hybrid sparse temp cannot open multi‑GB readers)"
+                )
+                let httpsAsset = makeHTTPSPassthroughAsset(
+                    remoteURL: remoteURL,
+                    authorizationProvider: authorizationProvider
+                )
+                try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                    asset: httpsAsset,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
+                    sourceLabel: "\(sourceLabel) (HTTPS export session)",
+                    log: log
+                )
+                return
+            }
+            var (readAsset, hybridLoader) = try await resolvePassthroughReadAsset(
                 downloader: downloader,
                 tempURL: tempURL,
                 remoteURL: remoteURL,
@@ -449,6 +470,22 @@ final class SegmentExporter {
                 forceHTTPSRangeReads: forceHTTPSRangeReads,
                 log: log
             )
+            if hybridLoader != nil {
+                do {
+                    _ = try AVAssetReader(asset: readAsset)
+                } catch {
+                    log(
+                        "Hybrid reader could not open (\(error.localizedDescription)) — using HTTPS byte-range reads"
+                    )
+                    readAsset.resourceLoader.setDelegate(nil, queue: nil)
+                    hybridLoader?.cancelOutstandingWork()
+                    hybridLoader = nil
+                    readAsset = makeHTTPSPassthroughAsset(
+                        remoteURL: remoteURL,
+                        authorizationProvider: authorizationProvider
+                    )
+                }
+            }
             if let hybridLoader {
                 defer {
                     readAsset.resourceLoader.setDelegate(nil, queue: nil)
@@ -475,9 +512,12 @@ final class SegmentExporter {
             windowDense: windowDense
         )
         if windowDense, !useOnDiskFileURL, byteRange.start > 0 {
-            log(
-                "Dense window at \(Self.formatBytes(byteRange.start)) — capped hybrid reader (file:// reads zero-filled gaps)"
-            )
+            let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
+            if fileLength < Self.streamOnlyThresholdBytes {
+                log(
+                    "Dense window at \(Self.formatBytes(byteRange.start)) — capped hybrid reader (file:// reads zero-filled gaps)"
+                )
+            }
         }
         if windowDense,
            CMTimeGetSeconds(rangeStart) < 0.5,
@@ -515,10 +555,11 @@ final class SegmentExporter {
             }
             if byteRange.start > 0,
                windowDense,
-               Self.isUnsupportedAssetURLError(error) {
-                log(
-                    "Hybrid asset URL rejected (\(error.localizedDescription)) — using HTTPS byte-range reads from pCloud"
-                )
+               Self.isUnsupportedAssetURLError(error) || Self.isHybridReaderOpenFailure(error) {
+                let reason = Self.isUnsupportedAssetURLError(error)
+                    ? "custom asset URL rejected"
+                    : "hybrid reader could not open"
+                log("\(reason.capitalized) — using HTTPS passthrough from pCloud")
                 downloader.closeWriteHandleForPassthroughRead(log: log)
                 try await runPassthrough(
                     sourceLabel: "\(tempSourceLabel) (HTTPS range)",
@@ -833,6 +874,19 @@ final class SegmentExporter {
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorUnsupportedURL { return true }
         return error.localizedDescription.lowercased().contains("unsupported url")
+    }
+
+    static func isHybridReaderOpenFailure(_ error: Error) -> Bool {
+        let underlying: Error = {
+            if case SegmentExporterError.readerFailed(let err) = error { return err }
+            return error
+        }()
+        let text = underlying.localizedDescription.lowercased()
+        if text.contains("operation stopped") || text.contains("cannot open") {
+            return true
+        }
+        let ns = underlying as NSError
+        return ns.domain == AVFoundationErrorDomain
     }
 
     static func isRetriablePassthroughWriterFailure(_ error: Error) -> Bool {
