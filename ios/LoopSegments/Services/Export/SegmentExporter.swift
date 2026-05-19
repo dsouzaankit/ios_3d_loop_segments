@@ -420,6 +420,8 @@ final class SegmentExporter {
         let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
         if shouldUseRemotePassthroughForMidFile(byteRange: byteRange, downloader: downloader) {
             try await exportMidFileSegmentOverRemote(
+                downloader: downloader,
+                tempURL: tempURL,
                 remoteURL: remoteURL,
                 authorizationProvider: authorizationProvider,
                 rangeCache: rangeCache,
@@ -588,6 +590,8 @@ final class SegmentExporter {
                 log("\(reason.capitalized) — remote passthrough from pCloud")
                 downloader.closeWriteHandleForPassthroughRead(log: log)
                 try await exportMidFileSegmentOverRemote(
+                    downloader: downloader,
+                    tempURL: tempURL,
                     remoteURL: remoteURL,
                     authorizationProvider: authorizationProvider,
                     rangeCache: rangeCache,
@@ -778,8 +782,10 @@ final class SegmentExporter {
         return !isFullSourceOnDisk(downloader: downloader)
     }
 
-    /// Mid-file export: capped `loopsegments://` reads from pCloud, then HTTPS manual, then export session.
+    /// Mid-file export: capped pCloud reads, HTTPS, then dense window + local export session (minute 1 at seek 0 pattern).
     private func exportMidFileSegmentOverRemote(
+        downloader: WebDAVTempFileDownload,
+        tempURL: URL,
         remoteURL: URL,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
@@ -865,13 +871,83 @@ final class SegmentExporter {
                 log: log
             )
         } catch {
-            if let lastError {
-                log(
-                    "All remote passthrough paths failed (last: \(lastError.localizedDescription))"
-                )
-            }
-            throw error
+            lastError = error
+            log(
+                "Remote passthrough failed (\(error.localizedDescription)) — dense-filling \(Self.formatBytes(byteRange.length)) window, then local export session"
+            )
         }
+        try await exportMidFileSegmentViaDenseLocalTemp(
+            downloader: downloader,
+            tempURL: tempURL,
+            byteRange: byteRange,
+            rangeStart: rangeStart,
+            rangeDuration: rangeDuration,
+            outputURL: outputURL,
+            videoFormat: videoFormat,
+            audioFormat: audioFormat,
+            isCancelled: isCancelled,
+            priorError: lastError,
+            log: log
+        )
+    }
+
+    private func exportMidFileSegmentViaDenseLocalTemp(
+        downloader: WebDAVTempFileDownload,
+        tempURL: URL,
+        byteRange: TimelineByteRange,
+        rangeStart: CMTime,
+        rangeDuration: CMTime,
+        outputURL: URL,
+        videoFormat: CMFormatDescription,
+        audioFormat: CMFormatDescription?,
+        isCancelled: @escaping () -> Bool,
+        priorError: Error?,
+        log: @escaping (String) -> Void
+    ) async throws {
+        downloader.pauseBackgroundDownload()
+        try await downloader.ensureFileHeadOnDisk()
+        try await downloader.ensureIndexTailOnDisk(force: true)
+        try await downloader.ensureContiguousRange(byteRange)
+        guard downloader.isRangeFilled(byteRange),
+              downloader.hasHeadOnDisk(),
+              downloader.hasIndexTailOnDisk() else {
+            if let priorError { throw priorError }
+            throw SegmentExporterError.readerSetupFailed
+        }
+        log(
+            "Dense window on disk — \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start)) (head + index present)"
+        )
+        downloader.closeWriteHandleForPassthroughRead(log: log)
+        let fileAsset = AVURLAsset(
+            url: tempURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        do {
+            try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                asset: fileAsset,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "dense local temp (export session)",
+                log: log
+            )
+            return
+        } catch {
+            log(
+                "Local export session failed (\(error.localizedDescription)) — manual passthrough on dense window"
+            )
+        }
+        try await SegmentPassThroughExporter.exportWindow(
+            asset: fileAsset,
+            videoFormat: videoFormat,
+            audioFormat: audioFormat,
+            rangeStart: rangeStart,
+            rangeDuration: rangeDuration,
+            outputURL: outputURL,
+            sourceLabel: "dense local temp (pCloud)",
+            isCancelled: isCancelled,
+            log: log
+        )
     }
 
     private func makeRemoteCappedPassthroughAsset(
