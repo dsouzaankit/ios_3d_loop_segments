@@ -11,7 +11,7 @@ struct SegmentExportResult {
 
 /// Stream-copy export to one rotating 60s MP4 on the phone (AVFoundation, WebDAV input).
 final class SegmentExporter {
-    static let segmentDurationSeconds = 60.0
+    static let segmentDurationSeconds = ExportDeliveryPolicy.targetSegmentDurationSeconds
     static var segmentFileCount: Int { ExportPaths.segmentFileCount }
 
     private let cancelLock = NSLock()
@@ -92,28 +92,28 @@ final class SegmentExporter {
         )
         try Self.ensureExportDiskSpace(fileBytes: fileSize)
 
-        if fileSize > Self.streamOnlyThresholdBytes {
-            logHandler(
-                "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
+            if fileSize > Self.streamOnlyThresholdBytes {
+                logHandler(
+                    "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
+                )
+            }
+            let downloader = try WebDAVTempFileDownload(
+                remoteURL: inputURL,
+                rangeCache: rangeCache,
+                authorizationProvider: authorizationProvider,
+                isCancelled: cancelCheck,
+                log: logHandler
             )
-        }
-        let downloader = try WebDAVTempFileDownload(
-            remoteURL: inputURL,
-            rangeCache: rangeCache,
-            authorizationProvider: authorizationProvider,
-            isCancelled: cancelCheck,
-            log: logHandler
-        )
-        tempDownload = downloader
-        downloader.logDownloadStarted()
-        try await downloader.ensureIndexTailOnDisk()
+            tempDownload = downloader
+            downloader.logDownloadStarted()
+            try await downloader.ensureIndexTailOnDisk()
         let (durationSeconds, videoFormat, audioFormat) = try await probeMetadataPreferLocal(
-            fileURL: downloader.fileURL,
-            inputURL: inputURL,
-            authorizationProvider: authorizationProvider,
-            rangeCache: rangeCache,
-            log: logHandler
-        )
+                fileURL: downloader.fileURL,
+                inputURL: inputURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                log: logHandler
+            )
 
         let durationMs = Int64(durationSeconds * 1000)
         let seekSeconds = Double(seekMs) / 1000.0
@@ -142,28 +142,30 @@ final class SegmentExporter {
 
         let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
+        var mediaCursorSeconds = seekSeconds
         var lastMediaTimeMs = seekMs
         var reachedEnd = false
 
         logHandler(
-            "Phone export: one file \(ExportPaths.segmentURL(index: 0).lastPathComponent) per ~60s; " +
-                "PC keeps op_00/01 via LAN watch or USB (overwrite older slot)"
+            "Phone export: one file \(ExportPaths.segmentURL(index: 0).lastPathComponent) per ~\(Int(Self.segmentDurationSeconds))s " +
+                (ExportDeliveryPolicy.keyframeAlignedBoundaries ? "(keyframe borders)" : "") +
+                "; PC keeps op_00/01 via LAN watch or USB (overwrite older slot)"
         )
 
-        guard let downloader = tempDownload else {
-            throw SegmentExporterError.readerSetupFailed
-        }
+            guard let downloader = tempDownload else {
+                throw SegmentExporterError.readerSetupFailed
+            }
         logHandler(
-            "Publishing 60s segments — dense fill each minute, then passthrough " +
+            "Publishing ~\(Int(Self.segmentDurationSeconds))s segments — dense fill each window, then passthrough " +
                 "(per-minute failsafe: skip on error and continue; _export_source_working.mp4 on LAN when serve is on)"
         )
 
         var skippedSegmentCount = 0
         var publishedSegmentCount = 0
-        while true {
+            while true {
                 try checkCancelled()
 
-                let windowStartSeconds = seekSeconds + Double(minuteIndex) * Self.segmentDurationSeconds
+                let windowStartSeconds = mediaCursorSeconds
                 if windowStartSeconds >= durationSeconds - 0.05 {
                     reachedEnd = true
                     break
@@ -183,9 +185,17 @@ final class SegmentExporter {
                     reachedEnd = true
                     break
                 }
+                let byteRangeEndSeconds = min(
+                    windowEndSeconds + (
+                        ExportDeliveryPolicy.keyframeAlignedBoundaries
+                            ? ExportDeliveryPolicy.keyframeEndHuntSeconds
+                            : 0
+                    ),
+                    durationSeconds
+                )
                 let byteRange = downloader.byteRangeForTimeline(
                     timelineStartSeconds: windowStartSeconds,
-                    timelineEndSeconds: windowEndSeconds,
+                    timelineEndSeconds: byteRangeEndSeconds,
                     durationSeconds: durationSeconds
                 )
                 let effectiveDuration = WebDAVTempFileDownload.effectiveDurationSeconds(
@@ -210,7 +220,7 @@ final class SegmentExporter {
                         index: minuteIndex,
                         startSeconds: windowStartSeconds,
                         endSeconds: windowEndSeconds
-                    )
+                )
                 )
                 logHandler(
                     "Need ~\(Self.formatBytes(byteRange.length)) at file \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)) " +
@@ -260,9 +270,9 @@ final class SegmentExporter {
                     logHandler(
                         "Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…"
                     )
-                    try await downloader.ensureFileHeadOnDisk()
-                    try await downloader.ensureIndexTailOnDisk()
-                    try await downloader.ensureContiguousRange(byteRange)
+                try await downloader.ensureFileHeadOnDisk()
+                try await downloader.ensureIndexTailOnDisk()
+                try await downloader.ensureContiguousRange(byteRange)
                 }
                 if skipDenseMidFileRemote {
                     // remote passthrough reads ranges from pCloud; no dense window on sparse temp
@@ -274,28 +284,28 @@ final class SegmentExporter {
                             "(AVAssetReader preflight often reports 0 samples on sparse HEVC)"
                     )
                 } else {
-                    try await SegmentLocalReadiness.waitUntilReadable(
-                        fileURL: downloader.fileURL,
-                        rangeStart: rangeStart,
-                        rangeDuration: rangeDuration,
-                        totalFileBytes: downloader.totalLength,
-                        requiredByteRange: byteRange,
-                        isWindowDenseFilled: { downloader.isRangeFilled(byteRange) },
-                        windowFilledBytes: { downloader.exportWindowFilledBytes(for: byteRange) },
-                        filledByteSpan: { downloader.filledSpan() },
-                        indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
-                        refreshMP4Index: { try await downloader.ensureIndexTailOnDisk(force: true) },
-                        prepareSparseFileForReader: {
-                            try await downloader.ensureFileHeadOnDisk()
-                            try await downloader.ensureIndexTailOnDisk(force: true)
-                            try await downloader.ensureContiguousRange(byteRange)
-                        },
-                        isCancelled: cancelCheck,
-                        log: logHandler
-                    )
+                try await SegmentLocalReadiness.waitUntilReadable(
+                    fileURL: downloader.fileURL,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    totalFileBytes: downloader.totalLength,
+                    requiredByteRange: byteRange,
+                    isWindowDenseFilled: { downloader.isRangeFilled(byteRange) },
+                    windowFilledBytes: { downloader.exportWindowFilledBytes(for: byteRange) },
+                    filledByteSpan: { downloader.filledSpan() },
+                    indexTailOnDisk: { downloader.hasIndexTailOnDisk() },
+                    refreshMP4Index: { try await downloader.ensureIndexTailOnDisk(force: true) },
+                    prepareSparseFileForReader: {
+                        try await downloader.ensureFileHeadOnDisk()
+                        try await downloader.ensureIndexTailOnDisk(force: true)
+                        try await downloader.ensureContiguousRange(byteRange)
+                    },
+                    isCancelled: cancelCheck,
+                    log: logHandler
+                )
                 }
 
-                try await exportSegmentFromTempOrStream(
+                let boundary = try await exportSegmentFromTempOrStream(
                     downloader: downloader,
                     tempURL: downloader.fileURL,
                     remoteURL: inputURL,
@@ -311,15 +321,26 @@ final class SegmentExporter {
                     isCancelled: cancelCheck,
                     log: logHandler
                 )
+                let actualDuration = CMTime(
+                    seconds: boundary.segmentDurationSeconds,
+                    preferredTimescale: 600
+                )
+                if ExportDeliveryPolicy.keyframeAlignedBoundaries {
+                    logHandler(
+                        "Segment \(minuteIndex + 1) — source \(ExportTimelineLog.sourceRange(start: boundary.segmentStart, end: boundary.segmentEnd)); " +
+                            "next window at \(ExportTimelineLog.wallClock(boundary.nextSegmentStart))"
+                    )
+                }
                 try await publishValidatedSegment(
                     minuteIndex: minuteIndex,
                     slot: slot,
                     stagingURL: stagingURL,
-                    rangeDuration: rangeDuration,
+                    rangeDuration: actualDuration,
                     wallOrigin: dlnaPublishOrigin,
                     log: logHandler
                 )
                 publishedSegmentCount += 1
+                    mediaCursorSeconds = boundary.nextSegmentStartSeconds
                 } catch {
                     try checkCancelled()
                     if !Self.shouldSkipMinuteAndContinue(after: error) {
@@ -334,14 +355,15 @@ final class SegmentExporter {
                         "Continuing — next minute will dense-fill on _export_source_working.mp4 " +
                             "(LAN :8765 when serve is on)"
                     )
+                    mediaCursorSeconds = windowEndSeconds
                 }
 
-                lastMediaTimeMs = Int64(windowEndSeconds * 1000)
+                lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
                 minuteIndex += 1
-        }
+            }
 
-        if seekSeconds <= 0.5 {
-            try await downloader.waitUntilComplete()
+            if seekSeconds <= 0.5 {
+                try await downloader.waitUntilComplete()
         }
 
         if skippedSegmentCount > 0 {
@@ -351,7 +373,7 @@ final class SegmentExporter {
                     (reachedEnd ? "Reached end of file." : "Export stopped before EOF.")
             )
         } else {
-            logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
+        logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
         }
         return SegmentExportResult(
             lastMediaTimeMs: lastMediaTimeMs,
@@ -476,7 +498,7 @@ final class SegmentExporter {
         outputURL: URL,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
-    ) async throws {
+    ) async throws -> SegmentPassThroughResult {
         let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
         let rangeEnd = CMTimeAdd(rangeStart, rangeDuration)
         log(
@@ -484,7 +506,7 @@ final class SegmentExporter {
                 "file bytes \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end))"
         )
         if shouldUseRemotePassthroughForMidFile(byteRange: byteRange, downloader: downloader) {
-            try await exportMidFileSegmentOverRemote(
+            return try await exportMidFileSegmentOverRemote(
                 downloader: downloader,
                 tempURL: tempURL,
                 remoteURL: remoteURL,
@@ -500,7 +522,6 @@ final class SegmentExporter {
                 isCancelled: isCancelled,
                 log: log
             )
-            return
         }
 
         let midFileSegment = byteRange.start >= Self.midFilePrefetchThresholdBytes
@@ -532,7 +553,7 @@ final class SegmentExporter {
             sourceLabel: String,
             useOnDiskFileURL: Bool,
             forceHTTPSRangeReads: Bool = false
-        ) async throws {
+        ) async throws -> SegmentPassThroughResult {
             if useOnDiskFileURL, isFullSourceOnDisk(downloader: downloader) {
                 log(
                     "Passthrough via AVAssetExportSession (full \(Self.formatBytes(downloader.totalLength)) file on disk)"
@@ -541,7 +562,7 @@ final class SegmentExporter {
                     url: tempURL,
                     options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
                 )
-                try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                return try await SegmentPassThroughExporter.exportWindowViaExportSession(
                     asset: fileAsset,
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
@@ -549,7 +570,6 @@ final class SegmentExporter {
                     sourceLabel: "\(sourceLabel) (export session)",
                     log: log
                 )
-                return
             }
             var (readAsset, hybridLoader) = try await resolvePassthroughReadAsset(
                 downloader: downloader,
@@ -585,7 +605,7 @@ final class SegmentExporter {
                     hybridLoader.cancelOutstandingWork()
                 }
             }
-            try await SegmentPassThroughExporter.exportWindow(
+            return try await SegmentPassThroughExporter.exportWindow(
                 asset: readAsset,
                 videoFormat: videoFormat,
                 audioFormat: audioFormat,
@@ -623,7 +643,7 @@ final class SegmentExporter {
         }
         downloader.closeWriteHandleForPassthroughRead(log: log)
         do {
-            try await runPassthrough(
+            return try await runPassthrough(
                 sourceLabel: tempSourceLabel,
                 useOnDiskFileURL: useOnDiskFileURL
             )
@@ -636,7 +656,7 @@ final class SegmentExporter {
                     url: tempURL,
                     options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
                 )
-                try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                return try await SegmentPassThroughExporter.exportWindowViaExportSession(
                     asset: fileAsset,
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
@@ -644,7 +664,6 @@ final class SegmentExporter {
                     sourceLabel: "\(tempSourceLabel) (export session after keyframe scan)",
                     log: log
                 )
-                return
             }
             if byteRange.start > 0,
                windowDense,
@@ -654,7 +673,7 @@ final class SegmentExporter {
                     : "hybrid reader could not open"
                 log("\(reason.capitalized) — remote passthrough from pCloud")
                 downloader.closeWriteHandleForPassthroughRead(log: log)
-                try await exportMidFileSegmentOverRemote(
+                return try await exportMidFileSegmentOverRemote(
                     downloader: downloader,
                     tempURL: tempURL,
                     remoteURL: remoteURL,
@@ -670,7 +689,6 @@ final class SegmentExporter {
                     isCancelled: isCancelled,
                     log: log
                 )
-                return
             }
             if byteRange.start == 0,
                windowDense,
@@ -684,14 +702,13 @@ final class SegmentExporter {
                     log: log
                 )
                 downloader.closeWriteHandleForPassthroughRead(log: log)
-                try await runPassthrough(
+                return try await runPassthrough(
                     sourceLabel: tempSourceLabel,
                     useOnDiskFileURL: true
                 )
-                return
             }
             guard Self.shouldStreamFallback(after: error) else { throw error }
-            try? FileManager.default.removeItem(at: outputURL)
+                try? FileManager.default.removeItem(at: outputURL)
             if useOnDiskFileURL,
                byteRange.start == 0,
                Self.isRetriablePassthroughWriterFailure(error) {
@@ -714,7 +731,7 @@ final class SegmentExporter {
                         url: tempURL,
                         options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
                     )
-                    try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                    return try await SegmentPassThroughExporter.exportWindowViaExportSession(
                         asset: fileAsset,
                         rangeStart: rangeStart,
                         rangeDuration: rangeDuration,
@@ -722,17 +739,15 @@ final class SegmentExporter {
                         sourceLabel: "\(tempSourceLabel) (export session)",
                         log: log
                     )
-                    return
                 }
                 log(
                     "On-disk passthrough failed (\(error.localizedDescription)) — sparse gap after window; using capped hybrid reader"
                 )
                 try await Task.sleep(nanoseconds: 400_000_000)
-                try await runPassthrough(
+                return try await runPassthrough(
                     sourceLabel: "\(tempSourceLabel) (hybrid after on-disk writer error)",
                     useOnDiskFileURL: false
                 )
-                return
             }
             if useOnDiskFileURL,
                byteRange.start > 0,
@@ -741,11 +756,10 @@ final class SegmentExporter {
                     "On-disk passthrough failed (\(error.localizedDescription)) — retrying with capped hybrid reader"
                 )
                 downloader.closeWriteHandleForPassthroughRead(log: log)
-                try await runPassthrough(
+                return try await runPassthrough(
                     sourceLabel: "\(tempSourceLabel) (hybrid retry)",
                     useOnDiskFileURL: false
                 )
-                return
             }
             let writerRejected = Self.isRetriablePassthroughWriterFailure(error)
             let writerBackpressure: Bool = {
@@ -758,26 +772,24 @@ final class SegmentExporter {
                         "Writer rejected on-disk reader (\(error.localizedDescription)) — retrying with capped hybrid reader"
                     )
                     downloader.closeWriteHandleForPassthroughRead(log: log)
-                    try await runPassthrough(
+                    return try await runPassthrough(
                         sourceLabel: "dense local temp (hybrid after writer error)",
                         useOnDiskFileURL: false
                     )
-                    return
                 }
                 log(
                     "Writer rejected passthrough (\(error.localizedDescription)) — re-downloading window, then capped hybrid reader"
                 )
-                downloader.pauseBackgroundDownload()
+            downloader.pauseBackgroundDownload()
                 try await downloader.ensureFileHeadOnDisk()
                 try await downloader.ensureIndexTailOnDisk()
                 try await downloader.ensureContiguousRange(byteRange, force: true)
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
                 downloader.closeWriteHandleForPassthroughRead(log: log)
-                try await runPassthrough(
+                return try await runPassthrough(
                     sourceLabel: windowDense ? "dense local temp (writer retry)" : "sparse temp + pCloud (writer retry)",
                     useOnDiskFileURL: false
                 )
-                return
             }
             if writerBackpressure {
                 log(
@@ -797,11 +809,10 @@ final class SegmentExporter {
                 useOnDiskFileURL = false
                 downloader.closeWriteHandleForPassthroughRead(log: log)
                 do {
-                    try await runPassthrough(
+                    return try await runPassthrough(
                         sourceLabel: windowDense ? "dense local temp (hybrid retry)" : "sparse temp + pCloud (retry)",
                         useOnDiskFileURL: false
                     )
-                    return
                 } catch {
                     guard Self.shouldStreamFallback(after: error) else { throw error }
                     try? FileManager.default.removeItem(at: outputURL)
@@ -825,7 +836,7 @@ final class SegmentExporter {
                 windowDense: windowDense
             )
             downloader.closeWriteHandleForPassthroughRead(log: log)
-            try await runPassthrough(
+            return try await runPassthrough(
                 sourceLabel: windowDense ? "dense local temp (window filled)" : "sparse temp + pCloud (window filled)",
                 useOnDiskFileURL: useOnDiskFileURL
             )
@@ -863,21 +874,21 @@ final class SegmentExporter {
         outputURL: URL,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
-    ) async throws {
+    ) async throws -> SegmentPassThroughResult {
         let fileLength = trustedLength > 0 ? trustedLength : 0
         if fileLength >= Self.streamOnlyThresholdBytes, Self.isHEVCFormat(videoFormat) {
             log(
                 "Large HEVC mid-file — dense window + capped hybrid export " +
                     "(sparse file:// skipped on \(Self.formatBytes(fileLength)) sources)"
             )
-            try await exportMidFileSegmentViaDenseLocalTemp(
+            return try await exportMidFileSegmentViaDenseLocalTemp(
                 downloader: downloader,
                 tempURL: tempURL,
-                remoteURL: remoteURL,
-                authorizationProvider: authorizationProvider,
-                rangeCache: rangeCache,
+                    remoteURL: remoteURL,
+                    authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
                 trustedLength: fileLength,
-                byteRange: byteRange,
+                    byteRange: byteRange,
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
                 outputURL: outputURL,
@@ -887,7 +898,6 @@ final class SegmentExporter {
                 priorError: nil,
                 log: log
             )
-            return
         }
         var lastError: Error?
         log(
@@ -908,18 +918,17 @@ final class SegmentExporter {
         }
         do {
             _ = try await cappedAsset.loadTracks(withMediaType: .video)
-            try await SegmentPassThroughExporter.exportWindow(
+            return try await SegmentPassThroughExporter.exportWindow(
                 asset: cappedAsset,
-                videoFormat: videoFormat,
-                audioFormat: audioFormat,
-                rangeStart: rangeStart,
-                rangeDuration: rangeDuration,
-                outputURL: outputURL,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
                 sourceLabel: "capped pCloud range",
                 isCancelled: isCancelled,
-                log: log
-            )
-            return
+                    log: log
+                )
         } catch {
             lastError = error
             if Self.shouldTryExportSessionAfterHTTPSManualFailure(error) {
@@ -927,7 +936,7 @@ final class SegmentExporter {
                     "Capped pCloud manual failed (\(error.localizedDescription)) — trying export session on same asset"
                 )
                 do {
-                    try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                    return try await SegmentPassThroughExporter.exportWindowViaExportSession(
                         asset: cappedAsset,
                         rangeStart: rangeStart,
                         rangeDuration: rangeDuration,
@@ -935,7 +944,6 @@ final class SegmentExporter {
                         sourceLabel: "capped pCloud (export session)",
                         log: log
                     )
-                    return
                 } catch {
                     lastError = error
                 }
@@ -951,41 +959,43 @@ final class SegmentExporter {
             authorizationProvider: authorizationProvider
         )
         do {
-            try await SegmentPassThroughExporter.exportWindow(
+                return try await SegmentPassThroughExporter.exportWindow(
                 asset: httpsAsset,
-                videoFormat: videoFormat,
-                audioFormat: audioFormat,
-                rangeStart: rangeStart,
-                rangeDuration: rangeDuration,
-                outputURL: outputURL,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: outputURL,
                 sourceLabel: "HTTPS range (pCloud)",
                 isCancelled: isCancelled,
-                log: log
-            )
-            return
+                    log: log
+                )
         } catch {
             lastError = error
-            guard Self.shouldTryExportSessionAfterHTTPSManualFailure(error) else { throw error }
+            if Self.shouldTryExportSessionAfterHTTPSManualFailure(error) {
+                log(
+                    "HTTPS manual passthrough failed (\(error.localizedDescription)) — trying AVAssetExportSession"
+                )
+                do {
+                    return try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                        asset: httpsAsset,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        outputURL: outputURL,
+                        sourceLabel: "HTTPS export session",
+                        log: log
+                    )
+                } catch {
+                    lastError = error
+                }
+            } else {
+                throw error
+            }
             log(
-                "HTTPS manual passthrough failed (\(error.localizedDescription)) — trying AVAssetExportSession"
+                "Remote passthrough failed (\(lastError?.localizedDescription ?? "unknown")) — dense-filling \(Self.formatBytes(byteRange.length)) window, then local export session"
             )
         }
-        do {
-            try await SegmentPassThroughExporter.exportWindowViaExportSession(
-                asset: httpsAsset,
-                rangeStart: rangeStart,
-                rangeDuration: rangeDuration,
-                outputURL: outputURL,
-                sourceLabel: "HTTPS export session",
-                log: log
-            )
-        } catch {
-            lastError = error
-            log(
-                "Remote passthrough failed (\(error.localizedDescription)) — dense-filling \(Self.formatBytes(byteRange.length)) window, then local export session"
-            )
-        }
-        try await exportMidFileSegmentViaDenseLocalTemp(
+        return try await exportMidFileSegmentViaDenseLocalTemp(
             downloader: downloader,
             tempURL: tempURL,
             remoteURL: remoteURL,
@@ -1020,7 +1030,7 @@ final class SegmentExporter {
         isCancelled: @escaping () -> Bool,
         priorError: Error?,
         log: @escaping (String) -> Void
-    ) async throws {
+    ) async throws -> SegmentPassThroughResult {
         downloader.pauseBackgroundDownload()
         try await downloader.ensureFileHeadOnDisk()
         try await downloader.ensureIndexTailOnDisk(force: true)
@@ -1039,7 +1049,7 @@ final class SegmentExporter {
         var lastError: Error? = priorError
 
         log("Trying capped hybrid — dense window on disk + pCloud for head/index")
-        if try await tryExportViaCappedAsset(
+        if let boundary = try await tryExportViaCappedAsset(
             remoteURL: remoteURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
@@ -1055,11 +1065,11 @@ final class SegmentExporter {
             isCancelled: isCancelled,
             log: log
         ) {
-            return
+            return boundary
         }
 
         log("Capped hybrid failed — trying remote-only capped pCloud reads")
-        if try await tryExportViaCappedAsset(
+        if let boundary = try await tryExportViaCappedAsset(
             remoteURL: remoteURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
@@ -1075,7 +1085,7 @@ final class SegmentExporter {
             isCancelled: isCancelled,
             log: log
         ) {
-            return
+            return boundary
         }
 
         if let lastError {
@@ -1103,23 +1113,23 @@ final class SegmentExporter {
         sourceLabel: String,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
-    ) async throws -> Bool {
+    ) async throws -> SegmentPassThroughResult? {
         let (asset, loader) = makeCappedPassthroughAsset(
-            remoteURL: remoteURL,
+                remoteURL: remoteURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
             fileLength: fileLength,
             byteRange: byteRange,
             downloader: downloader,
-            log: log
-        )
+                log: log
+            )
         defer {
             asset.resourceLoader.setDelegate(nil, queue: nil)
             loader.cancelOutstandingWork()
         }
         _ = try await asset.loadTracks(withMediaType: .video)
         do {
-            try await SegmentPassThroughExporter.exportWindow(
+            return try await SegmentPassThroughExporter.exportWindow(
                 asset: asset,
                 videoFormat: videoFormat,
                 audioFormat: audioFormat,
@@ -1130,14 +1140,13 @@ final class SegmentExporter {
                 isCancelled: isCancelled,
                 log: log
             )
-            return true
         } catch {
             guard Self.shouldTryExportSessionAfterHTTPSManualFailure(error) else { throw error }
             log(
                 "\(sourceLabel) manual failed (\(error.localizedDescription)) — export session on same asset"
             )
             do {
-                try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                return try await SegmentPassThroughExporter.exportWindowViaExportSession(
                     asset: asset,
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
@@ -1145,10 +1154,9 @@ final class SegmentExporter {
                     sourceLabel: "\(sourceLabel) (export session)",
                     log: log
                 )
-                return true
             } catch {
                 log("\(sourceLabel) export session failed (\(error.localizedDescription))")
-                return false
+                return nil
             }
         }
     }
@@ -1744,7 +1752,7 @@ final class SegmentWriterContext {
     func finish() async throws {
         videoInput.markAsFinished()
         if !audioAbandoned {
-            audioInput?.markAsFinished()
+        audioInput?.markAsFinished()
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             writer.finishWriting {

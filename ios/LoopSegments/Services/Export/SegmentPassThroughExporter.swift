@@ -14,7 +14,7 @@ enum SegmentPassThroughExporter {
         sourceLabel: String,
         isCancelled: (() -> Bool)? = nil,
         log: @escaping (String) -> Void
-    ) async throws {
+    ) async throws -> SegmentPassThroughResult {
         let includeAudio = audioFormat != nil
         let videoTrack: AVAssetTrack?
         do {
@@ -28,8 +28,20 @@ enum SegmentPassThroughExporter {
         guard let videoTrack else {
             throw SegmentExporterError.noVideoTrack
         }
-        let rangeEnd = CMTimeAdd(rangeStart, rangeDuration)
-        log("Passthrough — source \(ExportTimelineLog.sourceRange(start: rangeStart, end: rangeEnd))")
+        let nominalEnd = CMTimeAdd(rangeStart, rangeDuration)
+        let keyframeAligned = ExportDeliveryPolicy.keyframeAlignedBoundaries
+        let huntSeconds = ExportDeliveryPolicy.keyframeEndHuntSeconds
+        let readerEnd = keyframeAligned
+            ? CMTimeAdd(
+                nominalEnd,
+                CMTime(seconds: huntSeconds, preferredTimescale: rangeStart.timescale)
+            )
+            : nominalEnd
+        let cutAt = nominalEnd
+        log(
+            "Passthrough — source \(ExportTimelineLog.sourceRange(start: rangeStart, end: nominalEnd))" +
+                (keyframeAligned ? " (cut at next keyframe, hunt +\(Int(huntSeconds))s)" : "")
+        )
         let windowSeconds = CMTimeGetSeconds(rangeDuration)
         guard windowSeconds.isFinite, windowSeconds >= 0.5 else {
             log(
@@ -53,7 +65,7 @@ enum SegmentPassThroughExporter {
             rangeStart,
             CMTime(seconds: readerLeadInSeconds, preferredTimescale: rangeStart.timescale)
         )
-        reader.timeRange = CMTimeRange(start: readerStart, end: rangeEnd)
+        reader.timeRange = CMTimeRange(start: readerStart, end: readerEnd)
 
         let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
         videoOutput.alwaysCopiesSampleData = true
@@ -94,6 +106,8 @@ enum SegmentPassThroughExporter {
         var skippedNonKeyframe = 0
         var inRangeVideoSamples = 0
         var lastInRangePTS = rangeStart
+        var nextSegmentStartPTS: CMTime?
+        var droppedPastNominalEnd = 0
         let relaxKeyframeGating = label.lowercased().contains("pcloud")
         let maxKeyframeScan = relaxKeyframeGating ? 2400 : 480
         let earliestStart = relaxKeyframeGating
@@ -226,8 +240,25 @@ enum SegmentPassThroughExporter {
                 }
                 log(
                     "Segment timestamps reset to 0 — first sample source PTS \(ExportTimelineLog.wallClock(pts)), " +
-                        "window \(ExportTimelineLog.sourceRange(start: rangeStart, end: rangeEnd))"
+                        "window \(ExportTimelineLog.sourceRange(start: rangeStart, end: nominalEnd))"
                 )
+            }
+
+            if keyframeAligned, startedWriter, CMTimeCompare(pts, cutAt) >= 0 {
+                let writerFormatForSync = CMSampleBufferGetFormatDescription(videoSample)
+                    ?? videoFormat
+                let strictH264IDR = CMTimeGetSeconds(rangeStart) < 1.0
+                if HEVCSyncSample.isReliableSyncPoint(
+                    videoSample,
+                    videoFormat: writerFormatForSync,
+                    strictHEVCNALScan: true,
+                    strictH264IDR: strictH264IDR
+                ) {
+                    nextSegmentStartPTS = pts
+                    break
+                }
+                droppedPastNominalEnd += 1
+                continue
             }
 
             let origin = timelineOrigin ?? rangeStart
@@ -295,13 +326,23 @@ enum SegmentPassThroughExporter {
             throw SegmentExporterError.segmentOutputTooSmall(0)
         }
 
+        let segmentEndPTS = lastInRangePTS
+        let resolvedNextStart = nextSegmentStartPTS ?? nominalEnd
+        if keyframeAligned, droppedPastNominalEnd > 0 {
+            log(
+                "Keyframe segment end — dropped \(droppedPastNominalEnd) frame(s) after \(formatMediaTime(nominalEnd)); " +
+                    "next segment at \(formatMediaTime(resolvedNextStart))"
+            )
+        }
+
         if includeAudio, let writerContext {
             let segmentOrigin = timelineOrigin ?? rangeStart
+            let audioEnd = keyframeAligned ? resolvedNextStart : nominalEnd
             await appendAudioPassthrough(
                 asset: asset,
                 readerStart: readerStart,
                 rangeStart: rangeStart,
-                rangeEnd: rangeEnd,
+                rangeEnd: audioEnd,
                 segmentOrigin: segmentOrigin,
                 writerContext: writerContext,
                 sourceLabel: sourceLabel,
@@ -314,8 +355,13 @@ enum SegmentPassThroughExporter {
             try await writerContext.finish()
         }
         log(
-            "Passthrough finished — source \(ExportTimelineLog.sourceRange(start: segmentOrigin, end: lastInRangePTS)), " +
-                "segment file 0:00–\(ExportTimelineLog.wallClock(seconds: CMTimeGetSeconds(CMTimeSubtract(lastInRangePTS, segmentOrigin))))"
+            "Passthrough finished — source \(ExportTimelineLog.sourceRange(start: segmentOrigin, end: segmentEndPTS)), " +
+                "segment file 0:00–\(ExportTimelineLog.wallClock(seconds: CMTimeGetSeconds(CMTimeSubtract(segmentEndPTS, segmentOrigin))))"
+        )
+        return SegmentPassThroughResult(
+            segmentStart: segmentOrigin,
+            segmentEnd: segmentEndPTS,
+            nextSegmentStart: resolvedNextStart
         )
         exportFinishedOK = true
     }
@@ -408,7 +454,7 @@ enum SegmentPassThroughExporter {
         outputURL: URL,
         sourceLabel: String,
         log: @escaping (String) -> Void
-    ) async throws {
+    ) async throws -> SegmentPassThroughResult {
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
             throw SegmentExporterError.writerSetupFailed
         }
@@ -434,6 +480,12 @@ enum SegmentPassThroughExporter {
                 throw SegmentExporterError.segmentOutputTooSmall(0)
             }
             log("AVAssetExportSession passthrough finished (\(formatBytes(bytes)))")
+            let end = CMTimeAdd(rangeStart, rangeDuration)
+            return SegmentPassThroughResult(
+                segmentStart: rangeStart,
+                segmentEnd: end,
+                nextSegmentStart: end
+            )
         case .failed:
             let err = session.error ?? NSError(domain: "AVAssetExportSession", code: -1)
             log("AVAssetExportSession failed (\(sourceLabel)): \(err.localizedDescription)")

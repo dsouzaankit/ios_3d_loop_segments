@@ -22,13 +22,15 @@ enum ExportPaths {
     static func publishSegmentToDLNA(slot: Int, log: ((String) -> Void)? = nil) throws {
         let staging = segmentStagingURL(index: slot)
         let final = segmentURL(index: slot)
-        guard FileManager.default.fileExists(atPath: staging.path) else {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: staging.path) else {
             throw SegmentExporterError.writerSetupFailed
         }
-        if FileManager.default.fileExists(atPath: final.path) {
-            try FileManager.default.removeItem(at: final)
+        if fm.fileExists(atPath: final.path) {
+            _ = try fm.replaceItemAt(final, withItemAt: staging, backupItemName: nil, options: [])
+        } else {
+            try fm.moveItem(at: staging, to: final)
         }
-        try FileManager.default.moveItem(at: staging, to: final)
         log?("DLNA slot \(final.lastPathComponent) published (~60s wall-clock cadence)")
     }
 
@@ -144,6 +146,27 @@ enum ExportPaths {
     /// Remove prior export log snapshots so `export_latest.txt` / `export_progress.txt` only reflect this run.
     static func clearLogsForNewExport(log: ((String) -> Void)? = nil) {
         _ = clearExportLogs(log: log)
+    }
+
+    /// Names and sizes of segment / working-source files for post-export logs and troubleshooting Files visibility.
+    static func describeExportMediaOnDisk() -> String {
+        let fm = FileManager.default
+        let dir = exportsDirectory
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else {
+            return "Exports/: could not list directory"
+        }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        var parts: [String] = []
+        for name in names.sorted() where name.hasSuffix(".mp4") {
+            let url = dir.appendingPathComponent(name)
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+            parts.append("\(name) \(formatter.string(fromByteCount: size))")
+        }
+        if parts.isEmpty {
+            return "Exports/: no .mp4 on disk — Files → On My iPhone → Loop Segments → Exports"
+        }
+        return "Exports on disk: " + parts.joined(separator: "; ")
     }
 
     /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).

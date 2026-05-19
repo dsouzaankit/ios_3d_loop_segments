@@ -7,6 +7,9 @@
   While export runs on the phone, Loop Segments serves Documents/Exports on Wi-Fi
   (default http://<phone-ip>:8765/). This script downloads the segment and copies it
   to the older of op_00.mp4 / op_01.mp4 on the PC — same ring logic as Photos MTP.
+  Skips overwrite when the peer slot already has the same segment (phone unchanged) so DLNA
+  never has identical op_00 and op_01. Schedules a retry of that same slot after DeferRetrySeconds
+  (default = PollSeconds, 60). Installs via a temp file + rename so DLNA never reads a partial MP4.
 
   Save the phone IP from the export log (LAN export: http://...) or -Discover.
 
@@ -85,6 +88,109 @@ function Get-LANStatus {
     return Invoke-RestMethod -Uri "$BaseUrl/status.json" -Method Get -TimeoutSec 30
 }
 
+function Get-FileSha256Hex {
+    param([string] $Path)
+    $hash = Get-FileHash -LiteralPath $Path -Algorithm SHA256
+    return $hash.Hash.ToLowerInvariant()
+}
+
+function Get-LANSyncState {
+    param([string] $StateFile)
+    if (-not (Test-Path -LiteralPath $StateFile -PathType Leaf)) { return $null }
+    try {
+        return Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+}
+
+function Write-LANSyncState {
+    param(
+        [string] $StateFile,
+        [long] $Bytes,
+        [string] $Checksum,
+        [string] $DestName,
+        [string] $DeferredDest = '',
+        [string] $DeferredAt = '',
+        [string] $DeferredReason = ''
+    )
+    $payload = [ordered]@{
+        bytes = $Bytes
+        checksum = $Checksum
+        syncedAt = (Get-Date).ToUniversalTime().ToString('o')
+        dest = $DestName
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DeferredDest)) {
+        $payload.deferredDest = $DeferredDest
+        $payload.deferredAt = $DeferredAt
+        $payload.deferredReason = $DeferredReason
+    }
+    $payload | ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding UTF8
+}
+
+function Register-LANSyncDefer {
+    param(
+        [string] $StateFile,
+        [string] $DestName,
+        [string] $Reason,
+        [int] $DeferRetrySeconds,
+        [long] $Bytes,
+        [string] $Checksum
+    )
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+    Write-LANSyncState -StateFile $StateFile -Bytes $Bytes -Checksum $Checksum -DestName $DestName `
+        -DeferredDest $DestName -DeferredAt $now -DeferredReason $Reason
+    Write-Host "Deferred $DestName — will force retry in $DeferRetrySeconds s ($Reason)."
+}
+
+function Resolve-DLANTargetSlot {
+    param(
+        [string] $DestinationRoot,
+        [string] $StateFile,
+        [int] $DeferRetrySeconds
+    )
+    $state = Get-LANSyncState -StateFile $StateFile
+    if ($null -ne $state -and $null -ne $state.deferredDest -and $null -ne $state.deferredAt) {
+        $destName = [string]$state.deferredDest
+        if ($SegmentNames -contains $destName) {
+            try {
+                $deferredAt = [datetime]::Parse(
+                    [string]$state.deferredAt,
+                    $null,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind
+                )
+                if ($deferredAt.Kind -eq [System.DateTimeKind]::Unspecified) {
+                    $deferredAt = [datetime]::SpecifyKind($deferredAt, [System.DateTimeKind]::Utc)
+                }
+                $elapsed = ((Get-Date).ToUniversalTime() - $deferredAt.ToUniversalTime()).TotalSeconds
+                if ($elapsed -ge $DeferRetrySeconds) {
+                    $destPath = Join-Path $DestinationRoot $destName
+                    $was = if ($state.deferredReason) { [string]$state.deferredReason } else { 'checksum skip' }
+                    return $destPath, $destName, "retry deferred $destName (${DeferRetrySeconds}s+, $was)"
+                }
+            } catch {
+                Write-Warning "Could not parse deferredAt in lan-sync-state.json — using ring slot."
+            }
+        }
+    }
+    return Get-OlderDLNASlot -DestinationRoot $DestinationRoot
+}
+
+function Install-DLANSegmentAtomic {
+    param(
+        [string] $SourcePath,
+        [string] $DestPath
+    )
+    $parent = Split-Path -Parent $DestPath
+    $leaf = Split-Path -Leaf $DestPath
+    $tempPath = Join-Path $parent ".$leaf.part"
+    if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
+        Remove-Item -LiteralPath $tempPath -Force
+    }
+    Copy-Item -LiteralPath $SourcePath -Destination $tempPath -Force
+    Move-Item -LiteralPath $tempPath -Destination $DestPath -Force
+}
+
 function Get-OlderDLNASlot {
     param([string] $DestinationRoot)
     $paths = @(
@@ -105,12 +211,22 @@ function Get-OlderDLNASlot {
     return $paths[1], $SegmentNames[1], 'overwrite older PC slot (op_01)'
 }
 
+function Get-PeerDLNASlotPath {
+    param(
+        [string] $DestinationRoot,
+        [string] $DestName
+    )
+    $peerName = if ($DestName -eq $SegmentNames[0]) { $SegmentNames[1] } else { $SegmentNames[0] }
+    return (Join-Path $DestinationRoot $peerName), $peerName
+}
+
 function Invoke-LANSegmentSync {
     param(
         [string] $BaseUrl,
         [string] $DestinationRoot,
         [string] $StagingDirectory,
         [int] $MinSegmentBytes,
+        [int] $DeferRetrySeconds = 60,
         [switch] $DryRun
     )
 
@@ -128,21 +244,18 @@ function Invoke-LANSegmentSync {
     }
 
     $stateFile = Join-Path $StagingDirectory 'lan-sync-state.json'
-    $lastBytes = -1
-    if (Test-Path -LiteralPath $stateFile -PathType Leaf) {
-        try {
-            $prev = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-            if ($null -ne $prev.bytes) { $lastBytes = [int64]$prev.bytes }
-        } catch { }
-    }
 
-    $destPath, $destName, $reason = Get-OlderDLNASlot -DestinationRoot $DestinationRoot
+    $destPath, $destName, $reason = Resolve-DLANTargetSlot -DestinationRoot $DestinationRoot `
+        -StateFile $stateFile -DeferRetrySeconds $DeferRetrySeconds
     $stagingFile = Join-Path $StagingDirectory $RemoteSegmentName
 
     Write-Host "Phone: $RemoteSegmentName $remoteBytes bytes (modified $($entry.modified)) -> $destName ($reason)"
 
+    $peerPath, $peerName = Get-PeerDLNASlotPath -DestinationRoot $DestinationRoot -DestName $destName
+
     if ($DryRun) {
-        Write-Host "Would download: $BaseUrl/$RemoteSegmentName -> $destPath"
+        Write-Host "Would download: $BaseUrl/$RemoteSegmentName -> $destPath (atomic install)"
+        Write-Host "Would skip if $destName already matches, or if $peerName already has the same segment (avoid duplicate slots)."
         return $true
     }
 
@@ -162,14 +275,33 @@ function Invoke-LANSegmentSync {
         return $false
     }
 
-    Copy-Item -LiteralPath $stagingFile -Destination $destPath -Force
-    @{
-        bytes = $local.Length
-        syncedAt = (Get-Date).ToUniversalTime().ToString('o')
-        dest = $destName
-    } | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8
+    $checksum = Get-FileSha256Hex -Path $stagingFile
+    if (Test-Path -LiteralPath $destPath -PathType Leaf) {
+        $destChecksum = Get-FileSha256Hex -Path $destPath
+        if ($destChecksum -eq $checksum) {
+            Write-Host "$destName already has this segment (SHA256 $checksum) — skipped."
+            Register-LANSyncDefer -StateFile $stateFile -DestName $destName -Reason 'dest_unchanged' `
+                -DeferRetrySeconds $DeferRetrySeconds -Bytes $local.Length -Checksum $checksum
+            return $false
+        }
+    }
+    if (Test-Path -LiteralPath $peerPath -PathType Leaf) {
+        $peerChecksum = Get-FileSha256Hex -Path $peerPath
+        if ($peerChecksum -eq $checksum) {
+            Write-Host (
+                "Peer $peerName already has this segment (phone unchanged) — " +
+                "skipped $destName to avoid identical DLNA slots."
+            )
+            Register-LANSyncDefer -StateFile $stateFile -DestName $destName -Reason 'peer_has_segment' `
+                -DeferRetrySeconds $DeferRetrySeconds -Bytes $local.Length -Checksum $checksum
+            return $false
+        }
+    }
 
-    Write-Host "Copied -> $destPath ($($local.Length) bytes)"
+    Install-DLANSegmentAtomic -SourcePath $stagingFile -DestPath $destPath
+    Write-LANSyncState -StateFile $stateFile -Bytes $local.Length -Checksum $checksum -DestName $destName
+
+    Write-Host "Copied -> $destPath ($($local.Length) bytes, SHA256 $checksum)"
     return $true
 }
 
@@ -222,7 +354,8 @@ if ($Watch) {
         Write-Host "--- LAN sync #$iteration  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" -ForegroundColor Cyan
         try {
             Invoke-LANSegmentSync -BaseUrl $baseUrl -DestinationRoot $destRoot `
-                -StagingDirectory $stagingRoot -MinSegmentBytes $MinSegmentBytes -DryRun:$DryRun
+                -StagingDirectory $stagingRoot -MinSegmentBytes $MinSegmentBytes `
+                -DeferRetrySeconds $PollSeconds -DryRun:$DryRun
         } catch {
             Write-Warning $_.Exception.Message
         }
@@ -236,4 +369,5 @@ if ($Watch) {
 }
 
 Invoke-LANSegmentSync -BaseUrl $baseUrl -DestinationRoot $destRoot `
-    -StagingDirectory $stagingRoot -MinSegmentBytes $MinSegmentBytes -DryRun:$DryRun
+    -StagingDirectory $stagingRoot -MinSegmentBytes $MinSegmentBytes `
+    -DeferRetrySeconds $PollSeconds -DryRun:$DryRun

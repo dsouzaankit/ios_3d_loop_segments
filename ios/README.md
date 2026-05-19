@@ -7,7 +7,8 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 .\Sync-FromPhoneLAN.ps1 -Watch
 
 Notes:
-phone should be unlocked, app on foreground, screen on!
+phone must be unlocked, app on foreground, screen on:
+  Settings > Display & Brightness > Auto-Lock > Never!
 
 
 # Loop Segments (iOS)
@@ -40,7 +41,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
 - 60s segments; phone keeps **one** file (`op_00.mp4`); PC DLNA pair via **`Sync-FromPhoneLAN.ps1 -Watch`** (build 103+) or USB. **Dense fill** per minute is the default (sparse temp shell, not a full 17 GB copy); see transport table below for large-file exceptions.
-- Real-time read pacing (like ffmpeg `-re`)
+- Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file or **Stop**; **per-minute failsafe** (build 130+) skips a failed minute and continues dense-filling `_export_source_working.mp4` (kept on disk and LAN until the next export replaces it)
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`

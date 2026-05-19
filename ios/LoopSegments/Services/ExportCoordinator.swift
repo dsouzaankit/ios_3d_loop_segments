@@ -84,7 +84,9 @@ final class ExportCoordinator {
             } onCancel: {
                 self.exporter.cancel()
             }
-            logHandler("Export finished — op_*.mp4 and _export_source_working.mp4 kept on LAN until next export")
+            logHandler("Export finished — op_*.mp4 and _export_source_working.mp4 kept until next export or Clear media")
+            logHandler(ExportPaths.describeExportMediaOnDisk())
+            logHandler("Files: On My iPhone → Loop Segments → Exports (same folder as export_latest.txt)")
             if PhotosSegmentPublisher.isEnabled {
                 logHandler("Photos: syncing finished segments to library…")
                 await PhotosSegmentPublisher.publishAllSegmentsFromExports(log: logHandler)
@@ -116,6 +118,7 @@ final class ExportCoordinator {
             throw SegmentExporterError.readerInterrupted
         } catch {
             logHandler("Export failed — partial segment files kept for USB/Photos sync")
+            logHandler(ExportPaths.describeExportMediaOnDisk())
             logWriter.finish(status: "failed", error: error)
             throw error
         }

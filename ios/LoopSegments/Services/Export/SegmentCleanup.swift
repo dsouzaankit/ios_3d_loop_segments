@@ -2,8 +2,9 @@ import Foundation
 
 /// Removes rotating segment files from app storage and the Photos library.
 enum SegmentCleanup {
+    /// Stop: segment MP4s + Photos only (`_export_source_working.mp4` kept until next export or Clear media).
     static func removeAllSegments(log: ((String) -> Void)? = nil) async {
-        removeExportMedia(log: log)
+        removeExportFiles(log: log)
         await PhotosSegmentPublisher.removeAllPublished(log: log)
     }
 

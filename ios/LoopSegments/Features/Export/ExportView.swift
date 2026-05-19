@@ -246,8 +246,8 @@ struct ExportView: View {
         do {
             try await session.startExport(item: item, seekMs: seekMs)
             status = PhotosSegmentPublisher.workflowEnabled && PhotosSegmentPublisher.isEnabled
-                ? "Done — latest segment in Exports (and Photos). Run Photos sync on PC; leave app to clear."
-                : "Done — latest segment in Exports. Sync-FromPhoneLAN.ps1 -Watch works while LAN serve is on."
+                ? "Done — segment in Files → Loop Segments → Exports (and Photos). Stays until Clear media or next export."
+                : "Done — segment in Files → Exports. LAN sync while app is open and Serve Exports is on."
         } catch is CancellationError, SegmentExporterError.cancelled {
             status = "Stopped — segment files removed from device"
         } catch ExportError.stillStopping {
