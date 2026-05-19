@@ -334,42 +334,57 @@ enum ExportLANServer {
                 done()
                 return
             }
-            streamFile(connection: connection, fileURL: fileURL, offset: 0, remaining: size, done: done)
+            // One handle for the whole response — reopening per chunk can splice two op_00.mp4
+            // versions if the phone publishes a new segment mid-download (corrupt / no moov on PC).
+            let handle: FileHandle
+            do {
+                handle = try FileHandle(forReadingFrom: fileURL)
+            } catch {
+                sendResponse(
+                    connection: connection,
+                    status: 500,
+                    contentType: "text/plain",
+                    body: Data("Cannot open file".utf8),
+                    done: done
+                )
+                return
+            }
+            streamFile(
+                connection: connection,
+                handle: handle,
+                offset: 0,
+                remaining: size,
+                done: done
+            )
         })
     }
 
     private static func streamFile(
         connection: NWConnection,
-        fileURL: URL,
+        handle: FileHandle,
         offset: Int64,
         remaining: Int64,
         done: @escaping () -> Void
     ) {
         if remaining <= 0 {
+            try? handle.close()
             connection.cancel()
             done()
             return
         }
         let chunkSize = min(remaining, 512 * 1024)
-        let handle: FileHandle
-        do {
-            handle = try FileHandle(forReadingFrom: fileURL)
-        } catch {
-            connection.cancel()
-            done()
-            return
-        }
-        defer { try? handle.close() }
         do {
             try handle.seek(toOffset: UInt64(offset))
             let data = handle.readData(ofLength: Int(chunkSize))
             guard !data.isEmpty else {
+                try? handle.close()
                 connection.cancel()
                 done()
                 return
             }
             connection.send(content: data, completion: .contentProcessed { error in
                 if error != nil {
+                    try? handle.close()
                     connection.cancel()
                     done()
                     return
@@ -377,13 +392,14 @@ enum ExportLANServer {
                 let sent = Int64(data.count)
                 streamFile(
                     connection: connection,
-                    fileURL: fileURL,
+                    handle: handle,
                     offset: offset + sent,
                     remaining: remaining - sent,
                     done: done
                 )
             })
         } catch {
+            try? handle.close()
             connection.cancel()
             done()
         }

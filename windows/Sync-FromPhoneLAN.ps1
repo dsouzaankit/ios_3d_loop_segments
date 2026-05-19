@@ -207,8 +207,25 @@ function Test-SegmentMP4Readable {
     if (-not $ffprobe) {
         return $true
     }
-    & $ffprobe.Source -v error -show_format -show_streams -i $Path 2>&1 | Out-Null
-    return $LASTEXITCODE -eq 0
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $ffprobe.Source
+    $psi.Arguments = "-v error -show_format -show_streams -i `"$Path`""
+    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $proc.WaitForExit()
+    return $proc.ExitCode -eq 0
+}
+
+function Clear-LANSyncDefer {
+    param(
+        [string] $StateFile,
+        [long] $Bytes,
+        [string] $DestName
+    )
+    Write-LANSyncState -StateFile $StateFile -Bytes $Bytes -Checksum '' -DestName $DestName
 }
 
 function Install-DLANSegmentAtomic {
@@ -336,8 +353,12 @@ function Invoke-LANSegmentSync {
         return $false
     }
     if (-not (Test-SegmentMP4Readable -Path $stagingFile)) {
-        Write-Host "ffprobe: $RemoteSegmentName is not a playable MP4 (moov atom missing or corrupt) — skipped."
-        Remove-Item -LiteralPath $stagingFile -Force -ErrorAction SilentlyContinue
+        Write-Host (
+            "Not a playable MP4 (moov missing — often a partial LAN download while the phone published a new segment). " +
+            "Wait for export_latest.txt 'DLNA slot published', then sync again. Skipped."
+        )
+        Clear-LANSyncDefer -StateFile $stateFile -Bytes $remoteBytes -DestName $destName
+        Remove-LANStagingFile -StagingFile $stagingFile
         return $false
     }
 
