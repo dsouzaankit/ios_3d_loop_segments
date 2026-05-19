@@ -168,9 +168,23 @@ enum SegmentPassThroughExporter {
                     continue
                 }
                 timelineOrigin = pts
+                let writerFormat: CMFormatDescription
+                if let sampleDesc = CMSampleBufferGetFormatDescription(videoSample) {
+                    writerFormat = CodecSupport.normalizedForMP4Writer(sampleDesc)
+                    let probeSub = CMFormatDescriptionGetMediaSubType(videoFormat)
+                    let sampleSub = CMFormatDescriptionGetMediaSubType(sampleDesc)
+                    if probeSub != sampleSub {
+                        log(
+                            "Writer uses \(CodecSupport.fourCCString(writerFormat)) from first sample " +
+                                "(probe had \(CodecSupport.fourCCString(videoFormat)))"
+                        )
+                    }
+                } else {
+                    writerFormat = videoFormat
+                }
                 let ctx = try SegmentWriterContext(
                     outputURL: outputURL,
-                    videoFormat: videoFormat,
+                    videoFormat: writerFormat,
                     audioFormat: nil,
                     realTime: false
                 )

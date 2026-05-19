@@ -234,7 +234,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     /// Fill every byte in `range` from pCloud (dense on disk) so AVFoundation can open the sparse temp.
-    func ensureContiguousRange(_ range: TimelineByteRange) async throws {
+    func ensureContiguousRange(_ range: TimelineByteRange, force: Bool = false) async throws {
         guard range.length > 0 else { return }
         let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
         let rangeEnd = min(range.end, totalLength)
@@ -248,7 +248,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             spans: filledRanges
         )
         lock.unlock()
-        if contiguousMarked, bytesOnDisk {
+        if !force, contiguousMarked, bytesOnDisk {
             lock.lock()
             exportWindowStart = range.start
             exportWindowContiguousEnd = max(exportWindowContiguousEnd, rangeEnd)
