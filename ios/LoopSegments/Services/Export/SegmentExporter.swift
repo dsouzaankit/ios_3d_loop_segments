@@ -643,7 +643,7 @@ final class SegmentExporter {
                     remoteURL: remoteURL,
                     authorizationProvider: authorizationProvider,
                     rangeCache: rangeCache,
-                    trustedLength: trustedLength > 0 ? trustedLength : downloader.totalLength,
+                    trustedLength: fileLength,
                     byteRange: byteRange,
                     videoFormat: videoFormat,
                     audioFormat: audioFormat,
@@ -856,6 +856,10 @@ final class SegmentExporter {
             try await exportMidFileSegmentViaDenseLocalTemp(
                 downloader: downloader,
                 tempURL: tempURL,
+                remoteURL: remoteURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                trustedLength: fileLength,
                 byteRange: byteRange,
                 rangeStart: rangeStart,
                 rangeDuration: rangeDuration,
@@ -869,25 +873,26 @@ final class SegmentExporter {
             return
         }
         var lastError: Error?
+        log(
+            "Mid-file passthrough — capped pCloud reads (head, window \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)), index tail)"
+        )
+        let (cappedAsset, cappedLoader) = makeCappedPassthroughAsset(
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            fileLength: fileLength,
+            byteRange: byteRange,
+            downloader: nil,
+            log: log
+        )
+        defer {
+            cappedAsset.resourceLoader.setDelegate(nil, queue: nil)
+            cappedLoader.cancelOutstandingWork()
+        }
         do {
-            log(
-                "Mid-file passthrough — capped pCloud reads (head, window \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end)), index tail)"
-            )
-            let (asset, loader) = makeRemoteCappedPassthroughAsset(
-                remoteURL: remoteURL,
-                authorizationProvider: authorizationProvider,
-                rangeCache: rangeCache,
-                fileLength: fileLength,
-                byteRange: byteRange,
-                log: log
-            )
-            defer {
-                asset.resourceLoader.setDelegate(nil, queue: nil)
-                loader.cancelOutstandingWork()
-            }
-            _ = try await asset.loadTracks(withMediaType: .video)
+            _ = try await cappedAsset.loadTracks(withMediaType: .video)
             try await SegmentPassThroughExporter.exportWindow(
-                asset: asset,
+                asset: cappedAsset,
                 videoFormat: videoFormat,
                 audioFormat: audioFormat,
                 rangeStart: rangeStart,
@@ -900,9 +905,28 @@ final class SegmentExporter {
             return
         } catch {
             lastError = error
-            guard Self.shouldTryExportSessionAfterHTTPSManualFailure(error) else { throw error }
+            if Self.shouldTryExportSessionAfterHTTPSManualFailure(error) {
+                log(
+                    "Capped pCloud manual failed (\(error.localizedDescription)) — trying export session on same asset"
+                )
+                do {
+                    try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                        asset: cappedAsset,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        outputURL: outputURL,
+                        sourceLabel: "capped pCloud (export session)",
+                        log: log
+                    )
+                    return
+                } catch {
+                    lastError = error
+                }
+            } else {
+                throw error
+            }
             log(
-                "Capped pCloud reader failed (\(error.localizedDescription)) — trying HTTPS URL passthrough"
+                "Capped pCloud failed (\(lastError?.localizedDescription ?? "unknown")) — trying HTTPS URL passthrough"
             )
         }
         let httpsAsset = makeHTTPSPassthroughAsset(
@@ -947,6 +971,10 @@ final class SegmentExporter {
         try await exportMidFileSegmentViaDenseLocalTemp(
             downloader: downloader,
             tempURL: tempURL,
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            trustedLength: fileLength,
             byteRange: byteRange,
             rangeStart: rangeStart,
             rangeDuration: rangeDuration,
@@ -962,6 +990,10 @@ final class SegmentExporter {
     private func exportMidFileSegmentViaDenseLocalTemp(
         downloader: WebDAVTempFileDownload,
         tempURL: URL,
+        remoteURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        trustedLength: Int64,
         byteRange: TimelineByteRange,
         rangeStart: CMTime,
         rangeDuration: CMTime,
@@ -1002,28 +1034,52 @@ final class SegmentExporter {
             return
         } catch {
             log(
-                "Local export session failed (\(error.localizedDescription)) — manual passthrough on dense window"
+                "Local export session failed (\(error.localizedDescription)) — capped hybrid (dense window + pCloud)"
             )
         }
-        try await SegmentPassThroughExporter.exportWindow(
-            asset: fileAsset,
-            videoFormat: videoFormat,
-            audioFormat: audioFormat,
-            rangeStart: rangeStart,
-            rangeDuration: rangeDuration,
-            outputURL: outputURL,
-            sourceLabel: "dense local temp (pCloud)",
-            isCancelled: isCancelled,
+        let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
+        let (hybridAsset, hybridLoader) = makeCappedPassthroughAsset(
+            remoteURL: remoteURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            fileLength: fileLength,
+            byteRange: byteRange,
+            downloader: downloader,
             log: log
         )
+        defer {
+            hybridAsset.resourceLoader.setDelegate(nil, queue: nil)
+            hybridLoader.cancelOutstandingWork()
+        }
+        do {
+            _ = try await hybridAsset.loadTracks(withMediaType: .video)
+            try await SegmentPassThroughExporter.exportWindow(
+                asset: hybridAsset,
+                videoFormat: videoFormat,
+                audioFormat: audioFormat,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "dense window hybrid (pCloud)",
+                isCancelled: isCancelled,
+                log: log
+            )
+            return
+        } catch {
+            if let priorError {
+                throw priorError
+            }
+            throw error
+        }
     }
 
-    private func makeRemoteCappedPassthroughAsset(
+    private func makeCappedPassthroughAsset(
         remoteURL: URL,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
         fileLength: Int64,
         byteRange: TimelineByteRange,
+        downloader: WebDAVTempFileDownload?,
         log: @escaping (String) -> Void
     ) -> (AVURLAsset, WebDAVResourceLoader) {
         let readPolicy = StreamReadPolicy.forExportWindow(
@@ -1037,8 +1093,10 @@ final class SegmentExporter {
             rangeCache: rangeCache,
             trustedContentLength: fileLength > 0 ? fileLength : nil,
             readPolicy: readPolicy,
-            localTempURL: nil,
-            readLocalBytes: nil,
+            localTempURL: downloader?.fileURL,
+            readLocalBytes: downloader.map { dl in
+                { offset, length in dl.readLocalBytes(offset: offset, length: length) }
+            },
             log: log
         )
         let asset = AVURLAsset(
