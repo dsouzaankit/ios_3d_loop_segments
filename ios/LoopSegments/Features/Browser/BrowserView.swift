@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BrowserView: View {
     @EnvironmentObject private var session: AppSession
+    @ObservedObject private var resumeStore = ResumeStore.shared
     @State private var pathStack: [String] = ["/"]
     @State private var items: [WebDAVItem] = []
     @State private var isLoading = false
@@ -45,6 +46,21 @@ struct BrowserView: View {
                         if !isSearchActive, pathStack.count > 1 {
                             Button("↑ Up") { goUp() }
                         }
+                        if !isSearchActive, !resumeStore.interruptedEntries().isEmpty {
+                            Section("Paused exports") {
+                                ForEach(resumeStore.interruptedEntries()) { entry in
+                                    if let pausedItem = resumeStore.webDAVItem(for: entry) {
+                                        NavigationLink {
+                                            ExportView(item: pausedItem)
+                                        } label: {
+                                            pausedExportRow(entry: entry)
+                                        }
+                                    } else {
+                                        pausedExportRow(entry: entry)
+                                    }
+                                }
+                            }
+                        }
                         if isSearchActive, !searchModeNote.isEmpty {
                             Text(searchModeNote)
                                 .font(.caption)
@@ -84,7 +100,7 @@ struct BrowserView: View {
                                 NavigationLink {
                                     ExportView(item: item)
                                 } label: {
-                                    Label(item.name, systemImage: "film")
+                                    videoRowLabel(for: item)
                                 }
                             }
                         }
@@ -143,6 +159,45 @@ struct BrowserView: View {
 
     private var displayedItems: [WebDAVItem] {
         isSearchActive ? searchResults : items
+    }
+
+    @ViewBuilder
+    private func videoRowLabel(for item: WebDAVItem) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Label(item.name, systemImage: "film")
+            Spacer(minLength: 8)
+            resumeBadge(for: item)
+        }
+    }
+
+    @ViewBuilder
+    private func pausedExportRow(entry: ResumeEntry) -> some View {
+        let ms = max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(entry.displayName)
+                .lineLimit(2)
+            Text("Paused at \(ResumeTimeFormat.formatMs(ms)) · \(ResumeTimeFormat.relative(entry.updatedAt))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func resumeBadge(for item: WebDAVItem) -> some View {
+        let resume = resumeStore.resumeStatus(for: item)
+        if session.isExportRunning, session.activeExportItem?.fileKey == item.fileKey {
+            Text("Exporting")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange)
+        } else if resume.isPaused {
+            Text("Paused \(ResumeTimeFormat.formatMs(resume.effectiveMs))")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange)
+        } else if resume.savedSeekMs > 0 {
+            Text("Resume \(ResumeTimeFormat.formatMs(resume.savedSeekMs))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var navigationTitle: String {

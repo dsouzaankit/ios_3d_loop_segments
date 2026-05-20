@@ -9,7 +9,7 @@ final class AppSession: ObservableObject {
     private(set) var userRequestedExportCancel = false
     /// Created on first export (lazy init for export stack).
     private lazy var exportCoordinator = ExportCoordinator()
-    private var activeExportItem: WebDAVItem?
+    @Published private(set) var activeExportItem: WebDAVItem?
 
     init() {
         credentials = credentialStore.load()

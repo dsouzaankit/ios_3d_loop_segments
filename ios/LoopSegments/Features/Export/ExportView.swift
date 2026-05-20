@@ -4,6 +4,7 @@ struct ExportView: View {
     @EnvironmentObject private var session: AppSession
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var network = NetworkPathMonitor()
+    @ObservedObject private var resumeStore = ResumeStore.shared
     let item: WebDAVItem
 
     @State private var seekMs: Int64 = 0
@@ -57,17 +58,7 @@ struct ExportView: View {
                 Text(item.name)
                 Text(item.href).font(.caption).foregroundStyle(.secondary)
             }
-            Section("Start position") {
-                Text("Resume: \(formatMs(seekMs))")
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack {
-                        ForEach(SeekPreset.allCases) { preset in
-                            Button(preset.label) { seekMs = preset.seekMs }
-                                .buttonStyle(.bordered)
-                        }
-                    }
-                }
-            }
+            resumeSection
             if PhotosSegmentPublisher.workflowEnabled {
                 Section("Photos (optional — PC sync)") {
                     Toggle("Save segments to Photos", isOn: Binding(
@@ -180,6 +171,14 @@ struct ExportView: View {
                 applyForegroundResume()
             }
         }
+        .onChange(of: resumeStore.revision) { _, _ in
+            guard session.isExportRunning,
+                  session.activeExportItem?.fileKey == item.fileKey else { return }
+            let live = resumeStore.resumeStatus(for: item).effectiveMs
+            if live > seekMs {
+                seekMs = live
+            }
+        }
         .task(id: ExportLANServer.isEnabled) {
             guard ExportLANServer.isEnabled else {
                 lanExportURL = nil
@@ -232,17 +231,100 @@ struct ExportView: View {
         }
     }
 
-    private func applyForegroundResume() {
-        seekMs = ResumeStore.shared.seekMs(for: item)
-        if let checkpoint = ResumeStore.shared.checkpointMediaMs(for: item), checkpoint > seekMs {
-            seekMs = checkpoint
+    @ViewBuilder
+    private var resumeSection: some View {
+        let resume = resumeStore.resumeStatus(for: item)
+        let isThisFileExporting = session.isExportRunning
+            && session.activeExportItem?.fileKey == item.fileKey
+
+        Section {
+            if isThisFileExporting {
+                Label("Export in progress", systemImage: "arrow.down.circle")
+                    .foregroundStyle(.orange)
+                LabeledContent("Current position") {
+                    Text(ResumeTimeFormat.formatMs(resume.effectiveMs))
+                        .monospacedDigit()
+                }
+            } else if resume.isPaused {
+                Label("Export paused", systemImage: "pause.circle.fill")
+                    .foregroundStyle(.orange)
+                Text("Interrupted or app left mid-run. Next export continues from the checkpoint below.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else if resume.effectiveMs > 0 {
+                Label("Saved resume point", systemImage: "clock.arrow.circlepath")
+                    .foregroundStyle(.secondary)
+                Text("Last export stopped before the end of the file. You can continue from this time or pick a preset.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Start from the beginning or pick a preset below.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("Start at") {
+                Text(ResumeTimeFormat.formatMs(seekMs))
+                    .font(.body.monospacedDigit())
+            }
+
+            if resume.savedSeekMs > 0, resume.savedSeekMs != seekMs || resume.isPaused {
+                LabeledContent("Last finished at") {
+                    Text(ResumeTimeFormat.formatMs(resume.savedSeekMs))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let checkpoint = resume.checkpointMs, checkpoint > 0 {
+                LabeledContent(resume.isPaused ? "Checkpoint" : "Last checkpoint") {
+                    Text(ResumeTimeFormat.formatMs(checkpoint))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(resume.isPaused ? .orange : .secondary)
+                }
+            }
+            if let updated = resume.updatedAt {
+                LabeledContent("Updated") {
+                    Text(ResumeTimeFormat.relative(updated))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack {
+                    ForEach(SeekPreset.allCases) { preset in
+                        Button(preset.label) { seekMs = preset.seekMs }
+                            .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            if resume.hasResumePoint, !session.isExportRunning {
+                Button("Reset to 0:00", role: .destructive) {
+                    resumeStore.clearResume(for: item)
+                    seekMs = 0
+                    status = "Resume cleared — next export starts at 0:00"
+                }
+            }
+        } header: {
+            Text("Resume")
         }
-        if session.isExportRunning {
+    }
+
+    private func applyForegroundResume() {
+        let resume = resumeStore.resumeStatus(for: item)
+        seekMs = resume.effectiveMs
+        if session.isExportRunning, session.activeExportItem?.fileKey == item.fileKey {
+            if let checkpoint = resumeStore.checkpointMediaMs(for: item), checkpoint > seekMs {
+                seekMs = checkpoint
+            }
             if status.isEmpty || status.hasPrefix("Export paused") {
                 status = "Export running — logs refresh while app is open"
             }
-        } else if ResumeStore.shared.exportWasInterrupted(for: item) {
-            status = "Export paused — continue from \(formatMs(seekMs)) (tap Start export)"
+        } else if resume.isPaused {
+            status = "Export paused — continue from \(ResumeTimeFormat.formatMs(seekMs)) (tap Start export)"
+        } else if resume.effectiveMs > 0, status.isEmpty {
+            status = "Will start from \(ResumeTimeFormat.formatMs(seekMs))"
         }
         refreshLogFromDisk()
         refreshLogHint()
@@ -336,10 +418,4 @@ struct ExportView: View {
         return n.int64Value
     }
 
-    private func formatMs(_ ms: Int64) -> String {
-        let totalSec = ms / 1000
-        let min = totalSec / 60
-        let sec = totalSec % 60
-        return String(format: "%d:%02d", min, sec)
-    }
 }
