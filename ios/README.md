@@ -91,7 +91,9 @@ Skybox **requires Basic auth** on every WebDAV request (OPTIONS + PROPFIND + lis
 2. Skybox → **Network** → **Add WebDAV server**.
 3. **URL:** `http://10.0.100.10:8765/` — must include `http://`, IP, **:8765**, trailing `/`.
 4. **Username:** `admin` · **Password:** `iosadmin` (case-sensitive password).
-5. After connect, play **`op_00.mp4`** only (not `_export_source_working.mp4`).
+5. After connect, play **`op_00.mp4`** only — **`_export_source_working.mp4` is sparse** and usually fails in Skybox (browser can still preview it via the LAN index `#t=` link).
+
+**Build 170+** fixes Skybox playback: file GET uses **absolute URIs** (`GET http://ip:8765/op_00.mp4`) and **Basic auth** on media GET (same as listing).
 
 **PC test (same Wi‑Fi as phone):**
 
@@ -101,7 +103,7 @@ cd windows
 .\Map-LoopSegmentsWebDAV.ps1 -TestOnly
 ```
 
-Expect `OPTIONS 200 OK` and `PROPFIND 207` with auth. If that fails, Skybox will fail too — fix LAN/firewall first.
+Expect `OPTIONS 200 OK`, `PROPFIND 207`, and `GET op_00.mp4 (Skybox absolute URI + Range) 206 OK` with auth. If listing works but playback fails, upgrade to **build 170+**.
 
 **If Skybox still won’t add:** Quest often blocks plain HTTP to local IPs; use **PC DLNA** (`Sync-FromPhoneLAN.ps1 -Watch`) and open the share from Skybox via **SMB** on the PC, or copy `op_00.mp4` to the headset with the Skybox PC client.
 

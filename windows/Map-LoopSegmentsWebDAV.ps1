@@ -129,6 +129,58 @@ function Add-LoopSegmentsLANWebDAVAuthHeader {
     $Request.Headers['Authorization'] = 'Basic ' + [Convert]::ToBase64String($bytes)
 }
 
+function Test-LoopSegmentsWebDAVMediaGet {
+    param([string] $RootUrl)
+
+    $segmentName = 'op_00.mp4'
+    try {
+        $status = Invoke-RestMethod -Uri ($RootUrl.TrimEnd('/') + '/status.json') -TimeoutSec 8
+        $mp4 = @($status.files | Where-Object { $_.name -like 'op_*.mp4' } | Select-Object -First 1)
+        if ($mp4.name) { $segmentName = $mp4.name }
+    } catch {}
+
+    $base = $RootUrl.TrimEnd('/')
+    $absoluteUri = "$base/$segmentName"
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($absoluteUri)
+        $req.Method = 'GET'
+        $req.Timeout = 20000
+        $req.UserAgent = 'Skybox VR Player'
+        $req.AddRange(0, 1)
+        Add-LoopSegmentsLANWebDAVAuthHeader -Request $req
+        $resp = $req.GetResponse()
+        $status = [int]$resp.StatusCode
+        $acceptRanges = $resp.Headers['Accept-Ranges']
+        $length = $resp.ContentLength
+        $stream = $resp.GetResponseStream()
+        $buf = New-Object byte[] 4
+        $read = $stream.Read($buf, 0, $buf.Length)
+        $stream.Close()
+        $resp.Close()
+        if ($status -notin 200, 206) {
+            throw "GET absolute URI returned $status (expected 200 or 206)."
+        }
+        if ($read -lt 1) {
+            throw 'GET returned no bytes — export may not have written a segment yet.'
+        }
+        Write-Host "  GET $segmentName (Skybox absolute URI + Range) $status OK ($read bytes, Accept-Ranges=$acceptRanges)"
+    } catch [System.Net.WebException] {
+        $r = $_.Exception.Response
+        if ($null -ne $r) {
+            $code = [int]$r.StatusCode
+            $r.Close()
+            if ($code -eq 404) {
+                Write-Warning "  GET $segmentName -> 404 — start export on phone so op_00.mp4 exists, then retry."
+                return
+            }
+            if ($code -eq 401) {
+                throw "GET $segmentName returned 401 — install build 170+ IPA (Skybox sends auth on file GET)."
+            }
+        }
+        throw "Skybox-style media GET failed. $($_.Exception.Message)"
+    }
+}
+
 function Test-LoopSegmentsWebDAVRootForNetUse {
     param([string] $RootUrl)
 
@@ -224,6 +276,8 @@ function Test-LoopSegmentsWebDAV {
     }
 
     $null = Test-LoopSegmentsWebDAVDavWWWRoot -RootUrl $RootUrl
+
+    Test-LoopSegmentsWebDAVMediaGet -RootUrl $RootUrl
 
     if (-not (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $RootUrl)) {
         $msg = @(

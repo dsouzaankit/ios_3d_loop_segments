@@ -256,12 +256,39 @@ enum ExportLANServer {
     private static func parseRequestLine(_ line: String) -> (String, String)? {
         let parts = line.split(separator: " ", omittingEmptySubsequences: true)
         guard parts.count >= 2 else { return nil }
-        var path = String(parts[1])
+        let path = httpRequestPath(from: String(parts[1]))
+        return (String(parts[0]).uppercased(), path)
+    }
+
+    /// Request-target may be `/op_00.mp4` (browser) or `http://host:8765/op_00.mp4` (Skybox, some WebDAV clients).
+    private static func httpRequestPath(from raw: String) -> String {
+        var path = raw.trimmingCharacters(in: .whitespaces)
         if let query = path.firstIndex(of: "?") {
             path = String(path[..<query])
         }
-        if path.isEmpty { path = "/" }
-        return (String(parts[0]).uppercased(), path)
+        if path.isEmpty { return "/" }
+
+        let lower = path.lowercased()
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
+            if let url = URL(string: path) {
+                path = url.path.isEmpty ? "/" : url.path
+            }
+        } else if path.hasPrefix("//") {
+            let withoutScheme = String(path.dropFirst(2))
+            if let slash = withoutScheme.firstIndex(of: "/") {
+                path = String(withoutScheme[slash...])
+            } else {
+                path = "/"
+            }
+        }
+
+        if let decoded = path.removingPercentEncoding {
+            path = decoded
+        }
+        if !path.hasPrefix("/") {
+            path = "/\(path)"
+        }
+        return normalizedDAVPath(path)
     }
 
     private static func isWebDAVClient(requestHeaders: String) -> Bool {
@@ -281,13 +308,20 @@ enum ExportLANServer {
         path.hasPrefix("/") ? String(path.dropFirst()) : path
     }
 
-    /// Skybox sends OPTIONS/PROPFIND with credentials; `op_00.mp4` GET stays open for PC sync.
+    /// Skybox sends OPTIONS/PROPFIND with credentials; `op_00.mp4` GET stays open for PC sync (no WebDAV UA).
     private static func requiresLANWebDAVAuth(method: String, path: String, requestHeaders: String) -> Bool {
         switch method {
         case "OPTIONS", "PROPFIND", "LOCK":
             return true
         case "GET", "HEAD":
-            return normalizedGETPath(path).isEmpty && !isBrowserLikeRequest(requestHeaders: requestHeaders)
+            if normalizedGETPath(path).isEmpty {
+                return !isBrowserLikeRequest(requestHeaders: requestHeaders)
+            }
+            // Skybox plays files with absolute-URI GET + Basic auth (Sync-FromPhoneLAN uses plain GET, no auth).
+            if isWebDAVClient(requestHeaders: requestHeaders) {
+                return true
+            }
+            return false
         default:
             return false
         }
