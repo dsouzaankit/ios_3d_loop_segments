@@ -48,7 +48,7 @@ struct BrowserView: View {
                             Button("↑ Up") { goUp() }
                         }
                         if !isSearchActive, !resumeStore.interruptedEntries().isEmpty {
-                            Section("Paused exports") {
+                            Section {
                                 ForEach(resumeStore.interruptedEntries()) { entry in
                                     Button {
                                         selectedPausedEntry = entry
@@ -63,7 +63,17 @@ struct BrowserView: View {
                                         .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
+                                    .swipeActions(edge: .trailing) {
+                                        Button("Remove", role: .destructive) {
+                                            resumeStore.dismissPausedExport(entry)
+                                        }
+                                    }
                                 }
+                            } header: {
+                                Text("Paused exports")
+                            } footer: {
+                                Text("Shows exports interrupted or left mid-run. Usually one file; swipe left to remove a stale row.")
+                                    .font(.footnote)
                             }
                         }
                         if isSearchActive, !searchModeNote.isEmpty {
@@ -142,6 +152,7 @@ struct BrowserView: View {
             .onAppear {
                 SearchDebugLog.ensureReady()
                 searchDebugStatus = SearchDebugLog.statusLine()
+                resumeStore.reconcilePausedWithWorkingSource()
                 resumeStore.backfillHrefsFromSparseManifest()
             }
             .task(id: listToken) {
@@ -404,6 +415,7 @@ private struct PausedExportDestinationView: View {
         .navigationTitle(entry.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            resumeStore.reconcilePausedWithWorkingSource()
             resumeStore.backfillHrefsFromSparseManifest()
             if resumeStore.resolveItem(for: entry, browsing: browsing) != nil {
                 return

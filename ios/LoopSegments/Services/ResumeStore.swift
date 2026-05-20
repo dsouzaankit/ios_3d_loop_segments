@@ -74,6 +74,7 @@ final class ResumeStore: ObservableObject {
     }
 
     func beginExport(for item: WebDAVItem, seekMs: Int64, sourceDurationMs: Int64? = nil) {
+        clearPausedExports(exceptFileKey: item.fileKey)
         upsert(item: item) { entry in
             entry.exportInProgress = true
             entry.checkpointMediaMs = max(0, seekMs)
@@ -82,6 +83,45 @@ final class ResumeStore: ObservableObject {
             }
             entry.updatedAt = Date()
         }
+    }
+
+    /// Only one export runs at a time; starting another file should not leave stale rows in Paused exports.
+    func clearPausedExports(exceptFileKey: String? = nil) {
+        var entries = load()
+        var changed = false
+        for index in entries.indices where entries[index].exportInProgress {
+            if let exceptFileKey, entries[index].fileKey == exceptFileKey { continue }
+            entries[index].exportInProgress = false
+            entries[index].checkpointMediaMs = nil
+            entries[index].updatedAt = Date()
+            changed = true
+        }
+        if changed { persist(entries) }
+    }
+
+    /// `_export_source_working.sparse.json` is for one source file — other paused rows are stale.
+    func reconcilePausedWithWorkingSource() {
+        guard let manifest = WorkingSourceSparseCatalog.readManifest() else { return }
+        var entries = load()
+        var changed = false
+        for index in entries.indices where entries[index].exportInProgress {
+            if entries[index].fileKey == manifest.fileKey { continue }
+            entries[index].exportInProgress = false
+            entries[index].checkpointMediaMs = nil
+            entries[index].updatedAt = Date()
+            changed = true
+        }
+        if changed { persist(entries) }
+    }
+
+    func dismissPausedExport(_ entry: ResumeEntry) {
+        var entries = load()
+        guard let index = entries.firstIndex(where: { $0.fileKey == entry.fileKey }) else { return }
+        guard entries[index].exportInProgress else { return }
+        entries[index].exportInProgress = false
+        entries[index].checkpointMediaMs = nil
+        entries[index].updatedAt = Date()
+        persist(entries)
     }
 
     func setSourceDurationMs(_ ms: Int64, for item: WebDAVItem) {
@@ -185,13 +225,9 @@ final class ResumeStore: ObservableObject {
         guard !href.isEmpty else { return }
 
         var entries = load()
-        let paused = entries.filter(\.exportInProgress)
-        let singlePaused = paused.count == 1
         var changed = false
         for index in entries.indices where entries[index].exportInProgress {
-            let matchesKey = entries[index].fileKey == manifest.fileKey
-            let eligible = matchesKey || (singlePaused && paused.count == 1)
-            guard eligible else { continue }
+            guard entries[index].fileKey == manifest.fileKey else { continue }
 
             let item = WebDAVItem(
                 href: href,
