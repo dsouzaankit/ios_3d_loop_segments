@@ -749,7 +749,7 @@ enum ExportLANServer {
         }
 
         let byteStart: Int64
-        let byteEnd: Int64
+        var byteEnd: Int64
         let status: Int
         let phrase: String
         let hasRangeHeader = requestHeaders.split(separator: "\r\n").contains { $0.lowercased().hasPrefix("range:") }
