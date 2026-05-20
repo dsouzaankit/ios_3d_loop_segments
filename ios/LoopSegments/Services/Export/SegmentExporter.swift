@@ -134,20 +134,18 @@ final class SegmentExporter {
         )
         await MainActor.run {
             ResumeStore.shared.setSourceDurationMs(durationMs, for: item)
-            ExportPlaybackState.shared.beginExport(
-                seekSeconds: seekSeconds,
-                durationSeconds: durationSeconds,
-                totalBytes: fileSize
-            )
         }
+        ExportPlaybackState.shared.beginExport(
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds,
+            totalBytes: fileSize
+        )
         downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
 
         let reportProgress: @Sendable (Int64) -> Void = { mediaMs in
             onMediaProgress?(mediaMs)
             let seconds = Double(mediaMs) / 1000.0
-            Task { @MainActor in
-                ExportPlaybackState.shared.updateCursor(seconds: seconds)
-            }
+            ExportPlaybackState.shared.updateCursor(seconds: seconds)
             tempDownload?.publishLANPlaybackState(mediaCursorSeconds: seconds)
         }
 

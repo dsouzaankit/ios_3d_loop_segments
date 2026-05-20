@@ -367,16 +367,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let spans = filledSpansOnDisk()
         let head = hasHeadOnDisk()
         let tail = hasIndexTailOnDisk()
-        Task { @MainActor in
-            ExportPlaybackState.shared.syncSparseLayout(
-                totalBytes: totalLength,
-                filledSpans: spans,
-                headOnDisk: head,
-                tailOnDisk: tail
-            )
-            if let mediaCursorSeconds {
-                ExportPlaybackState.shared.updateCursor(seconds: mediaCursorSeconds)
-            }
+        ExportPlaybackState.shared.syncSparseLayout(
+            totalBytes: totalLength,
+            filledSpans: spans,
+            headOnDisk: head,
+            tailOnDisk: tail
+        )
+        if let mediaCursorSeconds {
+            ExportPlaybackState.shared.updateCursor(seconds: mediaCursorSeconds)
         }
     }
 

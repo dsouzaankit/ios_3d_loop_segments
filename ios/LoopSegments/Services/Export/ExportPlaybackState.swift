@@ -1,11 +1,10 @@
 import Foundation
 
 /// LAN playback hints for `_export_source_working.mp4` (sparse; moov reports full duration).
-@MainActor
-final class ExportPlaybackState {
+final class ExportPlaybackState: @unchecked Sendable {
     static let shared = ExportPlaybackState()
 
-    private struct Frozen: Sendable {
+    private struct Snapshot: Sendable {
         var playbackStartSeconds: Double = 0
         var exportCursorSeconds: Double = 0
         var durationSeconds: Double = 0
@@ -16,35 +15,31 @@ final class ExportPlaybackState {
         var filledSpans: [ClosedRange<Int64>] = []
     }
 
-    private var frozen = Frozen()
-    private let frozenLock = NSLock()
-
-    private(set) var playbackStartSeconds: Double = 0
-    private(set) var exportCursorSeconds: Double = 0
-    private(set) var durationSeconds: Double = 0
-    private(set) var totalFileBytes: Int64 = 0
-    private(set) var indexTailStart: Int64 = 0
-    private(set) var headOnDisk = false
-    private(set) var tailOnDisk = false
-    private(set) var filledSpans: [ClosedRange<Int64>] = []
+    private let lock = NSLock()
+    private var snapshot = Snapshot()
 
     private init() {}
 
     func beginExport(seekSeconds: Double, durationSeconds: Double, totalBytes: Int64) {
-        playbackStartSeconds = max(0, seekSeconds)
-        exportCursorSeconds = playbackStartSeconds
-        self.durationSeconds = max(0, durationSeconds)
-        totalFileBytes = totalBytes
-        indexTailStart = max(0, totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes))
-        headOnDisk = false
-        tailOnDisk = false
-        filledSpans = []
-        freeze()
+        lock.withLock {
+            snapshot.playbackStartSeconds = max(0, seekSeconds)
+            snapshot.exportCursorSeconds = snapshot.playbackStartSeconds
+            snapshot.durationSeconds = max(0, durationSeconds)
+            snapshot.totalFileBytes = totalBytes
+            snapshot.indexTailStart = max(
+                0,
+                totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
+            )
+            snapshot.headOnDisk = false
+            snapshot.tailOnDisk = false
+            snapshot.filledSpans = []
+        }
     }
 
     func updateCursor(seconds: Double) {
-        exportCursorSeconds = max(0, seconds)
-        freeze()
+        lock.withLock {
+            snapshot.exportCursorSeconds = max(0, seconds)
+        }
     }
 
     func syncSparseLayout(
@@ -53,33 +48,24 @@ final class ExportPlaybackState {
         headOnDisk: Bool,
         tailOnDisk: Bool
     ) {
-        totalFileBytes = totalBytes
-        self.filledSpans = filledSpans
-        self.headOnDisk = headOnDisk
-        self.tailOnDisk = tailOnDisk
-        indexTailStart = max(0, totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes))
-        freeze()
+        lock.withLock {
+            snapshot.totalFileBytes = totalBytes
+            snapshot.filledSpans = filledSpans
+            snapshot.headOnDisk = headOnDisk
+            snapshot.tailOnDisk = tailOnDisk
+            snapshot.indexTailStart = max(
+                0,
+                totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
+            )
+        }
     }
 
     var playbackStartSecondsInt: Int {
-        Int(playbackStartSeconds.rounded(.down))
+        lock.withLock { Int(snapshot.playbackStartSeconds.rounded(.down)) }
     }
 
-    var statusPayload: [String: Any] {
-        [
-            "playbackStartSeconds": playbackStartSeconds,
-            "exportCursorSeconds": exportCursorSeconds,
-            "durationSeconds": durationSeconds,
-            "totalBytes": totalFileBytes,
-            "indexTailStart": indexTailStart,
-            "headOnDisk": headOnDisk,
-            "tailOnDisk": tailOnDisk,
-        ]
-    }
-
-    /// Thread-safe for `ExportLANServer` connection handlers.
-    nonisolated func rangeIsReadable(start: Int64, end: Int64) -> Bool {
-        let snap = frozenLock.withLock { frozen }
+    func rangeIsReadable(start: Int64, end: Int64) -> Bool {
+        let snap = lock.withLock { snapshot }
         guard snap.totalFileBytes > 0, start >= 0, end >= start, end < snap.totalFileBytes else {
             return false
         }
@@ -93,13 +79,12 @@ final class ExportPlaybackState {
         return true
     }
 
-    nonisolated var frozenPlaybackStartSecondsInt: Int {
-        let sec = frozenLock.withLock { frozen.playbackStartSeconds }
-        return Int(sec.rounded(.down))
+    var frozenPlaybackStartSecondsInt: Int {
+        lock.withLock { Int(snapshot.playbackStartSeconds.rounded(.down)) }
     }
 
-    nonisolated var frozenStatusPayload: [String: Any] {
-        let snap = frozenLock.withLock { frozen }
+    var frozenStatusPayload: [String: Any] {
+        let snap = lock.withLock { snapshot }
         return [
             "playbackStartSeconds": snap.playbackStartSeconds,
             "exportCursorSeconds": snap.exportCursorSeconds,
@@ -111,24 +96,10 @@ final class ExportPlaybackState {
         ]
     }
 
-    private func freeze() {
-        let next = Frozen(
-            playbackStartSeconds: playbackStartSeconds,
-            exportCursorSeconds: exportCursorSeconds,
-            durationSeconds: durationSeconds,
-            totalFileBytes: totalFileBytes,
-            indexTailStart: indexTailStart,
-            headOnDisk: headOnDisk,
-            tailOnDisk: tailOnDisk,
-            filledSpans: filledSpans
-        )
-        frozenLock.withLock { frozen = next }
-    }
-
-    private nonisolated static func endOfServedRun(
+    private static func endOfServedRun(
         from offset: Int64,
         maxEnd: Int64,
-        snap: Frozen
+        snap: Snapshot
     ) -> Int64? {
         if snap.headOnDisk {
             let headEnd = min(maxEnd, min(Int64(512 * 1024) - 1, snap.totalFileBytes - 1))
