@@ -1,12 +1,12 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Pull op_00.mp4 from Loop Segments LAN export into the older PC DLNA slot.
+  Pull loop/op_00.mp4 from Loop Segments LAN export into the older PC DLNA slot.
 
 .DESCRIPTION
-  While export runs on the phone, Loop Segments serves Documents/Exports on Wi-Fi
-  (default http://<phone-ip>:8765/). This script downloads the segment and copies it
-  to the older of op_00.mp4 / op_01.mp4 on the PC (DLNA ring buffer).
+  Optional fallback when you do not use Mount-LoopSegmentsRclone.ps1. While export runs,
+  the phone serves Documents/Exports on Wi-Fi (http://<phone-ip>:8765/). This script
+  downloads loop/op_00.mp4 and copies it to the older of op_00.mp4 / op_01.mp4 on the PC.
   Skips overwrite when the peer slot already has the same segment (phone unchanged) so DLNA
   never has identical op_00 and op_01. Schedules a retry of that same slot after DeferRetrySeconds
   (default = PollSeconds, 60). Installs via a temp file + rename so DLNA never reads a partial MP4.
@@ -50,10 +50,10 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\LoopSegments-Config.ps1"
 
 $SegmentNames = @('op_00.mp4', 'op_01.mp4')
-$RemoteSegmentName = 'op_00.mp4'
+$RemoteSegmentName = 'loop/op_00.mp4'
 
 function Get-LoopSegmentsLANHostConfigPath {
-    Join-Path $PSScriptRoot 'loop-segments-lan-host.txt'
+    Join-Path (Split-Path $PSScriptRoot -Parent) 'loop-segments-lan-host.txt'
 }
 
 function Get-LoopSegmentsLANHost {

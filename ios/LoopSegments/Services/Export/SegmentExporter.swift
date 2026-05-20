@@ -170,9 +170,9 @@ final class SegmentExporter {
         var reachedEnd = false
 
         logHandler(
-            "Phone export: one file \(ExportPaths.segmentURL(index: 0).lastPathComponent) per ~\(Int(Self.segmentDurationSeconds))s " +
+            "Phone export: loop/op_00 ↔ op_01 per ~\(Int(Self.segmentDurationSeconds))s " +
                 (ExportDeliveryPolicy.keyframeAlignedBoundaries ? "(keyframe borders)" : "") +
-                "; PC keeps op_00/01 via LAN watch or USB (overwrite older slot)"
+                "; PC: Mount-LoopSegmentsRclone.ps1"
         )
 
             guard let downloader = tempDownload else {
@@ -180,7 +180,7 @@ final class SegmentExporter {
             }
         logHandler(
             "Publishing ~\(Int(Self.segmentDurationSeconds))s segments — dense fill each window, then passthrough " +
-                "(per-minute failsafe: skip on error and continue; _export_source_working.mp4 on LAN when serve is on)"
+                "(per-minute failsafe: skip on error and continue; _working.mp4 on LAN when serve is on)"
         )
 
         var skippedSegmentCount = 0
@@ -375,7 +375,7 @@ final class SegmentExporter {
                         "Minute skipped (failsafe) — source \(ExportTimelineLog.sourceRange(startSeconds: windowStartSeconds, endSeconds: windowEndSeconds)): \(error.localizedDescription)"
                     )
                     logHandler(
-                        "Continuing — next minute will dense-fill on _export_source_working.mp4 " +
+                        "Continuing — next minute will dense-fill on _working.mp4 " +
                             "(LAN :8765 when serve is on)"
                     )
                     mediaCursorSeconds = windowEndSeconds
@@ -434,7 +434,7 @@ final class SegmentExporter {
                 log: log
             )
         } else if ExportPaths.segmentFileCount == 1 {
-            log("Publishing segment immediately (single phone file; PC DLNA ring via USB sync)")
+            log("Publishing segment immediately (first slot; wall-clock hold skipped)")
         } else {
             log("Publishing slot 0 immediately (no wall-clock hold)")
         }

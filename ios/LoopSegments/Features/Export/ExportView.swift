@@ -45,7 +45,7 @@ struct ExportView: View {
                         }
                     }
                 ))
-                Text("Phone and PC on same LAN (HTTP + WebDAV on port 8765 — not SMB). For in-progress source preview, open the LAN index link to _export_source_working.mp4 (#t= resume time). Sync-FromPhoneLAN.ps1 -Watch or Map-LoopSegmentsWebDAV.ps1 on PC.")
+                Text("Phone and PC on same LAN (HTTP + WebDAV :8765). In-progress: LAN index → _working.mp4 (#t= resume). PC: Mount-LoopSegmentsRclone.ps1 maps full Exports (loop/ + _working.mp4).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if let lanExportURL {
@@ -84,10 +84,10 @@ struct ExportView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (op_00.mp4). First segment can take a few minutes on large files.")
+                    Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (loop/op_00.mp4). First segment can take a few minutes on large files.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("PC sync: Sync-FromPhoneLAN.ps1 -Watch (Wi‑Fi) or Apple Devices → Exports → Save to PC.")
+                    Text("PC: Mount-LoopSegmentsRclone.ps1 (Wi‑Fi) or Apple Devices → Exports → Save to PC.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -110,7 +110,7 @@ struct ExportView: View {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
                 Text("1. Large files: sparse temp shell; each minute dense-fills only that window from pCloud (not the full file).")
-                Text("2. Passthrough to op_00.mp4; PC pulls via Sync-FromPhoneLAN.ps1 -Watch (or USB / Apple Devices)")
+                Text("2. Passthrough to loop/op_*.mp4; PC: Mount-LoopSegmentsRclone.ps1")
                 Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -134,7 +134,7 @@ struct ExportView: View {
                     showClearLogsConfirm = true
                 }
                 .disabled(session.isExportRunning)
-                Text("Media: op_*.mp4, staging, _export_source_working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
+                Text("Media: loop/op_00|01.mp4, _working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

@@ -69,9 +69,8 @@ enum ExportLANServer {
                         lock.lock()
                         advertisedBaseURL = url
                         lock.unlock()
-                        log("LAN export: \(url) — PC: Sync-FromPhoneLAN.ps1 -Watch or Map-LoopSegmentsWebDAV.ps1")
-                        let segmentName = ExportPaths.segmentURL(index: 0).lastPathComponent
-                        log("LAN: HTTP + WebDAV read-only — /\(segmentName), logs, _export_source_working.mp4 (not SMB)")
+                        log("LAN export: \(url) — PC: Mount-LoopSegmentsRclone.ps1")
+                        log("LAN: HTTP + WebDAV — loop/op_00|01.mp4, _working.mp4, logs (not SMB)")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
                         Self.stopOnQueue(log: nil)
@@ -422,7 +421,7 @@ enum ExportLANServer {
             sendStatusJSON(connection, done: done)
             return
         }
-        guard let fileURL = resolveExportFile(name: normalized) else {
+        guard let fileURL = resolveExportFile(relativePath: normalized) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
         }
@@ -523,16 +522,13 @@ enum ExportLANServer {
 
     private static func listExportFiles() -> [ExportFileEntry] {
         let fm = FileManager.default
-        let dir = ExportPaths.exportsDirectory
-        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
         var entries: [ExportFileEntry] = []
-        for name in names.sorted() {
-            guard resolveExportFile(name: name) != nil else { continue }
-            let url = dir.appendingPathComponent(name)
+        for rel in allowedServableRelativePaths().sorted() where rel != "status.json" {
+            guard let url = resolveExportFile(relativePath: rel) else { continue }
             let attrs = try? fm.attributesOfItem(atPath: url.path)
             let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
             let modified = attrs?[.modificationDate] as? Date
-            entries.append(ExportFileEntry(name: name, url: url, size: size, modified: modified))
+            entries.append(ExportFileEntry(name: rel, url: url, size: size, modified: modified))
         }
         return entries
     }
@@ -572,11 +568,30 @@ enum ExportLANServer {
         return p
     }
 
-    private static func fileName(fromDAVPath path: String) -> String? {
+    /// Relative path under `Exports/` (e.g. `loop/op_00.mp4`, `_working.mp4`).
+    private static func relativeExportPath(fromDAVPath path: String) -> String? {
         let p = webDAVResourcePath(path)
         guard p != "/" else { return nil }
-        let name = (p as NSString).lastPathComponent
-        return name.isEmpty ? nil : name
+        var rel = p.hasPrefix("/") ? String(p.dropFirst()) : p
+        while rel.hasSuffix("/"), rel.count > 1 {
+            rel.removeLast()
+        }
+        guard !rel.isEmpty, !rel.contains("..") else { return nil }
+        return rel
+    }
+
+    private static func allowedServableRelativePaths() -> Set<String> {
+        var names: Set<String> = [
+            ExportPaths.workingSourceURL.lastPathComponent,
+            ExportPaths.latestLogTextURL.lastPathComponent,
+            ExportPaths.latestLogURL.lastPathComponent,
+            ExportPaths.exportProgressURL.lastPathComponent,
+            "status.json",
+        ]
+        for slot in 0 ..< ExportPaths.segmentFileCount {
+            names.insert(ExportPaths.segmentRelativePath(index: slot))
+        }
+        return names
     }
 
     private static func xmlEscape(_ text: String) -> String {
@@ -733,25 +748,57 @@ enum ExportLANServer {
         let depth = parseDepth(requestHeaders: requestHeaders)
         var responses: [String] = []
 
-        if let name = fileName(fromDAVPath: davPath) {
-            guard let fileURL = resolveExportFile(name: name) else {
-                sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
-                return
-            }
-            let fm = FileManager.default
-            let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
-            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-            let modified = attrs?[.modificationDate] as? Date
-            responses.append(
-                propfindEntryXML(
-                    href: davListingHref(path: davPath, isCollection: false),
-                    isCollection: false,
-                    displayName: name,
-                    size: size,
-                    modified: modified,
-                    contentType: mimeType(for: fileURL)
+        if let rel = relativeExportPath(fromDAVPath: davPath) {
+            if rel == ExportPaths.loopDirectoryName || rel == "\(ExportPaths.loopDirectoryName)/" {
+                responses.append(
+                    propfindEntryXML(
+                        href: davListingHref(path: "/\(ExportPaths.loopDirectoryName)/", isCollection: true),
+                        isCollection: true,
+                        displayName: ExportPaths.loopDirectoryName,
+                        size: nil,
+                        modified: nil
+                    )
                 )
-            )
+                if depth != 0 {
+                    for slot in 0 ..< ExportPaths.segmentFileCount {
+                        let segmentRel = ExportPaths.segmentRelativePath(index: slot)
+                        guard let fileURL = resolveExportFile(relativePath: segmentRel) else { continue }
+                        let fm = FileManager.default
+                        let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
+                        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+                        let modified = attrs?[.modificationDate] as? Date
+                        responses.append(
+                            propfindEntryXML(
+                                href: davListingHref(path: "/\(segmentRel)", isCollection: false),
+                                isCollection: false,
+                                displayName: fileURL.lastPathComponent,
+                                size: size,
+                                modified: modified,
+                                contentType: mimeType(for: fileURL)
+                            )
+                        )
+                    }
+                }
+            } else {
+                guard let fileURL = resolveExportFile(relativePath: rel) else {
+                    sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+                    return
+                }
+                let fm = FileManager.default
+                let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
+                let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+                let modified = attrs?[.modificationDate] as? Date
+                responses.append(
+                    propfindEntryXML(
+                        href: davListingHref(path: davPath, isCollection: false),
+                        isCollection: false,
+                        displayName: fileURL.lastPathComponent,
+                        size: size,
+                        modified: modified,
+                        contentType: mimeType(for: fileURL)
+                    )
+                )
+            }
         } else {
             responses.append(
                 propfindEntryXML(
@@ -763,12 +810,21 @@ enum ExportLANServer {
                 )
             )
             if depth != 0 {
+                responses.append(
+                    propfindEntryXML(
+                        href: davListingHref(path: "/\(ExportPaths.loopDirectoryName)/", isCollection: true),
+                        isCollection: true,
+                        displayName: ExportPaths.loopDirectoryName,
+                        size: nil,
+                        modified: nil
+                    )
+                )
                 for entry in listExportFiles() {
                     responses.append(
                         propfindEntryXML(
                             href: davListingHref(path: "/\(entry.name)", isCollection: false),
                             isCollection: false,
-                            displayName: entry.name,
+                            displayName: (entry.name as NSString).lastPathComponent,
                             size: entry.size,
                             modified: entry.modified,
                             contentType: mimeType(for: entry.url)
@@ -801,24 +857,11 @@ enum ExportLANServer {
         })
     }
 
-    private static func resolveExportFile(name: String) -> URL? {
-        guard !name.contains("/"), !name.contains("..") else { return nil }
-        let allowedNames: Set<String> = {
-            var names: Set<String> = [
-                ExportPaths.latestLogTextURL.lastPathComponent,
-                ExportPaths.latestLogURL.lastPathComponent,
-                ExportPaths.exportProgressURL.lastPathComponent,
-                "status.json",
-            ]
-            for slot in 0 ..< ExportPaths.segmentFileCount {
-                names.insert(ExportPaths.segmentURL(index: slot).lastPathComponent)
-            }
-            names.insert(ExportPaths.workingSourceURL.lastPathComponent)
-            return names
-        }()
-        guard allowedNames.contains(name) else { return nil }
-        if name == "status.json" { return nil }
-        let url = ExportPaths.exportsDirectory.appendingPathComponent(name)
+    private static func resolveExportFile(relativePath: String) -> URL? {
+        guard !relativePath.contains("..") else { return nil }
+        guard allowedServableRelativePaths().contains(relativePath) else { return nil }
+        if relativePath == "status.json" { return nil }
+        let url = ExportPaths.exportsDirectory.appendingPathComponent(relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
     }
@@ -847,8 +890,10 @@ enum ExportLANServer {
                         : " — sparse partial copy; fills as export runs"
                     items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(startNote)</li>")
                     continue
+                } else if name.hasSuffix(".mp4"), name.contains("loop/") {
+                    note = " — ~60s segment (Range supported)"
                 } else if name.hasSuffix(".mp4") {
-                    note = " — playable in browser (Range supported)"
+                    note = " — sparse in-progress source (#t= resume on link)"
                 }
                 items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
         }
@@ -869,8 +914,8 @@ enum ExportLANServer {
             </head><body>
             <h1>Loop Segments — LAN export</h1>
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
-            <p>PC: <code>Sync-FromPhoneLAN.ps1 -Watch</code> or map a drive with <code>Map-LoopSegmentsWebDAV.ps1</code> (WebDAV, not SMB).</p>
-            <p><strong>Playback:</strong> use <code>op_00.mp4</code> (complete segment). For <code>_export_source_working.mp4</code>, open the index link (adds <code>#t=</code> resume). Only dense-filled minutes are playable in a browser; resume at 11:00 needs that window on disk (export running or finished past that point).</p>
+            <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps loop/ and _working.mp4).</p>
+            <p><strong>Playback:</strong> <code>loop/op_00.mp4</code> / <code>loop/op_01.mp4</code> (complete segments). For <code>_working.mp4</code>, use the index link (<code>#t=</code> resume). Sparse middle minutes need export to catch up.</p>
             <ul>
             \(fileList)
             </ul>
@@ -891,7 +936,10 @@ enum ExportLANServer {
         var entries: [[String: Any]] = []
         if let names = try? fm.contentsOfDirectory(atPath: dir.path) {
             for name in names.sorted() {
-                guard resolveExportFile(name: name) != nil || name.hasSuffix(".mp4") || name.hasSuffix(".txt") else {
+                guard resolveExportFile(relativePath: name) != nil
+                    || name.hasPrefix("\(ExportPaths.loopDirectoryName)/")
+                    || name.hasSuffix(".mp4")
+                    || name.hasSuffix(".txt") else {
                     continue
                 }
                 let url = dir.appendingPathComponent(name)
@@ -1136,7 +1184,7 @@ enum ExportLANServer {
         let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
         let hint = active
             ? "Range not on disk yet. Export is still filling this part of the file; retry in a few seconds."
-            : "Range not on disk. Open http://<phone-ip>:8765/ and click _export_source_working.mp4 (not a typed URL). Resume at \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))) of ~\(formatLANClock(Int(durationSec.rounded(.down)))). For playback now use op_00.mp4 on the same page, or VLC/ffplay on the working file."
+            : "Range not on disk. Open http://<phone-ip>:8765/ and click _working.mp4 (not a typed URL). Resume at \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))) of ~\(formatLANClock(Int(durationSec.rounded(.down)))). For playback now use loop/op_00.mp4 on the same page, or VLC/ffplay on _working.mp4."
         sendResponse(
             connection: connection,
             status: status,

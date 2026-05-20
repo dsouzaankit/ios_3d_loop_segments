@@ -40,7 +40,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\LoopSegments-Config.ps1"
 
 function Get-LoopSegmentsLANHostConfigPath {
-    Join-Path $PSScriptRoot 'loop-segments-lan-host.txt'
+    Join-Path (Split-Path $PSScriptRoot -Parent) 'loop-segments-lan-host.txt'
 }
 
 function Get-LoopSegmentsLANHost {
@@ -159,7 +159,7 @@ function Test-LoopSegmentsLANMp4MoovInHead {
 function Test-LoopSegmentsWebDAVMediaGet {
     param([string] $RootUrl)
 
-    $segmentName = 'op_00.mp4'
+    $segmentName = 'loop/op_00.mp4'
     try {
         $status = Invoke-RestMethod -Uri ($RootUrl.TrimEnd('/') + '/status.json') -TimeoutSec 8
         $mp4 = @($status.files | Where-Object { $_.name -like 'op_*.mp4' } | Select-Object -First 1)
@@ -629,4 +629,4 @@ if (-not $mapped) {
     exit 1
 }
 
-Write-Host "Open ${drive}\ in Explorer. Prefer op_00.mp4 over _export_source_working.mp4."
+Write-Host "Open ${drive}\ in Explorer. Segments: loop\op_00.mp4 / op_01.mp4. In-progress: _working.mp4."

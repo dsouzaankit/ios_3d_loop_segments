@@ -1,6 +1,6 @@
 import Foundation
 
-/// LAN playback hints for `_export_source_working.mp4` (sparse; moov reports full duration).
+/// LAN playback hints for `_working.mp4` (sparse; moov reports full duration).
 final class ExportPlaybackState: @unchecked Sendable {
     static let shared = ExportPlaybackState()
 

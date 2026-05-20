@@ -1,6 +1,6 @@
 import Foundation
 
-/// Persists which byte ranges of `_export_source_working.mp4` are dense (survives export resume).
+/// Persists which byte ranges of `_working.mp4` are dense (survives export resume).
 enum WorkingSourceSparseCatalog {
     struct Manifest: Codable {
         var fileKey: String

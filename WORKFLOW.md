@@ -9,7 +9,7 @@ Three separate networks. **No Personal Hotspot** required for the iPhone path be
 │  iPhone (cellular LTE/5G for pCloud; Wi‑Fi for LAN serve)        │
 │    Loop Segments → pCloud WebDAV → Exports/op_00.mp4              │
 └────────────────────────────┬────────────────────────────────────┘
-                             │ Wi‑Fi (Sync-FromPhoneLAN.ps1 -Watch)
+                             │ Wi‑Fi (Mount-LoopSegmentsRclone.ps1)
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Windows PC — op_00/01 in DLNA folder → media server → TV       │
@@ -41,7 +41,7 @@ Install via **TestFlight** or sideload (AltStore, etc.) with an Apple Developer 
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
 5. Keep the app in the foreground. On phone: **Files → Loop Segments → Exports** should show `op_00.mp4` updating each ~60s of **media** time (first segment can take several minutes on large moov-at-end HEVC while the minute **dense-downloads**).
-6. On the phone: enable **Serve Exports on Wi‑Fi** for PC pull (`Sync-FromPhoneLAN.ps1 -Watch`). Photos library export is **off** in the app by default — see [ios/README.md](ios/README.md).
+6. On the phone: enable **Serve Exports on Wi‑Fi** for PC rclone mount. Photos library export is **off** by default — see [ios/README.md](ios/README.md).
 
 Large files on cellular: first segment waits for index + dense window (`Downloading window … (dense fill)` → `Window on disk` in `export_latest.txt`). Later minutes reuse the same sparse temp shell; export does not keep up with live TV wall clock on slow LTE — OK if the DLNA player **loops** the PC pair.
 
@@ -57,12 +57,13 @@ Large files on cellular: first segment waits for index + dense window (`Download
 
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Set-LoopSegmentsDestination.ps1 'F:\f1_media\3d_fullsbs_trans'   # once
 .\Set-LoopSegmentsLANHost.ps1 192.168.x.x
-.\Sync-FromPhoneLAN.ps1 -Watch
+.\Mount-LoopSegmentsRclone.ps1
 ```
 
-The script pulls `op_00.mp4` from the phone and installs it into the older of `op_00.mp4` / `op_01.mp4` on the PC (DLNA ring). Press **Enter** to stop `-Watch` (removes PC segment files and clears LAN staging — see script help).
+Point your DLNA library at **`L:\loop\`** (segments) or **`L:\`** (includes `_working.mp4`). Keep the mount window open while exporting.
+
+Legacy local copy: [windows/archive/](windows/archive/).
 
 ### Manual (USB / Apple Devices)
 

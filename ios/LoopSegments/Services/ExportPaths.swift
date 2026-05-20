@@ -3,19 +3,31 @@ import Foundation
 enum ExportPaths {
     static let segmentPattern = "op_%02d.mp4"
     static let segmentDurationSeconds = 60
-    /// One rotating file on the phone; PC DLNA pair (`op_00` / `op_01`) via `Sync-FromPhoneLAN.ps1` or USB.
-    static let segmentFileCount = 1
+    static let loopDirectoryName = "loop"
+    /// Two slots under `Exports/loop/` — PC sees both via rclone mount (`Mount-LoopSegmentsRclone.ps1`).
+    static let segmentFileCount = 2
+
+    static var loopDirectory: URL {
+        let dir = exportsDirectory.appendingPathComponent(loopDirectoryName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func segmentRelativePath(index: Int) -> String {
+        let name = String(format: segmentPattern, index % segmentFileCount)
+        return "\(loopDirectoryName)/\(name)"
+    }
 
     static func segmentURL(index: Int) -> URL {
         let name = String(format: segmentPattern, index % segmentFileCount)
-        return exportsDirectory.appendingPathComponent(name)
+        return loopDirectory.appendingPathComponent(name)
     }
 
-    /// Finished segment before wall-clock publish to `op_*.mp4` (DLNA must not see partial slot files).
+    /// Finished segment before wall-clock publish to `loop/op_*.mp4` (LAN must not list staging files).
     static func segmentStagingURL(index: Int) -> URL {
         let finalName = String(format: segmentPattern, index % segmentFileCount)
         let stagingName = finalName.replacingOccurrences(of: ".mp4", with: ".staging.mp4")
-        return exportsDirectory.appendingPathComponent(stagingName)
+        return loopDirectory.appendingPathComponent(stagingName)
     }
 
     /// Replace DLNA slot atomically after staging + wall-clock schedule (one update per ~60s).
@@ -66,13 +78,37 @@ enum ExportPaths {
         exportsDirectory.appendingPathComponent("export_progress.txt")
     }
 
-    /// Sparse full-source temp; replaced when a new export creates the file (not removed on export end).
+    /// Sparse full-source temp at Exports root; replaced when a new export starts (kept until next export).
     static var workingSourceURL: URL {
-        exportsDirectory.appendingPathComponent("_export_source_working.mp4")
+        exportsDirectory.appendingPathComponent("_working.mp4")
     }
 
     static var workingSourceManifestURL: URL {
-        exportsDirectory.appendingPathComponent("_export_source_working.sparse.json")
+        exportsDirectory.appendingPathComponent("_working.sparse.json")
+    }
+
+    /// Rename legacy export filenames from older builds (idempotent).
+    static func migrateLegacyExportFilenames(log: ((String) -> Void)? = nil) {
+        let fm = FileManager.default
+        _ = loopDirectory
+        let legacyPairs: [(String, URL)] = [
+            ("_export_source_working.mp4", workingSourceURL),
+            ("_export_source_working.sparse.json", workingSourceManifestURL),
+            ("op_00.mp4", segmentURL(index: 0)),
+            ("op_01.mp4", segmentURL(index: 1)),
+            ("op_00.staging.mp4", segmentStagingURL(index: 0)),
+            ("op_01.staging.mp4", segmentStagingURL(index: 1)),
+        ]
+        for (legacyName, destination) in legacyPairs {
+            let legacy = exportsDirectory.appendingPathComponent(legacyName)
+            guard fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: destination.path) else { continue }
+            do {
+                try fm.moveItem(at: legacy, to: destination)
+                log?("Migrated \(legacyName) → \(destination.path.replacingOccurrences(of: exportsDirectory.path + "/", with: ""))")
+            } catch {
+                log?("Could not migrate \(legacyName): \(error.localizedDescription)")
+            }
+        }
     }
 
     @discardableResult
@@ -165,10 +201,18 @@ enum ExportPaths {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         var parts: [String] = []
-        for name in names.sorted() where name.hasSuffix(".mp4") {
-            let url = dir.appendingPathComponent(name)
+        func appendMP4(at url: URL, label: String) {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-            parts.append("\(name) \(formatter.string(fromByteCount: size))")
+            parts.append("\(label) \(formatter.string(fromByteCount: size))")
+        }
+        for name in names.sorted() where name.hasSuffix(".mp4") {
+            appendMP4(at: dir.appendingPathComponent(name), label: name)
+        }
+        let loopDir = dir.appendingPathComponent(loopDirectoryName)
+        if let loopNames = try? fm.contentsOfDirectory(atPath: loopDir.path) {
+            for name in loopNames.sorted() where name.hasSuffix(".mp4") {
+                appendMP4(at: loopDir.appendingPathComponent(name), label: "\(loopDirectoryName)/\(name)")
+            }
         }
         if parts.isEmpty {
             return "Exports/: no .mp4 on disk — Files → On My iPhone → Loop Segments → Exports"
@@ -179,7 +223,9 @@ enum ExportPaths {
     /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).
     static func ensureExportDirectories() {
         _ = exportsDirectory
+        _ = loopDirectory
         _ = logsDirectory
+        migrateLegacyExportFilenames()
         SearchDebugLog.ensureReady()
         let probe = exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
         let text = "Loop Segments \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") \(ISO8601DateFormatter().string(from: Date()))\n"

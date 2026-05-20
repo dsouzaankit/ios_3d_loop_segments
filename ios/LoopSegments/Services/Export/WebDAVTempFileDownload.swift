@@ -362,7 +362,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         publishLANPlaybackState()
     }
 
-    /// Updates LAN range gating + playback start hint for `_export_source_working.mp4`.
+    /// Updates LAN range gating + playback start hint for `_working.mp4`.
     func publishLANPlaybackState(mediaCursorSeconds: Double? = nil) {
         let spans = filledSpansOnDisk()
         let head = hasHeadOnDisk()

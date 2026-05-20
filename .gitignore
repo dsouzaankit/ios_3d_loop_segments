@@ -22,3 +22,7 @@ ios/build artifacts/
 *.ipa
 *.zip
 ios/logs/
+
+# Local PC config (per-machine)
+windows/loop-segments-lan-host.txt
+windows/loop-segments-destination.txt

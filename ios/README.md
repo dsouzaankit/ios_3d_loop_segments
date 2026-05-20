@@ -1,20 +1,10 @@
 https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
 
-# read-only webdav windows setup (failing)
-# prefer Skybox webdav <admin, iosadmin>
 cd P:\all_scripts\ios_3d_loop_segments\windows
-# onetime pwsh admin
-Start-Process pwsh -Verb RunAs -ArgumentList "-NoExit", "-Command", "Set-Location '$PWD'"
-.\Set-LoopSegmentsLANHost.ps1 10.0.100.10   # your phone IP
-.\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient   # once, admin, if mapping fails
-.\Map-LoopSegmentsWebDAV.ps1
-.\Map-LoopSegmentsWebDAV.ps1 -ViaPort80Proxy
-
-cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Set-LoopSegmentsDestination.ps1 'D:\ios\loop_segs_out'
 .\Set-LoopSegmentsLANHost.ps1 10.0.100.10
-.\Sync-FromPhoneLAN.ps1 -Discover
-.\Sync-FromPhoneLAN.ps1 -Watch
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly
+.\Mount-LoopSegmentsRclone.ps1          # L:\ = full Exports (loop\, _working.mp4, logs)
+# Skybox PC / DLNA: index L:\ or L:\loop\ — see PC sync section below
 
 Notes:
 phone must be unlocked, app in foreground, screen on:
@@ -50,39 +40,44 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
-- 60s segments; phone keeps **one** file (`op_00.mp4`); PC DLNA pair via **`Sync-FromPhoneLAN.ps1 -Watch`** (build 103+) or USB. **Dense fill** per minute is the default (sparse temp shell, not a full 17 GB copy); see transport table below for large-file exceptions.
+- 60s segments; phone alternates **`loop/op_00.mp4`** / **`loop/op_01.mp4`**; sparse in-progress copy **`_working.mp4`** at Exports root. PC: **`Mount-LoopSegmentsRclone.ps1`** maps the whole folder. **Dense fill** per minute is the default.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
-- Runs until end of file or **Stop**; **per-minute failsafe** (build 130+) skips a failed minute and continues dense-filling `_export_source_working.mp4` (kept on disk and LAN until the next export replaces it)
+- Runs until end of file or **Stop**; **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
-## PC sync (primary — LAN)
+## PC sync (primary — rclone mount)
 
-1. On the phone: **Serve Exports on Wi‑Fi** (export screen; stays on while the app is open).
-2. On the PC (same LAN):
+1. On the phone: **Serve Exports on Wi‑Fi** (export screen; app open on LAN).
+2. On the PC: install **WinFsp** + **rclone**, then:
 
 ```powershell
 cd ..\windows
 .\Set-LoopSegmentsLANHost.ps1 192.168.1.42   # IP from export log
-.\Sync-FromPhoneLAN.ps1 -Watch
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly
+.\Mount-LoopSegmentsRclone.ps1               # keeps running — L:\ = whole Exports folder
 ```
 
-pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/` on port **8765** (`op_00.mp4`, logs, and `_export_source_working.mp4` from the last export until a new one overwrites it). **Browser playback:** use `op_00.mp4` (full segment). `_export_source_working.mp4` is a sparse partial copy — browsers often hang on **5K+**; use VLC, ffplay, or `Sync-FromPhoneLAN.ps1` (build **145+** adds HTTP **Range** so browsers can seek without downloading the whole file).
+3. Point **Skybox PC** / your DLNA library at the mount:
+   - **`L:\loop\`** — only the two ~60s segments (cleaner library).
+   - **`L:\`** — whole Exports folder, including **`_working.mp4`** (in-progress sparse source).
 
-### SMB vs WebDAV (network folder on PC)
+The mount exposes **everything** on the phone under `Documents/Exports/`, not just `loop/`. If your DLNA server indexes `L:\`, Skybox will **see** `_working.mp4` the same way it sees the segment files.
 
-**True SMB** (`\\phone\share`) is **not** possible on iOS: there is no supported in-app SMB server API, and embedding one would be large, fragile, and a poor fit for the sandbox.
+**`_working.mp4` on Skybox:** VLC on iOS plays it over plain HTTP with **Range** on dense-filled minutes only (same server rules). Skybox over **PC DLNA** may work too — especially with rclone **`--vfs-cache-mode full`** — but some DLNA servers choke on sparse “full size” files. Worth trying if you index `L:\`; if it stutters or fails, use **Pigasus** on Quest (`http://<ip>:8765/_working.mp4`) or index only **`L:\loop\`**.
 
-**WebDAV** on the same port (**8765**, build **146+**) is the supported alternative — Windows can map a drive letter:
+Legacy copy / `net use` scripts: [`../windows/archive/`](../windows/archive/).
 
-```powershell
-.\Set-LoopSegmentsLANHost.ps1 192.168.1.42
-.\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient   # once per PC (admin): WebClient + AuthForwardServerList
-.\Map-LoopSegmentsWebDAV.ps1 -TestOnly             # HTTP + PROPFIND check before mapping
-.\Map-LoopSegmentsWebDAV.ps1                       # maps L: to http://<phone>:8765/
-```
+LAN serves `loop/op_*.mp4`, `_working.mp4`, and logs on port **8765**. **Browser / Pigasus:** `loop/op_00.mp4` for segments; `_working.mp4` for in-progress (`#t=` on the index page).
 
-Read-only; phone must stay on the LAN with **Serve Exports** enabled. For hands-off DLNA copy, keep using **`Sync-FromPhoneLAN.ps1 -Watch`**.
+### SMB vs WebDAV on the phone
+
+**True SMB** on the iPhone is not available. The app serves **HTTP + WebDAV** on port **8765**. On Windows use **`Mount-LoopSegmentsRclone.ps1`** (WinFsp + rclone), not `net use` (often fails on :8765). Archived: [`../windows/archive/Map-LoopSegmentsWebDAV.ps1`](../windows/archive/Map-LoopSegmentsWebDAV.ps1).
+
+| File | On mount `L:\` | Skybox via PC DLNA |
+|------|----------------|---------------------|
+| `loop/op_00.mp4`, `loop/op_01.mp4` | Yes | Usually OK |
+| `_working.mp4` | Yes (same folder tree) | May work (like VLC); sparse holes can break some servers |
 
 ### Quest LAN playback (Skybox vs Pigasus)
 
@@ -90,13 +85,13 @@ Read-only; phone must stay on the LAN with **Serve Exports** enabled. For hands-
 
 **Phone LAN** (`http://<ip>:8765`) = plain HTTP + optional WebDAV for the export folder. Players differ:
 
-| Player | `_export_source_working.mp4` (sparse) | `op_00.mp4` (segment) |
+| Player | `_working.mp4` (sparse) | `loop/op_00.mp4` (segment) |
 |--------|----------------------------------------|------------------------|
 | **Pigasus** (direct URL / network file) | **Works** — uses HTTP **Range** (head + `moov` tail + dense minutes) | Should work |
 | **Skybox WebDAV** | Usually **fails** | Often **“too large to decode”** on 5K HEVC; use Pigasus/PC |
 | **Quest browser** (index link, `#t=`) | Works for dense-filled regions | Works (**build 173+** — skip broken faststart remux from 171–172) |
 
-**In-progress export on Quest:** use **Pigasus** with the URL from the phone export log, e.g. `http://10.0.100.10:8765/_export_source_working.mp4` (or open the LAN index in the browser and tap that file — adds `#t=` resume). No WebDAV setup required.
+**In-progress export on Quest:** use **Pigasus** with `http://<ip>:8765/_working.mp4` (or the LAN index link with `#t=` resume). No WebDAV setup required.
 
 ### Skybox (Quest) WebDAV
 
@@ -105,29 +100,29 @@ Skybox over **WebDAV** on the phone is best-effort (not the same code path as Pi
 | | pCloud WebDAV | Loop Segments LAN |
 |--|----------------|-------------------|
 | Transport | **HTTPS** | **HTTP** (port 8765) |
-| Files | Full originals on cloud | `op_00.mp4` (~60s segment), sparse `_export_source_working.mp4` |
+| Files | Full originals on cloud | `loop/op_00|01.mp4` (~60s), sparse `_working.mp4` |
 | Server | Mature WebDAV | Minimal in-app server |
 
-**Skybox on phone LAN:** install **build 173+** (restores playable `op_00.mp4` on browser/Pigasus; **172** WebDAV listing). Skybox may still refuse **5K+ HEVC** segments (“video too large to decode”) even when the file is valid — use **Pigasus** or **PC SMB** for phone exports. For **`_export_source_working.mp4`**, use **Pigasus** or the browser index, not Skybox WebDAV.
+**Skybox on phone LAN:** build **173+** for playable segments in browser/Pigasus. Skybox may refuse **5K+ HEVC** (“video too large to decode”). For **`_working.mp4`**, use **Pigasus** or the browser index, not Skybox WebDAV.
 
 1. Phone: **Serve Exports on Wi‑Fi** on, app **in foreground**, same Wi‑Fi as Quest.
 2. Skybox → **Add WebDAV server** → `http://10.0.100.10:8765/` · `admin` / `iosadmin`.
-3. Prefer **`op_00.mp4` in Pigasus** (`http://<ip>:8765/op_00.mp4`) after export publishes a **new** segment on **173+**.
+3. Prefer **`loop/op_00.mp4` in Pigasus** (`http://<ip>:8765/loop/op_00.mp4`) after a new segment publishes.
 
 **Reliable Skybox paths (same as pCloud-quality playback):**
 
 - **Full movie on pCloud** — use pCloud WebDAV in Skybox (what already works for you).
-- **Phone export segment** — `Sync-FromPhoneLAN.ps1 -Watch` on PC, then Skybox → **SMB** to the PC folder (Skybox handles SMB well), or Skybox PC client copy.
+- **Phone export segment** — `Mount-LoopSegmentsRclone.ps1`, DLNA index `L:\loop\`, or Skybox → **SMB** to a local PC folder.
 
 **PC test:**
 
 ```powershell
 cd windows
 .\Set-LoopSegmentsLANHost.ps1 10.0.100.10
-.\Map-LoopSegmentsWebDAV.ps1 -TestOnly
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly
 ```
 
-Expect `PROPFIND 207`, `GET op_00.mp4` **206 without auth**, and **`moov atom in first 768 KB`**.
+Expect PROPFIND OK and `loop/op_00.mp4` listed. After mount, `L:\_working.mp4` is visible if export has run.
 
 ### Export transport
 
@@ -168,19 +163,18 @@ Export and folder browse use **WebDAV only** — you do not need search for thos
 
 ## Windows sync (LAN → DLNA)
 
-**`Documents/Exports/op_00.mp4` is the full-quality DLNA source on the phone.**
+**`Documents/Exports/loop/op_00.mp4` (and `op_01`) are the segment sources; `_working.mp4` is the in-progress sparse copy.**
 
 | Step | PowerShell |
 |------|------------|
-| Phone **Exports** → PC | **`Sync-FromPhoneLAN.ps1 -Watch`** (Wi‑Fi, port **8765**; **Serve Exports on Wi‑Fi** on) |
-| Manual USB | **Apple Devices** → Loop Segments → Exports → Save to PC (pick DLNA folder) |
+| Phone **Exports** → PC | **`Mount-LoopSegmentsRclone.ps1`** (Wi‑Fi, port **8765**; **Serve Exports on Wi‑Fi** on) |
+| Manual USB | **Apple Devices** → Loop Segments → Exports → Save to PC |
+| Legacy local copy | [`../windows/archive/`](../windows/archive/) (`Sync-FromPhoneLAN.ps1`) |
 
 ```powershell
 cd ..\windows
-.\Set-LoopSegmentsDestination.ps1 'F:\f1_media\3d_fullsbs_trans'   # once
-.\Set-LoopSegmentsLANHost.ps1 192.168.1.42   # IP from export log
-.\Sync-FromPhoneLAN.ps1 -Discover
-.\Sync-FromPhoneLAN.ps1 -Watch
+.\Set-LoopSegmentsLANHost.ps1 192.168.1.42
+.\Mount-LoopSegmentsRclone.ps1
 ```
 
 Details: [../WORKFLOW.md](../WORKFLOW.md) §3, [../FEASIBILITY.md](../FEASIBILITY.md).

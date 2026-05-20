@@ -99,7 +99,7 @@ final class ResumeStore: ObservableObject {
         if changed { persist(entries) }
     }
 
-    /// `_export_source_working.sparse.json` is for one source file — other paused rows are stale.
+    /// `_working.sparse.json` is for one source file — other paused rows are stale.
     func reconcilePausedWithWorkingSource() {
         guard let manifest = WorkingSourceSparseCatalog.readManifest() else { return }
         var entries = load()
@@ -218,7 +218,7 @@ final class ResumeStore: ObservableObject {
         return nil
     }
 
-    /// Restore `href` on paused rows from `_export_source_working.sparse.json` (older pauses often lack href).
+    /// Restore `href` on paused rows from `_working.sparse.json` (older pauses often lack href).
     func backfillHrefsFromSparseManifest() {
         guard let manifest = WorkingSourceSparseCatalog.readManifest() else { return }
         let href = manifest.href?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

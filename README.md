@@ -6,7 +6,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 | Automated today | Not automated today |
 |-----------------|---------------------|
-| pCloud → phone `op_00.mp4`; PC pair via `Sync-FromPhoneLAN.ps1 -Watch` (Wi‑Fi) | Apple Devices manual save to DLNA folder (one-off) |
+| pCloud → phone `loop/op_00|01`; PC via `Mount-LoopSegmentsRclone.ps1` → Skybox DLNA | Apple Devices USB save; legacy scripts in `windows/archive/` |
 | **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Legacy Photos/USB PowerShell sync scripts (removed from `windows/`) |
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
@@ -14,7 +14,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 | Step | Device | Connection |
 |------|--------|------------|
 | Export from pCloud | iPhone | Cellular (Wi‑Fi off OK) |
-| Copy `op_*.mp4` | iPhone → PC | Wi‑Fi (`Sync-FromPhoneLAN.ps1`) or manual USB |
+| Expose `Exports/` on PC | iPhone → PC | rclone mount (`Mount-LoopSegmentsRclone.ps1`) or manual USB |
 | Play on TV | PC → LAN | WLAN (DLNA server on Windows) |
 
 Full guide: **[WORKFLOW.md](WORKFLOW.md)**
@@ -28,10 +28,10 @@ Full guide: **[WORKFLOW.md](WORKFLOW.md)**
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
 .\Set-LoopSegmentsLANHost.ps1 <phone-ip>   # once, from export log
-.\Sync-FromPhoneLAN.ps1 -Watch
+.\Mount-LoopSegmentsRclone.ps1
 ```
 
-Or **Apple Devices** → **Loop Segments → Exports** → save `op_00.mp4` directly to `F:\f1_media\3d_fullsbs_trans`. See [ios/README.md](ios/README.md).
+Point Skybox PC / DLNA at `L:\loop\` (segments) or `L:\` (includes `_working.mp4`). See [ios/README.md](ios/README.md).
 
 ---
 
@@ -52,9 +52,9 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [WORKFLOW.md](WORKFLOW.md) | Step-by-step cellular / LAN / DLNA |
 | [DESIGN.md](DESIGN.md) | Architecture |
 | [ios/](ios/) | Loop Segments iPhone app |
-| [windows/Sync-FromPhoneLAN.ps1](windows/Sync-FromPhoneLAN.ps1) | Wi‑Fi pull `op_00.mp4` → PC DLNA pair |
+| [windows/Mount-LoopSegmentsRclone.ps1](windows/Mount-LoopSegmentsRclone.ps1) | rclone WebDAV mount of phone `Exports/` |
 | [windows/Set-LoopSegmentsLANHost.ps1](windows/Set-LoopSegmentsLANHost.ps1) | Save phone LAN IP |
-| [windows/Set-LoopSegmentsDestination.ps1](windows/Set-LoopSegmentsDestination.ps1) | Save PC DLNA folder |
+| [windows/archive/](windows/archive/) | Legacy sync / `net use` WebDAV scripts |
 | [codemagic.yaml](codemagic.yaml) | Cloud iOS build |
 
 PotPlayer registry resume and **PC-side** `Run-SegmentCopy.ps1` are **not** part of this repo.

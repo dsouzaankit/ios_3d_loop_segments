@@ -2,13 +2,13 @@ import Foundation
 
 /// Removes rotating segment files from app storage and the Photos library.
 enum SegmentCleanup {
-    /// Stop: segment MP4s + Photos only (`_export_source_working.mp4` kept until next export or Clear media).
+    /// Stop: segment MP4s + Photos only (`_working.mp4` kept until next export or Clear media).
     static func removeAllSegments(log: ((String) -> Void)? = nil) async {
         removeExportFiles(log: log)
         await PhotosSegmentPublisher.removeAllPublished(log: log)
     }
 
-    /// Segment MP4s, staging files, and `_export_source_working.mp4` in `Exports/` (not Photos).
+    /// Segment MP4s, staging files, and `_working.mp4` in `Exports/` (not Photos).
     @discardableResult
     static func removeExportMedia(log: ((String) -> Void)? = nil) -> Int {
         var removed = removeExportFiles(log: log)
@@ -41,7 +41,8 @@ enum SegmentCleanup {
         for legacy in [
             "3d_op_00.mp4", "3d_op_01.mp4",
             "3d_op_00.staging.mp4", "3d_op_01.staging.mp4",
-            "op_01.mp4", "op_01.staging.mp4",
+            "op_00.mp4", "op_01.mp4", "op_00.staging.mp4", "op_01.staging.mp4",
+            "_export_source_working.mp4", "_export_source_working.sparse.json",
         ] {
             let url = ExportPaths.exportsDirectory.appendingPathComponent(legacy)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
