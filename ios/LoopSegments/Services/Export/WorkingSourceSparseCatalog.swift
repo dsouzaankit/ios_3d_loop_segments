@@ -11,6 +11,8 @@ enum WorkingSourceSparseCatalog {
         var tailOnDisk: Bool
         /// Resume / seek start for LAN `#t=` links (seconds).
         var playbackStartSeconds: Double?
+        var durationSeconds: Double?
+        var exportCursorSeconds: Double?
 
         struct Span: Codable {
             var lower: Int64
@@ -51,7 +53,9 @@ enum WorkingSourceSparseCatalog {
         filledRanges: [ClosedRange<Int64>],
         headOnDisk: Bool,
         tailOnDisk: Bool,
-        playbackStartSeconds: Double? = nil
+        playbackStartSeconds: Double? = nil,
+        durationSeconds: Double? = nil,
+        exportCursorSeconds: Double? = nil
     ) {
         let manifest = Manifest(
             fileKey: fileKey,
@@ -60,7 +64,9 @@ enum WorkingSourceSparseCatalog {
             spans: filledRanges.map { Manifest.Span(lower: $0.lowerBound, upper: $0.upperBound) },
             headOnDisk: headOnDisk,
             tailOnDisk: tailOnDisk,
-            playbackStartSeconds: playbackStartSeconds
+            playbackStartSeconds: playbackStartSeconds,
+            durationSeconds: durationSeconds,
+            exportCursorSeconds: exportCursorSeconds
         )
         guard let data = try? JSONEncoder().encode(manifest) else { return }
         try? data.write(to: manifestURL, options: .atomic)
@@ -79,26 +85,41 @@ enum WorkingSourceSparseCatalog {
             return
         }
         let total = sizeNum.int64Value
+        let probed = probeLayoutOnDisk(fileURL: fileURL, totalLength: total)
         if let manifest = loadManifest(totalLength: total),
-           let layout = layout(from: manifest, fileURL: fileURL, totalLength: total) {
-            applyLayout(layout, totalLength: total, playbackStartSeconds: manifest.playbackStartSeconds)
+           let manifestLayout = layout(from: manifest, fileURL: fileURL, totalLength: total) {
+            let merged = AdoptedLayout(
+                filledRanges: manifestLayout.filledRanges,
+                headOnDisk: manifestLayout.headOnDisk || probed.headOnDisk,
+                tailOnDisk: manifestLayout.tailOnDisk || probed.tailOnDisk
+            )
+            applyLayout(
+                merged,
+                totalLength: total,
+                playbackStartSeconds: manifest.playbackStartSeconds,
+                durationSeconds: manifest.durationSeconds,
+                exportCursorSeconds: manifest.exportCursorSeconds
+            )
             return
         }
-        let probed = probeLayoutOnDisk(fileURL: fileURL, totalLength: total)
-        applyLayout(probed, totalLength: total, playbackStartSeconds: nil)
+        applyLayout(probed, totalLength: total, playbackStartSeconds: nil, durationSeconds: nil, exportCursorSeconds: nil)
     }
 
     private static func applyLayout(
         _ layout: AdoptedLayout,
         totalLength: Int64,
-        playbackStartSeconds: Double?
+        playbackStartSeconds: Double?,
+        durationSeconds: Double?,
+        exportCursorSeconds: Double?
     ) {
-        ExportPlaybackState.shared.syncSparseLayout(
+        ExportPlaybackState.shared.restoreLANPlayback(
             totalBytes: totalLength,
             filledSpans: layout.filledRanges,
             headOnDisk: layout.headOnDisk,
             tailOnDisk: layout.tailOnDisk,
-            playbackStartSeconds: playbackStartSeconds
+            playbackStartSeconds: playbackStartSeconds,
+            durationSeconds: durationSeconds,
+            exportCursorSeconds: exportCursorSeconds
         )
     }
 

@@ -674,7 +674,10 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let href = sourceHref
         let length = totalLength
         lock.unlock()
-        let playbackStart = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
+        let playback = ExportPlaybackState.shared.frozenStatusPayload
+        let playbackStart = (playback["playbackStartSeconds"] as? Double) ?? 0
+        let duration = (playback["durationSeconds"] as? Double) ?? 0
+        let cursor = (playback["exportCursorSeconds"] as? Double) ?? 0
         WorkingSourceSparseCatalog.save(
             fileKey: key,
             totalLength: length,
@@ -682,7 +685,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             filledRanges: spans,
             headOnDisk: head,
             tailOnDisk: tail,
-            playbackStartSeconds: playbackStart > 0 ? Double(playbackStart) : nil
+            playbackStartSeconds: playbackStart > 0 ? playbackStart : nil,
+            durationSeconds: duration > 0 ? duration : nil,
+            exportCursorSeconds: cursor > 0 ? cursor : nil
         )
     }
 

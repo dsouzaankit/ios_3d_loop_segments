@@ -929,8 +929,8 @@ enum ExportLANServer {
         let status = active ? 503 : 416
         let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
         let hint = active
-            ? "Range not on disk yet — export is filling sparse windows; retry in a few seconds."
-            : "Range not on disk — open http://<phone>:8765/ and use the _export_source_working link (#t= resume), or play op_00.mp4. Resume \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is" : "is not") dense on disk; filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))). Duration ~\(formatLANClock(Int(durationSec.rounded(.down)))). VLC/ffplay tolerate sparse files better than browsers."
+            ? "Range not on disk yet. Export is still filling this part of the file; retry in a few seconds."
+            : "Range not on disk. Open http://<phone-ip>:8765/ and click _export_source_working.mp4 (not a typed URL). Resume at \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))) of ~\(formatLANClock(Int(durationSec.rounded(.down)))). For playback now use op_00.mp4 on the same page, or VLC/ffplay on the working file."
         sendResponse(
             connection: connection,
             status: status,

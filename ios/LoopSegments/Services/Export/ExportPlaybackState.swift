@@ -61,6 +61,27 @@ final class ExportPlaybackState: @unchecked Sendable {
         tailOnDisk: Bool,
         playbackStartSeconds: Double? = nil
     ) {
+        restoreLANPlayback(
+            totalBytes: totalBytes,
+            filledSpans: filledSpans,
+            headOnDisk: headOnDisk,
+            tailOnDisk: tailOnDisk,
+            playbackStartSeconds: playbackStartSeconds,
+            durationSeconds: nil,
+            exportCursorSeconds: nil
+        )
+    }
+
+    /// Reload LAN gating from disk manifest (export may be idle).
+    func restoreLANPlayback(
+        totalBytes: Int64,
+        filledSpans: [ClosedRange<Int64>],
+        headOnDisk: Bool,
+        tailOnDisk: Bool,
+        playbackStartSeconds: Double?,
+        durationSeconds: Double?,
+        exportCursorSeconds: Double?
+    ) {
         lock.withLock {
             snapshot.totalFileBytes = totalBytes
             snapshot.filledSpans = filledSpans
@@ -72,6 +93,12 @@ final class ExportPlaybackState: @unchecked Sendable {
             )
             if let playbackStartSeconds {
                 snapshot.playbackStartSeconds = max(0, playbackStartSeconds)
+            }
+            if let durationSeconds, durationSeconds > 0 {
+                snapshot.durationSeconds = durationSeconds
+            }
+            if let exportCursorSeconds {
+                snapshot.exportCursorSeconds = max(0, exportCursorSeconds)
             }
         }
     }
