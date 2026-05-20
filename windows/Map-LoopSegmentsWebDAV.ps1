@@ -114,6 +114,40 @@ function Enable-LoopSegmentsWebClientHTTP {
     Write-Host 'WebClient restarted.'
 }
 
+function Test-LoopSegmentsWebDAVRootForNetUse {
+    param([string] $RootUrl)
+
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($RootUrl)
+        $req.Method = 'GET'
+        $req.Timeout = 15000
+        $req.UserAgent = 'Microsoft-WebDAV-MiniRedir/1.1'
+        $req.Headers.Add('Translate', 'f')
+        $req.Accept = '*/*'
+        $resp = $req.GetResponse()
+        $status = [int]$resp.StatusCode
+        $ctype = $resp.ContentType
+        $resp.Close()
+        if ($ctype -like '*html*') {
+            return $false
+        }
+        if ($status -eq 403 -or $status -eq 404 -or $status -eq 405) {
+            return $true
+        }
+        return $true
+    } catch [System.Net.WebException] {
+        $r = $_.Exception.Response
+        if ($null -ne $r) {
+            $code = [int]$r.StatusCode
+            $r.Close()
+            if ($code -eq 403 -or $code -eq 404 -or $code -eq 405) {
+                return $true
+            }
+        }
+        return $false
+    }
+}
+
 function Test-LoopSegmentsWebDAV {
     param(
         [string] $RootUrl,
@@ -146,39 +180,19 @@ function Test-LoopSegmentsWebDAV {
         throw "WebDAV PROPFIND failed. $($_.Exception.Message)"
     }
 
-    try {
-        $req = [System.Net.HttpWebRequest]::Create($RootUrl)
-        $req.Method = 'GET'
-        $req.Timeout = 15000
-        $req.UserAgent = 'Microsoft-WebDAV-MiniRedir/1.1'
-        $req.Headers.Add('Translate', 'f')
-        $resp = $req.GetResponse()
-        $status = [int]$resp.StatusCode
-        $ctype = $resp.ContentType
-        $resp.Close()
-        if ($ctype -like '*html*') {
-            $msg = 'GET / returned HTML to WebDAV client — install app build 152+ for net use (403 instead of HTML).'
-            if ($RequireWebDAVRootNotHtml) {
-                throw $msg
-            }
-            Write-Warning $msg
-            return
-        }
-        Write-Host "  GET / as WebDAV client $status ($ctype) OK"
-    } catch [System.Net.WebException] {
-        $r = $_.Exception.Response
-        if ($null -ne $r) {
-            $code = [int]$r.StatusCode
-            $r.Close()
-            if ($code -eq 403 -or $code -eq 404 -or $code -eq 405) {
-                Write-Host "  GET / as WebDAV client $code OK (not HTML)"
-                return
-            }
-        }
+    if (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $RootUrl) {
+        Write-Host '  GET / as WebDAV client OK (not HTML — safe for net use)'
+    } else {
+        $msg = @(
+            'GET / returned HTML to WebDAV client — Windows net use will fail.',
+            'Install Loop Segments build 153+ on the phone (GitHub Actions → LoopSegments-ipa), then run:',
+            '  .\Map-LoopSegmentsWebDAV.ps1 -TestOnly',
+            'Until then use: .\Sync-FromPhoneLAN.ps1 -Watch  (same LAN server, no drive letter).'
+        ) -join [Environment]::NewLine
         if ($RequireWebDAVRootNotHtml) {
-            throw "WebDAV GET / check failed. $($_.Exception.Message)"
+            throw $msg
         }
-        Write-Warning "WebDAV GET / check: $($_.Exception.Message)"
+        Write-Warning $msg
     }
 }
 
@@ -283,7 +297,20 @@ if ($LASTEXITCODE -eq 0) {
     cmd /c "net use $drive /delete /y" | Out-Null
 }
 
-Test-LoopSegmentsWebDAV -RootUrl $rootUrl -HostIp $hostIp -RequireWebDAVRootNotHtml
+if (-not (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $rootUrl)) {
+    Write-Host ''
+    Write-Host 'Skipping net use — phone must be build 153+ (GET / returns HTML on your current app).'
+    Write-Host 'PROPFIND 207 only means the server is up; it does not mean drive mapping will work.'
+    Write-Host ''
+    Write-Host 'Next steps:'
+    Write-Host '  1. Sideload LoopSegments-ipa build 153+ from GitHub Actions'
+    Write-Host '  2. .\Map-LoopSegmentsWebDAV.ps1 -TestOnly   (expect: GET / as WebDAV client OK)'
+    Write-Host '  3. .\Map-LoopSegmentsWebDAV.ps1'
+    Write-Host ''
+    Write-Host 'Works today without mapping:'
+    Write-Host '  .\Sync-FromPhoneLAN.ps1 -Watch'
+    exit 1
+}
 
 Write-Host "Mapping $drive -> $rootUrl (phone app open, Serve Exports on)."
 if (-not (Invoke-LoopSegmentsNetUse -Drive $drive -RootUrl $rootUrl -HostIp $mapHostIp -Port $mapPort)) {

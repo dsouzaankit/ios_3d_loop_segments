@@ -236,13 +236,18 @@ enum ExportLANServer {
         return (String(parts[0]).uppercased(), path)
     }
 
-    /// Windows WebDAV MiniRedir fails to map if GET `/` returns HTML (browser index).
-    private static func isWebDAVClient(requestHeaders: String) -> Bool {
+    /// Browsers get the HTML index; WebDAV clients (incl. Windows `net use`) must not.
+    private static func isBrowserLikeRequest(requestHeaders: String) -> Bool {
         let lower = requestHeaders.lowercased()
-        if lower.contains("microsoft-webdav") { return true }
-        if lower.contains("translate: f") { return true }
-        if lower.contains("\ndepth:") || lower.hasPrefix("depth:") { return true }
-        if lower.contains("user-agent:"), lower.contains("webdav") { return true }
+        if lower.contains("microsoft-webdav") { return false }
+        if lower.contains("translate: f") { return false }
+        if lower.contains("\ndepth:") || lower.hasPrefix("depth:") { return false }
+        if lower.contains("accept:"), lower.contains("text/html") { return true }
+        if lower.contains("user-agent:") {
+            if lower.contains("mozilla") || lower.contains("applewebkit") || lower.contains("safari") {
+                return true
+            }
+        }
         return false
     }
 
@@ -255,7 +260,7 @@ enum ExportLANServer {
     ) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
-            if isWebDAVClient(requestHeaders: requestHeaders) {
+            if !isBrowserLikeRequest(requestHeaders: requestHeaders) {
                 sendResponse(
                     connection: connection,
                     status: 403,
