@@ -13,7 +13,8 @@ struct ExportView: View {
     @State private var logHint = ""
     @State private var photosAccessNote = ""
     @State private var liveLogTail = ""
-    @State private var lanExportURL: String?
+    @State private var lanHostURL: String?
+    @State private var lanIPURL: String?
     @State private var exportTask: Task<Void, Never>?
     @State private var showClearMediaConfirm = false
     @State private var showClearLogsConfirm = false
@@ -21,6 +22,47 @@ struct ExportView: View {
 
     var body: some View {
         Form {
+            exportControlsSection
+            if !status.isEmpty {
+                Section("Status") {
+                    Text(status).font(.caption)
+                }
+            }
+            Section("LAN export (PC sync)") {
+                Toggle("Serve Exports on Wi‑Fi", isOn: Binding(
+                    get: { ExportLANServer.isEnabled },
+                    set: { enabled in
+                        ExportLANServer.isEnabled = enabled
+                        if enabled {
+                            ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
+                        } else {
+                            ExportLANServer.stop(log: nil)
+                            lanHostURL = nil
+                            lanIPURL = nil
+                        }
+                    }
+                ))
+                Text("Use \(ExportLANServer.bonjourHostName) on the same Wi‑Fi (like VLC). Skybox WebDAV: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if let lanHostURL {
+                    LabeledContent("LAN host") {
+                        Text(lanHostURL)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                }
+                if let lanIPURL {
+                    LabeledContent("IP fallback") {
+                        Text(lanIPURL)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                }
+                Text("In-progress: index → pcld_ios_media/_working.mp4 (#t= resume while paused). Segments: pcld_ios_media/loop/op_*.mp4")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Section("Network (pCloud)") {
                 Text(network.interfaceLabel)
                 if network.usesCellular {
@@ -32,33 +74,10 @@ struct ExportView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            Section("LAN export (PC sync)") {
-                Toggle("Serve Exports on Wi‑Fi", isOn: Binding(
-                    get: { ExportLANServer.isEnabled },
-                    set: { enabled in
-                        ExportLANServer.isEnabled = enabled
-                        if enabled {
-                            ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
-                        } else {
-                            ExportLANServer.stop(log: nil)
-                            lanExportURL = nil
-                        }
-                    }
-                ))
-                Text("Phone and PC on same LAN (HTTP + WebDAV :8765). In-progress: LAN index → pcld_ios_media/_working.mp4 (#t= resume while paused). PC: Mount-LoopSegmentsRclone.ps1 maps full Exports (pcld_ios_media/loop/ for segments + pcld_ios_media/_working).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                if let lanExportURL {
-                    Text(lanExportURL)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-            }
             Section("File") {
                 Text(item.name)
                 Text(item.href).font(.caption).foregroundStyle(.secondary)
             }
-            resumeSection
             if PhotosSegmentPublisher.workflowEnabled {
                 Section("Photos (optional — PC sync)") {
                     Toggle("Save segments to Photos", isOn: Binding(
@@ -138,26 +157,6 @@ struct ExportView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            if !status.isEmpty {
-                Section("Status") {
-                    Text(status).font(.caption)
-                }
-            }
-            Section {
-                Button(session.isExportRunning ? "Exporting…" : "Start export") {
-                    exportTask?.cancel()
-                    exportTask = Task { await startExport() }
-                }
-                .disabled(session.isExportRunning)
-                if session.isExportRunning {
-                    Button("Stop", role: .destructive) {
-                        session.cancelExport()
-                        exportTask?.cancel()
-                        exportTask = nil
-                        status = "Stopping…"
-                    }
-                }
-            }
         }
         .navigationTitle("Export")
         .onAppear {
@@ -181,7 +180,8 @@ struct ExportView: View {
         }
         .task(id: ExportLANServer.isEnabled) {
             guard ExportLANServer.isEnabled else {
-                lanExportURL = nil
+                lanHostURL = nil
+                lanIPURL = nil
                 return
             }
             ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
@@ -189,11 +189,14 @@ struct ExportView: View {
                 if session.isExportRunning {
                     refreshLogFromDisk()
                 }
-                lanExportURL = ExportLANServer.baseURLString
+                let urls = ExportLANServer.displayLANURLs
+                lanHostURL = urls.host
+                lanIPURL = urls.ip
                 try? await Task.sleep(for: .seconds(2))
             }
             if !ExportLANServer.isEnabled {
-                lanExportURL = nil
+                lanHostURL = nil
+                lanIPURL = nil
             }
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
@@ -232,7 +235,7 @@ struct ExportView: View {
     }
 
     @ViewBuilder
-    private var resumeSection: some View {
+    private var exportControlsSection: some View {
         let resume = resumeStore.resumeStatus(for: item)
         let isThisFileExporting = session.isExportRunning
             && session.activeExportItem?.fileKey == item.fileKey
@@ -248,7 +251,7 @@ struct ExportView: View {
             } else if resume.isPaused {
                 Label("Export paused", systemImage: "pause.circle.fill")
                     .foregroundStyle(.orange)
-                Text("Interrupted or app left mid-run. Next export continues from the checkpoint below.")
+                Text("Checkpoint saved. Tap Start export to continue — segments and _working.mp4 stay on the phone.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else if resume.effectiveMs > 0 {
@@ -310,8 +313,32 @@ struct ExportView: View {
                     status = "Resume cleared — next export starts at 0:00"
                 }
             }
+
+            Button(session.isExportRunning ? "Exporting…" : "Start export") {
+                exportTask?.cancel()
+                exportTask = Task { await startExport() }
+            }
+            .disabled(session.isExportRunning)
+
+            if session.isExportRunning {
+                Button("Pause") {
+                    session.pauseExport()
+                    exportTask?.cancel()
+                    exportTask = nil
+                    status = "Paused — tap Start export to continue from checkpoint"
+                }
+                Button("Stop", role: .destructive) {
+                    session.cancelExport()
+                    exportTask?.cancel()
+                    exportTask = nil
+                    status = "Stopping…"
+                }
+            }
         } header: {
-            Text("Resume")
+            Text("Export")
+        } footer: {
+            Text("Pause keeps the checkpoint and files on disk. Stop clears paused state and removes published segment files.")
+                .font(.footnote)
         }
     }
 
@@ -342,7 +369,9 @@ struct ExportView: View {
         if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
-        lanExportURL = ExportLANServer.baseURLString
+        let urls = ExportLANServer.displayLANURLs
+        lanHostURL = urls.host
+        lanIPURL = urls.ip
     }
 
     private func clearExportMedia() {
@@ -385,7 +414,18 @@ struct ExportView: View {
             status = PhotosSegmentPublisher.workflowEnabled && PhotosSegmentPublisher.isEnabled
                 ? "Done — segment in Files → Loop Segments → Exports (and Photos). Stays until Clear media or next export."
                 : "Done — segment in Files → Exports. LAN sync while app is open and Serve Exports is on."
-        } catch is CancellationError, SegmentExporterError.cancelled {
+        } catch SegmentExporterError.paused {
+            let resume = resumeStore.resumeStatus(for: item)
+            let at = ResumeTimeFormat.formatMs(resume.effectiveMs)
+            status = "Paused — tap Start export to continue from \(at)"
+        } catch is CancellationError {
+            let resume = resumeStore.resumeStatus(for: item)
+            if resume.isPaused {
+                status = "Paused — tap Start export to continue from \(ResumeTimeFormat.formatMs(resume.effectiveMs))"
+            } else {
+                status = "Stopped — segment files removed from device"
+            }
+        } catch SegmentExporterError.cancelled {
             status = "Stopped — segment files removed from device"
         } catch ExportError.stillStopping {
             errorMessage = ExportError.stillStopping.errorDescription

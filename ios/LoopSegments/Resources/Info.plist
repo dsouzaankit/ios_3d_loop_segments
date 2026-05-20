@@ -33,6 +33,10 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Loop Segments serves Exports on your Wi‑Fi network (HTTP/WebDAV) so your PC can copy or map segment files for DLNA.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Loop Segments saves 60s segment videos to your Photos library so you can import them on a PC.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

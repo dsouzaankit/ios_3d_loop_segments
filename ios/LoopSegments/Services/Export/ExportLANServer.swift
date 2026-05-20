@@ -28,12 +28,22 @@ enum ExportLANServer {
     private static var listener: NWListener?
     private static var connections: [ObjectIdentifier: NWConnection] = [:]
     private static let queue = DispatchQueue(label: "com.loopsegments.lan-server")
+    /// Stable LAN hostname (mDNS / Bonjour). Same Wi‑Fi required; IP shown as fallback.
+    static let bonjourHostName = "loopsegments.local"
     private static var advertisedBaseURL: String?
+    private static var advertisedIPAddressURL: String?
 
     static var baseURLString: String? {
         lock.lock()
         defer { lock.unlock() }
         return advertisedBaseURL
+    }
+
+    /// Primary `http://loopsegments.local:8765/` plus numeric IP when known.
+    static var displayLANURLs: (host: String?, ip: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (advertisedBaseURL, advertisedIPAddressURL)
     }
 
     /// Start the listener when the user preference is on (idempotent).
@@ -57,6 +67,7 @@ enum ExportLANServer {
                 let params = NWParameters.tcp
                 params.allowLocalEndpointReuse = true
                 let nwListener = try NWListener(using: params, on: port)
+                nwListener.service = NWListener.Service(name: "loopsegments", type: "_http._tcp")
                 lock.lock()
                 listener = nwListener
                 lock.unlock()
@@ -64,12 +75,14 @@ enum ExportLANServer {
                 nwListener.stateUpdateHandler = { state in
                     switch state {
                     case .ready:
-                        let ip = Self.primaryLANIPv4Address() ?? "?"
-                        let url = "http://\(ip):\(defaultPort)/"
+                        let ip = Self.primaryLANIPv4Address()
+                        let hostURL = "http://\(Self.bonjourHostName):\(defaultPort)/"
+                        let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
                         lock.lock()
-                        advertisedBaseURL = url
+                        advertisedBaseURL = hostURL
+                        advertisedIPAddressURL = ipURL
                         lock.unlock()
-                        log("LAN export: \(url) — PC: Mount-LoopSegmentsRclone.ps1")
+                        log("LAN export: \(hostURL)\(ip.map { " (IP \($0))" } ?? "") — Skybox/WebDAV or browser")
                         log("LAN: HTTP + WebDAV — pcld_ios_media/loop/op_00|01, pcld_ios_media/_working.mp4, logs (not SMB)")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
@@ -112,6 +125,7 @@ enum ExportLANServer {
         let nwListener = listener
         listener = nil
         advertisedBaseURL = nil
+        advertisedIPAddressURL = nil
         let open = connections.values
         connections.removeAll()
         lock.unlock()
@@ -928,8 +942,8 @@ enum ExportLANServer {
                     let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
                     let href = "\(escaped)\(tFrag)"
                     let startNote = startSec > 0
-                        ? " — start playback at \(formatLANClock(startSec)) (resume; middle is sparse until export catches up)"
-                        : " — sparse partial copy; fills as export runs"
+                        ? " — start at \(formatLANClock(startSec)) (#t= resume). Scrubber length = full file from index; only dense spans play — not the same as segment export progress."
+                        : " — sparse partial copy; scrubber shows full duration from index tail; video bytes fill as export runs"
                     items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(startNote)</li>")
                     continue
                 } else if name.hasSuffix(".mp4"),

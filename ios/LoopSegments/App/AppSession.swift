@@ -7,6 +7,7 @@ final class AppSession: ObservableObject {
 
     private let credentialStore = CredentialStore()
     private(set) var userRequestedExportCancel = false
+    private(set) var userRequestedExportPause = false
     /// Created on first export (lazy init for export stack).
     private lazy var exportCoordinator = ExportCoordinator()
     @Published private(set) var activeExportItem: WebDAVItem?
@@ -127,7 +128,9 @@ final class AppSession: ObservableObject {
         guard !exportCoordinator.isBusy else { throw ExportError.stillStopping }
 
         userRequestedExportCancel = false
+        userRequestedExportPause = false
         exportCoordinator.userRequestedCancel = false
+        exportCoordinator.userRequestedPause = false
         activeExportItem = item
         ResumeStore.shared.beginExport(for: item, seekMs: seekMs)
         isExportRunning = true
@@ -160,18 +163,33 @@ final class AppSession: ObservableObject {
             if userRequestedExportCancel {
                 ResumeStore.shared.finishExport(for: item)
             }
+            // Pause / interrupt: checkpoint + exportInProgress stay until next Start export.
             throw error
         }
     }
 
+    /// Stop export and clear paused state (removes published segment files).
     func cancelExport() {
         userRequestedExportCancel = true
+        userRequestedExportPause = false
         exportCoordinator.userRequestedCancel = true
+        exportCoordinator.userRequestedPause = false
         exportCoordinator.cancel()
         isExportRunning = false
         if let item = activeExportItem {
             ResumeStore.shared.finishExport(for: item)
         }
+    }
+
+    /// Pause export: saves checkpoint, keeps export marked paused, keeps media on disk.
+    func pauseExport() {
+        guard isExportRunning else { return }
+        userRequestedExportPause = true
+        userRequestedExportCancel = false
+        exportCoordinator.userRequestedPause = true
+        exportCoordinator.userRequestedCancel = false
+        exportCoordinator.cancel()
+        isExportRunning = false
     }
 }
 

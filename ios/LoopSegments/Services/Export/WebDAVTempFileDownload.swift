@@ -312,13 +312,13 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             exportWindowContiguousEnd = max(exportWindowContiguousEnd, rangeEnd)
             lock.unlock()
             log(
-                "Window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) already dense on disk — skip re-download"
+                "Window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) already dense on _working.mp4 — skip pCloud re-download"
             )
             return
         }
 
         log(
-            "Downloading window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) from pCloud (\(formatBytes(needLen)), dense fill)…"
+            "pCloud dense fill — window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) (\(formatBytes(needLen)); LAN scrubber may show full duration before this span is local)…"
         )
         var offset = range.start
         var lastLoggedPercent = -Self.progressStepPercent

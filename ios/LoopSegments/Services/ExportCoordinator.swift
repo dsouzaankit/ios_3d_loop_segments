@@ -5,6 +5,7 @@ final class ExportCoordinator {
     private let lock = NSLock()
     private var active = false
     var userRequestedCancel = false
+    var userRequestedPause = false
 
     var isBusy: Bool {
         lock.lock()
@@ -110,6 +111,11 @@ final class ExportCoordinator {
             }
             return result
         } catch SegmentExporterError.cancelled {
+            if userRequestedPause {
+                logHandler("Export paused — checkpoint saved; pcld_ios_media/loop/op_*.mp4 and _working.mp4 kept on device")
+                logWriter.finish(status: "paused")
+                throw SegmentExporterError.paused
+            }
             if userRequestedCancel {
                 await SegmentCleanup.removeAllSegments(log: logHandler)
                 logHandler("Cleanup: removed pcld_ios_media/loop/op_*.mp4 from Exports (_working.mp4 kept until next export)")

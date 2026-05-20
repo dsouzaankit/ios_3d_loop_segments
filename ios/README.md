@@ -4,7 +4,7 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once per PC
 .\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional LAN probe; PC rclone drive mount is optional/sluggish — see ../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md
-# Skybox (Quest): Add WebDAV → http://<phone-ip>:8765/ · admin / iosadmin — see “Quest LAN playback” below
+# Skybox (Quest): Add WebDAV → http://loopsegments.local:8765/ (or http://<phone-ip>:8765/) · admin / iosadmin — see “Quest LAN playback” below
 
 Notes:
 phone must be unlocked, app in foreground, screen on:
@@ -42,19 +42,27 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
 - 60s segments; phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute is the default.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
-- Runs until end of file or **Stop**; **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
+- Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **Serve Exports on Wi‑Fi** (export screen; app open on LAN).
-2. **URLs:** **`http://<phone-ip>:8765/`** — HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, LOCK, etc.) for folder-aware clients.
+2. **URLs:** **`http://loopsegments.local:8765/`** (preferred on same Wi‑Fi) or **`http://<phone-ip>:8765/`** — HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, LOCK, etc.) for folder-aware clients.
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
 LAN serves `pcld_ios_media/loop/op_*.mp4`, `pcld_ios_media/_working.mp4`, and logs on port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree; **`#t=`** on the index handles resume for `_working` (clears after a finished export).
+
+**Hostname:** on the same Wi‑Fi use **`http://loopsegments.local:8765/`** (Bonjour, like VLC); the export screen also shows an **IP fallback** if `.local` does not resolve on the PC.
+
+### `_working.mp4`: browser scrubber vs export logs
+
+`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** (head, index tail, and minutes already filled on the phone) are actually local — that is **not** the same as segment export progress or the resume checkpoint.
+
+Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + files; **Stop** clears paused state and removes published `op_*.mp4`.
 
 ### SMB vs HTTP / WebDAV on the phone
 
@@ -105,7 +113,8 @@ Expect **GET** **`status.json`** and index **`/`** OK. **`rclone`** drive mappin
 | Mode | When | Behavior |
 |------|------|----------|
 | **Dense fill** (default) | Source **&lt; ~1.5 GB**, or large file **first minute at seek 0** | Sparse temp once; **one dense pCloud download per minute window**; `file://` passthrough → `op_00.mp4` |
-| **Remote passthrough** | Sparse temp, minute **not** at file byte 0, source **&lt; ~1.5 GB** or **H.264** | **Capped pCloud reads** → HTTPS → export session; then dense + local if needed. |
+| **Remote passthrough** | Sparse temp, minute **not** at file byte 0, window **not** dense on `_working.mp4` yet | **Capped pCloud reads** → HTTPS → export session; then dense + local if needed. |
+| **Local passthrough (mid-file)** | Minute window already **dense** on `_working.mp4` (head + index tail on disk) | Segment cut from **disk** — no second pCloud read for that minute |
 | **Large HEVC mid-file** | **≥ ~1.5 GB**, HEVC, minute not at byte 0 (e.g. seek **30:00**) | **Dense-fill ~1 GB window** → **local export session** (remote passthrough skipped; matches seek‑0 minute‑1 success). |
 | **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
 | **Hybrid (capped)** | Mid-file on **smaller** large sources where custom URL + sparse temp still opens | Head + dense window + MP4 index at EOF; falls back to HTTPS if reader fails |

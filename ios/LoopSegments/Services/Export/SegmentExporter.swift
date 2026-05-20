@@ -303,6 +303,9 @@ final class SegmentExporter {
                           downloader.hasHeadOnDisk(),
                           downloader.hasIndexTailOnDisk() {
                     logHandler(
+                        "Minute window already dense on _working.mp4 — passthrough from disk (no pCloud read for this segment)"
+                    )
+                    logHandler(
                         "Dense window + MP4 head/index on disk — skipping readiness probe " +
                             "(AVAssetReader preflight often reports 0 samples on sparse HEVC)"
                     )
@@ -530,6 +533,9 @@ final class SegmentExporter {
                 "file bytes \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end))"
         )
         if shouldUseRemotePassthroughForMidFile(byteRange: byteRange, downloader: downloader) {
+            log(
+                "Mid-file segment — reading this minute from pCloud (window not dense on _working.mp4 yet); Mbps in log is pCloud, not LAN playback"
+            )
             return try await exportMidFileSegmentOverRemote(
                 downloader: downloader,
                 tempURL: tempURL,
@@ -873,12 +879,15 @@ final class SegmentExporter {
         return downloader.isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: length))
     }
 
-    /// Mid-file on a sparse temp: hybrid/`file://` often fails (Operation Stopped); read this minute from pCloud.
+    /// Mid-file on a sparse temp: hybrid/`file://` often fails — use pCloud only when the minute window is not dense on `_working.mp4` yet.
     private func shouldUseRemotePassthroughForMidFile(
         byteRange: TimelineByteRange,
         downloader: WebDAVTempFileDownload
     ) -> Bool {
         guard byteRange.start > 0 else { return false }
+        if isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
+            return false
+        }
         return !isFullSourceOnDisk(downloader: downloader)
     }
 
@@ -1861,6 +1870,7 @@ enum CodecSupport {
 
 enum SegmentExporterError: LocalizedError {
     case cancelled
+    case paused
     case readerInterrupted
     case seekPastEnd
     case noVideoTrack
@@ -1882,6 +1892,8 @@ enum SegmentExporterError: LocalizedError {
         switch self {
         case .cancelled:
             return "Export cancelled."
+        case .paused:
+            return "Export paused — tap Start export to continue from the checkpoint."
         case .readerInterrupted:
             return "pCloud read was interrupted (app did not stop). Try seek 0 min, keep app open, or use Wi‑Fi."
         case .seekPastEnd:
