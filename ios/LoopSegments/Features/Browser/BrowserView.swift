@@ -15,6 +15,7 @@ struct BrowserView: View {
     @State private var searchToken = 0
     @State private var searchModeNote = ""
     @State private var searchDebugStatus = ""
+    @State private var selectedPausedEntry: ResumeEntry?
 
     private var currentPath: String { pathStack.last ?? "/" }
     private var isSearchActive: Bool {
@@ -49,15 +50,19 @@ struct BrowserView: View {
                         if !isSearchActive, !resumeStore.interruptedEntries().isEmpty {
                             Section("Paused exports") {
                                 ForEach(resumeStore.interruptedEntries()) { entry in
-                                    if let pausedItem = resumeStore.webDAVItem(for: entry) {
-                                        NavigationLink {
-                                            ExportView(item: pausedItem)
-                                        } label: {
+                                    Button {
+                                        selectedPausedEntry = entry
+                                    } label: {
+                                        HStack(alignment: .center) {
                                             pausedExportRow(entry: entry)
+                                            Spacer(minLength: 4)
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(.tertiary)
                                         }
-                                    } else {
-                                        pausedExportRow(entry: entry)
+                                        .contentShape(Rectangle())
                                     }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -109,6 +114,16 @@ struct BrowserView: View {
             }
             .navigationTitle(navigationTitle)
             .navigationSubtitleIfAvailable(navigationSubtitle)
+            .navigationDestination(item: $selectedPausedEntry) { entry in
+                PausedExportDestinationView(
+                    entry: entry,
+                    browsing: items,
+                    onSearchByName: { name in
+                        searchText = name
+                        searchToken += 1
+                    }
+                )
+            }
             .searchable(text: $searchText, prompt: "Search pCloud")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -266,6 +281,7 @@ struct BrowserView: View {
             let loaded = try await client.list(path: path)
             guard !Task.isCancelled, WebDAVURLBuilder.pathsEqual(path, currentPath) else { return }
             items = loaded
+            resumeStore.backfillHrefs(from: loaded)
         } catch is CancellationError {
             return
         } catch {
@@ -348,6 +364,68 @@ struct BrowserView: View {
             SearchDebugLog.log("UI error: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+private struct PausedExportDestinationView: View {
+    @EnvironmentObject private var session: AppSession
+    @ObservedObject private var resumeStore = ResumeStore.shared
+    let entry: ResumeEntry
+    let browsing: [WebDAVItem]
+    let onSearchByName: (String) -> Void
+
+    @State private var searchItem: WebDAVItem?
+    @State private var isSearching = false
+
+    var body: some View {
+        Group {
+            if let item = resumeStore.resolveItem(for: entry, browsing: browsing + (searchItem.map { [$0] } ?? [])) {
+                ExportView(item: item)
+            } else if isSearching {
+                ProgressView("Finding \(entry.displayName)…")
+            } else {
+                ContentUnavailableView {
+                    Label("File not in this folder", systemImage: "film")
+                } description: {
+                    Text(
+                        "Search pCloud for “\(entry.displayName)” or open the folder that contains it, then tap the paused export again."
+                    )
+                } actions: {
+                    Button("Search pCloud") {
+                        onSearchByName(entry.displayName)
+                    }
+                    Button("Try again") {
+                        Task { await resolveViaSearch() }
+                    }
+                }
+            }
+        }
+        .navigationTitle(entry.displayName)
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            if resumeStore.resolveItem(for: entry, browsing: browsing) == nil {
+                await resolveViaSearch()
+            }
+        }
+    }
+
+    private func resolveViaSearch() async {
+        guard searchItem == nil else { return }
+        isSearching = true
+        defer { isSearching = false }
+        guard let credentials = try? await session.prepareCredentialsForSearch() else { return }
+        do {
+            let result = try await PCloudSearchService.search(
+                query: entry.displayName,
+                credentials: credentials,
+                browsePaths: ["/"],
+                status: nil
+            )
+            if let match = result.items.first(where: { $0.fileKey == entry.fileKey && $0.isVideo }) {
+                searchItem = match
+                resumeStore.backfillHrefs(from: [match])
+            }
+        } catch {}
     }
 }
 

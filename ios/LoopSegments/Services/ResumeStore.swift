@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-struct ResumeEntry: Codable, Identifiable {
+struct ResumeEntry: Codable, Identifiable, Hashable {
     var fileKey: String
     var displayName: String
     var href: String?
@@ -153,6 +153,28 @@ final class ResumeStore: ObservableObject {
     func webDAVItem(for entry: ResumeEntry) -> WebDAVItem? {
         guard let href = entry.href, !href.isEmpty else { return nil }
         return WebDAVItem(href: href, name: entry.displayName, isDirectory: false, contentLength: nil)
+    }
+
+    /// Prefer stored href; otherwise match the current browser listing by `fileKey`.
+    func resolveItem(for entry: ResumeEntry, browsing: [WebDAVItem]) -> WebDAVItem? {
+        if let item = webDAVItem(for: entry) { return item }
+        return browsing.first { $0.fileKey == entry.fileKey && $0.isVideo }
+    }
+
+    /// Attach `href` when the paused file is visible in the folder being browsed.
+    func backfillHrefs(from browsing: [WebDAVItem]) {
+        var entries = load()
+        var changed = false
+        for item in browsing where item.isVideo {
+            guard let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) else { continue }
+            guard entries[index].exportInProgress else { continue }
+            if entries[index].href != item.href {
+                entries[index].href = item.href
+                entries[index].displayName = item.name
+                changed = true
+            }
+        }
+        if changed { persist(entries) }
     }
 
     private func persist(_ entries: [ResumeEntry]) {
