@@ -13,6 +13,9 @@
   Admin: forward this PC's LAN IP:80 -> phone:8765, then net use http://<pc-lan-ip>/
   (Windows WebClient usually cannot map http://phone:8765/ — error 67).
 
+.PARAMETER Remove
+  Admin: unmap drive letter and delete portproxy rules to the phone (safe if nothing mapped).
+
 .EXAMPLE
   .\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient
   .\Map-LoopSegmentsWebDAV.ps1 -TestOnly
@@ -295,6 +298,43 @@ function Remove-LoopSegmentsPort80Proxy {
     netsh interface portproxy delete v4tov4 listenport=$ListenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
 }
 
+function Remove-AllLoopSegmentsPortProxies {
+    param(
+        [string] $PhoneHost,
+        [int] $PhonePort = 8765
+    )
+
+    $listenAddresses = @('0.0.0.0', '127.0.0.1')
+    try {
+        $pcIp = Get-LoopSegmentsPCLanIPv4 -PreferSameSubnetAs $PhoneHost
+        if ($listenAddresses -notcontains $pcIp) {
+            $listenAddresses += $pcIp
+        }
+    } catch {}
+
+    foreach ($addr in $listenAddresses) {
+        foreach ($listenPort in 80, 8080) {
+            netsh interface portproxy delete v4tov4 listenaddress=$addr listenport=$listenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
+            netsh interface portproxy delete v4tov4 listenport=$listenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
+        }
+    }
+}
+
+function Disconnect-LoopSegmentsMappedDrive {
+    param([string] $Drive)
+
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+  cmd /c "net use $Drive /delete /y" 2>&1 | Out-Null
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prev
+    if ($code -eq 0) {
+        Write-Host "Disconnected $Drive"
+    } else {
+        Write-Host "No mapped drive $Drive (OK)"
+    }
+}
+
 function Test-LoopSegmentsWebDAVDavWWWRoot {
     param([string] $RootUrl)
 
@@ -358,9 +398,12 @@ $script:Port80ListenAddress = $null
 $script:ProxyListenPort = 80
 
 if ($Remove) {
-    cmd /c "net use $drive /delete /y" 2>$null | Out-Null
-    Remove-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port -ListenPort $script:ProxyListenPort
-    Write-Host "Disconnected $drive (if mapped). Port 80 proxy removed if present."
+    Disconnect-LoopSegmentsMappedDrive -Drive $drive
+    Remove-AllLoopSegmentsPortProxies -PhoneHost $hostIp -PhonePort $Port
+    Write-Host ''
+    Write-Host "Port proxy cleanup done for phone ${hostIp}:$Port"
+    Write-Host 'Remaining portproxy rules (should be empty or unrelated):'
+    netsh interface portproxy show all
     return
 }
 
