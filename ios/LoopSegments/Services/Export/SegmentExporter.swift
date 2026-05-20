@@ -64,12 +64,13 @@ final class SegmentExporter {
         cancelLock.unlock()
         ExportPlaybackState.shared.setLANExportActive(true)
         defer {
+            tempDownload?.flushLANPlaybackManifestForExportEnd()
             ExportPlaybackState.shared.setLANExportActive(false)
-            tempDownload?.publishLANPlaybackState()
             tempDownload?.cancel()
             tempDownload = nil
             retainedWebDAVLoader = nil
             retainedAsset = nil
+            WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
 
 
@@ -1314,6 +1315,7 @@ final class SegmentExporter {
         try await downloader.ensureFileHeadOnDisk()
         try await downloader.ensureIndexTailOnDisk()
         if seekSeconds <= 0.5, downloader.isByteRangeFullyOnDisk(full) {
+            downloader.recordFullDenseFileForLANIfNeeded()
             log("LAN _working.mp4 — full file already on disk (seek anywhere)")
             return
         }

@@ -415,6 +415,25 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
+    /// Write manifest + sync LAN state after export ends (before temp downloader is torn down).
+    func flushLANPlaybackManifestForExportEnd() {
+        manifestSaveTask?.cancel()
+        manifestSaveTask = nil
+        publishLANPlaybackState()
+        persistManifestNow()
+    }
+
+    /// When the sparse temp is already fully dense, ensure the LAN catalog spans the whole file (not just head/tail flags).
+    func recordFullDenseFileForLANIfNeeded() {
+        let full = TimelineByteRange(start: 0, end: totalLength)
+        guard isByteRangeFullyOnDisk(full) else { return }
+        lock.lock()
+        recordFilledRange(offset: 0, end: totalLength)
+        lock.unlock()
+        publishLANPlaybackState()
+        persistManifestNow()
+    }
+
     /// File byte span that must be on disk for media `[timelineStartSeconds, timelineEndSeconds]`.
     func byteRangeForTimeline(
         timelineStartSeconds: Double,

@@ -226,13 +226,6 @@ final class ExportPlaybackState: @unchecked Sendable {
                 durationSeconds: duration
             )
         }
-        if snap.headOnDisk, startByte == 0 {
-            return WebDAVTempFileDownload.timelineSecondsForByteOffset(
-                min(Int64(512 * 1024), snap.totalFileBytes),
-                totalLength: snap.totalFileBytes,
-                durationSeconds: duration
-            )
-        }
         return start
     }
 
@@ -251,13 +244,33 @@ final class ExportPlaybackState: @unchecked Sendable {
             durationSeconds: duration
         )
         return
-            "LAN playable till \(ExportTimelineLog.wallClock(seconds: till))… " +
-            "export \(ExportTimelineLog.wallClock(seconds: export)), " +
-            "from \(ExportTimelineLog.wallClock(seconds: from))"
+            "LAN playable till \(ExportTimelineLog.wallClock(seconds: till)), " +
+            "exported \(ExportTimelineLog.wallClock(seconds: export)), " +
+            "started \(ExportTimelineLog.wallClock(seconds: from))"
     }
 
+    /// Furthest byte reachable from `offset` without crossing a sparse gap (chains head → dense spans → tail).
     private static func endOfServedRun(
         from offset: Int64,
+        maxEnd: Int64,
+        snap: Snapshot
+    ) -> Int64? {
+        guard offset <= maxEnd else { return nil }
+        guard var runEnd = endOfReadableRunCovering(offset: offset, maxEnd: maxEnd, snap: snap) else {
+            return nil
+        }
+        while runEnd < maxEnd {
+            let nextStart = runEnd + 1
+            guard let nextEnd = endOfReadableRunCovering(offset: nextStart, maxEnd: maxEnd, snap: snap) else {
+                break
+            }
+            runEnd = nextEnd
+        }
+        return runEnd
+    }
+
+    private static func endOfReadableRunCovering(
+        offset: Int64,
         maxEnd: Int64,
         snap: Snapshot
     ) -> Int64? {

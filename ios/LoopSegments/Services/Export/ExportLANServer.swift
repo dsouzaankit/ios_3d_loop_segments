@@ -959,7 +959,7 @@ enum ExportLANServer {
                 .replacingOccurrences(of: "<", with: "&lt;")
             playbackStatusBlock = """
             <p><strong>\(escaped)</strong></p>
-            <p>Times are positions in the source file (0:00 = start). <code>till</code> is the furthest contiguous dense playback from <code>from</code>; the scrubber may still show full duration.</p>
+            <p>Times are positions in the source file (0:00 = start). <code>till</code> is the furthest contiguous dense playback from <code>started</code>; the scrubber may still show full duration.</p>
             """
         }
         var items: [String] = []
