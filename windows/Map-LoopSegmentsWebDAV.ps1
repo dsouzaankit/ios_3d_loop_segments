@@ -28,7 +28,9 @@ param(
     [switch] $Remove,
     [switch] $ConfigureWebClient,
     [switch] $TestOnly,
-    [switch] $ViaPort80Proxy
+    [switch] $ViaPort80Proxy,
+    [int] $ProxyListenPort = 80,
+    [switch] $SkipPort80Check
 )
 
 $ErrorActionPreference = 'Stop'
@@ -217,33 +219,80 @@ function Get-LoopSegmentsPCLanIPv4 {
     return $addrs[0].IPAddress
 }
 
+function Get-LoopSegmentsPortListeners {
+    param([int] $Port)
+
+    $rows = @()
+    foreach ($c in Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq $Port }) {
+        $procName = 'unknown'
+        try {
+            $procName = (Get-Process -Id $c.OwningProcess -ErrorAction Stop).ProcessName
+        } catch {}
+        $rows += [PSCustomObject]@{
+            LocalAddress = $c.LocalAddress
+            Process      = $procName
+            PID          = $c.OwningProcess
+        }
+    }
+    return $rows | Sort-Object LocalAddress -Unique
+}
+
+function Show-Port80BlockedHelp {
+    param([int] $Port, [string] $ListenAddress)
+
+    Write-Host "Port $Port is in use (cannot add portproxy on $ListenAddress):"
+    foreach ($row in Get-LoopSegmentsPortListeners -Port $Port) {
+        Write-Host "  $($row.LocalAddress):$Port  PID $($row.PID)  ($($row.Process))"
+    }
+    Write-Host ''
+    Write-Host 'Common fix (admin PowerShell) — free port 80 for the proxy:'
+    Write-Host '  Stop-Service W3SVC -Force -ErrorAction SilentlyContinue   # IIS'
+    Write-Host '  Stop-Service http -Force -ErrorAction SilentlyContinue    # HTTP.sys (if present)'
+    Write-Host '  Get-Service W3SVC, WAS, WebClient'
+    Write-Host ''
+    Write-Host 'Or skip drive mapping (works with your passing -TestOnly):'
+    Write-Host '  .\Sync-FromPhoneLAN.ps1 -Watch'
+    Write-Host ''
+    Write-Host 'After stopping IIS, run: .\Map-LoopSegmentsWebDAV.ps1 -ViaPort80Proxy'
+}
+
 function Enable-LoopSegmentsPort80Proxy {
     param(
         [string] $ListenAddress,
         [string] $PhoneHost,
-        [int] $PhonePort
+        [int] $PhonePort,
+        [int] $ListenPort = 80,
+        [switch] $SkipPortCheck
     )
 
-    $listenPort = 80
-    $inUse = Get-NetTCPConnection -LocalAddress $ListenAddress -LocalPort $listenPort -State Listen -ErrorAction SilentlyContinue
-    if ($inUse) {
-        throw "Port $listenPort is already in use on $ListenAddress. Stop IIS/WAMP or use another PC NIC IP."
+    if (-not $SkipPortCheck) {
+        $onNic = Get-NetTCPConnection -LocalAddress $ListenAddress -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue
+        $onAny = Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue
+        if ($onNic -or ($ListenPort -eq 80 -and $onAny)) {
+            Show-Port80BlockedHelp -Port $ListenPort -ListenAddress $ListenAddress
+            throw "Port $ListenPort is already in use."
+        }
     }
-    netsh interface portproxy delete v4tov4 listenaddress=$ListenAddress listenport=$listenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
-    netsh interface portproxy add v4tov4 listenaddress=$ListenAddress listenport=$listenPort connectaddress=$PhoneHost connectport=$PhonePort | Out-Null
-    Write-Host "Port proxy: ${ListenAddress}:$listenPort -> ${PhoneHost}:$PhonePort (map WebDAV to http://${ListenAddress}/)"
+
+    netsh interface portproxy delete v4tov4 listenaddress=$ListenAddress listenport=$ListenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
+    $add = netsh interface portproxy add v4tov4 listenaddress=$ListenAddress listenport=$ListenPort connectaddress=$PhoneHost connectport=$PhonePort 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "netsh portproxy failed: $add"
+    }
+    Write-Host "Port proxy: ${ListenAddress}:$ListenPort -> ${PhoneHost}:$PhonePort (map WebDAV to http://${ListenAddress}:$ListenPort/)"
 }
 
 function Remove-LoopSegmentsPort80Proxy {
     param(
         [string] $ListenAddress,
         [string] $PhoneHost,
-        [int] $PhonePort
+        [int] $PhonePort,
+        [int] $ListenPort = 80
     )
     if ($ListenAddress) {
-        netsh interface portproxy delete v4tov4 listenaddress=$ListenAddress listenport=80 connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
+        netsh interface portproxy delete v4tov4 listenaddress=$ListenAddress listenport=$ListenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
     }
-    netsh interface portproxy delete v4tov4 listenport=80 connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
+    netsh interface portproxy delete v4tov4 listenport=$ListenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
 }
 
 function Test-LoopSegmentsWebDAVDavWWWRoot {
@@ -306,10 +355,11 @@ $hostIp = Get-LoopSegmentsLANHost -Override $PhoneHost
 $rootUrl = "http://${hostIp}:${Port}/"
 $drive = "${DriveLetter}:"
 $script:Port80ListenAddress = $null
+$script:ProxyListenPort = 80
 
 if ($Remove) {
     cmd /c "net use $drive /delete /y" 2>$null | Out-Null
-    Remove-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port
+    Remove-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port -ListenPort $script:ProxyListenPort
     Write-Host "Disconnected $drive (if mapped). Port 80 proxy removed if present."
     return
 }
@@ -328,10 +378,21 @@ if ($ConfigureWebClient) {
 
 if ($ViaPort80Proxy) {
     $script:Port80ListenAddress = Get-LoopSegmentsPCLanIPv4 -PreferSameSubnetAs $hostIp
+    $script:ProxyListenPort = $ProxyListenPort
     Enable-LoopSegmentsWebClientHTTP -AuthForwardHosts @($hostIp, $script:Port80ListenAddress)
-    Enable-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port
-    $rootUrl = "http://$($script:Port80ListenAddress)/"
-    Write-Host "WebDAV URL for net use: $rootUrl (port 80 on this PC -> phone :$Port)"
+    try {
+        Enable-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port -ListenPort $script:ProxyListenPort -SkipPortCheck:$SkipPort80Check
+    } catch {
+        if ($script:ProxyListenPort -eq 80 -and $ProxyListenPort -eq 80) {
+            Write-Warning 'Retry with -ProxyListenPort 8080 (WebClient may still reject non-80; freeing port 80 is better).'
+            $script:ProxyListenPort = 8080
+            Enable-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port -ListenPort 8080 -SkipPortCheck:$SkipPort80Check
+        } else {
+            throw
+        }
+    }
+    $rootUrl = "http://$($script:Port80ListenAddress):$($script:ProxyListenPort)/"
+    Write-Host "WebDAV URL for net use: $rootUrl (this PC -> phone :$Port)"
 }
 
 if ($TestOnly) {
@@ -351,7 +412,7 @@ if ($listed -notcontains $hostIp) {
 }
 
 $mapHostIp = if ($ViaPort80Proxy) { $script:Port80ListenAddress } else { $hostIp }
-$mapPort = if ($ViaPort80Proxy) { 80 } else { $Port }
+$mapPort = if ($ViaPort80Proxy) { $script:ProxyListenPort } else { $Port }
 
 $existing = cmd /c "net use $drive" 2>$null
 if ($LASTEXITCODE -eq 0) {
@@ -400,7 +461,7 @@ if (-not $mapped) {
     Write-Host 'Or skip mapping:'
     Write-Host '  .\Sync-FromPhoneLAN.ps1 -Watch'
     if ($ViaPort80Proxy) {
-        Remove-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port
+        Remove-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port -ListenPort $script:ProxyListenPort
     }
     exit 1
 }
