@@ -10,8 +10,8 @@
   HTTP + PROPFIND test only.
 
 .PARAMETER ViaPort80Proxy
-  Admin: forward localhost:80 -> phone:8765, then net use http://127.0.0.1/
-  (Windows WebDAV often rejects non-standard ports like 8765).
+  Admin: forward this PC's LAN IP:80 -> phone:8765, then net use http://<pc-lan-ip>/
+  (Windows WebClient usually cannot map http://phone:8765/ — error 67).
 
 .EXAMPLE
   .\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient
@@ -198,27 +198,51 @@ function Test-LoopSegmentsWebDAV {
     }
 }
 
+function Get-LoopSegmentsPCLanIPv4 {
+    param([string] $PreferSameSubnetAs = '')
+
+    $addrs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
+            $_.IPAddress -notmatch '^127\.' -and $_.IPAddress -notmatch '^169\.254\.' -and $_.PrefixOrigin -ne 'WellKnown'
+        })
+    if ($PreferSameSubnetAs -match '^(\d+\.\d+\.\d+)\.\d+$') {
+        $prefix = $Matches[1]
+        $same = @($addrs | Where-Object { $_.IPAddress -like "$prefix.*" })
+        if ($same.Count -gt 0) {
+            return $same[0].IPAddress
+        }
+    }
+    if ($addrs.Count -eq 0) {
+        throw 'No LAN IPv4 on this PC — cannot create port-80 WebDAV proxy.'
+    }
+    return $addrs[0].IPAddress
+}
+
 function Enable-LoopSegmentsPort80Proxy {
     param(
+        [string] $ListenAddress,
         [string] $PhoneHost,
         [int] $PhonePort
     )
 
     $listenPort = 80
-    $inUse = Get-NetTCPConnection -LocalPort $listenPort -State Listen -ErrorAction SilentlyContinue
+    $inUse = Get-NetTCPConnection -LocalAddress $ListenAddress -LocalPort $listenPort -State Listen -ErrorAction SilentlyContinue
     if ($inUse) {
-        throw "Port $listenPort is already in use. Stop IIS/other service or skip -ViaPort80Proxy."
+        throw "Port $listenPort is already in use on $ListenAddress. Stop IIS/WAMP or use another PC NIC IP."
     }
-    netsh interface portproxy delete v4tov4 listenport=$listenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
-    netsh interface portproxy add v4tov4 listenport=$listenPort connectaddress=$PhoneHost connectport=$PhonePort | Out-Null
-    Write-Host "Port proxy: 127.0.0.1:$listenPort -> ${PhoneHost}:$PhonePort"
+    netsh interface portproxy delete v4tov4 listenaddress=$ListenAddress listenport=$listenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
+    netsh interface portproxy add v4tov4 listenaddress=$ListenAddress listenport=$listenPort connectaddress=$PhoneHost connectport=$PhonePort | Out-Null
+    Write-Host "Port proxy: ${ListenAddress}:$listenPort -> ${PhoneHost}:$PhonePort (map WebDAV to http://${ListenAddress}/)"
 }
 
 function Remove-LoopSegmentsPort80Proxy {
     param(
+        [string] $ListenAddress,
         [string] $PhoneHost,
         [int] $PhonePort
     )
+    if ($ListenAddress) {
+        netsh interface portproxy delete v4tov4 listenaddress=$ListenAddress listenport=80 connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
+    }
     netsh interface portproxy delete v4tov4 listenport=80 connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
 }
 
@@ -264,12 +288,13 @@ function Invoke-LoopSegmentsNetUse {
     }
     $commands.Add(@{ Label = 'http .../DavWWWRoot/'; Cmd = "net use $Drive `"$root/DavWWWRoot/`" /persistent:no" })
     $commands.Add(@{ Label = 'http root URL'; Cmd = "net use $Drive `"$RootUrl`" /persistent:no" })
-    $commands.Add(@{ Label = 'http root + anonymous'; Cmd = "net use $Drive `"$RootUrl`" /persistent:no /user:anonymous `"`"" })
+    $commands.Add(@{ Label = 'http empty credentials'; Cmd = "net use $Drive `"$RootUrl`" /persistent:no `"`" `"`"" })
+    $commands.Add(@{ Label = 'http + anonymous'; Cmd = "net use $Drive `"$RootUrl`" /persistent:no /user:anonymous `"`"" })
 
     foreach ($attempt in $commands) {
         Write-Host "Trying net use ($($attempt.Label)) ..."
-        $out = cmd /c $attempt.Cmd 2>&1
-        $out | ForEach-Object { Write-Host $_ }
+        $out = cmd /c $attempt.Cmd 2>&1 | Out-String
+        if ($out.Trim()) { Write-Host $out.TrimEnd() }
         if ($LASTEXITCODE -eq 0) {
             return $true
         }
@@ -280,10 +305,11 @@ function Invoke-LoopSegmentsNetUse {
 $hostIp = Get-LoopSegmentsLANHost -Override $PhoneHost
 $rootUrl = "http://${hostIp}:${Port}/"
 $drive = "${DriveLetter}:"
+$script:Port80ListenAddress = $null
 
 if ($Remove) {
     cmd /c "net use $drive /delete /y" 2>$null | Out-Null
-    Remove-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $Port
+    Remove-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port
     Write-Host "Disconnected $drive (if mapped). Port 80 proxy removed if present."
     return
 }
@@ -293,17 +319,19 @@ if ($ConfigureWebClient) {
     Enable-LoopSegmentsWebClientHTTP -AuthForwardHosts @($hostIp)
     Test-LoopSegmentsWebDAV -RootUrl $rootUrl -HostIp $hostIp
     Write-Host ''
-    Write-Host 'Configure done. Map drive: .\Map-LoopSegmentsWebDAV.ps1'
-    Write-Host 'If net use fails on port 8765, try: .\Map-LoopSegmentsWebDAV.ps1 -ViaPort80Proxy'
+    Write-Host 'Configure done.'
+    Write-Host 'Map (often fails on :8765 — WebClient wants port 80):'
+    Write-Host '  .\Map-LoopSegmentsWebDAV.ps1 -ViaPort80Proxy   # admin — recommended'
+    Write-Host 'Or skip drive letter: .\Sync-FromPhoneLAN.ps1 -Watch'
     return
 }
 
 if ($ViaPort80Proxy) {
-    Enable-LoopSegmentsWebClientHTTP -AuthForwardHosts @($hostIp, '127.0.0.1')
-    Enable-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $Port
-    $rootUrl = 'http://127.0.0.1/'
-    Write-Host 'Using http://127.0.0.1/ via port 80 proxy (WebClient-friendly).'
-    Write-Warning 'Many PCs refuse WebDAV to 127.0.0.1 (error 67) even with portproxy. Prefer direct map to phone IP after build 159+.'
+    $script:Port80ListenAddress = Get-LoopSegmentsPCLanIPv4 -PreferSameSubnetAs $hostIp
+    Enable-LoopSegmentsWebClientHTTP -AuthForwardHosts @($hostIp, $script:Port80ListenAddress)
+    Enable-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port
+    $rootUrl = "http://$($script:Port80ListenAddress)/"
+    Write-Host "WebDAV URL for net use: $rootUrl (port 80 on this PC -> phone :$Port)"
 }
 
 if ($TestOnly) {
@@ -322,7 +350,7 @@ if ($listed -notcontains $hostIp) {
     Write-Warning "Run as admin: .\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient"
 }
 
-$mapHostIp = if ($ViaPort80Proxy) { '127.0.0.1' } else { $hostIp }
+$mapHostIp = if ($ViaPort80Proxy) { $script:Port80ListenAddress } else { $hostIp }
 $mapPort = if ($ViaPort80Proxy) { 80 } else { $Port }
 
 $existing = cmd /c "net use $drive" 2>$null
@@ -346,18 +374,33 @@ if (-not (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $rootUrl)) {
 }
 
 Write-Host "Mapping $drive -> $rootUrl (phone app open, Serve Exports on)."
-Test-LoopSegmentsWebDAV -RootUrl $(if ($ViaPort80Proxy) { "http://${hostIp}:${Port}/" } else { $rootUrl }) -HostIp $hostIp | Out-Null
-
-if (-not (Invoke-LoopSegmentsNetUse -Drive $drive -RootUrl $rootUrl -HostIp $mapHostIp -Port $mapPort)) {
+if ($ViaPort80Proxy) {
+    Test-LoopSegmentsWebDAV -RootUrl $rootUrl -HostIp $mapHostIp | Out-Null
+} else {
+    Test-LoopSegmentsWebDAV -RootUrl "http://${hostIp}:${Port}/" -HostIp $hostIp | Out-Null
     Write-Host ''
-    Write-Host 'net use failed (system error 67 = WebClient could not attach — server may still be fine).'
-    Write-Host 'Try:'
-    Write-Host '  1. Phone app build 159+ (DavWWWRoot path + GET / not HTML) — .\Map-LoopSegmentsWebDAV.ps1 -TestOnly'
-    Write-Host '  2. Admin: .\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient  then map to http://<phone-ip>:8765/ (not 127.0.0.1)'
-    Write-Host '  3. .\Sync-FromPhoneLAN.ps1 -Watch   (recommended; no drive letter)'
+    Write-Host 'Note: -TestOnly can pass while net use still fails — Windows WebClient often refuses port 8765 (error 67).'
+}
+
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$mapped = Invoke-LoopSegmentsNetUse -Drive $drive -RootUrl $rootUrl -HostIp $mapHostIp -Port $mapPort
+$ErrorActionPreference = $prevEap
+
+if (-not $mapped) {
+    Write-Host ''
+    Write-Host 'net use failed. Your -TestOnly passed — the phone server is OK; Windows WebClient is the problem.'
+    if (-not $ViaPort80Proxy -and $Port -ne 80) {
+        Write-Host ''
+        Write-Host 'Error 67 on http://<phone>:8765/ is common: WebClient expects port 80.'
+        Write-Host 'Run PowerShell as Administrator:'
+        Write-Host '  .\Map-LoopSegmentsWebDAV.ps1 -ViaPort80Proxy'
+    }
+    Write-Host ''
+    Write-Host 'Or skip mapping:'
+    Write-Host '  .\Sync-FromPhoneLAN.ps1 -Watch'
     if ($ViaPort80Proxy) {
-        Write-Host '  Note: -ViaPort80Proxy often fails on Windows; use direct phone IP if TestOnly passes.'
-        Remove-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $Port
+        Remove-LoopSegmentsPort80Proxy -ListenAddress $script:Port80ListenAddress -PhoneHost $hostIp -PhonePort $Port
     }
     exit 1
 }
