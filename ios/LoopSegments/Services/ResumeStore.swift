@@ -6,6 +6,8 @@ struct ResumeEntry: Codable, Identifiable {
     var displayName: String
     var href: String?
     var lastSeekMs: Int64
+    /// Source duration from last export probe (ms); caps mistaken end-of-file resume points.
+    var sourceDurationMs: Int64?
     var updatedAt: Date
     /// True while export was interrupted or app left mid-run (cleared on successful finish or Stop).
     var exportInProgress: Bool = false
@@ -20,10 +22,15 @@ struct ResumeStatus {
     let checkpointMs: Int64?
     let isPaused: Bool
     let updatedAt: Date?
+    let sourceDurationMs: Int64?
 
     var effectiveMs: Int64 {
         let checkpoint = checkpointMs ?? 0
-        return max(savedSeekMs, checkpoint)
+        var ms = max(savedSeekMs, checkpoint)
+        if let cap = sourceDurationMs, cap > 500 {
+            ms = min(ms, max(0, cap - 250))
+        }
+        return ms
     }
 
     var hasResumePoint: Bool {
@@ -66,18 +73,32 @@ final class ResumeStore: ObservableObject {
         }
     }
 
-    func beginExport(for item: WebDAVItem, seekMs: Int64) {
+    func beginExport(for item: WebDAVItem, seekMs: Int64, sourceDurationMs: Int64? = nil) {
         upsert(item: item) { entry in
             entry.exportInProgress = true
             entry.checkpointMediaMs = max(0, seekMs)
+            if let sourceDurationMs, sourceDurationMs > 0 {
+                entry.sourceDurationMs = sourceDurationMs
+            }
             entry.updatedAt = Date()
+        }
+    }
+
+    func setSourceDurationMs(_ ms: Int64, for item: WebDAVItem) {
+        guard ms > 0 else { return }
+        upsert(item: item) { entry in
+            entry.sourceDurationMs = ms
         }
     }
 
     func saveCheckpoint(mediaMs: Int64, for item: WebDAVItem) {
         upsert(item: item) { entry in
             entry.exportInProgress = true
-            entry.checkpointMediaMs = max(0, mediaMs)
+            var ms = max(0, mediaMs)
+            if let cap = entry.sourceDurationMs, cap > 500 {
+                ms = min(ms, max(0, cap - 250))
+            }
+            entry.checkpointMediaMs = ms
             entry.updatedAt = Date()
         }
     }
@@ -100,13 +121,20 @@ final class ResumeStore: ObservableObject {
 
     func resumeStatus(for item: WebDAVItem) -> ResumeStatus {
         guard let entry = load().first(where: { $0.fileKey == item.fileKey }) else {
-            return ResumeStatus(savedSeekMs: 0, checkpointMs: nil, isPaused: false, updatedAt: nil)
+            return ResumeStatus(
+                savedSeekMs: 0,
+                checkpointMs: nil,
+                isPaused: false,
+                updatedAt: nil,
+                sourceDurationMs: nil
+            )
         }
         return ResumeStatus(
             savedSeekMs: entry.lastSeekMs,
             checkpointMs: entry.checkpointMediaMs,
             isPaused: entry.exportInProgress,
-            updatedAt: entry.updatedAt
+            updatedAt: entry.updatedAt,
+            sourceDurationMs: entry.sourceDurationMs
         )
     }
 

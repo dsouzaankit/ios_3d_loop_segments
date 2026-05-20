@@ -623,7 +623,14 @@ enum ExportLANServer {
                     .replacingOccurrences(of: "\"", with: "&quot;")
                 var note = ""
                 if name == ExportPaths.workingSourceURL.lastPathComponent {
-                    note = " — <em>sparse partial copy; use <code>op_00.mp4</code> or PC sync for playback (5K+ may hang in browser)</em>"
+                    let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
+                    let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
+                    let href = "\(escaped)\(tFrag)"
+                    let startNote = startSec > 0
+                        ? " — start playback at \(formatLANClock(startSec)) (resume; middle is sparse until export catches up)"
+                        : " — sparse partial copy; fills as export runs"
+                    items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(startNote)</li>")
+                    continue
                 } else if name.hasSuffix(".mp4") {
                     note = " — playable in browser (Range supported)"
                 }
@@ -647,7 +654,7 @@ enum ExportLANServer {
             <h1>Loop Segments — LAN export</h1>
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
             <p>PC: <code>Sync-FromPhoneLAN.ps1 -Watch</code> or map a drive with <code>Map-LoopSegmentsWebDAV.ps1</code> (WebDAV, not SMB).</p>
-            <p><strong>Playback:</strong> use <code>op_00.mp4</code> (complete segment). <code>_export_source_working.mp4</code> is a sparse in-progress copy — browsers often hang on 5K+; VLC or the sync script is safer.</p>
+            <p><strong>Playback:</strong> use <code>op_00.mp4</code> (complete segment). For <code>_export_source_working.mp4</code>, use the index link (includes <code>#t=</code> resume time after seek). Sparse holes return 503 so the player does not jump to end-of-file.</p>
             <ul>
             \(fileList)
             </ul>
@@ -684,11 +691,14 @@ enum ExportLANServer {
                 entries.append(dict)
             }
         }
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "exportsDirectory": "Exports",
             "port": Int(defaultPort),
             "files": entries,
         ]
+        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
+            payload["workingSourcePlayback"] = ExportPlaybackState.shared.frozenStatusPayload
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return
@@ -726,6 +736,13 @@ enum ExportLANServer {
             sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
             return
         } else {
+            if fileURL.lastPathComponent == ExportPaths.workingSourceURL.lastPathComponent {
+                let msg = Data(
+                    "Full download not supported for sparse working copy — use the index link (#t= resume) or Range requests.".utf8
+                )
+                sendResponse(connection: connection, status: 503, contentType: "text/plain", body: msg, done: done)
+                return
+            }
             byteStart = 0
             byteEnd = fileSize - 1
             status = 200
@@ -735,6 +752,15 @@ enum ExportLANServer {
         let bodyLength = byteEnd - byteStart + 1
         guard bodyLength > 0, bodyLength <= fileSize else {
             sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
+            return
+        }
+
+        if fileURL.lastPathComponent == ExportPaths.workingSourceURL.lastPathComponent,
+           !ExportPlaybackState.shared.rangeIsReadable(start: byteStart, end: byteEnd) {
+            let msg = Data(
+                "Sparse region not on disk yet — open link from LAN index (#t= resume) or wait for export to dense-fill this minute.".utf8
+            )
+            sendResponse(connection: connection, status: 503, contentType: "text/plain", body: msg, done: done)
             return
         }
 
@@ -867,6 +893,12 @@ enum ExportLANServer {
             connection.cancel()
             done()
         })
+    }
+
+    private static func formatLANClock(_ totalSeconds: Int) -> String {
+        let min = totalSeconds / 60
+        let sec = totalSeconds % 60
+        return String(format: "%d:%02d", min, sec)
     }
 
     private static func mimeType(for url: URL) -> String {

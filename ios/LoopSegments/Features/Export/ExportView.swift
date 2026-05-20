@@ -45,7 +45,7 @@ struct ExportView: View {
                         }
                     }
                 ))
-                Text("Phone and PC on same LAN (HTTP + WebDAV on port 8765 — not SMB). Sync-FromPhoneLAN.ps1 -Watch or Map-LoopSegmentsWebDAV.ps1 on PC.")
+                Text("Phone and PC on same LAN (HTTP + WebDAV on port 8765 — not SMB). For in-progress source preview, open the LAN index link to _export_source_working.mp4 (#t= resume time). Sync-FromPhoneLAN.ps1 -Watch or Map-LoopSegmentsWebDAV.ps1 on PC.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if let lanExportURL {

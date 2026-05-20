@@ -135,6 +135,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         tailOnDisk = true
         lock.unlock()
         try writeHandle?.synchronize()
+        publishLANPlaybackState()
     }
 
     func ensureFileHeadOnDisk() async throws {
@@ -159,6 +160,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         headOnDisk = true
         lock.unlock()
         try writeHandle?.synchronize()
+        publishLANPlaybackState()
     }
 
     deinit {
@@ -321,6 +323,25 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         log(
             "Window on disk — contiguous \(formatBytes(range.start))–\(formatBytes(exportWindowContiguousEnd))\(averageSpeedLogSuffix())"
         )
+        publishLANPlaybackState()
+    }
+
+    /// Updates LAN range gating + playback start hint for `_export_source_working.mp4`.
+    func publishLANPlaybackState(mediaCursorSeconds: Double? = nil) {
+        let spans = filledSpansOnDisk()
+        let head = hasHeadOnDisk()
+        let tail = hasIndexTailOnDisk()
+        Task { @MainActor in
+            ExportPlaybackState.shared.syncSparseLayout(
+                totalBytes: totalLength,
+                filledSpans: spans,
+                headOnDisk: head,
+                tailOnDisk: tail
+            )
+            if let mediaCursorSeconds {
+                ExportPlaybackState.shared.updateCursor(seconds: mediaCursorSeconds)
+            }
+        }
     }
 
     /// File byte span that must be on disk for media `[timelineStartSeconds, timelineEndSeconds]`.
@@ -510,6 +531,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             )
             log("First segment needs ~\(formatBytes(range.length)) at \(formatBytes(range.start))–\(formatBytes(range.end))")
         }
+        publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
     }
 
     private func recordFilledRange(offset: Int64, end: Int64) {

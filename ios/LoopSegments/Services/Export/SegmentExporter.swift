@@ -51,6 +51,7 @@ final class SegmentExporter {
     }
 
     func run(
+        item: WebDAVItem,
         inputURL: URL,
         catalogContentLength: Int64? = nil,
         seekMs: Int64,
@@ -129,6 +130,24 @@ final class SegmentExporter {
             durationSeconds: durationSeconds,
             useBackgroundDownload: false
         )
+        await MainActor.run {
+            ResumeStore.shared.setSourceDurationMs(durationMs, for: item)
+            ExportPlaybackState.shared.beginExport(
+                seekSeconds: seekSeconds,
+                durationSeconds: durationSeconds,
+                totalBytes: fileSize
+            )
+        }
+        downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
+
+        let reportProgress: @Sendable (Int64) -> Void = { mediaMs in
+            onMediaProgress?(mediaMs)
+            let seconds = Double(mediaMs) / 1000.0
+            Task { @MainActor in
+                ExportPlaybackState.shared.updateCursor(seconds: seconds)
+            }
+            tempDownload?.publishLANPlaybackState(mediaCursorSeconds: seconds)
+        }
 
         logHandler(
             "Video codec \(CodecSupport.fourCCString(videoFormat))" +
@@ -360,7 +379,7 @@ final class SegmentExporter {
                 }
 
                 lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
-                onMediaProgress?(lastMediaTimeMs)
+                reportProgress(lastMediaTimeMs)
                 minuteIndex += 1
             }
 

@@ -75,6 +75,7 @@ final class ExportCoordinator {
             let result = try await withTaskCancellationHandler {
                 try await Task.detached(priority: .userInitiated) {
                     try await self.exporter.run(
+                        item: item,
                         inputURL: inputURL,
                         catalogContentLength: item.contentLength,
                         seekMs: seekMs,
