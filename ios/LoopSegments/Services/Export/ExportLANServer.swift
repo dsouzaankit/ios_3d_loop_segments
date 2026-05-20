@@ -1228,9 +1228,7 @@ enum ExportLANServer {
     }
 
     private static func formatLANClock(_ totalSeconds: Int) -> String {
-        let min = totalSeconds / 60
-        let sec = totalSeconds % 60
-        return String(format: "%d:%02d", min, sec)
+        ExportTimelineLog.wallClock(seconds: Double(max(0, totalSeconds)))
     }
 
     private static func mimeType(for url: URL) -> String {

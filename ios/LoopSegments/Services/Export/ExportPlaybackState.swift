@@ -132,6 +132,10 @@ final class ExportPlaybackState: @unchecked Sendable {
         return true
     }
 
+    var playbackStartSeconds: Double {
+        lock.withLock { snapshot.playbackStartSeconds }
+    }
+
     var playbackStartSecondsInt: Int {
         lock.withLock { Int(snapshot.playbackStartSeconds.rounded(.down)) }
     }
@@ -149,6 +153,10 @@ final class ExportPlaybackState: @unchecked Sendable {
             cursor = servedEnd + 1
         }
         return true
+    }
+
+    var exportCursorSeconds: Double {
+        lock.withLock { snapshot.exportCursorSeconds }
     }
 
     var frozenPlaybackStartSecondsInt: Int {

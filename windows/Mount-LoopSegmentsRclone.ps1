@@ -18,7 +18,7 @@
   Mount point (default L:).
 
 .PARAMETER RemoteName
-  rclone config section name (default loopsegments).
+  rclone config section name (default loopsegments; separate from Koofr/other remotes).
 
 .PARAMETER Remove
   Unmount the drive (does not delete rclone.conf).
@@ -72,10 +72,34 @@ function Assert-CommandExists {
 }
 
 function Get-RcloneConfigPath {
-    if ($env:RCLONE_CONFIG) { return $env:RCLONE_CONFIG }
-    $local = Join-Path $env:LOCALAPPDATA 'rclone\rclone.conf'
-    if (Test-Path -LiteralPath $local) { return $local }
-    return Join-Path $env:USERPROFILE '.config\rclone\rclone.conf'
+    if (-not [string]::IsNullOrWhiteSpace($env:RCLONE_CONFIG)) {
+        return $env:RCLONE_CONFIG.Trim()
+    }
+    try {
+        $fromRclone = (& rclone config file 2>$null | Out-String).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($fromRclone) -and (Test-Path -LiteralPath $fromRclone)) {
+            return $fromRclone
+        }
+    } catch {
+        # ignore
+    }
+    $candidates = @(
+        (Join-Path $env:APPDATA 'rclone\rclone.conf'),
+        (Join-Path $env:LOCALAPPDATA 'rclone\rclone.conf'),
+        (Join-Path $env:USERPROFILE '.config\rclone\rclone.conf')
+    )
+    foreach ($path in $candidates) {
+        if (Test-Path -LiteralPath $path) { return $path }
+    }
+    return (Join-Path $env:APPDATA 'rclone\rclone.conf')
+}
+
+function Get-RcloneConfigArgs {
+    $path = Get-RcloneConfigPath
+    if (Test-Path -LiteralPath $path) {
+        return @('--config', $path)
+    }
+    return @()
 }
 
 function Ensure-RcloneRemote {
@@ -125,7 +149,67 @@ pass = $obscured
     Write-Host "Config: $configPath"
 }
 
-function Test-PhoneWebDAV {
+function Test-WinFspInstalled {
+    $candidates = @(
+        "${env:ProgramFiles}\WinFsp\bin\winfsp-x64.dll",
+        "${env:ProgramFiles(x86)}\WinFsp\bin\winfsp-x64.dll",
+        "${env:ProgramFiles}\WinFsp\bin\winfsp.dll",
+        "${env:ProgramFiles(x86)}\WinFsp\bin\winfsp.dll"
+    )
+    foreach ($path in $candidates) {
+        if (Test-Path -LiteralPath $path) { return $true }
+    }
+    foreach ($root in @("${env:ProgramFiles}\WinFsp", "${env:ProgramFiles(x86)}\WinFsp")) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        if (Get-ChildItem -LiteralPath $root -Recurse -Filter 'winfsp*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Invoke-WebDavRequest {
+    param(
+        [string] $Uri,
+        [string] $Method,
+        [hashtable] $Headers = @{},
+        [string] $Body = '',
+        [int] $TimeoutSec = 20
+    )
+
+    $request = [System.Net.HttpWebRequest]::Create($Uri)
+    $request.Method = $Method
+    $request.Timeout = $TimeoutSec * 1000
+    foreach ($key in $Headers.Keys) {
+        if ($key -ieq 'Authorization') {
+            $request.Headers['Authorization'] = [string]$Headers[$key]
+        } else {
+            $request.Headers[$key] = [string]$Headers[$key]
+        }
+    }
+    if (-not [string]::IsNullOrEmpty($Body)) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Body)
+        $request.ContentType = 'text/xml; charset=utf-8'
+        $request.ContentLength = $bytes.Length
+        $stream = $request.GetRequestStream()
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+        } finally {
+            $stream.Close()
+        }
+    }
+    try {
+        $response = $request.GetResponse()
+    } catch [System.Net.WebException] {
+        if ($null -ne $_.Exception.Response) {
+            return $_.Exception.Response
+        }
+        throw
+    }
+    return $response
+}
+
+function Test-PhoneLANExport {
     param(
         [string] $HostName,
         [int] $PortNum,
@@ -137,25 +221,62 @@ function Test-PhoneWebDAV {
     $pair = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${User}:${Pass}"))
     $headers = @{ Authorization = "Basic $pair" }
 
-    Write-Host "PROPFIND $base ..."
+    Write-Host "Checking $base ..."
+    try {
+        $r = Invoke-WebRequest -Uri ($base + 'status.json') -TimeoutSec 15 -UseBasicParsing
+        Write-Host "  GET status.json -> $($r.StatusCode)"
+    } catch {
+        throw "Phone not reachable at $base (same Wi-Fi? Serve Exports on?). $($_.Exception.Message)"
+    }
+
     try {
         $r = Invoke-WebRequest -Uri $base -Method 'OPTIONS' -Headers $headers -TimeoutSec 15 -UseBasicParsing
-        Write-Host "  OPTIONS -> $($r.StatusCode)"
+        Write-Host "  OPTIONS (WebDAV) -> $($r.StatusCode)"
     } catch {
         Write-Warning "  OPTIONS failed: $($_.Exception.Message)"
     }
 
     $body = '<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:displayname/></D:prop></D:propfind>'
+    $propHeaders = $headers.Clone()
+    $propHeaders['Depth'] = '1'
     try {
-        $r = Invoke-WebRequest -Uri $base -Method 'PROPFIND' -Headers $headers -Body $body -ContentType 'text/xml; charset=utf-8' -TimeoutSec 20 -UseBasicParsing
-        Write-Host "  PROPFIND -> $($r.StatusCode)"
-        if ($r.Content -match 'loop/op_00') {
-            Write-Host '  loop/op_00.mp4 listed — good'
-        } elseif ($r.Content -match 'op_00') {
-            Write-Warning '  Found op_00 at root — install latest Loop Segments (loop/ subfolder).'
+        $response = Invoke-WebDavRequest -Uri $base -Method 'PROPFIND' -Headers $propHeaders -Body $body -TimeoutSec 20
+        $status = [int]$response.StatusCode
+        $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+        try {
+            $content = $reader.ReadToEnd()
+        } finally {
+            $reader.Close()
+            $response.Close()
+        }
+        Write-Host "  PROPFIND -> $status"
+        if ($content -match 'loop/op_00') {
+            Write-Host '  loop/op_00.mp4 listed - good'
+        } elseif ($content -match 'op_00') {
+            Write-Warning '  Found op_00 at root - install latest Loop Segments (loop/ subfolder).'
         }
     } catch {
-        throw "PROPFIND failed. Phone on LAN? Serve Exports on? Build with loop/ + WebDAV. $($_.Exception.Message)"
+        Write-Warning "  PROPFIND probe skipped ($($_.Exception.Message)); rclone will verify WebDAV next."
+    }
+}
+
+function Test-RcloneWebDAVRemote {
+    param([string] $Name)
+    $cfg = Get-RcloneConfigArgs
+    Write-Host "rclone ls ${Name}: (WebDAV list) ..."
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $out = & rclone @cfg ls "${Name}:" --max-depth 1 2>&1
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($code -ne 0) {
+        throw "rclone could not list ${Name}: - $(($out | Out-String).Trim())"
+    }
+    $text = $out | Out-String
+    if ($text -match '_working\.mp4|loop/op_00') {
+        Write-Host '  Phone Exports visible via WebDAV - good'
+    } else {
+        Write-Warning "  Listed remote but expected _working.mp4 or loop/op_00.mp4"
     }
 }
 
@@ -166,14 +287,19 @@ $mountLabel = "${RemoteName}:"
 
 Assert-CommandExists -Name 'rclone' -InstallHint 'Install from https://rclone.org/install/'
 if (-not $Remove -and -not $TestOnly) {
-    $winfsp = "${env:ProgramFiles}\WinFsp\bin\winfsp-x64.dll"
-    if (-not (Test-Path -LiteralPath $winfsp)) {
-        Write-Warning 'WinFsp not found — install from https://winfsp.dev/ before mounting.'
+    if (-not (Test-WinFspInstalled)) {
+        Write-Warning @'
+WinFsp not detected under Program Files (Koofr mount may still mean it is installed).
+If rclone mount fails, install WinFsp from https://winfsp.dev/
+'@
     }
 }
 
 if ($TestOnly) {
-    Test-PhoneWebDAV -HostName $hostIp -PortNum $Port -User $WebDAVUser -Pass $WebDAVPassword
+    Test-PhoneLANExport -HostName $hostIp -PortNum $Port -User $WebDAVUser -Pass $WebDAVPassword
+    Ensure-RcloneRemote -Name $RemoteName -Url $webdavUrl -User $WebDAVUser -Pass $WebDAVPassword
+    Test-RcloneWebDAVRemote -Name $RemoteName
+    Write-Host 'OK - run without -TestOnly to mount.'
     exit 0
 }
 
@@ -187,13 +313,14 @@ if ($Remove) {
             $stopped++
         }
     if ($stopped -eq 0) {
-        Write-Warning 'No matching rclone mount process — close the mount window or Ctrl+C the running mount.'
+        Write-Warning 'No matching rclone mount process - close the mount window or Ctrl+C the running mount.'
     }
     exit 0
 }
 
-Test-PhoneWebDAV -HostName $hostIp -PortNum $Port -User $WebDAVUser -Pass $WebDAVPassword
+Test-PhoneLANExport -HostName $hostIp -PortNum $Port -User $WebDAVUser -Pass $WebDAVPassword
 Ensure-RcloneRemote -Name $RemoteName -Url $webdavUrl -User $WebDAVUser -Pass $WebDAVPassword
+Test-RcloneWebDAVRemote -Name $RemoteName
 
 if (Test-Path -LiteralPath $driveRoot) {
     $used = (Get-PSDrive -Name $DriveLetter -ErrorAction SilentlyContinue)
@@ -209,7 +336,8 @@ Write-Host 'Optional junction:'
 Write-Host "  cmd /c mklink /J `"<DLNA>\phone_exports`" `"$driveRoot`""
 Write-Host ''
 
-& rclone mount "${RemoteName}:" $driveRoot `
+$cfg = Get-RcloneConfigArgs
+& rclone @cfg mount "${RemoteName}:" $driveRoot `
     --read-only `
     --vfs-cache-mode full `
     --dir-cache-time 5s `

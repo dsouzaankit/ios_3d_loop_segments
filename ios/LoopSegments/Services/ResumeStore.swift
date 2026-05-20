@@ -40,10 +40,7 @@ struct ResumeStatus {
 
 enum ResumeTimeFormat {
     static func formatMs(_ ms: Int64) -> String {
-        let totalSec = max(0, ms / 1000)
-        let min = totalSec / 60
-        let sec = totalSec % 60
-        return String(format: "%d:%02d", min, sec)
+        ExportTimelineLog.wallClock(seconds: Double(max(0, ms)) / 1000.0)
     }
 
     static func relative(_ date: Date) -> String {

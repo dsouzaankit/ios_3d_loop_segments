@@ -113,6 +113,21 @@ enum WorkingSourceSparseCatalog {
                 durationSeconds: resolved.durationSeconds,
                 exportCursorSeconds: resolved.exportCursorSeconds
             )
+            if let resolvedStart = resolved.playbackStartSeconds,
+               resolvedStart > 0,
+               abs(resolvedStart - (manifest.playbackStartSeconds ?? 0)) > 0.5 {
+                save(
+                    fileKey: manifest.fileKey,
+                    totalLength: total,
+                    href: manifest.href,
+                    filledRanges: merged.filledRanges,
+                    headOnDisk: merged.headOnDisk,
+                    tailOnDisk: merged.tailOnDisk,
+                    playbackStartSeconds: resolvedStart,
+                    durationSeconds: resolved.durationSeconds,
+                    exportCursorSeconds: resolved.exportCursorSeconds
+                )
+            }
             return
         }
         let hints = ResumeStore.lanPlaybackHints(fileKey: nil, href: nil)
@@ -153,8 +168,20 @@ enum WorkingSourceSparseCatalog {
         var playback = playbackStartSeconds
         var duration = durationSeconds
         var cursor = exportCursorSeconds
+
+        if ExportPlaybackState.shared.isLANExportActive {
+            let live = ExportPlaybackState.shared.playbackStartSeconds
+            if live > 0 {
+                playback = live
+            }
+            let liveCursor = ExportPlaybackState.shared.exportCursorSeconds
+            if liveCursor > 0 {
+                cursor = liveCursor
+            }
+        }
+
         if let hints = ResumeStore.lanPlaybackHints(fileKey: manifest.fileKey, href: manifest.href) {
-            if playback == nil || playback == 0 {
+            if hints.playbackStartSeconds > 0, !ExportPlaybackState.shared.isLANExportActive {
                 playback = hints.playbackStartSeconds
             }
             if duration == nil || duration == 0 {

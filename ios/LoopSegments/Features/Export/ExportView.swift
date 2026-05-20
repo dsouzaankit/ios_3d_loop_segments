@@ -293,8 +293,12 @@ struct ExportView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack {
                     ForEach(SeekPreset.allCases) { preset in
-                        Button(preset.label) { seekMs = preset.seekMs }
-                            .buttonStyle(.bordered)
+                        Button(preset.label) {
+                            seekMs = preset.seekMs
+                            resumeStore.saveSeekMs(seekMs, for: item)
+                            syncLANResumeHintFromStore()
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
             }
@@ -311,9 +315,15 @@ struct ExportView: View {
         }
     }
 
+    private func syncLANResumeHintFromStore() {
+        guard FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) else { return }
+        WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
+    }
+
     private func applyForegroundResume() {
         let resume = resumeStore.resumeStatus(for: item)
         seekMs = resume.effectiveMs
+        syncLANResumeHintFromStore()
         if session.isExportRunning, session.activeExportItem?.fileKey == item.fileKey {
             if let checkpoint = resumeStore.checkpointMediaMs(for: item), checkpoint > seekMs {
                 seekMs = checkpoint
