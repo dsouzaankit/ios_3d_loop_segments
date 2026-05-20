@@ -325,7 +325,7 @@ function Disconnect-LoopSegmentsMappedDrive {
 
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-  cmd /c "net use $Drive /delete /y" 2>&1 | Out-Null
+    cmd /c "net use $Drive /delete /y" 2>&1 | Out-Null
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prev
     if ($code -eq 0) {
