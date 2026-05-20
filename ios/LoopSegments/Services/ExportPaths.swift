@@ -71,18 +71,25 @@ enum ExportPaths {
         exportsDirectory.appendingPathComponent("_export_source_working.mp4")
     }
 
+    static var workingSourceManifestURL: URL {
+        exportsDirectory.appendingPathComponent("_export_source_working.sparse.json")
+    }
+
     @discardableResult
     static func removeWorkingSourceCopy(log: ((String) -> Void)? = nil) -> Bool {
-        let url = workingSourceURL
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        do {
-            try FileManager.default.removeItem(at: url)
-            log?("Removed \(url.lastPathComponent) from Exports")
-            return true
-        } catch {
-            log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
-            return false
+        let fm = FileManager.default
+        var removed = false
+        for url in [workingSourceURL, workingSourceManifestURL] {
+            guard fm.fileExists(atPath: url.path) else { continue }
+            do {
+                try fm.removeItem(at: url)
+                removed = true
+                log?("Removed \(url.lastPathComponent) from Exports")
+            } catch {
+                log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
+            }
         }
+        return removed
     }
 
     /// Export + search logs under `Exports/` (keeps `loop_segments_ok.txt`).

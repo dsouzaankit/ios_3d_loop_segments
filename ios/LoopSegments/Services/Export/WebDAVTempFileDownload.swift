@@ -43,14 +43,21 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     /// Disjoint byte spans actually written (head, dense window, EOF index may be separate).
     private var filledRanges: [ClosedRange<Int64>] = []
     private let throughput = DownloadThroughput()
+    private let sourceFileKey: String
+    private let sourceHref: String?
+    private var manifestSaveTask: Task<Void, Never>?
 
     init(
+        fileKey: String,
+        sourceHref: String?,
         remoteURL: URL,
         rangeCache: WebDAVRangeCache,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
     ) throws {
+        self.sourceFileKey = fileKey
+        self.sourceHref = sourceHref
         guard let total = rangeCache.contentLengthValue(), total > 0 else {
             throw WebDAVResourceLoaderError.missingContentLength
         }
@@ -63,13 +70,39 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         self.totalLength = total
         self.fileURL = ExportPaths.workingSourceURL
 
-        try? FileManager.default.removeItem(at: fileURL)
-        guard FileManager.default.createFile(atPath: fileURL.path, contents: nil) else {
-            throw SegmentExporterError.writerSetupFailed
+        if let adopted = WorkingSourceSparseCatalog.tryAdopt(
+            fileKey: fileKey,
+            totalLength: total,
+            fileURL: fileURL
+        ) {
+            writeHandle = try FileHandle(forWritingTo: fileURL)
+            lock.lock()
+            filledRanges = adopted.filledRanges
+            headOnDisk = adopted.headOnDisk
+            tailOnDisk = adopted.tailOnDisk
+            restoreDownloadRegionFromFilledSpansLocked()
+            lock.unlock()
+            let denseBytes = adopted.filledRanges.reduce(Int64(0)) { sum, span in
+                sum + span.upperBound - span.lowerBound + 1
+            }
+            log(
+                "Reusing sparse temp for same source — \(adopted.filledRanges.count) dense region(s), " +
+                    "~\(formatBytes(denseBytes)) kept from previous attempt(s)"
+            )
+            try applyCachedSpans(rangeCache, skipRangesAlreadyOnDisk: true)
+            try finalizeSparseLayout()
+        } else {
+            WorkingSourceSparseCatalog.remove()
+            try? FileManager.default.removeItem(at: fileURL)
+            guard FileManager.default.createFile(atPath: fileURL.path, contents: nil) else {
+                throw SegmentExporterError.writerSetupFailed
+            }
+            writeHandle = try FileHandle(forWritingTo: fileURL)
+            log("New sparse temp — prior working copy was another file or incompatible")
+            try applyCachedSpans(rangeCache, skipRangesAlreadyOnDisk: false)
+            try finalizeSparseLayout()
+            scheduleManifestSave()
         }
-        writeHandle = try FileHandle(forWritingTo: fileURL)
-        try applyCachedSpans(rangeCache)
-        try finalizeSparseLayout()
     }
 
     /// Position download at seek (or 0). Optionally start background range fetches (off when using dense-only per minute).
@@ -164,6 +197,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     deinit {
+        manifestSaveTask?.cancel()
+        persistManifestNow()
         downloadTask?.cancel()
         try? writeHandle?.close()
     }
@@ -323,6 +358,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         log(
             "Window on disk — contiguous \(formatBytes(range.start))–\(formatBytes(exportWindowContiguousEnd))\(averageSpeedLogSuffix())"
         )
+        persistManifestNow()
         publishLANPlaybackState()
     }
 
@@ -404,6 +440,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     func isRangeFilled(_ range: TimelineByteRange) -> Bool {
+        if isByteRangeFullyOnDisk(range) { return true }
         lock.lock()
         defer { lock.unlock() }
         guard exportWindowStart == range.start else { return false }
@@ -538,6 +575,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         guard end > offset else { return }
         filledRanges.append(offset ... (end - 1))
         filledRanges = Self.mergeFilledRanges(filledRanges)
+        scheduleManifestSave()
     }
 
     private static func mergeFilledRanges(_ ranges: [ClosedRange<Int64>]) -> [ClosedRange<Int64>] {
@@ -577,9 +615,16 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return max(fromDuration, fromSize)
     }
 
-    private func applyCachedSpans(_ cache: WebDAVRangeCache) throws {
+    private func applyCachedSpans(_ cache: WebDAVRangeCache, skipRangesAlreadyOnDisk: Bool) throws {
         let tailThreshold = max(0, totalLength - 3 * 1024 * 1024)
+        lock.lock()
+        let existingSpans = filledRanges
+        lock.unlock()
         for span in cache.storedSpans() {
+            if skipRangesAlreadyOnDisk,
+               Self.rangeFullyCovered(offset: span.start, length: span.data.count, spans: existingSpans) {
+                continue
+            }
             try write(span.data, at: span.start)
             if span.start == 0 {
                 lock.lock()
@@ -593,6 +638,52 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             }
         }
         try writeHandle?.synchronize()
+        scheduleManifestSave()
+    }
+
+    private func restoreDownloadRegionFromFilledSpansLocked() {
+        guard let first = filledRanges.min(by: { $0.lowerBound < $1.lowerBound }) else {
+            regionStart = 0
+            regionFilledEnd = 0
+            downloadCursor = 0
+            return
+        }
+        regionStart = first.lowerBound
+        regionFilledEnd = first.lowerBound
+        for span in filledRanges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if span.lowerBound <= regionFilledEnd + 1 {
+                regionFilledEnd = max(regionFilledEnd, span.upperBound + 1)
+            }
+        }
+        downloadCursor = regionFilledEnd
+    }
+
+    private func scheduleManifestSave() {
+        manifestSaveTask?.cancel()
+        manifestSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.persistManifestNow()
+        }
+    }
+
+    private func persistManifestNow() {
+        lock.lock()
+        let spans = filledRanges
+        let head = headOnDisk
+        let tail = tailOnDisk
+        let key = sourceFileKey
+        let href = sourceHref
+        let length = totalLength
+        lock.unlock()
+        WorkingSourceSparseCatalog.save(
+            fileKey: key,
+            totalLength: length,
+            href: href,
+            filledRanges: spans,
+            headOnDisk: head,
+            tailOnDisk: tail
+        )
     }
 
     private func noteWrite(offset: Int64, length: Int) {

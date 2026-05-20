@@ -100,6 +100,8 @@ final class SegmentExporter {
                 )
             }
             let downloader = try WebDAVTempFileDownload(
+                fileKey: item.fileKey,
+                sourceHref: item.href,
                 remoteURL: inputURL,
                 rangeCache: rangeCache,
                 authorizationProvider: authorizationProvider,
