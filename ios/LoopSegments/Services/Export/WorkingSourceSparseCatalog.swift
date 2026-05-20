@@ -9,6 +9,8 @@ enum WorkingSourceSparseCatalog {
         var spans: [Span]
         var headOnDisk: Bool
         var tailOnDisk: Bool
+        /// Resume / seek start for LAN `#t=` links (seconds).
+        var playbackStartSeconds: Double?
 
         struct Span: Codable {
             var lower: Int64
@@ -48,7 +50,8 @@ enum WorkingSourceSparseCatalog {
         href: String?,
         filledRanges: [ClosedRange<Int64>],
         headOnDisk: Bool,
-        tailOnDisk: Bool
+        tailOnDisk: Bool,
+        playbackStartSeconds: Double? = nil
     ) {
         let manifest = Manifest(
             fileKey: fileKey,
@@ -56,7 +59,8 @@ enum WorkingSourceSparseCatalog {
             href: href,
             spans: filledRanges.map { Manifest.Span(lower: $0.lowerBound, upper: $0.upperBound) },
             headOnDisk: headOnDisk,
-            tailOnDisk: tailOnDisk
+            tailOnDisk: tailOnDisk,
+            playbackStartSeconds: playbackStartSeconds
         )
         guard let data = try? JSONEncoder().encode(manifest) else { return }
         try? data.write(to: manifestURL, options: .atomic)
@@ -75,27 +79,41 @@ enum WorkingSourceSparseCatalog {
             return
         }
         let total = sizeNum.int64Value
-        guard let layout = tryAdoptFromDisk(fileURL: fileURL, totalLength: total) else {
+        if let manifest = loadManifest(totalLength: total),
+           let layout = layout(from: manifest, fileURL: fileURL, totalLength: total) {
+            applyLayout(layout, totalLength: total, playbackStartSeconds: manifest.playbackStartSeconds)
             return
         }
+        let probed = probeLayoutOnDisk(fileURL: fileURL, totalLength: total)
+        applyLayout(probed, totalLength: total, playbackStartSeconds: nil)
+    }
+
+    private static func applyLayout(
+        _ layout: AdoptedLayout,
+        totalLength: Int64,
+        playbackStartSeconds: Double?
+    ) {
         ExportPlaybackState.shared.syncSparseLayout(
-            totalBytes: total,
+            totalBytes: totalLength,
             filledSpans: layout.filledRanges,
             headOnDisk: layout.headOnDisk,
-            tailOnDisk: layout.tailOnDisk
+            tailOnDisk: layout.tailOnDisk,
+            playbackStartSeconds: playbackStartSeconds
         )
     }
 
-    static func tryAdoptFromDisk(fileURL: URL, totalLength: Int64) -> AdoptedLayout? {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: fileURL.path),
-              fm.fileExists(atPath: manifestURL.path),
+    private static func loadManifest(totalLength: Int64) -> Manifest? {
+        guard FileManager.default.fileExists(atPath: manifestURL.path),
               let data = try? Data(contentsOf: manifestURL),
               let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
               manifest.totalLength == totalLength else {
             return nil
         }
-        let onDisk = (try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        return manifest
+    }
+
+    private static func layout(from manifest: Manifest, fileURL: URL, totalLength: Int64) -> AdoptedLayout? {
+        let onDisk = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         guard onDisk == totalLength else { return nil }
         let ranges = manifest.spans.map { $0.lower ... $0.upper }
         return AdoptedLayout(
@@ -103,6 +121,41 @@ enum WorkingSourceSparseCatalog {
             headOnDisk: manifest.headOnDisk,
             tailOnDisk: manifest.tailOnDisk
         )
+    }
+
+    /// When the JSON manifest is missing, still expose head/tail if bytes are present on disk.
+    static func probeLayoutOnDisk(fileURL: URL, totalLength: Int64) -> AdoptedLayout {
+        AdoptedLayout(
+            filledRanges: [],
+            headOnDisk: probeFileHeadOnDisk(fileURL: fileURL),
+            tailOnDisk: probeIndexTailOnDisk(fileURL: fileURL, totalLength: totalLength)
+        )
+    }
+
+    private static func probeFileHeadOnDisk(fileURL: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 12), data.count >= 8 else { return false }
+        return data[4 ..< 8] == Data("ftyp".utf8)
+    }
+
+    private static func probeIndexTailOnDisk(fileURL: URL, totalLength: Int64) -> Bool {
+        let tailLen = WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalLength)
+        let tailStart = max(0, totalLength - tailLen)
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
+        defer { try? handle.close() }
+        do {
+            try handle.seek(toOffset: UInt64(tailStart))
+            let data = handle.readDataToEndOfFile()
+            return data.range(of: Data("moov".utf8)) != nil
+        } catch {
+            return false
+        }
+    }
+
+    static func tryAdoptFromDisk(fileURL: URL, totalLength: Int64) -> AdoptedLayout? {
+        guard let manifest = loadManifest(totalLength: totalLength) else { return nil }
+        return layout(from: manifest, fileURL: fileURL, totalLength: totalLength)
     }
 
     private static var manifestURL: URL {

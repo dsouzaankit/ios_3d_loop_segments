@@ -13,6 +13,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         var headOnDisk = false
         var tailOnDisk = false
         var filledSpans: [ClosedRange<Int64>] = []
+        var lanExportActive = false
     }
 
     private let lock = NSLock()
@@ -33,7 +34,18 @@ final class ExportPlaybackState: @unchecked Sendable {
             snapshot.headOnDisk = false
             snapshot.tailOnDisk = false
             snapshot.filledSpans = []
+            snapshot.lanExportActive = true
         }
+    }
+
+    func setLANExportActive(_ active: Bool) {
+        lock.withLock {
+            snapshot.lanExportActive = active
+        }
+    }
+
+    var isLANExportActive: Bool {
+        lock.withLock { snapshot.lanExportActive }
     }
 
     func updateCursor(seconds: Double) {
@@ -46,7 +58,8 @@ final class ExportPlaybackState: @unchecked Sendable {
         totalBytes: Int64,
         filledSpans: [ClosedRange<Int64>],
         headOnDisk: Bool,
-        tailOnDisk: Bool
+        tailOnDisk: Bool,
+        playbackStartSeconds: Double? = nil
     ) {
         lock.withLock {
             snapshot.totalFileBytes = totalBytes
@@ -57,7 +70,49 @@ final class ExportPlaybackState: @unchecked Sendable {
                 0,
                 totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
             )
+            if let playbackStartSeconds {
+                snapshot.playbackStartSeconds = max(0, playbackStartSeconds)
+            }
         }
+    }
+
+    /// Longest contiguous readable span from `start` through `maxEnd` (for clamping open-ended Range requests).
+    func maxContiguousReadableEnd(from start: Int64, maxEnd: Int64) -> Int64? {
+        let snap = lock.withLock { snapshot }
+        guard snap.totalFileBytes > 0, start >= 0, start <= maxEnd else { return nil }
+        var cursor = start
+        var lastEnd: Int64?
+        while cursor <= maxEnd {
+            guard let runEnd = Self.endOfServedRun(from: cursor, maxEnd: maxEnd, snap: snap) else {
+                break
+            }
+            lastEnd = runEnd
+            if runEnd >= maxEnd { break }
+            cursor = runEnd + 1
+        }
+        return lastEnd
+    }
+
+    /// Whether timeline `seconds` lies inside a dense byte window on disk.
+    func timelineSecondsIsReadable(_ seconds: Double) -> Bool {
+        let snap = lock.withLock { snapshot }
+        guard snap.durationSeconds > 0, snap.totalFileBytes > 0 else { return false }
+        let range = WebDAVTempFileDownload.byteRangeForTimeline(
+            totalLength: snap.totalFileBytes,
+            timelineStartSeconds: seconds,
+            timelineEndSeconds: min(seconds + 1, snap.durationSeconds),
+            durationSeconds: snap.durationSeconds
+        )
+        let end = max(range.start, range.end - 1)
+        guard end >= range.start, end < snap.totalFileBytes else { return false }
+        var cursor = range.start
+        while cursor <= end {
+            guard let servedEnd = Self.endOfServedRun(from: cursor, maxEnd: end, snap: snap) else {
+                return false
+            }
+            cursor = servedEnd + 1
+        }
+        return true
     }
 
     var playbackStartSecondsInt: Int {

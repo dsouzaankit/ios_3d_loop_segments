@@ -625,6 +625,9 @@ enum ExportLANServer {
     }
 
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
+            WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
+        }
         var items: [String] = []
         for entry in listExportFiles() {
                 let name = entry.name
@@ -668,7 +671,7 @@ enum ExportLANServer {
             <h1>Loop Segments — LAN export</h1>
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
             <p>PC: <code>Sync-FromPhoneLAN.ps1 -Watch</code> or map a drive with <code>Map-LoopSegmentsWebDAV.ps1</code> (WebDAV, not SMB).</p>
-            <p><strong>Playback:</strong> use <code>op_00.mp4</code> (complete segment). For <code>_export_source_working.mp4</code>, use the index link (includes <code>#t=</code> resume time after seek). Sparse holes return 503 so the player does not jump to end-of-file.</p>
+            <p><strong>Playback:</strong> use <code>op_00.mp4</code> (complete segment). For <code>_export_source_working.mp4</code>, open the index link (adds <code>#t=</code> resume). Only dense-filled minutes are playable in a browser; resume at 11:00 needs that window on disk (export running or finished past that point).</p>
             <ul>
             \(fileList)
             </ul>
@@ -711,7 +714,11 @@ enum ExportLANServer {
             "files": entries,
         ]
         if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
-            payload["workingSourcePlayback"] = ExportPlaybackState.shared.frozenStatusPayload
+            WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
+            var playback = ExportPlaybackState.shared.frozenStatusPayload
+            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+            payload["workingSourcePlayback"] = playback
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
@@ -750,30 +757,47 @@ enum ExportLANServer {
         if let range = parseByteRange(requestHeaders: requestHeaders, fileSize: fileSize) {
             byteStart = range.start
             byteEnd = range.end
+            if isWorkingSource {
+                guard let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(
+                    from: byteStart,
+                    maxEnd: byteEnd
+                ) else {
+                    respondWorkingSourceUnreadable(connection: connection, done: done)
+                    return
+                }
+                byteEnd = readableEnd
+            }
             status = 206
             phrase = "Partial Content"
         } else if hasRangeHeader {
             sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
             return
         } else if isWorkingSource, method == "GET" {
-            // Browsers probe without Range first; answer with Accept-Ranges so they follow up with byte ranges.
-            let header = httpResponseHeader(
-                status: 200,
-                phrase: "OK",
-                contentType: contentType,
-                contentLength: 0,
-                contentRange: nil,
-                includeAcceptRanges: true
-            )
-            guard let headerData = header.data(using: .utf8) else {
-                done()
+            // Serve the first readable span (usually file head or index tail) so browsers get moov without bytes=0- on the whole sparse file.
+            if let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(from: 0, maxEnd: fileSize - 1) {
+                byteStart = 0
+                byteEnd = readableEnd
+                status = 206
+                phrase = "Partial Content"
+            } else {
+                let header = httpResponseHeader(
+                    status: 200,
+                    phrase: "OK",
+                    contentType: contentType,
+                    contentLength: 0,
+                    contentRange: nil,
+                    includeAcceptRanges: true
+                )
+                guard let headerData = header.data(using: .utf8) else {
+                    done()
+                    return
+                }
+                connection.send(content: headerData, completion: .contentProcessed { _ in
+                    connection.cancel()
+                    done()
+                })
                 return
             }
-            connection.send(content: headerData, completion: .contentProcessed { _ in
-                connection.cancel()
-                done()
-            })
-            return
         } else {
             byteStart = 0
             byteEnd = fileSize - 1
@@ -788,13 +812,7 @@ enum ExportLANServer {
         }
 
         if isWorkingSource, method != "HEAD", !ExportPlaybackState.shared.rangeIsReadable(start: byteStart, end: byteEnd) {
-            sendResponse(
-                connection: connection,
-                status: 416,
-                contentType: "text/plain",
-                body: Data("Range not on disk yet (sparse export) — try index link with #t= resume or wait for dense fill.".utf8),
-                done: done
-            )
+            respondWorkingSourceUnreadable(connection: connection, done: done)
             return
         }
 
@@ -899,6 +917,29 @@ enum ExportLANServer {
         }
     }
 
+    private static func respondWorkingSourceUnreadable(
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        let snap = ExportPlaybackState.shared.frozenStatusPayload
+        let startSec = (snap["playbackStartSeconds"] as? Double) ?? 0
+        let cursorSec = (snap["exportCursorSeconds"] as? Double) ?? 0
+        let durationSec = (snap["durationSeconds"] as? Double) ?? 0
+        let active = ExportPlaybackState.shared.isLANExportActive
+        let status = active ? 503 : 416
+        let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+        let hint = active
+            ? "Range not on disk yet — export is filling sparse windows; retry in a few seconds."
+            : "Range not on disk — open http://<phone>:8765/ and use the _export_source_working link (#t= resume), or play op_00.mp4. Resume \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is" : "is not") dense on disk; filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))). Duration ~\(formatLANClock(Int(durationSec.rounded(.down)))). VLC/ffplay tolerate sparse files better than browsers."
+        sendResponse(
+            connection: connection,
+            status: status,
+            contentType: "text/plain; charset=utf-8",
+            body: Data(hint.utf8),
+            done: done
+        )
+    }
+
     private static func sendResponse(
         connection: NWConnection,
         status: Int,
@@ -909,9 +950,12 @@ enum ExportLANServer {
         let phrase: String
         switch status {
         case 200: phrase = "OK"
+        case 206: phrase = "Partial Content"
         case 403: phrase = "Forbidden"
         case 404: phrase = "Not Found"
         case 405: phrase = "Method Not Allowed"
+        case 416: phrase = "Range Not Satisfiable"
+        case 503: phrase = "Service Unavailable"
         default: phrase = "Error"
         }
         let header = httpResponseHeader(

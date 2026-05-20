@@ -62,7 +62,10 @@ final class SegmentExporter {
         cancelLock.lock()
         isCancelled = false
         cancelLock.unlock()
+        ExportPlaybackState.shared.setLANExportActive(true)
         defer {
+            ExportPlaybackState.shared.setLANExportActive(false)
+            tempDownload?.publishLANPlaybackState()
             tempDownload?.cancel()
             tempDownload = nil
             retainedWebDAVLoader = nil
