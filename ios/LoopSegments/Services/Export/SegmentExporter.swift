@@ -424,6 +424,7 @@ final class SegmentExporter {
             rangeDuration: rangeDuration,
             log: log
         )
+        try await MP4NetworkOptimize.ensureMoovAtStartIfNeeded(at: stagingURL, log: log)
         let skipWallHold = ExportPaths.segmentFileCount == 1
             || (ExportDeliveryPolicy.prioritizeFirstPhotosPublish && minuteIndex == 0)
         if !skipWallHold {
@@ -1670,7 +1671,7 @@ final class SegmentWriterContext {
         realTime: Bool = true
     ) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        writer.shouldOptimizeForNetworkUse = false
+        writer.shouldOptimizeForNetworkUse = true
         videoInput = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: nil,

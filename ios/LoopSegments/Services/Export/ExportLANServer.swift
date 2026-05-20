@@ -308,20 +308,13 @@ enum ExportLANServer {
         path.hasPrefix("/") ? String(path.dropFirst()) : path
     }
 
-    /// Skybox sends OPTIONS/PROPFIND with credentials; `op_00.mp4` GET stays open for PC sync (no WebDAV UA).
+    /// Auth on OPTIONS/PROPFIND/LOCK and WebDAV `GET /`. Media GET stays open (Skybox often omits Authorization on play).
     private static func requiresLANWebDAVAuth(method: String, path: String, requestHeaders: String) -> Bool {
         switch method {
         case "OPTIONS", "PROPFIND", "LOCK":
             return true
         case "GET", "HEAD":
-            if normalizedGETPath(path).isEmpty {
-                return !isBrowserLikeRequest(requestHeaders: requestHeaders)
-            }
-            // Skybox plays files with absolute-URI GET + Basic auth (Sync-FromPhoneLAN uses plain GET, no auth).
-            if isWebDAVClient(requestHeaders: requestHeaders) {
-                return true
-            }
-            return false
+            return normalizedGETPath(path).isEmpty && !isBrowserLikeRequest(requestHeaders: requestHeaders)
         default:
             return false
         }
@@ -447,7 +440,9 @@ enum ExportLANServer {
         contentType: String,
         contentLength: Int,
         contentRange: String? = nil,
-        includeAcceptRanges: Bool = false
+        includeAcceptRanges: Bool = false,
+        lastModified: Date? = nil,
+        etag: String? = nil
     ) -> String {
         var lines = [
             "HTTP/1.1 \(status) \(phrase)",
@@ -460,8 +455,18 @@ enum ExportLANServer {
         if let contentRange {
             lines.append("Content-Range: \(contentRange)")
         }
+        if let lastModified {
+            lines.append("Last-Modified: \(httpDate(lastModified))")
+        }
+        if let etag {
+            lines.append("ETag: \(etag)")
+        }
         lines.append("Connection: close")
         return lines.joined(separator: "\r\n") + "\r\n\r\n"
+    }
+
+    private static func fileETag(size: Int64) -> String {
+        String(format: "\"%016llx\"", size)
     }
 
     /// Parses `Range: bytes=…` for a file of `fileSize` bytes (single range only).
@@ -934,6 +939,8 @@ enum ExportLANServer {
         }
         let fileSize = sizeNum.int64Value
         let contentType = mimeType(for: fileURL)
+        let modified = attrs[.modificationDate] as? Date
+        let etag = fileETag(size: fileSize)
         let isWorkingSource = fileURL.lastPathComponent == ExportPaths.workingSourceURL.lastPathComponent
         if isWorkingSource {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: fileURL)
@@ -977,7 +984,9 @@ enum ExportLANServer {
                     contentType: contentType,
                     contentLength: 0,
                     contentRange: nil,
-                    includeAcceptRanges: true
+                    includeAcceptRanges: true,
+                    lastModified: modified,
+                    etag: etag
                 )
                 guard let headerData = header.data(using: .utf8) else {
                     done()
@@ -1016,7 +1025,9 @@ enum ExportLANServer {
             contentType: contentType,
             contentLength: Int(bodyLength),
             contentRange: contentRange,
-            includeAcceptRanges: true
+            includeAcceptRanges: true,
+            lastModified: modified,
+            etag: etag
         )
         guard let headerData = header.data(using: .utf8) else {
             done()

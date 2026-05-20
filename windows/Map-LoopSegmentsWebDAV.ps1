@@ -129,6 +129,33 @@ function Add-LoopSegmentsLANWebDAVAuthHeader {
     $Request.Headers['Authorization'] = 'Basic ' + [Convert]::ToBase64String($bytes)
 }
 
+function Test-LoopSegmentsLANMp4MoovInHead {
+    param(
+        [string] $FileUrl,
+        [int] $ScanBytes = 786432
+    )
+
+    $req = [System.Net.HttpWebRequest]::Create($FileUrl)
+    $req.Method = 'GET'
+    $req.AddRange(0, [Math]::Max(0, $ScanBytes - 1))
+    $req.Timeout = 30000
+    $req.UserAgent = 'Skybox-Test/1.0'
+    $resp = $req.GetResponse()
+    $stream = $resp.GetResponseStream()
+    $ms = New-Object System.IO.MemoryStream
+    $buf = New-Object byte[] 65536
+    while ($ms.Length -lt $ScanBytes) {
+        $n = $stream.Read($buf, 0, $buf.Length)
+        if ($n -le 0) { break }
+        $ms.Write($buf, 0, $n)
+    }
+    $stream.Close()
+    $resp.Close()
+    $bytes = $ms.ToArray()
+    $text = [Text.Encoding]::ASCII.GetString($bytes)
+    return $text.Contains('moov')
+}
+
 function Test-LoopSegmentsWebDAVMediaGet {
     param([string] $RootUrl)
 
@@ -147,23 +174,26 @@ function Test-LoopSegmentsWebDAVMediaGet {
         $req.Timeout = 20000
         $req.UserAgent = 'Skybox VR Player'
         $req.AddRange(0, 1)
-        Add-LoopSegmentsLANWebDAVAuthHeader -Request $req
         $resp = $req.GetResponse()
         $status = [int]$resp.StatusCode
         $acceptRanges = $resp.Headers['Accept-Ranges']
-        $length = $resp.ContentLength
         $stream = $resp.GetResponseStream()
         $buf = New-Object byte[] 4
         $read = $stream.Read($buf, 0, $buf.Length)
         $stream.Close()
         $resp.Close()
         if ($status -notin 200, 206) {
-            throw "GET absolute URI returned $status (expected 200 or 206)."
+            throw "GET absolute URI (no auth) returned $status (expected 200 or 206)."
         }
         if ($read -lt 1) {
             throw 'GET returned no bytes — export may not have written a segment yet.'
         }
-        Write-Host "  GET $segmentName (Skybox absolute URI + Range) $status OK ($read bytes, Accept-Ranges=$acceptRanges)"
+        Write-Host "  GET $segmentName (Skybox URI, no auth, Range) $status OK (Accept-Ranges=$acceptRanges)"
+        if (Test-LoopSegmentsLANMp4MoovInHead -FileUrl $absoluteUri) {
+            Write-Host "  moov atom in first 768 KB — Skybox-friendly faststart"
+        } else {
+            Write-Warning "  moov not in file head — install build 171+ and wait for next op_00 publish (export log: faststart remux)"
+        }
     } catch [System.Net.WebException] {
         $r = $_.Exception.Response
         if ($null -ne $r) {
@@ -174,7 +204,7 @@ function Test-LoopSegmentsWebDAVMediaGet {
                 return
             }
             if ($code -eq 401) {
-                throw "GET $segmentName returned 401 — install build 170+ IPA (Skybox sends auth on file GET)."
+                throw "GET $segmentName returned 401 — media GET must not require auth (build 171+)."
             }
         }
         throw "Skybox-style media GET failed. $($_.Exception.Message)"

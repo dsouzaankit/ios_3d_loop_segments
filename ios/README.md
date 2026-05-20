@@ -1,6 +1,7 @@
 https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
 
-# read-only webdav windows setup
+# read-only webdav windows setup (failing)
+# prefer Skybox webdav <admin, iosadmin>
 cd P:\all_scripts\ios_3d_loop_segments\windows
 # onetime pwsh admin
 Start-Process pwsh -Verb RunAs -ArgumentList "-NoExit", "-Command", "Set-Location '$PWD'"
@@ -91,9 +92,11 @@ Skybox **requires Basic auth** on every WebDAV request (OPTIONS + PROPFIND + lis
 2. Skybox → **Network** → **Add WebDAV server**.
 3. **URL:** `http://10.0.100.10:8765/` — must include `http://`, IP, **:8765**, trailing `/`.
 4. **Username:** `admin` · **Password:** `iosadmin` (case-sensitive password).
-5. After connect, play **`op_00.mp4`** only — **`_export_source_working.mp4` is sparse** and usually fails in Skybox (browser can still preview it via the LAN index `#t=` link).
+5. After connect, play **`op_00.mp4`** only — **`_export_source_working.mp4` is sparse** and will show “can’t play” in Skybox (browser preview via the LAN index `#t=` link is different).
 
-**Build 170+** fixes Skybox playback: file GET uses **absolute URIs** (`GET http://ip:8765/op_00.mp4`) and **Basic auth** on media GET (same as listing).
+**Build 171+** fixes Skybox for `op_00.mp4`: **absolute-URI** GET (build 170), **no auth on file GET** (Skybox often skips credentials when playing), and **faststart** (`moov` at file head — browsers tolerate moov-at-end via Range; Skybox usually does not).
+
+If Skybox still fails on `op_00.mp4` after 171: copy to PC with **`Sync-FromPhoneLAN.ps1 -Watch`** and play from the PC share, or use the Skybox PC client — Quest may not decode your source codec (e.g. 10-bit HEVC 5K) over HTTP even when the Quest browser works.
 
 **PC test (same Wi‑Fi as phone):**
 
@@ -103,7 +106,7 @@ cd windows
 .\Map-LoopSegmentsWebDAV.ps1 -TestOnly
 ```
 
-Expect `OPTIONS 200 OK`, `PROPFIND 207`, and `GET op_00.mp4 (Skybox absolute URI + Range) 206 OK` with auth. If listing works but playback fails, upgrade to **build 170+**.
+Expect `OPTIONS 200 OK`, `PROPFIND 207`, `GET op_00.mp4` **206 without auth**, and `moov atom in first 768 KB`. If moov-at-end warning appears, let export publish one more segment on **build 171+**.
 
 **If Skybox still won’t add:** Quest often blocks plain HTTP to local IPs; use **PC DLNA** (`Sync-FromPhoneLAN.ps1 -Watch`) and open the share from Skybox via **SMB** on the PC, or copy `op_00.mp4` to the headset with the Skybox PC client.
 
