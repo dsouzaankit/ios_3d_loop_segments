@@ -950,8 +950,17 @@ enum ExportLANServer {
     }
 
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        var playbackStatusBlock = ""
         if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
+            let line = ExportPlaybackState.shared.lanPlayableStatusLine()
+            let escaped = line
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+            playbackStatusBlock = """
+            <p><strong>\(escaped)</strong></p>
+            <p>Times are positions in the source file (0:00 = start). <code>till</code> is the furthest contiguous dense playback from <code>from</code>; the scrubber may still show full duration.</p>
+            """
         }
         var items: [String] = []
         for entry in listExportFiles() {
@@ -968,9 +977,12 @@ enum ExportLANServer {
                     let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
                     let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
                     let href = "\(escaped)\(tFrag)"
+                    let tillSec = Int(
+                        ExportPlaybackState.shared.maxBrowserPlayableTimelineSeconds().rounded(.down)
+                    )
                     let startNote = startSec > 0
-                        ? " — start at \(formatLANClock(startSec)) (#t= resume). Scrubber length = full file from index; only dense spans play — not the same as segment export progress."
-                        : " — sparse partial copy; scrubber shows full duration from index tail; video bytes fill as export runs"
+                        ? " — resume #t=\(startSec); LAN dense through ~\(formatLANClock(tillSec)) from \(formatLANClock(startSec))"
+                        : " — sparse partial copy; LAN dense through ~\(formatLANClock(tillSec))"
                     items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(startNote)</li>")
                     continue
                 } else if name.hasSuffix(".mp4"),
@@ -1000,6 +1012,7 @@ enum ExportLANServer {
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). <code>pcld_ios_media/_working.mp4</code> — use the index link; many browsers won’t play sparse HEVC. After export finishes, the index drops a stale <code>#t=</code> seek.</p>
+            \(playbackStatusBlock)
             <ul>
             \(fileList)
             </ul>

@@ -163,8 +163,35 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock { Int(snapshot.playbackStartSeconds.rounded(.down)) }
     }
 
+    func maxBrowserPlayableTimelineSeconds(
+        playbackStartSeconds: Double? = nil,
+        durationSeconds: Double? = nil
+    ) -> Double {
+        let snap = lock.withLock { snapshot }
+        return Self.maxBrowserPlayableTimelineSeconds(
+            snap: snap,
+            playbackStartSeconds: playbackStartSeconds,
+            durationSeconds: durationSeconds
+        )
+    }
+
+    func lanPlayableStatusLine(
+        playbackStartSeconds: Double? = nil,
+        exportCursorSeconds: Double? = nil,
+        durationSeconds: Double? = nil
+    ) -> String {
+        let snap = lock.withLock { snapshot }
+        return Self.lanPlayableStatusLine(
+            snap: snap,
+            playbackStartSeconds: playbackStartSeconds,
+            exportCursorSeconds: exportCursorSeconds,
+            durationSeconds: durationSeconds
+        )
+    }
+
     var frozenStatusPayload: [String: Any] {
         let snap = lock.withLock { snapshot }
+        let till = Self.maxBrowserPlayableTimelineSeconds(snap: snap)
         return [
             "playbackStartSeconds": snap.playbackStartSeconds,
             "exportCursorSeconds": snap.exportCursorSeconds,
@@ -173,7 +200,60 @@ final class ExportPlaybackState: @unchecked Sendable {
             "indexTailStart": snap.indexTailStart,
             "headOnDisk": snap.headOnDisk,
             "tailOnDisk": snap.tailOnDisk,
+            "lanPlayableTillSeconds": till,
+            "lanPlayableStatusLine": Self.lanPlayableStatusLine(snap: snap),
         ]
+    }
+
+    private static func maxBrowserPlayableTimelineSeconds(
+        snap: Snapshot,
+        playbackStartSeconds: Double? = nil,
+        durationSeconds: Double? = nil
+    ) -> Double {
+        let start = max(0, playbackStartSeconds ?? snap.playbackStartSeconds)
+        let duration = durationSeconds ?? snap.durationSeconds
+        guard duration > 0, snap.totalFileBytes > 0 else { return start }
+        let startByte = WebDAVTempFileDownload.timelineByteOffsetForSeconds(
+            start,
+            totalLength: snap.totalFileBytes,
+            durationSeconds: duration
+        )
+        let maxEnd = snap.totalFileBytes - 1
+        if let servedEnd = endOfServedRun(from: startByte, maxEnd: maxEnd, snap: snap) {
+            return WebDAVTempFileDownload.timelineSecondsForByteOffset(
+                servedEnd + 1,
+                totalLength: snap.totalFileBytes,
+                durationSeconds: duration
+            )
+        }
+        if snap.headOnDisk, startByte == 0 {
+            return WebDAVTempFileDownload.timelineSecondsForByteOffset(
+                min(Int64(512 * 1024), snap.totalFileBytes),
+                totalLength: snap.totalFileBytes,
+                durationSeconds: duration
+            )
+        }
+        return start
+    }
+
+    private static func lanPlayableStatusLine(
+        snap: Snapshot,
+        playbackStartSeconds: Double? = nil,
+        exportCursorSeconds: Double? = nil,
+        durationSeconds: Double? = nil
+    ) -> String {
+        let from = max(0, playbackStartSeconds ?? snap.playbackStartSeconds)
+        let export = max(0, exportCursorSeconds ?? snap.exportCursorSeconds)
+        let duration = durationSeconds ?? snap.durationSeconds
+        let till = maxBrowserPlayableTimelineSeconds(
+            snap: snap,
+            playbackStartSeconds: from,
+            durationSeconds: duration
+        )
+        return
+            "LAN playable till \(ExportTimelineLog.wallClock(seconds: till))… " +
+            "export \(ExportTimelineLog.wallClock(seconds: export)), " +
+            "from \(ExportTimelineLog.wallClock(seconds: from))"
     }
 
     private static func endOfServedRun(

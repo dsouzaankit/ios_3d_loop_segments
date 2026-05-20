@@ -290,6 +290,42 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Map a file byte offset to timeline seconds (for LAN / export logs).
+    static func timelineSecondsForByteOffset(
+        _ byteOffset: Int64,
+        totalLength: Int64,
+        durationSeconds: Double
+    ) -> Double {
+        guard totalLength > 0, durationSeconds > 0 else { return 0 }
+        let effective = effectiveDurationSeconds(reported: durationSeconds, totalBytes: totalLength)
+        let ratio = min(1, max(0, Double(max(0, byteOffset)) / Double(totalLength)))
+        return min(effective, ratio * effective)
+    }
+
+    static func timelineByteOffsetForSeconds(
+        _ seconds: Double,
+        totalLength: Int64,
+        durationSeconds: Double
+    ) -> Int64 {
+        guard totalLength > 0, durationSeconds > 0 else { return 0 }
+        let effective = effectiveDurationSeconds(reported: durationSeconds, totalBytes: totalLength)
+        let ratio = min(1, max(0, seconds / effective))
+        return min(totalLength, Int64(ratio * Double(totalLength)))
+    }
+
+    func maxBrowserPlayableStatusLog(
+        playbackStartSeconds: Double,
+        durationSeconds: Double,
+        exportCursorSeconds: Double
+    ) -> String {
+        publishLANPlaybackState(mediaCursorSeconds: exportCursorSeconds)
+        return ExportPlaybackState.shared.lanPlayableStatusLine(
+            playbackStartSeconds: playbackStartSeconds,
+            exportCursorSeconds: exportCursorSeconds,
+            durationSeconds: durationSeconds
+        )
+    }
+
     /// Fill every byte in `range` from pCloud (dense on disk) so AVFoundation can open the sparse temp.
     func ensureContiguousRange(_ range: TimelineByteRange, force: Bool = false) async throws {
         guard range.length > 0 else { return }
@@ -513,14 +549,27 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
+    /// Wait for background prefetch at EOF, or return once background was paused (export uses disk per minute).
     func waitUntilComplete() async throws {
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
+            if isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: totalLength)) {
+                log("Temp copy complete — \(formatBytes(totalLength))\(averageSpeedLogSuffix())")
+                return
+            }
             lock.lock()
             let atEOF = regionFilledEnd >= totalLength
+            let backgroundActive = downloadTask != nil && !backgroundPausedForStream
+            let contiguousEnd = regionFilledEnd
             lock.unlock()
             if atEOF {
                 log("Temp copy complete — \(formatBytes(totalLength))\(averageSpeedLogSuffix())")
+                return
+            }
+            if !backgroundActive {
+                log(
+                    "Background prefetch finished (paused for segment export) — \(formatBytes(contiguousEnd)) contiguous on disk; export loop done"
+                )
                 return
             }
             try await Task.sleep(nanoseconds: 500_000_000)

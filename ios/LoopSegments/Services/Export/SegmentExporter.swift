@@ -132,10 +132,16 @@ final class SegmentExporter {
         }
         let lanPrefetch = Self.lanWorkingPrefetchPolicy(seekSeconds: seekSeconds)
         if lanPrefetch.prepareHeadAndIndex {
-            try Self.ensureExportDiskSpace(fileBytes: fileSize, lanPrefetchToEOF: true)
+            if seekSeconds <= 0.5 {
+                try Self.ensureExportDiskSpace(fileBytes: fileSize, lanPrefetchToEOF: true)
+            } else {
+                try Self.ensureExportDiskSpace(fileBytes: fileSize)
+            }
             try await preloadWorkingSourceForLANPlayback(
                 downloader: downloader,
                 fileSize: fileSize,
+                seekSeconds: seekSeconds,
+                durationSeconds: durationSeconds,
                 log: logHandler
             )
         }
@@ -404,10 +410,21 @@ final class SegmentExporter {
                 if lanPrefetch.extendThroughCursorEachMinute {
                     await extendLANPrefetchThroughExportCursor(
                         downloader: downloader,
+                        playbackStartSeconds: seekSeconds,
                         mediaCursorSeconds: mediaCursorSeconds,
                         durationSeconds: durationSeconds,
                         fileSize: fileSize,
                         log: logHandler
+                    )
+                }
+                if ExportLANServer.isEnabled {
+                    downloader.publishLANPlaybackState(mediaCursorSeconds: mediaCursorSeconds)
+                    logHandler(
+                        downloader.maxBrowserPlayableStatusLog(
+                            playbackStartSeconds: seekSeconds,
+                            durationSeconds: durationSeconds,
+                            exportCursorSeconds: mediaCursorSeconds
+                        )
                     )
                 }
                 minuteIndex += 1
@@ -531,10 +548,9 @@ final class SegmentExporter {
         downloader: WebDAVTempFileDownload,
         byteRange: TimelineByteRange
     ) -> Bool {
-        downloader.isRangeFilled(byteRange)
-            && downloader.isByteRangeFullyOnDisk(byteRange)
-            && downloader.hasHeadOnDisk()
+        downloader.hasHeadOnDisk()
             && downloader.hasIndexTailOnDisk()
+            && downloader.isByteRangeFullyOnDisk(byteRange)
     }
 
     private func exportSegmentFromTempOrStream(
@@ -1270,7 +1286,7 @@ final class SegmentExporter {
     }
 
     private static func lanWorkingPrefetchPolicy(seekSeconds: Double) -> LANWorkingPrefetchPolicy {
-        guard ExportLANServer.isEnabled, seekSeconds <= 0.5 else {
+        guard ExportLANServer.isEnabled else {
             return LANWorkingPrefetchPolicy(
                 prepareHeadAndIndex: false,
                 useBackgroundDownload: false,
@@ -1282,34 +1298,62 @@ final class SegmentExporter {
             prepareHeadAndIndex: true,
             useBackgroundDownload: true,
             extendThroughCursorEachMinute: true,
-            waitForBackgroundAtEnd: true
+            waitForBackgroundAtEnd: seekSeconds <= 0.5
         )
     }
 
-    /// Head + MP4 index; background task fills `_working.mp4` from the seek point (all sizes when LAN is on).
+    /// Head + index; background from export seek (or 0); dense first minute at seek so LAN can play there.
     private func preloadWorkingSourceForLANPlayback(
         downloader: WebDAVTempFileDownload,
         fileSize: Int64,
+        seekSeconds: Double,
+        durationSeconds: Double,
         log: @escaping (String) -> Void
     ) async throws {
         let full = TimelineByteRange(start: 0, end: fileSize)
         try await downloader.ensureFileHeadOnDisk()
         try await downloader.ensureIndexTailOnDisk()
-        if downloader.isByteRangeFullyOnDisk(full) {
+        if seekSeconds <= 0.5, downloader.isByteRangeFullyOnDisk(full) {
             log("LAN _working.mp4 — full file already on disk (seek anywhere)")
             return
         }
         downloader.setDownloadHighWaterMark(fileSize)
+        if seekSeconds <= 0.5 {
+            log(
+                "LAN preload — background fill to EOF (\(Self.formatBytes(fileSize)) _working.mp4 over cellular/pCloud; " +
+                    "LAN :8765 only serves dense bytes to the PC)"
+            )
+        } else {
+            log(
+                "LAN preload — head+index; background from export seek " +
+                    "\(ExportTimelineLog.wallClock(seconds: seekSeconds)) toward EOF; " +
+                    "dense first ~2 min at seek for browser playback"
+            )
+            let firstWindowEnd = min(
+                durationSeconds,
+                seekSeconds + Self.segmentDurationSeconds * 2
+            )
+            let firstRange = downloader.byteRangeForTimeline(
+                timelineStartSeconds: seekSeconds,
+                timelineEndSeconds: firstWindowEnd,
+                durationSeconds: durationSeconds
+            )
+            try await downloader.ensureContiguousRange(firstRange)
+        }
+        downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
         log(
-            "LAN preload — background fill to EOF (\(Self.formatBytes(fileSize)) _working.mp4 over cellular/pCloud; " +
-                "LAN :8765 only serves dense bytes to the PC)"
+            downloader.maxBrowserPlayableStatusLog(
+                playbackStartSeconds: seekSeconds,
+                durationSeconds: durationSeconds,
+                exportCursorSeconds: seekSeconds
+            )
         )
-        downloader.publishLANPlaybackState()
     }
 
-    /// Dense-fill `_working.mp4` from file start through export cursor (+2 min lookahead) for LAN range gating.
+    /// Dense-fill `_working.mp4` from playback seek through export cursor (+2 min lookahead) for LAN range gating.
     private func extendLANPrefetchThroughExportCursor(
         downloader: WebDAVTempFileDownload,
+        playbackStartSeconds: Double,
         mediaCursorSeconds: Double,
         durationSeconds: Double,
         fileSize: Int64,
@@ -1317,17 +1361,19 @@ final class SegmentExporter {
     ) async {
         let lookahead = min(durationSeconds, mediaCursorSeconds + Self.segmentDurationSeconds * 2)
         let range = downloader.byteRangeForTimeline(
-            timelineStartSeconds: 0,
+            timelineStartSeconds: playbackStartSeconds,
             timelineEndSeconds: lookahead,
             durationSeconds: durationSeconds
         )
-        let full = TimelineByteRange(start: 0, end: fileSize)
         guard !downloader.isByteRangeFullyOnDisk(range) else { return }
         do {
             try await downloader.ensureContiguousRange(range)
             downloader.publishLANPlaybackState(mediaCursorSeconds: mediaCursorSeconds)
         } catch {
-            log("LAN prefetch through \(ResumeTimeFormat.formatMs(Int64(mediaCursorSeconds * 1000))) skipped: \(error.localizedDescription)")
+            log(
+                "LAN prefetch through \(ExportTimelineLog.wallClock(seconds: mediaCursorSeconds)) skipped: " +
+                    "\(error.localizedDescription)"
+            )
         }
     }
 
