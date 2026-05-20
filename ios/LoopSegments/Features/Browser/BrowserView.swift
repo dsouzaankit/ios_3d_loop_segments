@@ -142,6 +142,7 @@ struct BrowserView: View {
             .onAppear {
                 SearchDebugLog.ensureReady()
                 searchDebugStatus = SearchDebugLog.statusLine()
+                resumeStore.backfillHrefsFromSparseManifest()
             }
             .task(id: listToken) {
                 guard !isSearchActive else { return }
@@ -403,9 +404,11 @@ private struct PausedExportDestinationView: View {
         .navigationTitle(entry.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            if resumeStore.resolveItem(for: entry, browsing: browsing) == nil {
-                await resolveViaSearch()
+            resumeStore.backfillHrefsFromSparseManifest()
+            if resumeStore.resolveItem(for: entry, browsing: browsing) != nil {
+                return
             }
+            await resolveViaSearch()
         }
     }
 
@@ -414,18 +417,56 @@ private struct PausedExportDestinationView: View {
         isSearching = true
         defer { isSearching = false }
         guard let credentials = try? await session.prepareCredentialsForSearch() else { return }
-        do {
-            let result = try await PCloudSearchService.search(
-                query: entry.displayName,
-                credentials: credentials,
-                browsePaths: ["/"],
-                status: nil
-            )
-            if let match = result.items.first(where: { $0.fileKey == entry.fileKey && $0.isVideo }) {
-                searchItem = match
-                resumeStore.backfillHrefs(from: [match])
+        let queries = searchQueries(for: entry)
+        for query in queries {
+            do {
+                let result = try await PCloudSearchService.search(
+                    query: query,
+                    credentials: credentials,
+                    browsePaths: ["/"],
+                    status: nil
+                )
+                if let match = pickSearchMatch(in: result.items, for: entry) {
+                    searchItem = match
+                    resumeStore.backfillHrefs(from: [match])
+                    return
+                }
+            } catch {}
+        }
+    }
+
+    private func searchQueries(for entry: ResumeEntry) -> [String] {
+        var queries: [String] = []
+        let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty {
+            queries.append(name)
+            let base = (name as NSString).deletingPathExtension
+            if base != name, !base.isEmpty {
+                queries.append(base)
             }
-        } catch {}
+        }
+        return queries
+    }
+
+    private func pickSearchMatch(in items: [WebDAVItem], for entry: ResumeEntry) -> WebDAVItem? {
+        if let keyMatch = items.first(where: { $0.fileKey == entry.fileKey && $0.isVideo }) {
+            return keyMatch
+        }
+        let target = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else { return nil }
+        let videos = items.filter(\.isVideo)
+        if let exact = videos.first(where: {
+            $0.name.compare(target, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }) {
+            return exact
+        }
+        let targetBase = (target as NSString).deletingPathExtension
+        return videos.first(where: {
+            ($0.name as NSString).deletingPathExtension.compare(
+                targetBase,
+                options: [.caseInsensitive, .diacriticInsensitive]
+            ) == .orderedSame
+        })
     }
 }
 

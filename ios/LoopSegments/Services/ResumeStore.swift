@@ -158,7 +158,69 @@ final class ResumeStore: ObservableObject {
     /// Prefer stored href; otherwise match the current browser listing by `fileKey`.
     func resolveItem(for entry: ResumeEntry, browsing: [WebDAVItem]) -> WebDAVItem? {
         if let item = webDAVItem(for: entry) { return item }
-        return browsing.first { $0.fileKey == entry.fileKey && $0.isVideo }
+        if let item = browsing.first(where: { $0.fileKey == entry.fileKey && $0.isVideo }) {
+            return item
+        }
+        let paused = load().filter(\.exportInProgress)
+        if let href = WorkingSourceSparseCatalog.hrefForResumeEntry(
+            entry,
+            singlePausedExport: paused.count == 1
+        ) {
+            let item = WebDAVItem(
+                href: href,
+                name: entry.displayName,
+                isDirectory: false,
+                contentLength: nil
+            )
+            backfillHrefIfNeeded(entry: entry, item: item)
+            return item
+        }
+        return nil
+    }
+
+    /// Restore `href` on paused rows from `_export_source_working.sparse.json` (older pauses often lack href).
+    func backfillHrefsFromSparseManifest() {
+        guard let manifest = WorkingSourceSparseCatalog.readManifest() else { return }
+        let href = manifest.href?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !href.isEmpty else { return }
+
+        var entries = load()
+        let paused = entries.filter(\.exportInProgress)
+        let singlePaused = paused.count == 1
+        var changed = false
+        for index in entries.indices where entries[index].exportInProgress {
+            let matchesKey = entries[index].fileKey == manifest.fileKey
+            let eligible = matchesKey || (singlePaused && paused.count == 1)
+            guard eligible else { continue }
+
+            let item = WebDAVItem(
+                href: href,
+                name: entries[index].displayName,
+                isDirectory: false,
+                contentLength: nil
+            )
+            if entries[index].href != href {
+                entries[index].href = href
+                changed = true
+            }
+            if entries[index].fileKey != item.fileKey {
+                entries[index].fileKey = item.fileKey
+                changed = true
+            }
+        }
+        if changed { persist(entries) }
+    }
+
+    private func backfillHrefIfNeeded(entry: ResumeEntry, item: WebDAVItem) {
+        guard entry.href != item.href || entry.fileKey != item.fileKey else { return }
+        var entries = load()
+        guard let index = entries.firstIndex(where: { $0.fileKey == entry.fileKey || $0.id == entry.id }) else {
+            return
+        }
+        entries[index].href = item.href
+        entries[index].fileKey = item.fileKey
+        entries[index].displayName = item.name
+        persist(entries)
     }
 
     /// Attach `href` when the paused file is visible in the folder being browsed.

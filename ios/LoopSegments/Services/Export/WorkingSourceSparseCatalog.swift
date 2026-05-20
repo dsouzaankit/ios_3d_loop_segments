@@ -288,6 +288,26 @@ enum WorkingSourceSparseCatalog {
         return layout(from: manifest, fileURL: fileURL, totalLength: totalLength)
     }
 
+    /// Latest on-disk manifest (if any).
+    static func readManifest() -> Manifest? {
+        guard FileManager.default.fileExists(atPath: manifestURL.path),
+              let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(Manifest.self, from: data) else {
+            return nil
+        }
+        return manifest
+    }
+
+    /// pCloud WebDAV path for a paused export when ResumeStore lost `href`.
+    static func hrefForResumeEntry(_ entry: ResumeEntry, singlePausedExport: Bool) -> String? {
+        guard let manifest = readManifest() else { return nil }
+        let href = manifest.href?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !href.isEmpty else { return nil }
+        if manifest.fileKey == entry.fileKey { return href }
+        if singlePausedExport, entry.exportInProgress { return href }
+        return nil
+    }
+
     private static var manifestURL: URL {
         ExportPaths.workingSourceManifestURL
     }
