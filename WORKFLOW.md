@@ -57,9 +57,12 @@ Large files on cellular: first segment waits for index + dense window (`Download
 
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Set-LoopSegmentsLANHost.ps1 192.168.x.x
+Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # first time on this PC
+.\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.x.x
 .\Mount-LoopSegmentsRclone.ps1
 ```
+
+Per-PC rclone / WinFsp / drive letter: [windows/README.md](windows/README.md).
 
 Point your DLNA library at **`L:\loop\`** (segments) or **`L:\`** (includes `_working.mp4`). Keep the mount window open while exporting.
 

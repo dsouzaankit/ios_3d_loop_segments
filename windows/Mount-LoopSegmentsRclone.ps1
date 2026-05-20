@@ -4,103 +4,37 @@
   Mount the phone Documents/Exports folder as a Windows drive via rclone WebDAV.
 
 .DESCRIPTION
-  Loop Segments serves Exports on http://<phone>:8765/ (WebDAV + HTTP). This script
-  configures an rclone remote and mounts the entire Exports folder (loop/op_00|01.mp4,
-  _working.mp4, logs). Point Skybox PC / DLNA at <drive>\loop\ (segments only) or
-  <drive>\ (includes _working.mp4 for in-progress playback).
+  Per-PC settings: loop-segments-windows.json (see Set-LoopSegmentsWindows.ps1).
+  Uses the same rclone.conf as Koofr when rcloneConfigPath is empty (auto-detect).
 
-  Requires WinFsp (https://winfsp.dev/) and rclone (https://rclone.org/install/).
-
-.PARAMETER PhoneHost
-  iPhone LAN IPv4. Default: loop-segments-lan-host.txt in this folder.
-
-.PARAMETER DriveLetter
-  Mount point (default L:).
-
-.PARAMETER RemoteName
-  rclone config section name (default loopsegments; separate from Koofr/other remotes).
-
-.PARAMETER Remove
-  Unmount the drive (does not delete rclone.conf).
+.PARAMETER RemovePort80Proxy
+  Admin: remove netsh portproxy rules (PC :80 or :8080 -> phone :8765) from legacy WebDAV mapping.
+  Does not stop an rclone mount; use -Remove for that.
 
 .EXAMPLE
-  .\Set-LoopSegmentsLANHost.ps1 192.168.1.42
+  .\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.1.42
+  .\Mount-LoopSegmentsRclone.ps1 -TestOnly
   .\Mount-LoopSegmentsRclone.ps1
 
 .EXAMPLE
-  .\Mount-LoopSegmentsRclone.ps1 -Remove
+  .\Mount-LoopSegmentsRclone.ps1 -RemovePort80Proxy
 #>
 [CmdletBinding()]
 param(
     [string] $PhoneHost = '',
     [ValidatePattern('^[A-Za-z]$')]
-    [string] $DriveLetter = 'L',
-    [int] $Port = 8765,
-    [string] $RemoteName = 'loopsegments',
+    [string] $DriveLetter = '',
+    [int] $Port = 0,
+    [string] $RemoteName = '',
     [string] $WebDAVUser = 'admin',
     [string] $WebDAVPassword = 'iosadmin',
     [switch] $Remove,
+    [switch] $RemovePort80Proxy,
     [switch] $TestOnly
 )
 
 $ErrorActionPreference = 'Stop'
-
-function Get-LoopSegmentsLANHostConfigPath {
-    Join-Path $PSScriptRoot 'loop-segments-lan-host.txt'
-}
-
-function Get-LoopSegmentsLANHost {
-    param([string] $Override = '')
-    $resolved = $Override.Trim()
-    if ([string]::IsNullOrWhiteSpace($resolved)) {
-        $configFile = Get-LoopSegmentsLANHostConfigPath
-        if (Test-Path -LiteralPath $configFile -PathType Leaf) {
-            $resolved = (Get-Content -LiteralPath $configFile -Raw).Trim().Trim('"')
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($resolved)) {
-        throw "PhoneHost required. Run .\Set-LoopSegmentsLANHost.ps1 <ip> or pass -PhoneHost."
-    }
-    return $resolved.Trim()
-}
-
-function Assert-CommandExists {
-    param([string] $Name, [string] $InstallHint)
-    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        throw "$Name not found on PATH. $InstallHint"
-    }
-}
-
-function Get-RcloneConfigPath {
-    if (-not [string]::IsNullOrWhiteSpace($env:RCLONE_CONFIG)) {
-        return $env:RCLONE_CONFIG.Trim()
-    }
-    try {
-        $fromRclone = (& rclone config file 2>$null | Out-String).Trim()
-        if (-not [string]::IsNullOrWhiteSpace($fromRclone) -and (Test-Path -LiteralPath $fromRclone)) {
-            return $fromRclone
-        }
-    } catch {
-        # ignore
-    }
-    $candidates = @(
-        (Join-Path $env:APPDATA 'rclone\rclone.conf'),
-        (Join-Path $env:LOCALAPPDATA 'rclone\rclone.conf'),
-        (Join-Path $env:USERPROFILE '.config\rclone\rclone.conf')
-    )
-    foreach ($path in $candidates) {
-        if (Test-Path -LiteralPath $path) { return $path }
-    }
-    return (Join-Path $env:APPDATA 'rclone\rclone.conf')
-}
-
-function Get-RcloneConfigArgs {
-    $path = Get-RcloneConfigPath
-    if (Test-Path -LiteralPath $path) {
-        return @('--config', $path)
-    }
-    return @()
-}
+. "$PSScriptRoot\LoopSegments-Windows.ps1"
 
 function Ensure-RcloneRemote {
     param(
@@ -110,13 +44,19 @@ function Ensure-RcloneRemote {
         [string] $Pass
     )
 
-    $obscured = & rclone obscure $Pass 2>&1
+    $inv = Get-RcloneInvocation
+    $args = @()
+    if ($inv.PrefixArgs) { $args += $inv.PrefixArgs }
+    $args += 'obscure', $Pass
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $obscured = (& $inv.Exe @args 2>&1 | Out-String).Trim()
+    $ErrorActionPreference = $prev
     if ($LASTEXITCODE -ne 0) {
         throw "rclone obscure failed: $obscured"
     }
-    $obscured = ($obscured | Out-String).Trim()
 
-    $configPath = Get-RcloneConfigPath
+    $configPath = (Get-RcloneInvocation).ConfigPath
     $configDir = Split-Path -Parent $configPath
     if (-not (Test-Path -LiteralPath $configDir)) {
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
@@ -147,25 +87,6 @@ pass = $obscured
     }
     Write-Host "rclone remote '$Name' -> $Url"
     Write-Host "Config: $configPath"
-}
-
-function Test-WinFspInstalled {
-    $candidates = @(
-        "${env:ProgramFiles}\WinFsp\bin\winfsp-x64.dll",
-        "${env:ProgramFiles(x86)}\WinFsp\bin\winfsp-x64.dll",
-        "${env:ProgramFiles}\WinFsp\bin\winfsp.dll",
-        "${env:ProgramFiles(x86)}\WinFsp\bin\winfsp.dll"
-    )
-    foreach ($path in $candidates) {
-        if (Test-Path -LiteralPath $path) { return $true }
-    }
-    foreach ($root in @("${env:ProgramFiles}\WinFsp", "${env:ProgramFiles(x86)}\WinFsp")) {
-        if (-not (Test-Path -LiteralPath $root)) { continue }
-        if (Get-ChildItem -LiteralPath $root -Recurse -Filter 'winfsp*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1) {
-            return $true
-        }
-    }
-    return $false
 }
 
 function Invoke-WebDavRequest {
@@ -262,52 +183,59 @@ function Test-PhoneLANExport {
 
 function Test-RcloneWebDAVRemote {
     param([string] $Name)
-    $cfg = Get-RcloneConfigArgs
     Write-Host "rclone ls ${Name}: (WebDAV list) ..."
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $out = & rclone @cfg ls "${Name}:" --max-depth 1 2>&1
+    Invoke-LoopSegmentsRclone ls "${Name}:" --max-depth 1 | Out-Host
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prevEap
     if ($code -ne 0) {
-        throw "rclone could not list ${Name}: - $(($out | Out-String).Trim())"
+        throw "rclone could not list ${Name}:"
     }
-    $text = $out | Out-String
-    if ($text -match '_working\.mp4|loop/op_00') {
-        Write-Host '  Phone Exports visible via WebDAV - good'
-    } else {
-        Write-Warning "  Listed remote but expected _working.mp4 or loop/op_00.mp4"
-    }
+    Write-Host '  Phone Exports visible via WebDAV - good'
 }
 
 $hostIp = Get-LoopSegmentsLANHost -Override $PhoneHost
-$webdavUrl = "http://${hostIp}:${Port}/"
-$driveRoot = "${DriveLetter}:\"
-$mountLabel = "${RemoteName}:"
+$portNum = Get-LoopSegmentsLanPort -Override $Port
+$driveLetter = Get-LoopSegmentsMountDriveLetter -Override $DriveLetter
+$remote = Get-LoopSegmentsRcloneRemoteName -Override $RemoteName
+$webdavUrl = "http://${hostIp}:${portNum}/"
+$driveRoot = "${driveLetter}:\"
+$mountLabel = "${remote}:"
 
-Assert-CommandExists -Name 'rclone' -InstallHint 'Install from https://rclone.org/install/'
+if ($RemovePort80Proxy) {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+    if (-not $isAdmin) {
+        Write-Warning 'Run PowerShell as Administrator to delete portproxy rules (netsh).'
+    }
+    Clear-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $portNum -DriveLetter $driveLetter
+    exit 0
+}
+
 if (-not $Remove -and -not $TestOnly) {
-    if (-not (Test-WinFspInstalled)) {
+    if (-not (Test-LoopSegmentsWinFspInstalled)) {
         Write-Warning @'
-WinFsp not detected under Program Files (Koofr mount may still mean it is installed).
-If rclone mount fails, install WinFsp from https://winfsp.dev/
+WinFsp not detected. Set winfspDllPath or skipWinFspCheck in loop-segments-windows.json.
+If Koofr rclone mount already works, run: .\Set-LoopSegmentsWindows.ps1 -SkipWinFspCheck
 '@
     }
 }
 
 if ($TestOnly) {
-    Test-PhoneLANExport -HostName $hostIp -PortNum $Port -User $WebDAVUser -Pass $WebDAVPassword
-    Ensure-RcloneRemote -Name $RemoteName -Url $webdavUrl -User $WebDAVUser -Pass $WebDAVPassword
-    Test-RcloneWebDAVRemote -Name $RemoteName
+    Test-PhoneLANExport -HostName $hostIp -PortNum $portNum -User $WebDAVUser -Pass $WebDAVPassword
+    Ensure-RcloneRemote -Name $remote -Url $webdavUrl -User $WebDAVUser -Pass $WebDAVPassword
+    Test-RcloneWebDAVRemote -Name $remote
     Write-Host 'OK - run without -TestOnly to mount.'
     exit 0
 }
 
 if ($Remove) {
-    Write-Host "Stopping rclone mount processes for ${DriveLetter}: ..."
+    Write-Host "Stopping rclone mount processes for ${driveLetter}: ..."
     $stopped = 0
     Get-CimInstance Win32_Process -Filter "Name='rclone.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match [regex]::Escape("mount") -and $_.CommandLine -match [regex]::Escape("${DriveLetter}:") } |
+        Where-Object { $_.CommandLine -match [regex]::Escape('mount') -and $_.CommandLine -match [regex]::Escape("${driveLetter}:") } |
         ForEach-Object {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
             $stopped++
@@ -318,29 +246,32 @@ if ($Remove) {
     exit 0
 }
 
-Test-PhoneLANExport -HostName $hostIp -PortNum $Port -User $WebDAVUser -Pass $WebDAVPassword
-Ensure-RcloneRemote -Name $RemoteName -Url $webdavUrl -User $WebDAVUser -Pass $WebDAVPassword
-Test-RcloneWebDAVRemote -Name $RemoteName
+Test-PhoneLANExport -HostName $hostIp -PortNum $portNum -User $WebDAVUser -Pass $WebDAVPassword
+Ensure-RcloneRemote -Name $remote -Url $webdavUrl -User $WebDAVUser -Pass $WebDAVPassword
+Test-RcloneWebDAVRemote -Name $remote
 
 if (Test-Path -LiteralPath $driveRoot) {
-    $used = (Get-PSDrive -Name $DriveLetter -ErrorAction SilentlyContinue)
+    $used = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
     if ($used) {
-        Write-Warning "$driveRoot already in use. Unmount first: .\Mount-LoopSegmentsRclone.ps1 -Remove"
+        Write-Warning "$driveRoot already in use (Koofr?). Change mountDriveLetter in loop-segments-windows.json or -DriveLetter."
     }
 }
 
+$settings = Get-LoopSegmentsWindowsSettings
 Write-Host ''
-Write-Host "Mounting ${mountLabel} on $driveRoot (read-only, vfs cache full). Ctrl+C stops the mount."
+Write-Host "Mounting ${mountLabel} on $driveRoot (read-only). Ctrl+C stops the mount."
 Write-Host "Skybox / DLNA: index ${driveRoot}loop\ (segments) or ${driveRoot} (includes _working.mp4)"
-Write-Host 'Optional junction:'
-Write-Host "  cmd /c mklink /J `"<DLNA>\phone_exports`" `"$driveRoot`""
+if (-not [string]::IsNullOrWhiteSpace($settings.dlnaFolder)) {
+    Write-Host "Configured DLNA folder: $($settings.dlnaFolder)"
+    Write-Host "  cmd /c mklink /J `"$($settings.dlnaFolder)\phone_exports`" `"$driveRoot`""
+}
 Write-Host ''
 
-$cfg = Get-RcloneConfigArgs
-& rclone @cfg mount "${RemoteName}:" $driveRoot `
+Invoke-LoopSegmentsRclone mount "${remote}:" $driveRoot `
     --read-only `
     --vfs-cache-mode full `
     --dir-cache-time 5s `
     --poll-interval 10s `
     --attr-timeout 5s `
     --volname 'LoopSegments'
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

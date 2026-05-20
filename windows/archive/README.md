@@ -11,6 +11,15 @@ Superseded by **[`../Mount-LoopSegmentsRclone.ps1`](../Mount-LoopSegmentsRclone.
 | `LoopSegments-Config.ps1` | Shared paths for sync scripts |
 | `loop-segments-destination.txt` | Saved destination (example) |
 
+Undo port-80 WebDAV proxy (preferred on active scripts):
+
+```powershell
+cd ..
+.\Mount-LoopSegmentsRclone.ps1 -RemovePort80Proxy   # admin PowerShell
+```
+
+Or from archive: `.\Map-LoopSegmentsWebDAV.ps1 -Remove`
+
 Run from this folder if you still need a local copy workflow:
 
 ```powershell

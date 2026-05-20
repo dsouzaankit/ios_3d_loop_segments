@@ -13,9 +13,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$path = Join-Path $PSScriptRoot 'loop-segments-lan-host.txt'
-$PhoneHost.Trim() | Set-Content -LiteralPath $path -Encoding UTF8 -NoNewline
-Write-Host "Saved LAN host: $PhoneHost"
-Write-Host "Config: $path"
-Write-Host "Run: .\Mount-LoopSegmentsRclone.ps1"
-Write-Host "Legacy copy scripts: .\archive\"
+. "$PSScriptRoot\LoopSegments-Windows.ps1"
+Initialize-LoopSegmentsWindowsConfig
+$settings = Get-LoopSegmentsWindowsSettings
+$settings.phoneLanHost = $PhoneHost.Trim()
+Save-LoopSegmentsWindowsSettings -Settings $settings
+Write-Host "Run: .\Set-LoopSegmentsWindows.ps1 -Show"
+Write-Host "     .\Mount-LoopSegmentsRclone.ps1"

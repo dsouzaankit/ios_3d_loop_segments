@@ -52,8 +52,9 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [WORKFLOW.md](WORKFLOW.md) | Step-by-step cellular / LAN / DLNA |
 | [DESIGN.md](DESIGN.md) | Architecture |
 | [ios/](ios/) | Loop Segments iPhone app |
+| [windows/README.md](windows/README.md) | **Portable PC setup** (`loop-segments-windows.json`) |
 | [windows/Mount-LoopSegmentsRclone.ps1](windows/Mount-LoopSegmentsRclone.ps1) | rclone WebDAV mount of phone `Exports/` |
-| [windows/Set-LoopSegmentsLANHost.ps1](windows/Set-LoopSegmentsLANHost.ps1) | Save phone LAN IP |
+| [windows/Set-LoopSegmentsWindows.ps1](windows/Set-LoopSegmentsWindows.ps1) | Per-PC paths (rclone, WinFsp, drive letter) |
 | [windows/archive/](windows/archive/) | Legacy sync / `net use` WebDAV scripts |
 | [codemagic.yaml](codemagic.yaml) | Cloud iOS build |
 

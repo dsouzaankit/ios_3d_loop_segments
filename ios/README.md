@@ -1,10 +1,11 @@
 https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml
 
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Set-LoopSegmentsLANHost.ps1 10.0.100.10
+Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once per PC
+.\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly
-.\Mount-LoopSegmentsRclone.ps1          # L:\ = full Exports (loop\, _working.mp4, logs)
-# Skybox PC / DLNA: index L:\ or L:\loop\ — see PC sync section below
+.\Mount-LoopSegmentsRclone.ps1          # mount drive from json (default L:)
+# Skybox PC / DLNA: index <drive>\loop\ — see [windows/README.md](../windows/README.md)
 
 Notes:
 phone must be unlocked, app in foreground, screen on:
@@ -53,9 +54,9 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 ```powershell
 cd ..\windows
-.\Set-LoopSegmentsLANHost.ps1 192.168.1.42   # IP from export log
+.\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.1.42   # once per PC (or -Show to verify)
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly
-.\Mount-LoopSegmentsRclone.ps1               # keeps running — L:\ = whole Exports folder
+.\Mount-LoopSegmentsRclone.ps1               # keeps running — whole Exports on mount drive
 ```
 
 3. Point **Skybox PC** / your DLNA library at the mount:
