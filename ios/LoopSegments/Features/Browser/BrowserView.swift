@@ -14,13 +14,17 @@ struct BrowserView: View {
     @State private var searchToken = 0
     @State private var searchModeNote = ""
     @State private var searchDebugStatus = ""
-    @State private var pathStack: [String] = ["/"]
     @State private var selectedPausedEntry: ResumeEntry?
     @State private var selectedPinnedEntry: ResumeEntry?
     @State private var pausedSidebarEntries: [ResumeEntry] = []
     @State private var pinnedSidebarEntries: [ResumeEntry] = []
     @State private var resumeByFileKey: [String: ResumeStatus] = [:]
     @State private var didSyncResumeManifest = false
+
+    private var pathStack: [String] {
+        get { session.browserPathStack }
+        nonmutating set { session.browserPathStack = newValue }
+    }
 
     private var currentPath: String { pathStack.last ?? "/" }
     private var isSearchActive: Bool {
@@ -30,7 +34,7 @@ struct BrowserView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if isLoading && !isSearchActive && displayedItems.isEmpty {
+                if isLoading && !isSearchActive && (displayedItems.isEmpty || pathStack.count > 1) {
                     ProgressView("Loading…")
                 } else {
                     List {
@@ -154,6 +158,7 @@ struct BrowserView: View {
                             }
                         }
                     }
+                    .id(currentPath)
                 }
             }
             .navigationTitle(navigationTitle)
@@ -330,7 +335,11 @@ struct BrowserView: View {
         guard item.isDirectory else { return }
         let next = WebDAVURLBuilder.directoryListingPath(item.href)
         guard !WebDAVURLBuilder.pathsEqual(next, currentPath) else { return }
-        pathStack.append(next)
+        var stack = pathStack
+        stack.append(next)
+        pathStack = stack
+        items = []
+        resumeByFileKey = [:]
         isLoading = true
         listToken += 1
     }
@@ -341,6 +350,8 @@ struct BrowserView: View {
         searchResults = []
         isSearching = false
         pathStack = pathStack(forFolderListingPath: item.href)
+        items = []
+        resumeByFileKey = [:]
         isLoading = true
         listToken += 1
     }
@@ -360,7 +371,11 @@ struct BrowserView: View {
 
     private func goUp() {
         guard pathStack.count > 1 else { return }
-        pathStack.removeLast()
+        var stack = pathStack
+        stack.removeLast()
+        pathStack = stack
+        items = []
+        resumeByFileKey = [:]
         isLoading = true
         listToken += 1
     }
