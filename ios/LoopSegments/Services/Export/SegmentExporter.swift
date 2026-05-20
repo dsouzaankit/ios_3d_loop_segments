@@ -419,7 +419,7 @@ final class SegmentExporter {
                     )
                 }
                 if ExportLANServer.isEnabled {
-                    downloader.publishLANPlaybackState(mediaCursorSeconds: mediaCursorSeconds)
+                    downloader.syncLANPlaybackManifestNow(mediaCursorSeconds: mediaCursorSeconds)
                     logHandler(
                         downloader.maxBrowserPlayableStatusLog(
                             playbackStartSeconds: seekSeconds,
@@ -1390,12 +1390,18 @@ final class SegmentExporter {
         let tail = TimelineByteRange(start: byteRange.end, end: fileLength)
         guard !downloader.isByteRangeFullyOnDisk(tail) else { return }
         let tailBytes = fileLength - byteRange.end
-        let shouldFill = ExportLANServer.isEnabled
+        if ExportLANServer.isEnabled {
+            log(
+                "Seek 0 — skip remainder dense fill (\(Self.formatBytes(tailBytes)); LAN background prefetch + per-minute windows)"
+            )
+            return
+        }
+        let shouldFill =
+            tailBytes <= Self.seekZeroDenseTailMaxBytes
             || fileLength <= Self.seekZeroDenseEntireFileMaxBytes
-            || tailBytes <= Self.seekZeroDenseTailMaxBytes
         guard shouldFill else {
             log(
-                "Seek 0 — leaving \(Self.formatBytes(tailBytes)) sparse after window (file too large for full tail fill; hybrid if needed)"
+                "Seek 0 — leaving \(Self.formatBytes(tailBytes)) sparse after window (file too large for full tail fill; hybrid/export session)"
             )
             return
         }
