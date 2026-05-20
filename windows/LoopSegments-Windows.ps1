@@ -280,17 +280,38 @@ function Get-LoopSegmentsPCLanIPv4 {
     return $addrs[0].IPAddress
 }
 
-function Remove-LoopSegmentsPort80ProxyRule {
+function Get-NetshPortProxyV4Rules {
+    <#
+      Parses output of netsh interface portproxy show v4tov4
+    #>
+    $rules = New-Object System.Collections.Generic.List[hashtable]
+    $lines = netsh interface portproxy show v4tov4 2>&1 | ForEach-Object { $_.ToString() }
+    foreach ($line in $lines) {
+        $parts = @($line.Trim() -split '\s+' | Where-Object { $_ })
+        if ($parts.Count -ne 4) { continue }
+        $lp = 0
+        $cp = 0
+        if (-not [int]::TryParse($parts[1], [ref]$lp)) { continue }
+        if (-not [int]::TryParse($parts[3], [ref]$cp)) { continue }
+        $rules.Add(@{
+                ListenAddress  = $parts[0]
+                ListenPort     = $lp
+                ConnectAddress = $parts[2]
+                ConnectPort    = $cp
+            }) | Out-Null
+    }
+    return $rules
+}
+
+function Remove-LoopSegmentsPortProxyOne {
     param(
         [string] $ListenAddress,
-        [string] $PhoneHost,
-        [int] $PhonePort,
         [int] $ListenPort
     )
-    if ($ListenAddress) {
-        netsh interface portproxy delete v4tov4 listenaddress=$ListenAddress listenport=$ListenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
-    }
-    netsh interface portproxy delete v4tov4 listenport=$ListenPort connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
+    # PowerShell expands * when passing args to native exes — use cmd /c single string.
+    $cmdLine = 'netsh interface portproxy delete v4tov4 listenaddress={0} listenport={1}' -f $ListenAddress, $ListenPort
+    $null = cmd.exe /c $cmdLine 2>&1
+    return $LASTEXITCODE
 }
 
 function Clear-LoopSegmentsPort80Proxy {
@@ -309,34 +330,68 @@ function Clear-LoopSegmentsPort80Proxy {
         $PhonePort = Get-LoopSegmentsLanPort
     }
 
-    $listenAddresses = @('0.0.0.0', '127.0.0.1')
-    try {
-        $pcIp = Get-LoopSegmentsPCLanIPv4 -PreferSameSubnetAs $hostIp
-        if ($listenAddresses -notcontains $pcIp) {
-            $listenAddresses += $pcIp
-        }
-    } catch {
-        Write-Warning "Could not detect PC LAN IP: $($_.Exception.Message)"
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+    if (-not $isAdmin) {
+        Write-Warning 'Deleting portproxy requires Administrator PowerShell (right-click, Run as administrator).'
     }
 
-    foreach ($addr in $listenAddresses) {
-        foreach ($listenPort in 80, 8080) {
-            Remove-LoopSegmentsPort80ProxyRule -ListenAddress $addr -PhoneHost $hostIp -PhonePort $PhonePort -ListenPort $listenPort
+    $removed = 0
+    foreach ($r in @(Get-NetshPortProxyV4Rules)) {
+        if ($r.ConnectAddress -ne $hostIp -or [int]$r.ConnectPort -ne $PhonePort) { continue }
+        $code = Remove-LoopSegmentsPortProxyOne -ListenAddress $r.ListenAddress -ListenPort $r.ListenPort
+        if ($code -eq 0) {
+            $removed++
+            Write-Host "  Deleted v4 $($r.ListenAddress):$($r.ListenPort) -> $($r.ConnectAddress):$($r.ConnectPort)"
+        }
+        else {
+            Write-Warning "  netsh delete failed (exit $code) for listen $($r.ListenAddress):$($r.ListenPort)"
         }
     }
+
+    $fallbackListen = New-Object System.Collections.Generic.List[string]
+    foreach ($a in @('0.0.0.0', '*', '127.0.0.1')) {
+        if (-not ($fallbackListen -contains $a)) { [void]$fallbackListen.Add($a) }
+    }
+    try {
+        foreach ($adapterIp in @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty IPAddress -Unique)) {
+            if ($adapterIp -notmatch '^169\.254\.' -and $fallbackListen -notcontains $adapterIp) {
+                [void]$fallbackListen.Add($adapterIp)
+            }
+        }
+        $sameSubnet = Get-LoopSegmentsPCLanIPv4 -PreferSameSubnetAs $hostIp
+        if ($fallbackListen -notcontains $sameSubnet) { [void]$fallbackListen.Add($sameSubnet) }
+    } catch {}
+
+    foreach ($addr in $fallbackListen) {
+        foreach ($listenPort in @(80, 8080)) {
+            $code = Remove-LoopSegmentsPortProxyOne -ListenAddress $addr -ListenPort $listenPort
+            if ($code -eq 0) {
+                $removed++
+                Write-Host "  Deleted fallback listen $addr`:$listenPort"
+            }
+        }
+    }
+
+    Write-Host "Portproxy cleanup finished ($removed successful netsh delete(s)) for target ${hostIp}:$PhonePort."
 
     if (-not [string]::IsNullOrWhiteSpace($DriveLetter)) {
         $drive = "${DriveLetter}:"
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
-        cmd /c "net use $drive /delete /y" 2>&1 | Out-Null
+        cmd.exe /c ("net use {0} /delete /y" -f $drive) 2>&1 | Out-Null
         $ErrorActionPreference = $prev
-        Write-Host "net use $drive /delete attempted (WebDAV drive letter)."
+        Write-Host "net use $drive /delete attempted (WebDAV)."
     }
 
-    Write-Host "Removed portproxy rules for phone ${hostIp}:$PhonePort (listen ports 80 and 8080)."
-    Write-Host 'Remaining portproxy rules:'
-    netsh interface portproxy show all
+    Write-Host ''
+    Write-Host 'Mapped drives:'
+    cmd.exe /c net use 2>&1
+
+    Write-Host ''
+    Write-Host 'Remaining portproxy (v4tov4):'
+    netsh interface portproxy show v4tov4
 }
 
 function Initialize-LoopSegmentsWindowsConfig {

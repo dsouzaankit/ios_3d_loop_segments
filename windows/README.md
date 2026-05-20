@@ -57,4 +57,12 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | | `-Remove` = stop rclone mount; **`-RemovePort80Proxy`** = undo legacy `netsh` port 80→8765 proxy (admin) |
 | `archive/` | Old sync / `net use` WebDAV scripts (`Map-LoopSegmentsWebDAV.ps1 -ViaPort80Proxy`) |
 
+### Legacy WebDAV mapped to `http://localhost/`
+
+`-ViaPort80Proxy` added a **local** `:80` (or `:8080`) redirect to the phone. Windows then maps the drive via **localhost**. After cleanup:
+
+1. Run **elevated**: `.\Mount-LoopSegmentsRclone.ps1 -RemovePort80Proxy`
+2. If rules still listed, **`git pull`** — deletes now match rows from `netsh interface portproxy show v4tov4` including listen address **`*`** (older script only tried `0.0.0.0`, which does not remove `*`).
+3. Run **`net use`** and **`net use L: /delete /y`** (or whatever letter Explorer shows).
+
 See [../ios/README.md](../ios/README.md) and [../WORKFLOW.md](../WORKFLOW.md).
