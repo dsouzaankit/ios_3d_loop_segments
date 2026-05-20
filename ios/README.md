@@ -85,15 +85,25 @@ Read-only; phone must stay on the LAN with **Serve Exports** enabled. For hands-
 
 ### Skybox (Quest) WebDAV
 
-Skybox **requires Basic auth** in the UI and often probes `GET /` when adding a server. Loop Segments (build **166+**) advertises WebDAV auth and lists the folder for non-browser clients.
+Skybox **requires Basic auth** on every WebDAV request (OPTIONS + PROPFIND + listing). Build **169+** enforces `admin` / `iosadmin` and returns **200** (not 403) for WebDAV `GET /`.
 
-1. Phone: **Serve Exports on Wi‑Fi** on, app in foreground, same Wi‑Fi as the headset.
+1. Phone: **Serve Exports on Wi‑Fi** on, app **in foreground** (unlocked), same Wi‑Fi as Quest (not Guest/isolated VLAN).
 2. Skybox → **Network** → **Add WebDAV server**.
-3. **URL:** `http://<phone-ip>:8765/` (include `http://` and port **8765**).
-4. **Username:** `admin` · **Password:** `iosadmin`
-5. Open **`op_00.mp4`** (full segment). Do **not** use `_export_source_working.mp4` (sparse; Skybox cannot play holes).
+3. **URL:** `http://10.0.100.10:8765/` — must include `http://`, IP, **:8765**, trailing `/`.
+4. **Username:** `admin` · **Password:** `iosadmin` (case-sensitive password).
+5. After connect, play **`op_00.mp4`** only (not `_export_source_working.mp4`).
 
-If add-server still fails: confirm the browser on PC can open `http://<phone-ip>:8765/`; try rebooting the Quest Wi‑Fi. Easiest path for VR is still **PC DLNA** after `Sync-FromPhoneLAN.ps1 -Watch`.
+**PC test (same Wi‑Fi as phone):**
+
+```powershell
+cd windows
+.\Set-LoopSegmentsLANHost.ps1 10.0.100.10
+.\Map-LoopSegmentsWebDAV.ps1 -TestOnly
+```
+
+Expect `OPTIONS 200 OK` and `PROPFIND 207` with auth. If that fails, Skybox will fail too — fix LAN/firewall first.
+
+**If Skybox still won’t add:** Quest often blocks plain HTTP to local IPs; use **PC DLNA** (`Sync-FromPhoneLAN.ps1 -Watch`) and open the share from Skybox via **SMB** on the PC, or copy `op_00.mp4` to the headset with the Skybox PC client.
 
 ### Export transport
 

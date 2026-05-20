@@ -119,6 +119,16 @@ function Enable-LoopSegmentsWebClientHTTP {
     Write-Host 'WebClient restarted.'
 }
 
+function Add-LoopSegmentsLANWebDAVAuthHeader {
+    param(
+        $Request,
+        [string] $User = 'admin',
+        [string] $Password = 'iosadmin'
+    )
+    $bytes = [Text.Encoding]::ASCII.GetBytes("${User}:${Password}")
+    $Request.Headers['Authorization'] = 'Basic ' + [Convert]::ToBase64String($bytes)
+}
+
 function Test-LoopSegmentsWebDAVRootForNetUse {
     param([string] $RootUrl)
 
@@ -169,10 +179,28 @@ function Test-LoopSegmentsWebDAV {
     }
 
     try {
+        $opt = [System.Net.HttpWebRequest]::Create($RootUrl)
+        $opt.Method = 'OPTIONS'
+        $opt.Timeout = 15000
+        Add-LoopSegmentsLANWebDAVAuthHeader -Request $opt
+        $optResp = $opt.GetResponse()
+        $optStatus = [int]$optResp.StatusCode
+        $optResp.Close()
+        if ($optStatus -ne 200) {
+            throw "OPTIONS returned $optStatus (expected 200)."
+        }
+        Write-Host '  OPTIONS 200 OK (with Basic auth)'
+    } catch {
+        throw "WebDAV OPTIONS failed. $($_.Exception.Message)"
+    }
+
+    try {
         $req = [System.Net.HttpWebRequest]::Create($RootUrl)
         $req.Method = 'PROPFIND'
         $req.Timeout = 15000
         $req.Headers.Add('Depth', '1')
+        $req.UserAgent = 'Skybox-Test/1.0'
+        Add-LoopSegmentsLANWebDAVAuthHeader -Request $req
         $req.ContentLength = 0
         $resp = $req.GetResponse()
         $status = [int]$resp.StatusCode

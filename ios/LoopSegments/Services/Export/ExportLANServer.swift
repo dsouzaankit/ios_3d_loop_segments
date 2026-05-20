@@ -150,31 +150,52 @@ enum ExportLANServer {
 
     private static func receiveRequest(on connection: NWConnection, done: @escaping () -> Void) {
         performWhenReady(connection: connection, onFailure: done) {
-                connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, error in
-                if let error {
-                    connection.cancel()
-                    _ = error
-                    done()
-                    return
-                }
-                guard let data, !data.isEmpty,
-                      let text = String(data: data, encoding: .utf8) else {
-                    sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
-                    return
-                }
-                guard let line = text.split(separator: "\r\n", maxSplits: 1).first,
-                      let (method, path) = parseRequestLine(String(line)) else {
-                    sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
-                    return
-                }
-                handleRequest(
-                    method: method,
-                    path: webDAVResourcePath(path),
-                    requestHeaders: text,
-                    connection: connection,
-                    done: done
-                )
+            receiveHTTPHeaders(on: connection, accumulated: Data(), done: done)
+        }
+    }
+
+    private static func receiveHTTPHeaders(
+        on connection: NWConnection,
+        accumulated: Data,
+        done: @escaping () -> Void
+    ) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, error in
+            if let error {
+                connection.cancel()
+                done()
+                return
             }
+            guard let data, !data.isEmpty else {
+                sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
+                return
+            }
+            var buffer = accumulated
+            buffer.append(data)
+            guard let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
+                if buffer.count > 256 * 1024 {
+                    sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Request too large".utf8), done: done)
+                    return
+                }
+                receiveHTTPHeaders(on: connection, accumulated: buffer, done: done)
+                return
+            }
+            let headerData = buffer[..<headerEnd.lowerBound]
+            guard let text = String(data: headerData, encoding: .utf8) else {
+                sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
+                return
+            }
+            guard let line = text.split(separator: "\r\n", maxSplits: 1).first,
+                  let (method, path) = parseRequestLine(String(line)) else {
+                sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Bad request".utf8), done: done)
+                return
+            }
+            handleRequest(
+                method: method,
+                path: webDAVResourcePath(path),
+                requestHeaders: text,
+                connection: connection,
+                done: done
+            )
         }
     }
 
@@ -185,6 +206,9 @@ enum ExportLANServer {
         connection: NWConnection,
         done: @escaping () -> Void
     ) {
+        if !enforceLANWebDAVAuth(method: method, path: path, requestHeaders: requestHeaders, connection: connection, done: done) {
+            return
+        }
         switch method {
         case "GET", "HEAD":
             handleGET(path: path, method: method, requestHeaders: requestHeaders, connection: connection, done: done)
@@ -245,9 +269,50 @@ enum ExportLANServer {
         if lower.contains("microsoft-webdav") { return true }
         if lower.contains("translate: f") { return true }
         if lower.contains("\ndepth:") || lower.hasPrefix("depth:") { return true }
-        if lower.contains("user-agent:"), lower.contains("skybox") { return true }
-        if lower.contains("user-agent:"), lower.contains("webdav") { return true }
+        if lower.contains("user-agent:") {
+            for token in ["skybox", "webdav", "okhttp", "dalvik", "unity"] {
+                if lower.contains(token) { return true }
+            }
+        }
         return false
+    }
+
+    private static func normalizedGETPath(_ path: String) -> String {
+        path.hasPrefix("/") ? String(path.dropFirst()) : path
+    }
+
+    /// Skybox sends OPTIONS/PROPFIND with credentials; `op_00.mp4` GET stays open for PC sync.
+    private static func requiresLANWebDAVAuth(method: String, path: String, requestHeaders: String) -> Bool {
+        switch method {
+        case "OPTIONS", "PROPFIND", "LOCK":
+            return true
+        case "GET", "HEAD":
+            return normalizedGETPath(path).isEmpty && !isBrowserLikeRequest(requestHeaders: requestHeaders)
+        default:
+            return false
+        }
+    }
+
+    @discardableResult
+    private static func enforceLANWebDAVAuth(
+        method: String,
+        path: String,
+        requestHeaders: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) -> Bool {
+        guard requiresLANWebDAVAuth(method: method, path: path, requestHeaders: requestHeaders) else {
+            return true
+        }
+        guard headerValue(named: "Authorization", in: requestHeaders) != nil else {
+            sendUnauthorized(connection: connection, done: done)
+            return false
+        }
+        guard lanWebDAVAuthorizationOK(requestHeaders: requestHeaders) else {
+            sendUnauthorized(connection: connection, done: done)
+            return false
+        }
+        return true
     }
 
     /// Browsers get the HTML index; WebDAV clients (Skybox, Windows `net use`) get DAV listings.
@@ -273,7 +338,8 @@ enum ExportLANServer {
             return true
         }
         guard let (user, password) = parseBasicAuthorization(value) else { return false }
-        return user == lanWebDAVUsername && password == lanWebDAVPassword
+        return user.caseInsensitiveCompare(lanWebDAVUsername) == .orderedSame
+            && password == lanWebDAVPassword
     }
 
     private static func parseBasicAuthorization(_ value: String) -> (user: String, password: String)? {
@@ -300,14 +366,6 @@ enum ExportLANServer {
         return nil
     }
 
-    /// Skybox probes with PROPFIND before credentials are stored; advertise Basic auth.
-    private static func shouldChallengeLANWebDAVAuth(method: String, requestHeaders: String) -> Bool {
-        guard method == "PROPFIND" else { return false }
-        guard headerValue(named: "Authorization", in: requestHeaders) == nil else { return false }
-        let lower = requestHeaders.lowercased()
-        return lower.contains("skybox")
-    }
-
     private static func handleGET(
         path: String,
         method: String,
@@ -321,8 +379,15 @@ enum ExportLANServer {
                 sendIndexHTML(connection, done: done)
                 return
             }
-            // Skybox and other players often GET / to validate the server (403 made them reject it).
-            sendPropfind(path: "/", requestHeaders: requestHeaders, connection: connection, done: done)
+            // Skybox validates with GET / — use 200 + DAV XML (207 on GET confuses some clients).
+            sendPropfind(
+                path: "/",
+                requestHeaders: requestHeaders,
+                connection: connection,
+                done: done,
+                httpStatus: 200,
+                httpPhrase: "OK"
+            )
             return
         }
         if normalized == "status.json" {
@@ -509,6 +574,12 @@ enum ExportLANServer {
         if let modified {
             prop += "<D:getlastmodified>\(xmlEscape(httpDate(modified)))</D:getlastmodified>"
         }
+        if let size, size > 0 {
+            let tag = String(format: "%016llx", size)
+            prop += "<D:getetag>\"\(tag)\"</D:getetag>"
+        } else if isCollection {
+            prop += "<D:getetag>\"collection\"</D:getetag>"
+        }
         return """
             <D:response>
             <D:href>\(xmlEscape(href))</D:href>
@@ -610,16 +681,10 @@ enum ExportLANServer {
         path: String,
         requestHeaders: String,
         connection: NWConnection,
-        done: @escaping () -> Void
+        done: @escaping () -> Void,
+        httpStatus: Int = 207,
+        httpPhrase: String = "Multi-Status"
     ) {
-        guard lanWebDAVAuthorizationOK(requestHeaders: requestHeaders) else {
-            sendUnauthorized(connection: connection, done: done)
-            return
-        }
-        if shouldChallengeLANWebDAVAuth(method: "PROPFIND", requestHeaders: requestHeaders) {
-            sendUnauthorized(connection: connection, done: done)
-            return
-        }
         let davPath = webDAVResourcePath(path)
         let depth = parseDepth(requestHeaders: requestHeaders)
         let baseURL = requestBaseURL(from: requestHeaders)
@@ -678,7 +743,7 @@ enum ExportLANServer {
             """
         let body = Data(bodyText.utf8)
         var headerLines = [
-            "HTTP/1.1 207 Multi-Status",
+            "HTTP/1.1 \(httpStatus) \(httpPhrase)",
             "Content-Type: application/xml; charset=utf-8",
             "Content-Length: \(body.count)",
             "DAV: 1, 2",
