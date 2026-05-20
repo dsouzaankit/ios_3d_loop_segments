@@ -463,10 +463,6 @@ enum ExportLANServer {
         return lines.joined(separator: "\r\n") + "\r\n\r\n"
     }
 
-    private static func responseConnectionHeader(context: LANHTTPContext) -> String {
-        "Connection: \(context.connectionHeaderValue())"
-    }
-
     private static func fileETag(size: Int64) -> String {
         String(format: "\"%016llx\"", size)
     }
