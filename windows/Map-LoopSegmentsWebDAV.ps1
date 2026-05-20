@@ -139,6 +139,7 @@ function Test-LoopSegmentsWebDAVRootForNetUse {
         $req.UserAgent = 'Microsoft-WebDAV-MiniRedir/1.1'
         $req.Headers.Add('Translate', 'f')
         $req.Accept = '*/*'
+        Add-LoopSegmentsLANWebDAVAuthHeader -Request $req
         $resp = $req.GetResponse()
         $status = [int]$resp.StatusCode
         $ctype = $resp.ContentType
@@ -146,15 +147,24 @@ function Test-LoopSegmentsWebDAVRootForNetUse {
         if ($ctype -like '*html*') {
             return $false
         }
+        if ($status -eq 200 -and $ctype -like '*xml*') {
+            Write-Host '  GET / as WebDAV client OK (200 XML with Basic auth)'
+            return $true
+        }
         if ($status -eq 403 -or $status -eq 404 -or $status -eq 405) {
             return $true
         }
-        return $true
+        Write-Warning "  GET / WebDAV returned $status ($ctype) — expected 200 XML"
+        return $false
     } catch [System.Net.WebException] {
         $r = $_.Exception.Response
         if ($null -ne $r) {
             $code = [int]$r.StatusCode
             $r.Close()
+            if ($code -eq 401) {
+                Write-Warning '  GET / WebDAV returned 401 — phone may be older than build 169; upgrade IPA or use Sync-FromPhoneLAN.ps1'
+                return $false
+            }
             if ($code -eq 403 -or $code -eq 404 -or $code -eq 405) {
                 return $true
             }
@@ -215,14 +225,11 @@ function Test-LoopSegmentsWebDAV {
 
     $null = Test-LoopSegmentsWebDAVDavWWWRoot -RootUrl $RootUrl
 
-    if (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $RootUrl) {
-        Write-Host '  GET / as WebDAV client OK (not HTML — safe for net use)'
-    } else {
+    if (-not (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $RootUrl)) {
         $msg = @(
-            'GET / returned HTML to WebDAV client — Windows net use will fail.',
-            'Install Loop Segments build 153+ on the phone (GitHub Actions → LoopSegments-ipa), then run:',
-            '  .\Map-LoopSegmentsWebDAV.ps1 -TestOnly',
-            'Until then use: .\Sync-FromPhoneLAN.ps1 -Watch  (same LAN server, no drive letter).'
+            'GET / as WebDAV client failed (need 200 XML with admin/iosadmin — build 169+ on phone).',
+            'Skybox/Windows WebDAV still need the IPA from GitHub Actions ios-build.',
+            'Until drive mapping works: .\Sync-FromPhoneLAN.ps1 -Watch'
         ) -join [Environment]::NewLine
         if ($RequireWebDAVRootNotHtml) {
             throw $msg
@@ -373,6 +380,7 @@ function Test-LoopSegmentsWebDAVDavWWWRoot {
         $req.Method = 'PROPFIND'
         $req.Timeout = 15000
         $req.Headers.Add('Depth', '0')
+        Add-LoopSegmentsLANWebDAVAuthHeader -Request $req
         $req.ContentLength = 0
         $resp = $req.GetResponse()
         $status = [int]$resp.StatusCode
