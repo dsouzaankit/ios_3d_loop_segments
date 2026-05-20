@@ -6,7 +6,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 | Automated today | Not automated today |
 |-----------------|---------------------|
-| pCloud → phone `pcld_ios_media/loop/op_00|01` + `pcld_ios_media/_working`; PC via `Mount-LoopSegmentsRclone.ps1` → Skybox DLNA | Apple Devices USB save; legacy scripts in `windows/archive/` |
+| pCloud → phone `pcld_ios_media/loop/op_00|01` + `pcld_ios_media/_working`; PC via **LAN HTTP** / scripts (see [ios/README.md](ios/README.md)) | Apple Devices USB save; legacy scripts in `windows/archive/` |
 | **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Legacy Photos/USB PowerShell sync scripts (removed from `windows/`) |
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
@@ -14,7 +14,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 | Step | Device | Connection |
 |------|--------|------------|
 | Export from pCloud | iPhone | Cellular (Wi‑Fi off OK) |
-| Expose `Exports/` on PC | iPhone → PC | rclone mount (`Mount-LoopSegmentsRclone.ps1`) or manual USB |
+| Expose `Exports/` on PC | iPhone → PC | Browser / download on `http://<ip>:8765/`, or manual USB |
 | Play on TV | PC → LAN | WLAN (DLNA server on Windows) |
 
 Full guide: **[WORKFLOW.md](WORKFLOW.md)**
@@ -27,11 +27,11 @@ Full guide: **[WORKFLOW.md](WORKFLOW.md)**
 
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\Set-LoopSegmentsLANHost.ps1 <phone-ip>   # once, from export log
-.\Mount-LoopSegmentsRclone.ps1
+.\Set-LoopSegmentsLANHost.ps1 <phone-ip>
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly
 ```
 
-Point Skybox PC / DLNA at `L:\loop\` (segments) or `L:\` (includes `_working.mp4`). See [ios/README.md](ios/README.md).
+Copy segment files into your DLNA folder (or use [WORKFLOW.md](WORKFLOW.md)). See [ios/README.md](ios/README.md).
 
 ---
 
@@ -53,9 +53,9 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [DESIGN.md](DESIGN.md) | Architecture |
 | [ios/](ios/) | Loop Segments iPhone app |
 | [windows/README.md](windows/README.md) | **Portable PC setup** (`loop-segments-windows.json`) |
-| [windows/Mount-LoopSegmentsRclone.ps1](windows/Mount-LoopSegmentsRclone.ps1) | rclone WebDAV mount of phone `Exports/` |
+| [windows/Mount-LoopSegmentsRclone.ps1](windows/Mount-LoopSegmentsRclone.ps1) | HTTP `-TestOnly` / `-RemovePort80Proxy`; legacy rclone mount → [archive/RCLONE-PHONE-MOUNT-LEGACY.md](windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md) |
 | [windows/Set-LoopSegmentsWindows.ps1](windows/Set-LoopSegmentsWindows.ps1) | Per-PC paths (rclone, WinFsp, drive letter) |
-| [windows/archive/](windows/archive/) | Legacy sync / `net use` WebDAV scripts |
+| [windows/archive/](windows/archive/) | Legacy WebDAV / rclone-to-phone, `Sync-FromPhoneLAN.ps1`, **[RCLONE-PHONE-MOUNT-LEGACY.md](windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** |
 | [codemagic.yaml](codemagic.yaml) | Cloud iOS build |
 
 PotPlayer registry resume and **PC-side** `Run-SegmentCopy.ps1` are **not** part of this repo.

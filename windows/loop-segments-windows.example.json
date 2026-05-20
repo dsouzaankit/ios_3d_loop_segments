@@ -8,5 +8,5 @@
   "winfspDllPath": "",
   "skipWinFspCheck": false,
   "dlnaFolder": "",
-  "notes": "Per-PC file. Copy to loop-segments-windows.json and edit. Leave rcloneConfigPath empty to use rclone's default (same file as Koofr). Use a different mountDriveLetter if Koofr already uses L:."
+  "notes": "Per-PC file. Phone LAN is HTTP-only — Mount-LoopSegmentsRclone.ps1 -TestOnly checks reachability; rclone does not mount the phone anymore. Koofr/rclone fields still apply to other remotes. See archive/RCLONE-PHONE-MOUNT-LEGACY.md."
 }

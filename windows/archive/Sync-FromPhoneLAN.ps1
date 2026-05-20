@@ -4,7 +4,7 @@
   Pull loop/op_00.mp4 from Loop Segments LAN export into the older PC DLNA slot.
 
 .DESCRIPTION
-  Optional fallback when you do not use Mount-LoopSegmentsRclone.ps1. While export runs,
+  Optional fallback instead of manually downloading from the LAN index. While export runs,
   the phone serves Documents/Exports on Wi-Fi (http://<phone-ip>:8765/). This script
   downloads loop/op_00.mp4 and copies it to the older of op_00.mp4 / op_01.mp4 on the PC.
   Skips overwrite when the peer slot already has the same segment (phone unchanged) so DLNA

@@ -9,7 +9,7 @@ Three separate networks. **No Personal Hotspot** required for the iPhone path be
 │  iPhone (cellular LTE/5G for pCloud; Wi‑Fi for LAN serve)        │
 │    Loop Segments → pCloud WebDAV → Exports/op_00.mp4              │
 └────────────────────────────┬────────────────────────────────────┘
-                             │ Wi‑Fi (Mount-LoopSegmentsRclone.ps1)
+                             │ Wi‑Fi (HTTP :8765 — copy files; see §3)
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Windows PC — op_00/01 in DLNA folder → media server → TV       │
@@ -41,7 +41,7 @@ Install via **TestFlight** or sideload (AltStore, etc.) with an Apple Developer 
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
 5. Keep the app in the foreground. On phone: **Files → Loop Segments → Exports** should show `op_00.mp4` updating each ~60s of **media** time (first segment can take several minutes on large moov-at-end HEVC while the minute **dense-downloads**).
-6. On the phone: enable **Serve Exports on Wi‑Fi** for PC rclone mount. Photos library export is **off** by default — see [ios/README.md](ios/README.md).
+6. On the phone: enable **Serve Exports on Wi‑Fi** so the PC can reach **`http://<ip>:8765/`**. Photos library export is **off** by default — see [ios/README.md](ios/README.md).
 
 Large files on cellular: first segment waits for index + dense window (`Downloading window … (dense fill)` → `Window on disk` in `export_latest.txt`). Later minutes reuse the same sparse temp shell; export does not keep up with live TV wall clock on slow LTE — OK if the DLNA player **loops** the PC pair.
 
@@ -59,14 +59,12 @@ Large files on cellular: first segment waits for index + dense window (`Download
 cd P:\all_scripts\ios_3d_loop_segments\windows
 Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # first time on this PC
 .\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.x.x
-.\Mount-LoopSegmentsRclone.ps1
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional HTTP check
 ```
 
-Per-PC rclone / WinFsp / drive letter: [windows/README.md](windows/README.md).
+Open **`http://192.168.x.x:8765/`** in a browser and save files, use **`Invoke-WebRequest`**, or **[windows/archive/Sync-FromPhoneLAN.ps1](windows/archive/Sync-FromPhoneLAN.ps1)**. Per-PC json: [windows/README.md](windows/README.md).
 
-Point your DLNA library at **`L:\pcld_ios_media\`** ( **`loop\`** for alternating segments + **`_working.mp4`**) or **`L:\`** (whole Exports). Keep the mount window open while exporting.
-
-Legacy local copy: [windows/archive/](windows/archive/).
+Copy segment MP4s into your DLNA folder (or use **`Run-SegmentCopy.ps1`** from the sibling **`3d_loop_segments`** repo for pCloud → PC). **rclone mount** of the phone is **archived**: [windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md](windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md).
 
 ### Manual (USB / Apple Devices)
 
