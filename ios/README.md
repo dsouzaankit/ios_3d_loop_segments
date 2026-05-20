@@ -3,8 +3,8 @@ https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.
 cd P:\all_scripts\ios_3d_loop_segments\windows
 Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once per PC
 .\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
-.\Mount-LoopSegmentsRclone.ps1 -TestOnly   # HTTP reachability only (rclone drive mount archived — see windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)
-# Copy files: open http://<phone-ip>:8765/ in a browser, Invoke-WebRequest, USB, or archive/Sync-FromPhoneLAN.ps1 — [windows/README.md](../windows/README.md)
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional LAN probe; PC rclone drive mount is optional/sluggish — see ../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md
+# Skybox (Quest): Add WebDAV → http://<phone-ip>:8765/ · admin / iosadmin — see “Quest LAN playback” below
 
 Notes:
 phone must be unlocked, app in foreground, screen on:
@@ -40,29 +40,27 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
-- 60s segments; phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. PC: copy over **HTTP** from **`http://<phone-ip>:8765/`** (browser / `Invoke-WebRequest` / [`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)) — **rclone WebDAV mount to the phone is archived.** **Dense fill** per minute is the default.
+- 60s segments; phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute is the default.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file or **Stop**; **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
-## PC sync (LAN HTTP)
+## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **Serve Exports on Wi‑Fi** (export screen; app open on LAN).
-2. On the PC: use **`http://<phone-ip>:8765/`** — HTML index, **`status.json`**, and direct file URLs (**GET**/**HEAD**, **Range** for video). Optional: `..\windows\Mount-LoopSegmentsRclone.ps1 -TestOnly` after **`Set-LoopSegmentsWindows.ps1 -PhoneHost …`**.
-3. **DLNA:** download or sync segment files into a **local PC folder** your media server indexes (many servers handle that better than streaming sparse shells from the phone).
-
-**Do not** point **`rclone mount`** or a **`webdav`** remote at the phone on current builds — the in-app server is **HTTP-only**. The old **rclone + WinFsp** workflow is **archived**: [`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md).
+2. **URLs:** **`http://<phone-ip>:8765/`** — HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, LOCK, etc.) for folder-aware clients.
+3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
-LAN serves `pcld_ios_media/loop/op_*.mp4`, `pcld_ios_media/_working.mp4`, and logs on port **8765**. **Browser / Pigasus:** `pcld_ios_media/loop/op_00.mp4` for segments; `pcld_ios_media/_working.mp4` for the working file (`#t=` on the index clears after a finished export so it is not stuck on an old seek).
+LAN serves `pcld_ios_media/loop/op_*.mp4`, `pcld_ios_media/_working.mp4`, and logs on port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree; **`#t=`** on the index handles resume for `_working` (clears after a finished export).
 
-### SMB vs HTTP on the phone
+### SMB vs HTTP / WebDAV on the phone
 
-**True SMB** on the iPhone is not available. The app serves **plain HTTP** on port **8765** (GET/HEAD/OPTIONS). Archived WebDAV / `net use` / **rclone**-to-phone setup: [`../windows/archive/`](../windows/archive/) (**[RCLONE-PHONE-MOUNT-LEGACY.md](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)**, `Map-LoopSegmentsWebDAV.ps1`).
+**True SMB** is not available. The app serves **HTTP + WebDAV** on **8765** (not a Windows file share). Mapped-drive / PROPFIND clients use **WebDAV**; browsers use **GET** on file URLs and the HTML index. Legacy **`net use`** notes and **PC rclone** script live under [`../windows/archive/`](../windows/archive/).
 
-| File | After copy to PC / direct HTTP URL | Skybox via PC DLNA |
+| File | HTTP/WebDAV URL | Skybox via PC DLNA |
 |------|--------------------------------------|---------------------|
 | `pcld_ios_media/loop/op_00.mp4`, `pcld_ios_media/loop/op_01.mp4` | Yes | Usually OK |
 | `pcld_ios_media/_working.mp4` | Yes | May work (like VLC); sparse holes can break some servers |
@@ -71,28 +69,28 @@ LAN serves `pcld_ios_media/loop/op_*.mp4`, `pcld_ios_media/_working.mp4`, and lo
 
 **pCloud WebDAV in Skybox** = full **HTTPS** files on pCloud’s server (what already works for you).
 
-**Phone LAN** (`http://<ip>:8765`) = **plain HTTP** for the export folder (no WebDAV). Players differ:
+**Phone LAN** (`http://<ip>:8765`) = **HTTP + WebDAV** (same export tree). Players differ:
 
 | Player | `pcld_ios_media/_working.mp4` (sparse) | `pcld_ios_media/loop/op_00.mp4` (segment) |
 |--------|----------------------------------------|------------------------|
-| **Pigasus** (direct URL / network file) | **Works** — uses HTTP **Range** (head + `moov` tail + dense minutes) | Should work |
-| **Skybox (WebDAV to phone)** | **Do not use** — phone is HTTP only | N/A — use Pigasus / browser |
+| **Pigasus** (direct URL / network file) | **Works** — uses HTTP **Range** | Should work |
+| **Skybox (WebDAV to phone)** | Often **works** for LAN export (app serves WebDAV + Basic auth) | **5K+ HEVC** may still show “too large to decode”; try segments or Pigasus |
 | **Quest browser** (index link, `#t=`) | Works for dense-filled regions | Works (**build 173+** — skip broken faststart remux from 171–172) |
 
-**In-progress export on Quest:** use **Pigasus** with `http://<ip>:8765/pcld_ios_media/_working.mp4` (or the LAN index link with `#t=` resume).
+**In-progress export on Quest:** **Skybox** → Add WebDAV server → `http://<ip>:8765/` · **`admin` / `iosadmin`**, or **Pigasus** / browser with direct URLs.
 
 ### Skybox (Quest) and the phone LAN
 
-**pCloud** in Skybox still uses **pCloud WebDAV** (unchanged).
+**pCloud** in Skybox uses **pCloud WebDAV** (unchanged).
 
-**Phone LAN** is **HTTP only** — do not add it as a WebDAV server in Skybox. Prefer **Pigasus** or the **Quest browser** with direct URLs (`http://<ip>:8765/pcld_ios_media/loop/op_00.mp4`).
+**Phone** in Skybox: add **WebDAV** with base URL **`http://<ip>:8765/`** and **`admin` / `iosadmin`**. That uses the app’s **LAN WebDAV** implementation (not plain SMB).
 
 **Reliable paths:**
 
-- **Full movie on pCloud** — pCloud WebDAV in Skybox (same as today).
-- **Phone export files** — Pigasus / browser, or copy to a PC folder indexed by DLNA.
+- **Full movie on pCloud** — pCloud WebDAV in Skybox.
+- **Phone export** — Skybox WebDAV to the phone, **Pigasus** / browser HTTP URLs, or copy to a PC folder for DLNA.
 
-**PC test (HTTP only):**
+**PC test:**
 
 ```powershell
 cd windows
@@ -100,7 +98,7 @@ cd windows
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly
 ```
 
-Expect `GET status.json` and `GET /` OK. There is no PROPFIND or rclone mount to the phone on current builds.
+Expect **GET** **`status.json`** and index **`/`** OK. **`rclone`** drive mapping is optional and may be **slow**; see [`../windows/archive/`](../windows/archive/).
 
 ### Export transport
 
@@ -147,7 +145,7 @@ Export and folder browse use **WebDAV only** — you do not need search for thos
 |------|------------------------|
 | Phone **Exports** → PC | **`http://<ip>:8765/`** in a browser, **`Invoke-WebRequest`**, USB, or **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **`../windows/Mount-LoopSegmentsRclone.ps1 -TestOnly`** |
 | Manual USB | **Apple Devices** → Loop Segments → Exports → Save to PC |
-| rclone+WinFsp to phone (old) | **[`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** |
+| rclone+WinFsp mount on PC (optional; can be sluggish) | **[`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** — Skybox WebDAV to the phone does not need this |
 
 ```powershell
 cd ..\windows

@@ -1,32 +1,31 @@
-# Legacy: rclone WebDAV mount of the iPhone LAN export server
+# rclone drive letter mount of the iPhone LAN export (optional PC workflow)
 
-Current Loop Segments builds serve **`Documents/Exports/`** on the LAN as **plain HTTP** (GET/HEAD/OPTIONS, Range, HTML index, `status.json`). **WebDAV (PROPFIND / LOCK) is not implemented** on the phone, so **`rclone` `type = webdav`** against `http://<phone>:8765/` **no longer works** for listing or `rclone mount`.
+The phone’s LAN server (**`http://<ip>:8765/`**) implements **HTTP + WebDAV** (PROPFIND, listings, Basic auth **`admin` / `iosadmin`**) so clients like **Quest Skybox** can add it as a **WebDAV** library directly — **no PC rclone step required**.
 
-This document describes the **old** Windows workflow for readers on archived IPAs or for comparison.
+On **Windows**, some users mapped the same URL with **`rclone mount`** (WinFsp + `type = webdav` in `rclone.conf`) to get a **drive letter** for Explorer / DLNA folder indexing. That path can feel **sluggish**, show **VFS/listing quirks** (e.g. *Entry doesn't belong in directory*), or hang compared to using **Skybox → phone WebDAV** or **plain HTTP** downloads.
 
-## What used to work
+This folder keeps the **full legacy mount script** and notes for that optional PC setup.
 
-1. **WinFsp** on Windows (required for `rclone mount` to a drive letter).
-2. **`Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1`** (copy in this folder): wrote a **`[loopsegments]`** block into `rclone.conf` (`type = webdav`, Basic auth), ran **`rclone ls`** and **`rclone mount`** to a drive letter from `loop-segments-windows.json`.
+## Optional: what the rclone mount did
+
+1. **WinFsp** on Windows (for `rclone mount` to a drive letter).
+2. **`Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1`**: wrote a **`[loopsegments]`** block into `rclone.conf` (`type = webdav`, Basic auth), ran **`rclone ls`** and **`rclone mount`** from `loop-segments-windows.json`.
 3. **DLNA / Explorer** could index that drive (e.g. `L:\pcld_ios_media\loop\`).
 
-## Why it was retired
+## When to skip rclone on the PC
 
-- Mapped-drive clients depend on **WebDAV** semantics; maintaining that in-app was simplified to **HTTP-only** file serving.
-- **`rclone` `http`** against the LAN URL is **not** a drop-in replacement (directory listing / nested paths do not match a stable “remote” tree; users reported errors such as *Entry doesn't belong in directory* and hangs).
+- **Quest Skybox** with **WebDAV** to the phone works for export playback for many users — prefer that if the goal is watching from the headset.
+- **PC DLNA** without a mapped drive: **browser**, **`Invoke-WebRequest`**, or **`Sync-FromPhoneLAN.ps1`** into a local folder.
 
-## What to use instead (current)
+## Active scripts
 
-| Goal | Approach |
-|------|----------|
-| Quick check | `..\Mount-LoopSegmentsRclone.ps1 -TestOnly` |
-| Copy segments to PC | Browser at `http://<ip>:8765/`, **`Invoke-WebRequest`**, or **`Sync-FromPhoneLAN.ps1`** in this `archive/` folder |
-| Unattended pCloud → PC | **`Run-SegmentCopy.ps1`** (sibling **`3d_loop_segments`** repo) |
-| Other cloud drives (Koofr, etc.) | Your existing **rclone** remotes — unrelated to the phone LAN server |
-
-## Files
-
-| File | Role |
-|------|------|
-| **`Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1`** | Full legacy mount script (reference / old builds) |
+| Location | Role |
+|---------|------|
+| **`../Mount-LoopSegmentsRclone.ps1`** | **`-TestOnly`** LAN probe (current repo default; may differ if you restore full mount in `../`) |
+| **`Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1`** | Historical **full** `rclone mount` flow (same auth as app) |
 | **`Map-LoopSegmentsWebDAV.ps1`** | Legacy `net use` / port 80 proxy experiments |
+
+## See also
+
+- **[../README.md](../README.md)** — portable Windows config  
+- **[../../ios/README.md](../../ios/README.md)** — Skybox WebDAV (`admin` / `iosadmin`), Pigasus HTTP URLs

@@ -2,11 +2,11 @@
 
 Active LAN checks: **[`../Mount-LoopSegmentsRclone.ps1`](../Mount-LoopSegmentsRclone.ps1)** (**`-TestOnly`** = HTTP reachability to the phone; **`-RemovePort80Proxy`** = undo legacy port proxy).
 
-**rclone WebDAV drive mapping of the phone is retired** — see **[RCLONE-PHONE-MOUNT-LEGACY.md](RCLONE-PHONE-MOUNT-LEGACY.md)** and the frozen script **[`Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1`](Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1)** (WinFsp + `rclone mount` against old WebDAV-on-phone builds).
+**rclone `mount` to a drive letter** is **optional**; it can be **sluggish** vs **Skybox WebDAV** straight to the phone — see **[RCLONE-PHONE-MOUNT-LEGACY.md](RCLONE-PHONE-MOUNT-LEGACY.md)** and **[`Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1`](Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1)** (full WinFsp + `rclone` script).
 
 | Script / doc | Role |
 |----------------|------|
-| **`RCLONE-PHONE-MOUNT-LEGACY.md`** | Why rclone+phone mount was removed; what to use instead |
+| **`RCLONE-PHONE-MOUNT-LEGACY.md`** | Optional PC **rclone** drive mount (sluggish for some); Skybox does not need it |
 | **`Mount-LoopSegmentsRclone-WebDAVMount-Legacy.ps1`** | Old full mount + `rclone.conf` patch (reference) |
 | `Map-LoopSegmentsWebDAV.ps1` | `net use` WebDAV drive (often error 67 on port 8765) |
 | `Sync-FromPhoneLAN.ps1` | Poll/copy `loop/op_00.mp4` into a local PC DLNA pair |
