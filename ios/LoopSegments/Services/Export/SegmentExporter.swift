@@ -178,7 +178,7 @@ final class SegmentExporter {
         var lastMediaTimeMs = seekMs
         var reachedEnd = false
 
-        logHandler(
+            logHandler(
             "Phone export: pcld_ios_media/loop/op_00 ↔ op_01 per ~\(Int(Self.segmentDurationSeconds))s " +
                 (ExportDeliveryPolicy.keyframeAlignedBoundaries ? "(keyframe borders)" : "") +
                 "; PC: Mount-LoopSegmentsRclone.ps1"
@@ -298,19 +298,9 @@ final class SegmentExporter {
                             "(sparse hybrid reader skipped)"
                     )
                 }
-                if !skipDenseMidFileRemote {
-                    logHandler(
-                        "Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…"
-                    )
-                try await downloader.ensureFileHeadOnDisk()
-                try await downloader.ensureIndexTailOnDisk()
-                try await downloader.ensureContiguousRange(byteRange)
-                }
                 if skipDenseMidFileRemote {
                     // remote passthrough reads ranges from pCloud; no dense window on sparse temp
-                } else if downloader.isRangeFilled(byteRange),
-                          downloader.hasHeadOnDisk(),
-                          downloader.hasIndexTailOnDisk() {
+                } else if isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
                     logHandler(
                         "Minute window already dense on _working.mp4 — passthrough from disk (no pCloud read for this segment)"
                     )
@@ -319,6 +309,21 @@ final class SegmentExporter {
                             "(AVAssetReader preflight often reports 0 samples on sparse HEVC)"
                     )
                 } else {
+                    logHandler(
+                        "Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…"
+                    )
+                    try await downloader.ensureFileHeadOnDisk()
+                    try await downloader.ensureIndexTailOnDisk()
+                    try await downloader.ensureContiguousRange(byteRange)
+                    if isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
+                        logHandler(
+                            "Minute window already dense on _working.mp4 — passthrough from disk (no pCloud read for this segment)"
+                        )
+                        logHandler(
+                            "Dense window + MP4 head/index on disk — skipping readiness probe " +
+                                "(AVAssetReader preflight often reports 0 samples on sparse HEVC)"
+                        )
+                    } else {
                 try await SegmentLocalReadiness.waitUntilReadable(
                     fileURL: downloader.fileURL,
                     rangeStart: rangeStart,
@@ -338,6 +343,7 @@ final class SegmentExporter {
                     isCancelled: cancelCheck,
                     log: logHandler
                 )
+                    }
                 }
 
                 let boundary = try await exportSegmentFromTempOrStream(

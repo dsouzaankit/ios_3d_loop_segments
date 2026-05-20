@@ -299,14 +299,13 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let needLen = rangeEnd - range.start
 
         lock.lock()
-        let contiguousMarked = exportWindowStart == range.start && exportWindowContiguousEnd >= rangeEnd
         let bytesOnDisk = Self.rangeFullyCovered(
             offset: range.start,
             length: Int(needLen),
             spans: filledRanges
         )
         lock.unlock()
-        if !force, contiguousMarked, bytesOnDisk {
+        if !force, bytesOnDisk {
             lock.lock()
             exportWindowStart = range.start
             exportWindowContiguousEnd = max(exportWindowContiguousEnd, rangeEnd)
