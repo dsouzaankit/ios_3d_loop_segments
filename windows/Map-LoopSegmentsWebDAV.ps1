@@ -53,26 +53,41 @@ function Get-LoopSegmentsLANHost {
     return $resolved.Trim()
 }
 
-function Add-AuthForwardServerListHost {
-    param([string[]] $Hosts)
+function Set-AuthForwardServerListHosts {
+    param(
+        [string[]] $Hosts,
+        [switch] $Merge
+    )
 
     $paramsPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\WebClient\Parameters'
     if (-not (Test-Path -LiteralPath $paramsPath)) {
         New-Item -Path $paramsPath -Force | Out-Null
     }
-    $existing = @()
-    $prop = Get-ItemProperty -Path $paramsPath -Name AuthForwardServerList -ErrorAction SilentlyContinue
-    if ($null -ne $prop -and $null -ne $prop.AuthForwardServerList) {
-        $existing = @($prop.AuthForwardServerList) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    }
-    $merged = $existing
-    foreach ($h in $Hosts) {
-        if ($merged -notcontains $h) {
-            $merged += $h
+
+    $clean = [System.Collections.Generic.List[string]]::new()
+    if ($Merge) {
+        $prop = Get-ItemProperty -Path $paramsPath -Name AuthForwardServerList -ErrorAction SilentlyContinue
+        if ($null -ne $prop -and $null -ne $prop.AuthForwardServerList) {
+            foreach ($entry in @($prop.AuthForwardServerList)) {
+                $t = [string]$entry
+                if (-not [string]::IsNullOrWhiteSpace($t) -and -not $clean.Contains($t)) {
+                    $clean.Add($t)
+                }
+            }
         }
     }
-    Set-ItemProperty -Path $paramsPath -Name AuthForwardServerList -Type MultiString -Value $merged
-    Write-Host "AuthForwardServerList: $($merged -join ', ')"
+
+    foreach ($h in $Hosts) {
+        $t = $h.Trim()
+        if ([string]::IsNullOrWhiteSpace($t)) { continue }
+        if (-not $clean.Contains($t)) {
+            $clean.Add($t)
+        }
+    }
+
+    $array = $clean.ToArray()
+    Set-ItemProperty -Path $paramsPath -Name AuthForwardServerList -Type MultiString -Value $array
+    Write-Host ("AuthForwardServerList: " + ($array -join ', '))
 }
 
 function Enable-LoopSegmentsWebClientHTTP {
@@ -94,7 +109,7 @@ function Enable-LoopSegmentsWebClientHTTP {
     }
     Set-ItemProperty -Path $paramsPath -Name BasicAuthLevel -Type DWord -Value 2
     Set-ItemProperty -Path $paramsPath -Name FileSizeLimitInBytes -Type DWord -Value 4294967295
-    Add-AuthForwardServerListHost -Hosts $AuthForwardHosts
+    Set-AuthForwardServerListHosts -Hosts $AuthForwardHosts
     Restart-Service -Name WebClient -Force
     Write-Host 'WebClient restarted.'
 }
@@ -102,7 +117,8 @@ function Enable-LoopSegmentsWebClientHTTP {
 function Test-LoopSegmentsWebDAV {
     param(
         [string] $RootUrl,
-        [string] $HostIp
+        [string] $HostIp,
+        [switch] $RequireWebDAVRootNotHtml
     )
 
     Write-Host "Testing $RootUrl ..."
@@ -141,7 +157,12 @@ function Test-LoopSegmentsWebDAV {
         $ctype = $resp.ContentType
         $resp.Close()
         if ($ctype -like '*html*') {
-            throw "GET / returned HTML to WebDAV client (build 152+ returns 403 instead — update the app)."
+            $msg = 'GET / returned HTML to WebDAV client — install app build 152+ for net use (403 instead of HTML).'
+            if ($RequireWebDAVRootNotHtml) {
+                throw $msg
+            }
+            Write-Warning $msg
+            return
         }
         Write-Host "  GET / as WebDAV client $status ($ctype) OK"
     } catch [System.Net.WebException] {
@@ -154,7 +175,10 @@ function Test-LoopSegmentsWebDAV {
                 return
             }
         }
-        throw "WebDAV GET / check failed. $($_.Exception.Message)"
+        if ($RequireWebDAVRootNotHtml) {
+            throw "WebDAV GET / check failed. $($_.Exception.Message)"
+        }
+        Write-Warning "WebDAV GET / check: $($_.Exception.Message)"
     }
 }
 
@@ -218,10 +242,9 @@ if ($Remove) {
     return
 }
 
-$authHosts = @($hostIp, '127.0.0.1')
-
 if ($ConfigureWebClient) {
-    Enable-LoopSegmentsWebClientHTTP -AuthForwardHosts $authHosts
+    # Replace list (fixes corrupted single-string entries like 10.0.0.10127.0.0.1).
+    Enable-LoopSegmentsWebClientHTTP -AuthForwardHosts @($hostIp)
     Test-LoopSegmentsWebDAV -RootUrl $rootUrl -HostIp $hostIp
     Write-Host ''
     Write-Host 'Configure done. Map drive: .\Map-LoopSegmentsWebDAV.ps1'
@@ -230,15 +253,14 @@ if ($ConfigureWebClient) {
 }
 
 if ($ViaPort80Proxy) {
-    Enable-LoopSegmentsWebClientHTTP -AuthForwardHosts $authHosts
+    Enable-LoopSegmentsWebClientHTTP -AuthForwardHosts @($hostIp, '127.0.0.1')
     Enable-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $Port
     $rootUrl = 'http://127.0.0.1/'
     Write-Host 'Using http://127.0.0.1/ via port 80 proxy (WebClient-friendly).'
 }
 
-Test-LoopSegmentsWebDAV -RootUrl $(if ($ViaPort80Proxy) { "http://${hostIp}:${Port}/" } else { $rootUrl }) -HostIp $hostIp
-
 if ($TestOnly) {
+    Test-LoopSegmentsWebDAV -RootUrl "http://${hostIp}:${Port}/" -HostIp $hostIp
     Write-Host 'WebDAV test passed.'
     return
 }
@@ -260,6 +282,8 @@ $existing = cmd /c "net use $drive" 2>$null
 if ($LASTEXITCODE -eq 0) {
     cmd /c "net use $drive /delete /y" | Out-Null
 }
+
+Test-LoopSegmentsWebDAV -RootUrl $rootUrl -HostIp $hostIp -RequireWebDAVRootNotHtml
 
 Write-Host "Mapping $drive -> $rootUrl (phone app open, Serve Exports on)."
 if (-not (Invoke-LoopSegmentsNetUse -Drive $drive -RootUrl $rootUrl -HostIp $mapHostIp -Port $mapPort)) {
