@@ -3,7 +3,6 @@ import SwiftUI
 struct BrowserView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
-    @State private var pathStack: [String] = ["/"]
     @State private var items: [WebDAVItem] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -17,6 +16,11 @@ struct BrowserView: View {
     @State private var searchDebugStatus = ""
     @State private var selectedPausedEntry: ResumeEntry?
     @State private var selectedPinnedEntry: ResumeEntry?
+
+    private var pathStack: [String] {
+        get { session.browserPathStack }
+        nonmutating set { session.browserPathStack = newValue }
+    }
 
     private var currentPath: String { pathStack.last ?? "/" }
     private var isSearchActive: Bool {
@@ -144,9 +148,7 @@ struct BrowserView: View {
                                     Label(item.name, systemImage: "folder")
                                 }
                             } else if item.isVideo {
-                                NavigationLink {
-                                    ExportView(item: item)
-                                } label: {
+                                NavigationLink(value: item) {
                                     videoRowLabel(for: item)
                                 }
                             }
@@ -156,6 +158,9 @@ struct BrowserView: View {
             }
             .navigationTitle(navigationTitle)
             .navigationSubtitleIfAvailable(navigationSubtitle)
+            .navigationDestination(for: WebDAVItem.self) { item in
+                ExportView(item: item)
+            }
             .navigationDestination(item: $selectedPausedEntry) { entry in
                 PausedExportDestinationView(
                     entry: entry,
@@ -298,7 +303,9 @@ struct BrowserView: View {
         guard item.isDirectory else { return }
         let next = WebDAVURLBuilder.directoryListingPath(item.href)
         guard !WebDAVURLBuilder.pathsEqual(next, currentPath) else { return }
-        pathStack.append(next)
+        var stack = pathStack
+        stack.append(next)
+        pathStack = stack
         items = []
         isLoading = true
         listToken += 1
@@ -330,7 +337,9 @@ struct BrowserView: View {
 
     private func goUp() {
         guard pathStack.count > 1 else { return }
-        pathStack.removeLast()
+        var stack = pathStack
+        stack.removeLast()
+        pathStack = stack
         items = []
         isLoading = true
         listToken += 1
