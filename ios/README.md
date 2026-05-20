@@ -86,19 +86,26 @@ Read-only; phone must stay on the LAN with **Serve Exports** enabled. For hands-
 
 ### Skybox (Quest) WebDAV
 
-Skybox **requires Basic auth** on every WebDAV request (OPTIONS + PROPFIND + listing). Build **169+** enforces `admin` / `iosadmin` and returns **200** (not 403) for WebDAV `GET /`.
+**pCloud WebDAV working in Skybox is expected** — that is a full **HTTPS** cloud server with complete files. The phone LAN server (`http://<ip>:8765`) is a small read-only HTTP export folder for PC sync; Skybox support is best-effort, not identical to pCloud.
 
-1. Phone: **Serve Exports on Wi‑Fi** on, app **in foreground** (unlocked), same Wi‑Fi as Quest (not Guest/isolated VLAN).
-2. Skybox → **Network** → **Add WebDAV server**.
-3. **URL:** `http://10.0.100.10:8765/` — must include `http://`, IP, **:8765**, trailing `/`.
-4. **Username:** `admin` · **Password:** `iosadmin` (case-sensitive password).
-5. After connect, play **`op_00.mp4`** only — **`_export_source_working.mp4` is sparse** and will show “can’t play” in Skybox (browser preview via the LAN index `#t=` link is different).
+| | pCloud WebDAV | Loop Segments LAN |
+|--|----------------|-------------------|
+| Transport | **HTTPS** | **HTTP** (port 8765) |
+| Files | Full originals on cloud | `op_00.mp4` (~60s segment), sparse `_export_source_working.mp4` |
+| Server | Mature WebDAV | Minimal in-app server |
 
-**Build 171+** fixes Skybox for `op_00.mp4`: **absolute-URI** GET (build 170), **no auth on file GET** (Skybox often skips credentials when playing), and **faststart** (`moov` at file head — browsers tolerate moov-at-end via Range; Skybox usually does not).
+**If pCloud plays but phone LAN does not:** install **build 172+** (PROPFIND hrefs like pCloud, no `WWW-Authenticate` on successful listings) and **171+** (faststart `op_00.mp4`). Then in Skybox play **`op_00.mp4` only** after export publishes a new segment — not `_export_source_working.mp4`.
 
-If Skybox still fails on `op_00.mp4` after 171: copy to PC with **`Sync-FromPhoneLAN.ps1 -Watch`** and play from the PC share, or use the Skybox PC client — Quest may not decode your source codec (e.g. 10-bit HEVC 5K) over HTTP even when the Quest browser works.
+1. Phone: **Serve Exports on Wi‑Fi** on, app **in foreground**, same Wi‑Fi as Quest.
+2. Skybox → **Add WebDAV server** → `http://10.0.100.10:8765/` · `admin` / `iosadmin`.
+3. Open **`op_00.mp4`** (wait for export log: *moov in file head* / *faststart*).
 
-**PC test (same Wi‑Fi as phone):**
+**Reliable Skybox paths (same as pCloud-quality playback):**
+
+- **Full movie on pCloud** — use pCloud WebDAV in Skybox (what already works for you).
+- **Phone export segment** — `Sync-FromPhoneLAN.ps1 -Watch` on PC, then Skybox → **SMB** to the PC folder (Skybox handles SMB well), or Skybox PC client copy.
+
+**PC test:**
 
 ```powershell
 cd windows
@@ -106,9 +113,7 @@ cd windows
 .\Map-LoopSegmentsWebDAV.ps1 -TestOnly
 ```
 
-Expect `OPTIONS 200 OK`, `PROPFIND 207`, `GET op_00.mp4` **206 without auth**, and `moov atom in first 768 KB`. If moov-at-end warning appears, let export publish one more segment on **build 171+**.
-
-**If Skybox still won’t add:** Quest often blocks plain HTTP to local IPs; use **PC DLNA** (`Sync-FromPhoneLAN.ps1 -Watch`) and open the share from Skybox via **SMB** on the PC, or copy `op_00.mp4` to the headset with the Skybox PC client.
+Expect `PROPFIND 207`, `GET op_00.mp4` **206 without auth**, and **`moov atom in first 768 KB`**.
 
 ### Export transport
 

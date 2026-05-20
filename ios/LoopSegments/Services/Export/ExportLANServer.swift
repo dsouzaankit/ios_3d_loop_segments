@@ -243,14 +243,13 @@ enum ExportLANServer {
         return "http://127.0.0.1:\(defaultPort)"
     }
 
-    private static func absoluteDAVHref(path: String, baseURL: String) -> String {
-        let p = normalizedDAVPath(path)
-        var base = baseURL
-        if base.hasSuffix("/") { base.removeLast() }
-        if p == "/" { return "\(base)/" }
-        let encoded = p.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? p
-        let suffix = encoded.hasPrefix("/") ? encoded : "/\(encoded)"
-        return "\(base)\(suffix)"
+    /// Path-only hrefs (pCloud-style) — Skybox resolves against the configured WebDAV root URL.
+    private static func davListingHref(path: String, isCollection: Bool) -> String {
+        var p = normalizedDAVPath(path)
+        if isCollection, p != "/", !p.hasSuffix("/") {
+            p += "/"
+        }
+        return p
     }
 
     private static func parseRequestLine(_ line: String) -> (String, String)? {
@@ -461,8 +460,11 @@ enum ExportLANServer {
         if let etag {
             lines.append("ETag: \(etag)")
         }
-        lines.append("Connection: close")
         return lines.joined(separator: "\r\n") + "\r\n\r\n"
+    }
+
+    private static func responseConnectionHeader(context: LANHTTPContext) -> String {
+        "Connection: \(context.connectionHeaderValue())"
     }
 
     private static func fileETag(size: Int64) -> String {
@@ -667,7 +669,6 @@ enum ExportLANServer {
             "Public: GET, HEAD, OPTIONS, PROPFIND, LOCK, UNLOCK",
             "Content-Length: 0",
         ]
-        lines.append(contentsOf: lanWebDAVAuthHeaderLines())
         lines.append("Connection: close")
         let header = lines.joined(separator: "\r\n") + "\r\n\r\n"
         connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in
@@ -726,7 +727,6 @@ enum ExportLANServer {
     ) {
         let davPath = webDAVResourcePath(path)
         let depth = parseDepth(requestHeaders: requestHeaders)
-        let baseURL = requestBaseURL(from: requestHeaders)
         var responses: [String] = []
 
         if let name = fileName(fromDAVPath: davPath) {
@@ -740,7 +740,7 @@ enum ExportLANServer {
             let modified = attrs?[.modificationDate] as? Date
             responses.append(
                 propfindEntryXML(
-                    href: absoluteDAVHref(path: davPath, baseURL: baseURL),
+                    href: davListingHref(path: davPath, isCollection: false),
                     isCollection: false,
                     displayName: name,
                     size: size,
@@ -751,7 +751,7 @@ enum ExportLANServer {
         } else {
             responses.append(
                 propfindEntryXML(
-                    href: absoluteDAVHref(path: "/", baseURL: baseURL),
+                    href: davListingHref(path: "/", isCollection: true),
                     isCollection: true,
                     displayName: "Exports",
                     size: nil,
@@ -762,7 +762,7 @@ enum ExportLANServer {
                 for entry in listExportFiles() {
                     responses.append(
                         propfindEntryXML(
-                            href: absoluteDAVHref(path: "/\(entry.name)", baseURL: baseURL),
+                            href: davListingHref(path: "/\(entry.name)", isCollection: false),
                             isCollection: false,
                             displayName: entry.name,
                             size: entry.size,
@@ -787,7 +787,6 @@ enum ExportLANServer {
             "Content-Length: \(body.count)",
             "DAV: 1, 2",
         ]
-        headerLines.append(contentsOf: lanWebDAVAuthHeaderLines())
         headerLines.append("Connection: close")
         let header = headerLines.joined(separator: "\r\n") + "\r\n\r\n"
         var data = Data(header.utf8)
