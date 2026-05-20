@@ -4,7 +4,7 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once per PC
 .\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional LAN probe; PC rclone drive mount is optional/sluggish — see ../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md
-# Skybox (Quest): Add WebDAV → http://loopsegments.local:8765/ (or http://<phone-ip>:8765/) · admin / iosadmin — see “Quest LAN playback” below
+# Skybox (Quest): Add WebDAV → http://<phone-ip>:8765/ (IP from Export screen) · admin / iosadmin — see “Quest LAN playback” below
 
 Notes:
 phone must be unlocked, app in foreground, screen on:
@@ -49,14 +49,14 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **Serve Exports on Wi‑Fi** (export screen; app open on LAN).
-2. **URLs:** **`http://loopsegments.local:8765/`** (preferred on same Wi‑Fi) or **`http://<phone-ip>:8765/`** — HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, LOCK, etc.) for folder-aware clients.
+2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, LOCK, etc.).
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
 LAN serves `pcld_ios_media/loop/op_*.mp4`, `pcld_ios_media/_working.mp4`, and logs on port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree; **`#t=`** on the index handles resume for `_working` (clears after a finished export).
 
-**Hostname:** on the same Wi‑Fi use **`http://loopsegments.local:8765/`** (Bonjour, like VLC); the export screen also shows an **IP fallback** if `.local` does not resolve on the PC.
+**Windows / ping:** **`ping loopsegments.local` will fail** — that name is not registered. Use the **IP** from the app (`http://10.x.x.x:8765/`). Optional: **`ping <iphone-name>.local`** only if Windows mDNS resolves it (often does not without Bonjour). **`ping` ≠ HTTP** — the server may work in a browser even when ping fails.
 
 ### `_working.mp4`: browser scrubber vs export logs
 

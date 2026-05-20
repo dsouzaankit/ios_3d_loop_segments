@@ -28,8 +28,14 @@ enum ExportLANServer {
     private static var listener: NWListener?
     private static var connections: [ObjectIdentifier: NWConnection] = [:]
     private static let queue = DispatchQueue(label: "com.loopsegments.lan-server")
-    /// Stable LAN hostname (mDNS / Bonjour). Same Wi‑Fi required; IP shown as fallback.
-    static let bonjourHostName = "loopsegments.local"
+    /// Bonjour service name (`loopsegments._http._tcp.local` in browsers) — not a pingable hostname.
+    static let bonjourServiceName = "loopsegments"
+    /// mDNS host label from this iPhone (Settings → General → About → Name → `<name>.local`).
+    static var deviceMDNSHostName: String {
+        "\(deviceMDNSHostLabel()).local"
+    }
+    /// @deprecated Misleading; use `deviceMDNSHostName`. Kept for call-site compatibility.
+    static var bonjourHostName: String { deviceMDNSHostName }
     private static var advertisedBaseURL: String?
     private static var advertisedIPAddressURL: String?
 
@@ -39,7 +45,7 @@ enum ExportLANServer {
         return advertisedBaseURL
     }
 
-    /// Primary `http://loopsegments.local:8765/` plus numeric IP when known.
+    /// `http://<iphone-name>.local:8765/` plus numeric IP (prefer IP on Windows).
     static var displayLANURLs: (host: String?, ip: String?) {
         lock.lock()
         defer { lock.unlock() }
@@ -67,7 +73,7 @@ enum ExportLANServer {
                 let params = NWParameters.tcp
                 params.allowLocalEndpointReuse = true
                 let nwListener = try NWListener(using: params, on: port)
-                nwListener.service = NWListener.Service(name: "loopsegments", type: "_http._tcp")
+                nwListener.service = NWListener.Service(name: bonjourServiceName, type: "_http._tcp")
                 lock.lock()
                 listener = nwListener
                 lock.unlock()
@@ -76,13 +82,18 @@ enum ExportLANServer {
                     switch state {
                     case .ready:
                         let ip = Self.primaryLANIPv4Address()
-                        let hostURL = "http://\(Self.bonjourHostName):\(defaultPort)/"
+                        let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
                         let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
                         lock.lock()
                         advertisedBaseURL = hostURL
                         advertisedIPAddressURL = ipURL
                         lock.unlock()
-                        log("LAN export: \(hostURL)\(ip.map { " (IP \($0))" } ?? "") — Skybox/WebDAV or browser")
+                        log(
+                            "LAN export: \(hostURL)\(ip.map { " · IP \($0)" } ?? "") — Bonjour \(bonjourServiceName)._http._tcp"
+                        )
+                        log(
+                            "LAN: Windows often cannot resolve .local — use IP above; ping may fail even when HTTP works"
+                        )
                         log("LAN: HTTP + WebDAV — pcld_ios_media/loop/op_00|01, pcld_ios_media/_working.mp4, logs (not SMB)")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
@@ -1338,6 +1349,37 @@ enum ExportLANServer {
     }
 
     // MARK: - IPv4
+
+    /// User-visible device label for mDNS (e.g. `johns-iphone` → `johns-iphone.local`).
+    private static func deviceMDNSHostLabel() -> String {
+        if let localized = Host.current().localizedName?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !localized.isEmpty {
+            return sanitizeMDNSHostLabel(localized)
+        }
+        if let name = Host.current().name?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !name.isEmpty, name != "localhost" {
+            return sanitizeMDNSHostLabel(name)
+        }
+        var buffer = [CChar](repeating: 0, count: 256)
+        if gethostname(&buffer, buffer.count) == 0 {
+            let host = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !host.isEmpty, host != "localhost" {
+                return sanitizeMDNSHostLabel(host)
+            }
+        }
+        return "iphone"
+    }
+
+    private static func sanitizeMDNSHostLabel(_ label: String) -> String {
+        let folded = label.folding(options: .diacriticInsensitive, locale: .current)
+        let safe = folded.lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "'", with: "")
+            .filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        return safe.isEmpty ? "iphone" : safe
+    }
 
     private static func primaryLANIPv4Address() -> String? {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?

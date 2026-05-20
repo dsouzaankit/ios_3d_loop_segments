@@ -42,19 +42,19 @@ struct ExportView: View {
                         }
                     }
                 ))
-                Text("Use \(ExportLANServer.bonjourHostName) on the same Wi‑Fi (like VLC). Skybox WebDAV: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword).")
+                Text("Same Wi‑Fi required. On Windows use the IP URL (ping often fails for .local). Bonjour service: \(ExportLANServer.bonjourServiceName)._http._tcp. Skybox: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                if let lanHostURL {
-                    LabeledContent("LAN host") {
-                        Text(lanHostURL)
+                if let lanIPURL {
+                    LabeledContent("LAN IP (PC)") {
+                        Text(lanIPURL)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
                     }
                 }
-                if let lanIPURL {
-                    LabeledContent("IP fallback") {
-                        Text(lanIPURL)
+                if let lanHostURL {
+                    LabeledContent("Phone .local name") {
+                        Text(lanHostURL)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
                     }
