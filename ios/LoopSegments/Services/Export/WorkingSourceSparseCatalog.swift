@@ -66,6 +66,45 @@ enum WorkingSourceSparseCatalog {
         try? FileManager.default.removeItem(at: manifestURL)
     }
 
+    /// Reload dense spans from disk into `ExportPlaybackState` (LAN playback when export is idle).
+    static func refreshPlaybackState(for fileURL: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path),
+              let sizeNum = try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber,
+              sizeNum.int64Value > 0 else {
+            return
+        }
+        let total = sizeNum.int64Value
+        guard let layout = tryAdoptFromDisk(fileURL: fileURL, totalLength: total) else {
+            return
+        }
+        ExportPlaybackState.shared.syncSparseLayout(
+            totalBytes: total,
+            filledSpans: layout.filledRanges,
+            headOnDisk: layout.headOnDisk,
+            tailOnDisk: layout.tailOnDisk
+        )
+    }
+
+    static func tryAdoptFromDisk(fileURL: URL, totalLength: Int64) -> AdoptedLayout? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path),
+              fm.fileExists(atPath: manifestURL.path),
+              let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
+              manifest.totalLength == totalLength else {
+            return nil
+        }
+        let onDisk = (try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard onDisk == totalLength else { return nil }
+        let ranges = manifest.spans.map { $0.lower ... $0.upper }
+        return AdoptedLayout(
+            filledRanges: ranges,
+            headOnDisk: manifest.headOnDisk,
+            tailOnDisk: manifest.tailOnDisk
+        )
+    }
+
     private static var manifestURL: URL {
         ExportPaths.workingSourceManifestURL
     }

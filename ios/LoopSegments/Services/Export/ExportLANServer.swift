@@ -736,27 +736,45 @@ enum ExportLANServer {
         }
         let fileSize = sizeNum.int64Value
         let contentType = mimeType(for: fileURL)
+        let isWorkingSource = fileURL.lastPathComponent == ExportPaths.workingSourceURL.lastPathComponent
+        if isWorkingSource {
+            WorkingSourceSparseCatalog.refreshPlaybackState(for: fileURL)
+        }
 
         let byteStart: Int64
         let byteEnd: Int64
         let status: Int
         let phrase: String
+        let hasRangeHeader = requestHeaders.split(separator: "\r\n").contains { $0.lowercased().hasPrefix("range:") }
+
         if let range = parseByteRange(requestHeaders: requestHeaders, fileSize: fileSize) {
             byteStart = range.start
             byteEnd = range.end
             status = 206
             phrase = "Partial Content"
-        } else if requestHeaders.split(separator: "\r\n").contains(where: { $0.lowercased().hasPrefix("range:") }) {
+        } else if hasRangeHeader {
             sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
             return
-        } else {
-            if fileURL.lastPathComponent == ExportPaths.workingSourceURL.lastPathComponent {
-                let msg = Data(
-                    "Full download not supported for sparse working copy — use the index link (#t= resume) or Range requests.".utf8
-                )
-                sendResponse(connection: connection, status: 503, contentType: "text/plain", body: msg, done: done)
+        } else if isWorkingSource, method == "GET" {
+            // Browsers probe without Range first; answer with Accept-Ranges so they follow up with byte ranges.
+            let header = httpResponseHeader(
+                status: 200,
+                phrase: "OK",
+                contentType: contentType,
+                contentLength: 0,
+                contentRange: nil,
+                includeAcceptRanges: true
+            )
+            guard let headerData = header.data(using: .utf8) else {
+                done()
                 return
             }
+            connection.send(content: headerData, completion: .contentProcessed { _ in
+                connection.cancel()
+                done()
+            })
+            return
+        } else {
             byteStart = 0
             byteEnd = fileSize - 1
             status = 200
@@ -769,12 +787,14 @@ enum ExportLANServer {
             return
         }
 
-        if fileURL.lastPathComponent == ExportPaths.workingSourceURL.lastPathComponent,
-           !ExportPlaybackState.shared.rangeIsReadable(start: byteStart, end: byteEnd) {
-            let msg = Data(
-                "Sparse region not on disk yet — open link from LAN index (#t= resume) or wait for export to dense-fill this minute.".utf8
+        if isWorkingSource, method != "HEAD", !ExportPlaybackState.shared.rangeIsReadable(start: byteStart, end: byteEnd) {
+            sendResponse(
+                connection: connection,
+                status: 416,
+                contentType: "text/plain",
+                body: Data("Range not on disk yet (sparse export) — try index link with #t= resume or wait for dense fill.".utf8),
+                done: done
             )
-            sendResponse(connection: connection, status: 503, contentType: "text/plain", body: msg, done: done)
             return
         }
 
