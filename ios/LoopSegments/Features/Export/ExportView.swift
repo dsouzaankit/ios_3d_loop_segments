@@ -19,6 +19,7 @@ struct ExportView: View {
     @State private var showClearMediaConfirm = false
     @State private var showClearLogsConfirm = false
     @State private var showAutoLockHelp = false
+    @State private var copiedLANURL = false
 
     var body: some View {
         Form {
@@ -42,23 +43,39 @@ struct ExportView: View {
                         }
                     }
                 ))
-                Text("Same Wi‑Fi required. On Windows use the IP URL (ping often fails for .local). Bonjour service: \(ExportLANServer.bonjourServiceName)._http._tcp. Skybox: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword).")
+                Text("Same Wi‑Fi as the PC. Use the LAN IP line below on Windows. http://iphone.local:8765/ is not a default URL — it only matches if About → Name is exactly “iPhone” and your PC resolves .local (most Windows PCs need the numeric IP).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                LabeledContent("About → Name") {
+                    Text(ExportLANServer.deviceAboutName)
+                        .font(.caption)
+                }
                 if let lanIPURL {
-                    LabeledContent("LAN IP (PC)") {
+                    LabeledContent("LAN IP (use on PC)") {
                         Text(lanIPURL)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
                     }
+                    Button(copiedLANURL ? "Copied" : "Copy LAN IP URL") {
+                        UIPasteboard.general.string = lanIPURL
+                        copiedLANURL = true
+                    }
+                } else if ExportLANServer.isEnabled {
+                    Text("No Wi‑Fi IPv4 address — connect the phone to Wi‑Fi (same network as the PC). `.local` URLs will not work until an IP appears here.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
                 if let lanHostURL {
-                    LabeledContent("Phone .local name") {
+                    LabeledContent("Optional .local URL") {
                         Text(lanHostURL)
                             .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
                 }
+                Text("Skybox WebDAV: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword). Bonjour: \(ExportLANServer.bonjourServiceName)._http._tcp")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Text("In-progress: index → pcld_ios_media/_working.mp4 (#t= resume while paused). Segments: pcld_ios_media/loop/op_*.mp4")
                     .font(.footnote)
                     .foregroundStyle(.secondary)

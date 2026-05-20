@@ -14,13 +14,13 @@ struct BrowserView: View {
     @State private var searchToken = 0
     @State private var searchModeNote = ""
     @State private var searchDebugStatus = ""
+    @State private var pathStack: [String] = ["/"]
     @State private var selectedPausedEntry: ResumeEntry?
     @State private var selectedPinnedEntry: ResumeEntry?
-
-    private var pathStack: [String] {
-        get { session.browserPathStack }
-        nonmutating set { session.browserPathStack = newValue }
-    }
+    @State private var pausedSidebarEntries: [ResumeEntry] = []
+    @State private var pinnedSidebarEntries: [ResumeEntry] = []
+    @State private var resumeByFileKey: [String: ResumeStatus] = [:]
+    @State private var didSyncResumeManifest = false
 
     private var currentPath: String { pathStack.last ?? "/" }
     private var isSearchActive: Bool {
@@ -52,9 +52,9 @@ struct BrowserView: View {
                         if !isSearchActive, pathStack.count > 1 {
                             Button("↑ Up") { goUp() }
                         }
-                        if !isSearchActive, !resumeStore.interruptedEntries().isEmpty {
+                        if !isSearchActive, !pausedSidebarEntries.isEmpty {
                             Section {
-                                ForEach(resumeStore.interruptedEntries()) { entry in
+                                ForEach(pausedSidebarEntries) { entry in
                                     Button {
                                         selectedPausedEntry = entry
                                     } label: {
@@ -81,9 +81,9 @@ struct BrowserView: View {
                                     .font(.footnote)
                             }
                         }
-                        if !isSearchActive, !resumeStore.pinnedCompletedEntries().isEmpty {
+                        if !isSearchActive, !pinnedSidebarEntries.isEmpty {
                             Section {
-                                ForEach(resumeStore.pinnedCompletedEntries()) { entry in
+                                ForEach(pinnedSidebarEntries) { entry in
                                     Button {
                                         selectedPinnedEntry = entry
                                     } label: {
@@ -199,8 +199,15 @@ struct BrowserView: View {
             .onAppear {
                 SearchDebugLog.ensureReady()
                 searchDebugStatus = SearchDebugLog.statusLine()
-                resumeStore.reconcilePausedWithWorkingSource()
-                resumeStore.backfillHrefsFromSparseManifest()
+                refreshResumeSidebar()
+                if !didSyncResumeManifest {
+                    didSyncResumeManifest = true
+                    resumeStore.reconcilePausedWithWorkingSource()
+                    resumeStore.backfillHrefsFromSparseManifest()
+                }
+            }
+            .onChange(of: resumeStore.revision) { _, _ in
+                refreshResumeSidebar()
             }
             .task(id: listToken) {
                 guard !isSearchActive else { return }
@@ -267,9 +274,29 @@ struct BrowserView: View {
         }
     }
 
+    private func refreshResumeSidebar() {
+        pausedSidebarEntries = resumeStore.interruptedEntries()
+        pinnedSidebarEntries = resumeStore.pinnedCompletedEntries()
+    }
+
+    private func refreshResumeBadges(for loaded: [WebDAVItem], entries: [ResumeEntry]) {
+        var cache: [String: ResumeStatus] = [:]
+        for item in loaded where item.isVideo {
+            cache[item.fileKey] = resumeStore.resumeStatus(for: item, in: entries)
+        }
+        resumeByFileKey = cache
+    }
+
     @ViewBuilder
     private func resumeBadge(for item: WebDAVItem) -> some View {
-        let resume = resumeStore.resumeStatus(for: item)
+        let resume = resumeByFileKey[item.fileKey]
+            ?? ResumeStatus(
+                savedSeekMs: 0,
+                checkpointMs: nil,
+                isPaused: false,
+                updatedAt: nil,
+                sourceDurationMs: nil
+            )
         if session.isExportRunning, session.activeExportItem?.fileKey == item.fileKey {
             Text("Exporting")
                 .font(.caption2.weight(.semibold))
@@ -303,10 +330,7 @@ struct BrowserView: View {
         guard item.isDirectory else { return }
         let next = WebDAVURLBuilder.directoryListingPath(item.href)
         guard !WebDAVURLBuilder.pathsEqual(next, currentPath) else { return }
-        var stack = pathStack
-        stack.append(next)
-        pathStack = stack
-        items = []
+        pathStack.append(next)
         isLoading = true
         listToken += 1
     }
@@ -317,7 +341,6 @@ struct BrowserView: View {
         searchResults = []
         isSearching = false
         pathStack = pathStack(forFolderListingPath: item.href)
-        items = []
         isLoading = true
         listToken += 1
     }
@@ -337,10 +360,7 @@ struct BrowserView: View {
 
     private func goUp() {
         guard pathStack.count > 1 else { return }
-        var stack = pathStack
-        stack.removeLast()
-        pathStack = stack
-        items = []
+        pathStack.removeLast()
         isLoading = true
         listToken += 1
     }
@@ -354,8 +374,12 @@ struct BrowserView: View {
             let client = WebDAVClient(credentials: credentials)
             let loaded = try await client.list(path: path)
             guard !Task.isCancelled, WebDAVURLBuilder.pathsEqual(path, currentPath) else { return }
+            let resumeEntries = resumeStore.snapshotEntries()
             items = loaded
-            resumeStore.backfillHrefs(from: loaded)
+            refreshResumeBadges(for: loaded, entries: resumeEntries)
+            if resumeEntries.contains(where: \.exportInProgress) {
+                resumeStore.backfillHrefs(from: loaded)
+            }
         } catch is CancellationError {
             return
         } catch {

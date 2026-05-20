@@ -4,8 +4,6 @@ import Foundation
 final class AppSession: ObservableObject {
     @Published var credentials: WebDAVCredentials?
     @Published var isExportRunning = false
-    /// WebDAV folder path stack for the browser (survives Export push/pop).
-    @Published var browserPathStack: [String] = ["/"]
 
     private let credentialStore = CredentialStore()
     private(set) var userRequestedExportCancel = false
@@ -53,7 +51,6 @@ final class AppSession: ObservableObject {
     func signOut() {
         credentialStore.clear()
         credentials = nil
-        browserPathStack = ["/"]
         WebDAVMediaSession.setActiveCredentials(nil)
         PCloudWebDAVRootResolver.clearCache()
     }

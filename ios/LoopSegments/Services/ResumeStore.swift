@@ -59,6 +59,12 @@ final class ResumeStore: ObservableObject {
 
     fileprivate static let entriesKey = "resume_entries"
     private let defaults = UserDefaults.standard
+    private var entriesCache: [ResumeEntry]?
+
+    /// In-memory snapshot (one UserDefaults decode per revision).
+    func snapshotEntries() -> [ResumeEntry] {
+        load()
+    }
 
     func seekMs(for item: WebDAVItem) -> Int64 {
         let entries = load()
@@ -160,7 +166,11 @@ final class ResumeStore: ObservableObject {
     }
 
     func resumeStatus(for item: WebDAVItem) -> ResumeStatus {
-        guard let entry = load().first(where: { $0.fileKey == item.fileKey }) else {
+        resumeStatus(for: item, in: load())
+    }
+
+    func resumeStatus(for item: WebDAVItem, in entries: [ResumeEntry]) -> ResumeStatus {
+        guard let entry = entries.first(where: { $0.fileKey == item.fileKey }) else {
             return ResumeStatus(
                 savedSeekMs: 0,
                 checkpointMs: nil,
@@ -324,6 +334,7 @@ final class ResumeStore: ObservableObject {
     }
 
     private func persist(_ entries: [ResumeEntry]) {
+        invalidateEntriesCache()
         if let data = try? JSONEncoder().encode(entries) {
             defaults.set(data, forKey: Self.entriesKey)
         }
@@ -356,11 +367,20 @@ final class ResumeStore: ObservableObject {
     }
 
     private func load() -> [ResumeEntry] {
+        if let entriesCache {
+            return entriesCache
+        }
         guard let data = defaults.data(forKey: Self.entriesKey),
               let entries = try? JSONDecoder().decode([ResumeEntry].self, from: data) else {
+            entriesCache = []
             return []
         }
+        entriesCache = entries
         return entries
+    }
+
+    private func invalidateEntriesCache() {
+        entriesCache = nil
     }
 }
 

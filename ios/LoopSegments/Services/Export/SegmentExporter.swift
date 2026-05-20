@@ -130,10 +130,19 @@ final class SegmentExporter {
             )
             throw SegmentExporterError.seekPastEnd
         }
+        let lanPrefetch = Self.lanWorkingPrefetchPolicy(seekSeconds: seekSeconds)
+        if lanPrefetch.prepareHeadAndIndex {
+            try Self.ensureExportDiskSpace(fileBytes: fileSize, lanPrefetchToEOF: true)
+            try await preloadWorkingSourceForLANPlayback(
+                downloader: downloader,
+                fileSize: fileSize,
+                log: logHandler
+            )
+        }
         tempDownload?.beginExport(
             seekSeconds: seekSeconds,
             durationSeconds: durationSeconds,
-            useBackgroundDownload: false
+            useBackgroundDownload: lanPrefetch.useBackgroundDownload
         )
         await MainActor.run {
             ResumeStore.shared.setSourceDurationMs(durationMs, for: item)
@@ -386,12 +395,21 @@ final class SegmentExporter {
 
                 lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
                 reportProgress(lastMediaTimeMs)
+                if lanPrefetch.extendThroughCursorEachMinute {
+                    await extendLANPrefetchThroughExportCursor(
+                        downloader: downloader,
+                        mediaCursorSeconds: mediaCursorSeconds,
+                        durationSeconds: durationSeconds,
+                        fileSize: fileSize,
+                        log: logHandler
+                    )
+                }
                 minuteIndex += 1
             }
 
-            if seekSeconds <= 0.5 {
+            if lanPrefetch.waitForBackgroundAtEnd {
                 try await downloader.waitUntilComplete()
-        }
+            }
 
         if skippedSegmentCount > 0 {
             logHandler(
@@ -492,9 +510,12 @@ final class SegmentExporter {
         return freeNumber.int64Value
     }
 
-    private static func ensureExportDiskSpace(fileBytes: Int64) throws {
+    private static func ensureExportDiskSpace(fileBytes: Int64, lanPrefetchToEOF: Bool = false) throws {
         guard let free = freeDiskBytes() else { return }
-        let needed = min(max(fileBytes, 0), streamingWorkingSetBytes) + diskMarginBytes
+        let budget = lanPrefetchToEOF
+            ? max(fileBytes, 0)
+            : min(max(fileBytes, 0), streamingWorkingSetBytes)
+        let needed = budget + diskMarginBytes
         guard free >= needed else {
             throw SegmentExporterError.insufficientDiskSpace(needed: needed, available: max(0, free))
         }
@@ -1234,6 +1255,76 @@ final class SegmentExporter {
         return true
     }
 
+    /// One LAN policy for all file sizes: head+index, background fill from seek, extend dense span each minute.
+    private struct LANWorkingPrefetchPolicy {
+        let prepareHeadAndIndex: Bool
+        let useBackgroundDownload: Bool
+        let extendThroughCursorEachMinute: Bool
+        let waitForBackgroundAtEnd: Bool
+    }
+
+    private static func lanWorkingPrefetchPolicy(seekSeconds: Double) -> LANWorkingPrefetchPolicy {
+        guard ExportLANServer.isEnabled, seekSeconds <= 0.5 else {
+            return LANWorkingPrefetchPolicy(
+                prepareHeadAndIndex: false,
+                useBackgroundDownload: false,
+                extendThroughCursorEachMinute: false,
+                waitForBackgroundAtEnd: false
+            )
+        }
+        return LANWorkingPrefetchPolicy(
+            prepareHeadAndIndex: true,
+            useBackgroundDownload: true,
+            extendThroughCursorEachMinute: true,
+            waitForBackgroundAtEnd: true
+        )
+    }
+
+    /// Head + MP4 index; background task fills `_working.mp4` from the seek point (all sizes when LAN is on).
+    private func preloadWorkingSourceForLANPlayback(
+        downloader: WebDAVTempFileDownload,
+        fileSize: Int64,
+        log: @escaping (String) -> Void
+    ) async throws {
+        let full = TimelineByteRange(start: 0, end: fileSize)
+        try await downloader.ensureFileHeadOnDisk()
+        try await downloader.ensureIndexTailOnDisk()
+        if downloader.isByteRangeFullyOnDisk(full) {
+            log("LAN _working.mp4 — full file already on disk (seek anywhere)")
+            return
+        }
+        downloader.setDownloadHighWaterMark(fileSize)
+        log(
+            "LAN preload — background fill to EOF (\(Self.formatBytes(fileSize)) _working.mp4 over cellular/pCloud; " +
+                "LAN :8765 only serves dense bytes to the PC)"
+        )
+        downloader.publishLANPlaybackState()
+    }
+
+    /// Dense-fill `_working.mp4` from file start through export cursor (+2 min lookahead) for LAN range gating.
+    private func extendLANPrefetchThroughExportCursor(
+        downloader: WebDAVTempFileDownload,
+        mediaCursorSeconds: Double,
+        durationSeconds: Double,
+        fileSize: Int64,
+        log: @escaping (String) -> Void
+    ) async {
+        let lookahead = min(durationSeconds, mediaCursorSeconds + Self.segmentDurationSeconds * 2)
+        let range = downloader.byteRangeForTimeline(
+            timelineStartSeconds: 0,
+            timelineEndSeconds: lookahead,
+            durationSeconds: durationSeconds
+        )
+        let full = TimelineByteRange(start: 0, end: fileSize)
+        guard !downloader.isByteRangeFullyOnDisk(range) else { return }
+        do {
+            try await downloader.ensureContiguousRange(range)
+            downloader.publishLANPlaybackState(mediaCursorSeconds: mediaCursorSeconds)
+        } catch {
+            log("LAN prefetch through \(ResumeTimeFormat.formatMs(Int64(mediaCursorSeconds * 1000))) skipped: \(error.localizedDescription)")
+        }
+    }
+
     private func ensureSeekZeroRemainderOnDiskIfBeneficial(
         downloader: WebDAVTempFileDownload,
         byteRange: TimelineByteRange,
@@ -1245,7 +1336,8 @@ final class SegmentExporter {
         let tail = TimelineByteRange(start: byteRange.end, end: fileLength)
         guard !downloader.isByteRangeFullyOnDisk(tail) else { return }
         let tailBytes = fileLength - byteRange.end
-        let shouldFill = fileLength <= Self.seekZeroDenseEntireFileMaxBytes
+        let shouldFill = ExportLANServer.isEnabled
+            || fileLength <= Self.seekZeroDenseEntireFileMaxBytes
             || tailBytes <= Self.seekZeroDenseTailMaxBytes
         guard shouldFill else {
             log(

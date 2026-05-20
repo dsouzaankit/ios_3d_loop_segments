@@ -31,6 +31,11 @@ enum ExportLANServer {
     private static let queue = DispatchQueue(label: "com.loopsegments.lan-server")
     /// Bonjour service name (`loopsegments._http._tcp.local` in browsers) — not a pingable hostname.
     static let bonjourServiceName = "loopsegments"
+    /// Settings → General → About → Name (e.g. `John's iPhone` → `http://johns-iphone.local:8765/`, not `iphone.local` unless named "iPhone").
+    static var deviceAboutName: String {
+        UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// mDNS host label from this iPhone (Settings → General → About → Name → `<name>.local`).
     static var deviceMDNSHostName: String {
         "\(deviceMDNSHostLabel()).local"
@@ -74,7 +79,17 @@ enum ExportLANServer {
                 let params = NWParameters.tcp
                 params.allowLocalEndpointReuse = true
                 let nwListener = try NWListener(using: params, on: port)
-                nwListener.service = NWListener.Service(name: bonjourServiceName, type: "_http._tcp")
+                let ipForTXT = Self.primaryLANIPv4Address()
+                var txtRecord: Data?
+                if let ipForTXT, !ipForTXT.isEmpty {
+                    let txt = NetService.data(fromTXTRecord: ["ip": Data(ipForTXT.utf8)])
+                    txtRecord = txt
+                }
+                nwListener.service = NWListener.Service(
+                    name: bonjourServiceName,
+                    type: "_http._tcp",
+                    txtRecord: txtRecord
+                )
                 lock.lock()
                 listener = nwListener
                 lock.unlock()
@@ -1403,7 +1418,7 @@ enum ExportLANServer {
             )
             guard result == 0 else { continue }
             let ip = String(cString: hostname)
-            if ip.hasPrefix("127.") || ip == "0.0.0.0" { continue }
+            if ip.hasPrefix("127.") || ip.hasPrefix("169.254.") || ip == "0.0.0.0" { continue }
             candidates.append((name, ip))
         }
         if let en0 = candidates.first(where: { $0.name == "en0" })?.address {

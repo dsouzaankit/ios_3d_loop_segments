@@ -56,11 +56,11 @@ Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the si
 
 LAN serves `pcld_ios_media/loop/op_*.mp4`, `pcld_ios_media/_working.mp4`, and logs on port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree; **`#t=`** on the index handles resume for `_working` (clears after a finished export).
 
-**Windows / ping:** **`ping loopsegments.local` will fail** — that name is not registered. Use the **IP** from the app (`http://10.x.x.x:8765/`). Optional: **`ping <iphone-name>.local`** only if Windows mDNS resolves it (often does not without Bonjour). **`ping` ≠ HTTP** — the server may work in a browser even when ping fails.
+**Windows / `.local`:** **`http://iphone.local:8765/` usually fails** — that hostname only exists if About → Name is literally “iPhone” (otherwise it is e.g. `http://johns-iphone.local:8765/`). Windows often does not resolve any `.local` name without [Apple Bonjour](https://support.apple.com/kb/DL999). Use the **LAN IP** from Export (`http://10.x.x.x:8765/`). Test: `cd windows` → `.\Set-LoopSegmentsLANHost.ps1 <ip>` → `.\Mount-LoopSegmentsRclone.ps1 -TestOnly`.
 
 ### `_working.mp4`: browser scrubber vs export logs
 
-`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** (head, index tail, and minutes already filled on the phone) are actually local — that is **not** the same as segment export progress or the resume checkpoint.
+`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Seek 0 + Serve Exports on:** same LAN preload for every file size — MP4 head+index, **background fill to EOF** (pCloud over cellular; LAN only serves `_working` to the PC), then **extend dense bytes through the export cursor** each minute until export ends (background may still be running). **Seek > 0:** minute windows only (no fill from file start).
 
 Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + files; **Stop** clears paused state and removes published `op_*.mp4`.
 
