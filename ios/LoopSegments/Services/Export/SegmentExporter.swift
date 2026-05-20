@@ -1432,7 +1432,7 @@ final class SegmentExporter {
     private static func shouldSkipMinuteAndContinue(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {
             switch exportError {
-            case .cancelled, .readerInterrupted, .seekPastEnd, .noVideoTrack,
+            case .cancelled, .paused, .readerInterrupted, .seekPastEnd, .noVideoTrack,
                  .unsupportedCodec, .missingFormatDescription, .insufficientDiskSpace:
                 return false
             case .readerSetupFailed, .readerFailed, .writerSetupFailed, .writerFailed,
@@ -1455,7 +1455,7 @@ final class SegmentExporter {
                 return isSparseContainerOpenFailure(underlying)
             case .writerFailed, .writerBackpressure:
                 return true
-            case .cancelled, .readerInterrupted, .seekPastEnd, .noVideoTrack, .unsupportedCodec,
+            case .cancelled, .paused, .readerInterrupted, .seekPastEnd, .noVideoTrack, .unsupportedCodec,
                  .missingFormatDescription, .writerSetupFailed, .writerAudioStall,
                  .insufficientDiskSpace, .midFileTempUnreadable:
                 return false
