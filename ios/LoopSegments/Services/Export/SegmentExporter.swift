@@ -142,11 +142,11 @@ final class SegmentExporter {
         )
         downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
 
-        let reportProgress: @Sendable (Int64) -> Void = { mediaMs in
+        let reportProgress: @Sendable (Int64) -> Void = { [weak self] mediaMs in
             onMediaProgress?(mediaMs)
             let seconds = Double(mediaMs) / 1000.0
             ExportPlaybackState.shared.updateCursor(seconds: seconds)
-            tempDownload?.publishLANPlaybackState(mediaCursorSeconds: seconds)
+            self?.tempDownload?.publishLANPlaybackState(mediaCursorSeconds: seconds)
         }
 
         logHandler(
