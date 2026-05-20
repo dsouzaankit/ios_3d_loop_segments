@@ -180,6 +180,8 @@ function Test-LoopSegmentsWebDAV {
         throw "WebDAV PROPFIND failed. $($_.Exception.Message)"
     }
 
+    $null = Test-LoopSegmentsWebDAVDavWWWRoot -RootUrl $RootUrl
+
     if (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $RootUrl) {
         Write-Host '  GET / as WebDAV client OK (not HTML — safe for net use)'
     } else {
@@ -220,6 +222,32 @@ function Remove-LoopSegmentsPort80Proxy {
     netsh interface portproxy delete v4tov4 listenport=80 connectport=$PhonePort connectaddress=$PhoneHost 2>$null | Out-Null
 }
 
+function Test-LoopSegmentsWebDAVDavWWWRoot {
+    param([string] $RootUrl)
+
+    $base = $RootUrl.TrimEnd('/')
+    $url = "$base/DavWWWRoot/"
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($url)
+        $req.Method = 'PROPFIND'
+        $req.Timeout = 15000
+        $req.Headers.Add('Depth', '0')
+        $req.ContentLength = 0
+        $resp = $req.GetResponse()
+        $status = [int]$resp.StatusCode
+        $resp.Close()
+        if ($status -eq 207) {
+            Write-Host "  PROPFIND $url -> 207 OK (Windows DavWWWRoot path)"
+            return $true
+        }
+        Write-Warning "  PROPFIND $url -> $status (expected 207 for net use)"
+        return $false
+    } catch {
+        Write-Warning "  PROPFIND DavWWWRoot failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Invoke-LoopSegmentsNetUse {
     param(
         [string] $Drive,
@@ -228,16 +256,20 @@ function Invoke-LoopSegmentsNetUse {
         [int] $Port
     )
 
-    $uncRoot = "\\${HostIp}@${Port}\DavWWWRoot\"
-    $commands = @(
-        @{ Label = 'DavWWWRoot UNC'; Cmd = "net use $Drive `"$uncRoot`" /persistent:no" },
-        @{ Label = 'http + anonymous'; Cmd = "net use $Drive `"$RootUrl`" /persistent:no /user:anonymous `"`"" },
-        @{ Label = 'http URL only'; Cmd = "net use $Drive `"$RootUrl`" /persistent:no" }
-    )
+    $root = $RootUrl.TrimEnd('/')
+    $commands = [System.Collections.Generic.List[hashtable]]::new()
+    $commands.Add(@{ Label = 'UNC \\host@port\DavWWWRoot\'; Cmd = "net use $Drive `"\\${HostIp}@${Port}\DavWWWRoot\`" /persistent:no" })
+    if ($Port -eq 80) {
+        $commands.Add(@{ Label = 'UNC \\host\DavWWWRoot\ (port 80)'; Cmd = "net use $Drive `"\\${HostIp}\DavWWWRoot\`" /persistent:no" })
+    }
+    $commands.Add(@{ Label = 'http .../DavWWWRoot/'; Cmd = "net use $Drive `"$root/DavWWWRoot/`" /persistent:no" })
+    $commands.Add(@{ Label = 'http root URL'; Cmd = "net use $Drive `"$RootUrl`" /persistent:no" })
+    $commands.Add(@{ Label = 'http root + anonymous'; Cmd = "net use $Drive `"$RootUrl`" /persistent:no /user:anonymous `"`"" })
 
     foreach ($attempt in $commands) {
         Write-Host "Trying net use ($($attempt.Label)) ..."
-        cmd /c $attempt.Cmd 2>&1 | ForEach-Object { Write-Host $_ }
+        $out = cmd /c $attempt.Cmd 2>&1
+        $out | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -eq 0) {
             return $true
         }
@@ -271,6 +303,7 @@ if ($ViaPort80Proxy) {
     Enable-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $Port
     $rootUrl = 'http://127.0.0.1/'
     Write-Host 'Using http://127.0.0.1/ via port 80 proxy (WebClient-friendly).'
+    Write-Warning 'Many PCs refuse WebDAV to 127.0.0.1 (error 67) even with portproxy. Prefer direct map to phone IP after build 159+.'
 }
 
 if ($TestOnly) {
@@ -313,14 +346,17 @@ if (-not (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $rootUrl)) {
 }
 
 Write-Host "Mapping $drive -> $rootUrl (phone app open, Serve Exports on)."
+Test-LoopSegmentsWebDAV -RootUrl $(if ($ViaPort80Proxy) { "http://${hostIp}:${Port}/" } else { $rootUrl }) -HostIp $hostIp | Out-Null
+
 if (-not (Invoke-LoopSegmentsNetUse -Drive $drive -RootUrl $rootUrl -HostIp $mapHostIp -Port $mapPort)) {
     Write-Host ''
-    Write-Host 'net use failed. PROPFIND 207 only proves the phone server — Windows WebClient is picky.'
+    Write-Host 'net use failed (system error 67 = WebClient could not attach — server may still be fine).'
     Write-Host 'Try:'
-    Write-Host '  1. App build 152+ (GET / must not return HTML to WebDAV clients)'
-    Write-Host '  2. .\Map-LoopSegmentsWebDAV.ps1 -ViaPort80Proxy   (admin; maps via localhost:80)'
+    Write-Host '  1. Phone app build 159+ (DavWWWRoot path + GET / not HTML) — .\Map-LoopSegmentsWebDAV.ps1 -TestOnly'
+    Write-Host '  2. Admin: .\Map-LoopSegmentsWebDAV.ps1 -ConfigureWebClient  then map to http://<phone-ip>:8765/ (not 127.0.0.1)'
     Write-Host '  3. .\Sync-FromPhoneLAN.ps1 -Watch   (recommended; no drive letter)'
     if ($ViaPort80Proxy) {
+        Write-Host '  Note: -ViaPort80Proxy often fails on Windows; use direct phone IP if TestOnly passes.'
         Remove-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $Port
     }
     exit 1

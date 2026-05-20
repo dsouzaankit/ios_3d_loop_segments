@@ -165,7 +165,7 @@ enum ExportLANServer {
                 }
                 handleRequest(
                     method: method,
-                    path: path,
+                    path: webDAVResourcePath(path),
                     requestHeaders: text,
                     connection: connection,
                     done: done
@@ -396,8 +396,22 @@ enum ExportLANServer {
         return p
     }
 
+    /// Windows `net use \\host\DavWWWRoot\` issues PROPFIND/GET under `/DavWWWRoot/…`.
+    private static func webDAVResourcePath(_ path: String) -> String {
+        var p = normalizedDAVPath(path)
+        let lower = p.lowercased()
+        if lower == "/davwwwroot" {
+            return "/"
+        }
+        if lower.hasPrefix("/davwwwroot/") {
+            let suffix = String(p.dropFirst("/davwwwroot".count))
+            return normalizedDAVPath(suffix.isEmpty ? "/" : suffix)
+        }
+        return p
+    }
+
     private static func fileName(fromDAVPath path: String) -> String? {
-        let p = normalizedDAVPath(path)
+        let p = webDAVResourcePath(path)
         guard p != "/" else { return nil }
         let name = (p as NSString).lastPathComponent
         return name.isEmpty ? nil : name
@@ -516,7 +530,7 @@ enum ExportLANServer {
         connection: NWConnection,
         done: @escaping () -> Void
     ) {
-        let davPath = normalizedDAVPath(path)
+        let davPath = webDAVResourcePath(path)
         let depth = parseDepth(requestHeaders: requestHeaders)
         let baseURL = requestBaseURL(from: requestHeaders)
         var responses: [String] = []
