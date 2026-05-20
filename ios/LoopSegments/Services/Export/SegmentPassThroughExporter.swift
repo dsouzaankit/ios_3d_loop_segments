@@ -462,7 +462,7 @@ enum SegmentPassThroughExporter {
         session.outputURL = outputURL
         session.outputFileType = .mp4
         session.timeRange = CMTimeRange(start: rangeStart, duration: rangeDuration)
-        session.shouldOptimizeForNetworkUse = true
+        session.shouldOptimizeForNetworkUse = false
         log(
             "Staging \(outputURL.lastPathComponent) via AVAssetExportSession passthrough " +
                 "(\(sourceLabel), media \(formatMediaTime(rangeStart))–\(formatMediaTime(CMTimeAdd(rangeStart, rangeDuration))))"

@@ -192,7 +192,7 @@ function Test-LoopSegmentsWebDAVMediaGet {
         if (Test-LoopSegmentsLANMp4MoovInHead -FileUrl $absoluteUri) {
             Write-Host "  moov atom in first 768 KB — Skybox-friendly faststart"
         } else {
-            Write-Warning "  moov not in file head — install build 171+ and wait for next op_00 publish (export log: faststart remux)"
+            Write-Warning "  moov not in file head — normal for stream-copy segments; browser/Pigasus use Range. Install build 173+ if op_00 won't play."
         }
     } catch [System.Net.WebException] {
         $r = $_.Exception.Response

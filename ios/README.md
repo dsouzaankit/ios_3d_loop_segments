@@ -84,9 +84,23 @@ pCloud can stay on **cellular** while the LAN server serves `Documents/Exports/`
 
 Read-only; phone must stay on the LAN with **Serve Exports** enabled. For hands-off DLNA copy, keep using **`Sync-FromPhoneLAN.ps1 -Watch`**.
 
+### Quest LAN playback (Skybox vs Pigasus)
+
+**pCloud WebDAV in Skybox** = full **HTTPS** files on pCloud’s server (what already works for you).
+
+**Phone LAN** (`http://<ip>:8765`) = plain HTTP + optional WebDAV for the export folder. Players differ:
+
+| Player | `_export_source_working.mp4` (sparse) | `op_00.mp4` (segment) |
+|--------|----------------------------------------|------------------------|
+| **Pigasus** (direct URL / network file) | **Works** — uses HTTP **Range** (head + `moov` tail + dense minutes) | Should work |
+| **Skybox WebDAV** | Usually **fails** | Often **“too large to decode”** on 5K HEVC; use Pigasus/PC |
+| **Quest browser** (index link, `#t=`) | Works for dense-filled regions | Works (**build 173+** — skip broken faststart remux from 171–172) |
+
+**In-progress export on Quest:** use **Pigasus** with the URL from the phone export log, e.g. `http://10.0.100.10:8765/_export_source_working.mp4` (or open the LAN index in the browser and tap that file — adds `#t=` resume). No WebDAV setup required.
+
 ### Skybox (Quest) WebDAV
 
-**pCloud WebDAV working in Skybox is expected** — that is a full **HTTPS** cloud server with complete files. The phone LAN server (`http://<ip>:8765`) is a small read-only HTTP export folder for PC sync; Skybox support is best-effort, not identical to pCloud.
+Skybox over **WebDAV** on the phone is best-effort (not the same code path as Pigasus’s HTTP streaming).
 
 | | pCloud WebDAV | Loop Segments LAN |
 |--|----------------|-------------------|
@@ -94,11 +108,11 @@ Read-only; phone must stay on the LAN with **Serve Exports** enabled. For hands-
 | Files | Full originals on cloud | `op_00.mp4` (~60s segment), sparse `_export_source_working.mp4` |
 | Server | Mature WebDAV | Minimal in-app server |
 
-**If pCloud plays but phone LAN does not:** install **build 172+** (PROPFIND hrefs like pCloud, no `WWW-Authenticate` on successful listings) and **171+** (faststart `op_00.mp4`). Then in Skybox play **`op_00.mp4` only** after export publishes a new segment — not `_export_source_working.mp4`.
+**Skybox on phone LAN:** install **build 173+** (restores playable `op_00.mp4` on browser/Pigasus; **172** WebDAV listing). Skybox may still refuse **5K+ HEVC** segments (“video too large to decode”) even when the file is valid — use **Pigasus** or **PC SMB** for phone exports. For **`_export_source_working.mp4`**, use **Pigasus** or the browser index, not Skybox WebDAV.
 
 1. Phone: **Serve Exports on Wi‑Fi** on, app **in foreground**, same Wi‑Fi as Quest.
 2. Skybox → **Add WebDAV server** → `http://10.0.100.10:8765/` · `admin` / `iosadmin`.
-3. Open **`op_00.mp4`** (wait for export log: *moov in file head* / *faststart*).
+3. Prefer **`op_00.mp4` in Pigasus** (`http://<ip>:8765/op_00.mp4`) after export publishes a **new** segment on **173+**.
 
 **Reliable Skybox paths (same as pCloud-quality playback):**
 
