@@ -329,6 +329,9 @@ struct ExportView: View {
         refreshLogFromDisk()
         refreshLogHint()
         ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
+        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
+            WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
+        }
         lanExportURL = ExportLANServer.baseURLString
     }
 

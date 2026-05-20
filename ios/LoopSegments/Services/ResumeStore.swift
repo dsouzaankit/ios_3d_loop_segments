@@ -58,7 +58,7 @@ final class ResumeStore: ObservableObject {
     static let shared = ResumeStore()
     @Published private(set) var revision = 0
 
-    private let key = "resume_entries"
+    fileprivate static let entriesKey = "resume_entries"
     private let defaults = UserDefaults.standard
 
     func seekMs(for item: WebDAVItem) -> Int64 {
@@ -179,7 +179,7 @@ final class ResumeStore: ObservableObject {
 
     private func persist(_ entries: [ResumeEntry]) {
         if let data = try? JSONEncoder().encode(entries) {
-            defaults.set(data, forKey: key)
+            defaults.set(data, forKey: Self.entriesKey)
         }
         revision += 1
     }
@@ -210,12 +210,71 @@ final class ResumeStore: ObservableObject {
     }
 
     private func load() -> [ResumeEntry] {
-        guard let data = defaults.data(forKey: key),
+        guard let data = defaults.data(forKey: Self.entriesKey),
               let entries = try? JSONDecoder().decode([ResumeEntry].self, from: data) else {
             return []
         }
         return entries
     }
+}
+
+extension ResumeStore {
+    /// LAN / sparse manifest hints (safe off main actor — reads UserDefaults only).
+    struct LANPlaybackHints: Sendable {
+        let fileKey: String
+        let href: String?
+        let playbackStartSeconds: Double
+        let exportCursorSeconds: Double
+        let durationSeconds: Double
+    }
+
+    nonisolated static func lanPlaybackHints(fileKey: String?, href: String?) -> LANPlaybackHints? {
+        guard let data = UserDefaults.standard.data(forKey: ResumeStore.entriesKey),
+              let entries = try? JSONDecoder().decode([ResumeEntry].self, from: data),
+              !entries.isEmpty else {
+            return nil
+        }
+
+        let entry: ResumeEntry?
+        if let fileKey, !fileKey.isEmpty,
+           let match = entries.first(where: { $0.fileKey == fileKey }) {
+            entry = match
+        } else if let href, !href.isEmpty,
+                  let match = entries.first(where: { $0.href == href }) {
+            entry = match
+        } else {
+            let paused = entries.filter(\.exportInProgress)
+            if paused.count == 1 {
+                entry = paused[0]
+            } else {
+                entry = paused.max(by: { $0.updatedAt < $1.updatedAt })
+            }
+        }
+        guard let entry else { return nil }
+
+        let savedMs = entry.lastSeekMs
+        let checkpointMs = entry.checkpointMediaMs ?? 0
+        var effectiveMs = max(savedMs, checkpointMs)
+        if let cap = entry.sourceDurationMs, cap > 500 {
+            effectiveMs = min(effectiveMs, max(0, cap - 250))
+        }
+        let durationSeconds: Double
+        if let cap = entry.sourceDurationMs, cap > 0 {
+            durationSeconds = Double(cap) / 1000.0
+        } else {
+            durationSeconds = 0
+        }
+        let playbackStartSeconds = Double(effectiveMs) / 1000.0
+        let exportCursorSeconds = Double(max(effectiveMs, checkpointMs)) / 1000.0
+        return LANPlaybackHints(
+            fileKey: entry.fileKey,
+            href: entry.href,
+            playbackStartSeconds: playbackStartSeconds,
+            exportCursorSeconds: exportCursorSeconds,
+            durationSeconds: durationSeconds
+        )
+    }
+
 }
 
 enum SeekPreset: Int, CaseIterable, Identifiable {

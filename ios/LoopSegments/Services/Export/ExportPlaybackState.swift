@@ -91,8 +91,8 @@ final class ExportPlaybackState: @unchecked Sendable {
                 0,
                 totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
             )
-            if let playbackStartSeconds {
-                snapshot.playbackStartSeconds = max(0, playbackStartSeconds)
+            if let playbackStartSeconds, playbackStartSeconds > 0 {
+                snapshot.playbackStartSeconds = playbackStartSeconds
             }
             if let durationSeconds, durationSeconds > 0 {
                 snapshot.durationSeconds = durationSeconds

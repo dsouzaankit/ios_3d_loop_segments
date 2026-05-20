@@ -86,23 +86,116 @@ enum WorkingSourceSparseCatalog {
         }
         let total = sizeNum.int64Value
         let probed = probeLayoutOnDisk(fileURL: fileURL, totalLength: total)
-        if let manifest = loadManifest(totalLength: total),
+        if let manifest = loadManifest(forFileAt: fileURL),
            let manifestLayout = layout(from: manifest, fileURL: fileURL, totalLength: total) {
             let merged = AdoptedLayout(
                 filledRanges: manifestLayout.filledRanges,
                 headOnDisk: manifestLayout.headOnDisk || probed.headOnDisk,
                 tailOnDisk: manifestLayout.tailOnDisk || probed.tailOnDisk
             )
-            applyLayout(
-                merged,
-                totalLength: total,
+            let resolved = resolvePlaybackFields(
+                manifest: manifest,
                 playbackStartSeconds: manifest.playbackStartSeconds,
                 durationSeconds: manifest.durationSeconds,
                 exportCursorSeconds: manifest.exportCursorSeconds
             )
+            applyLayout(
+                merged,
+                totalLength: total,
+                playbackStartSeconds: resolved.playbackStartSeconds,
+                durationSeconds: resolved.durationSeconds,
+                exportCursorSeconds: resolved.exportCursorSeconds
+            )
+            migrateManifestIfNeeded(
+                manifest: manifest,
+                layout: merged,
+                playbackStartSeconds: resolved.playbackStartSeconds,
+                durationSeconds: resolved.durationSeconds,
+                exportCursorSeconds: resolved.exportCursorSeconds
+            )
             return
         }
-        applyLayout(probed, totalLength: total, playbackStartSeconds: nil, durationSeconds: nil, exportCursorSeconds: nil)
+        let hints = ResumeStore.lanPlaybackHints(fileKey: nil, href: nil)
+        applyLayout(
+            probed,
+            totalLength: total,
+            playbackStartSeconds: hints?.playbackStartSeconds,
+            durationSeconds: hints?.durationSeconds,
+            exportCursorSeconds: hints?.exportCursorSeconds
+        )
+        if let hints {
+            save(
+                fileKey: hints.fileKey,
+                totalLength: total,
+                href: hints.href,
+                filledRanges: probed.filledRanges,
+                headOnDisk: probed.headOnDisk,
+                tailOnDisk: probed.tailOnDisk,
+                playbackStartSeconds: hints.playbackStartSeconds,
+                durationSeconds: hints.durationSeconds > 0 ? hints.durationSeconds : nil,
+                exportCursorSeconds: hints.exportCursorSeconds
+            )
+        }
+    }
+
+    private struct ResolvedPlaybackFields {
+        let playbackStartSeconds: Double?
+        let durationSeconds: Double?
+        let exportCursorSeconds: Double?
+    }
+
+    private static func resolvePlaybackFields(
+        manifest: Manifest,
+        playbackStartSeconds: Double?,
+        durationSeconds: Double?,
+        exportCursorSeconds: Double?
+    ) -> ResolvedPlaybackFields {
+        var playback = playbackStartSeconds
+        var duration = durationSeconds
+        var cursor = exportCursorSeconds
+        if let hints = ResumeStore.lanPlaybackHints(fileKey: manifest.fileKey, href: manifest.href) {
+            if playback == nil || playback == 0 {
+                playback = hints.playbackStartSeconds
+            }
+            if duration == nil || duration == 0 {
+                duration = hints.durationSeconds > 0 ? hints.durationSeconds : nil
+            }
+            if cursor == nil || cursor == 0 {
+                cursor = hints.exportCursorSeconds
+            }
+        }
+        return ResolvedPlaybackFields(
+            playbackStartSeconds: playback,
+            durationSeconds: duration,
+            exportCursorSeconds: cursor
+        )
+    }
+
+    private static func migrateManifestIfNeeded(
+        manifest: Manifest,
+        layout: AdoptedLayout,
+        playbackStartSeconds: Double?,
+        durationSeconds: Double?,
+        exportCursorSeconds: Double?
+    ) {
+        let needsPlayback = (manifest.playbackStartSeconds ?? 0) <= 0
+            && (playbackStartSeconds ?? 0) > 0
+        let needsDuration = (manifest.durationSeconds ?? 0) <= 0
+            && (durationSeconds ?? 0) > 0
+        let needsCursor = (manifest.exportCursorSeconds ?? 0) <= 0
+            && (exportCursorSeconds ?? 0) > 0
+        guard needsPlayback || needsDuration || needsCursor else { return }
+        save(
+            fileKey: manifest.fileKey,
+            totalLength: manifest.totalLength,
+            href: manifest.href,
+            filledRanges: layout.filledRanges,
+            headOnDisk: layout.headOnDisk,
+            tailOnDisk: layout.tailOnDisk,
+            playbackStartSeconds: needsPlayback ? playbackStartSeconds : manifest.playbackStartSeconds,
+            durationSeconds: needsDuration ? durationSeconds : manifest.durationSeconds,
+            exportCursorSeconds: needsCursor ? exportCursorSeconds : manifest.exportCursorSeconds
+        )
     }
 
     private static func applyLayout(
@@ -123,12 +216,28 @@ enum WorkingSourceSparseCatalog {
         )
     }
 
+    private static func loadManifest(forFileAt fileURL: URL) -> Manifest? {
+        guard FileManager.default.fileExists(atPath: manifestURL.path),
+              let data = try? Data(contentsOf: manifestURL),
+              var manifest = try? JSONDecoder().decode(Manifest.self, from: data) else {
+            return nil
+        }
+        let onDisk = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard onDisk > 0 else { return nil }
+        if manifest.totalLength != onDisk {
+            manifest.totalLength = onDisk
+        }
+        return manifest
+    }
+
     private static func loadManifest(totalLength: Int64) -> Manifest? {
         guard FileManager.default.fileExists(atPath: manifestURL.path),
               let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
-              manifest.totalLength == totalLength else {
+              var manifest = try? JSONDecoder().decode(Manifest.self, from: data) else {
             return nil
+        }
+        if manifest.totalLength != totalLength {
+            manifest.totalLength = totalLength
         }
         return manifest
     }
@@ -175,7 +284,7 @@ enum WorkingSourceSparseCatalog {
     }
 
     static func tryAdoptFromDisk(fileURL: URL, totalLength: Int64) -> AdoptedLayout? {
-        guard let manifest = loadManifest(totalLength: totalLength) else { return nil }
+        guard let manifest = loadManifest(forFileAt: fileURL) else { return nil }
         return layout(from: manifest, fileURL: fileURL, totalLength: totalLength)
     }
 
