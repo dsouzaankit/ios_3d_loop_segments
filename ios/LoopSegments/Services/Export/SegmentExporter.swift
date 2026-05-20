@@ -1670,7 +1670,7 @@ final class SegmentWriterContext {
         realTime: Bool = true
     ) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        writer.shouldOptimizeForNetworkUse = false
+        writer.shouldOptimizeForNetworkUse = true
         videoInput = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: nil,

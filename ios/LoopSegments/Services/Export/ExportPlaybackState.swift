@@ -103,21 +103,11 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
     }
 
-    /// Longest contiguous readable span from `start` through `maxEnd` (for clamping open-ended Range requests).
+    /// First contiguous readable span from `start` (one HTTP Range response must not chain sparse gaps).
     func maxContiguousReadableEnd(from start: Int64, maxEnd: Int64) -> Int64? {
         let snap = lock.withLock { snapshot }
         guard snap.totalFileBytes > 0, start >= 0, start <= maxEnd else { return nil }
-        var cursor = start
-        var lastEnd: Int64?
-        while cursor <= maxEnd {
-            guard let runEnd = Self.endOfServedRun(from: cursor, maxEnd: maxEnd, snap: snap) else {
-                break
-            }
-            lastEnd = runEnd
-            if runEnd >= maxEnd { break }
-            cursor = runEnd + 1
-        }
-        return lastEnd
+        return Self.endOfServedRun(from: start, maxEnd: maxEnd, snap: snap)
     }
 
     /// Whether timeline `seconds` lies inside a dense byte window on disk.

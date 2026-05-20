@@ -6,6 +6,8 @@ import Network
 /// True SMB is not available on iOS; WebDAV lets Windows map a drive letter to the same folder.
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
+    /// Per-response cap — open-ended `Range: bytes=0-` must not ship multi-GB (Quest browser / Safari OOM).
+    private static let maxResponseBodyBytes: Int64 = 32 * 1024 * 1024
     /// LAN WebDAV Basic auth (Skybox, mapped drives). GET without auth still works for PC sync.
     static let lanWebDAVUsername = "admin"
     static let lanWebDAVPassword = "iosadmin"
@@ -460,7 +462,13 @@ enum ExportLANServer {
         if let etag {
             lines.append("ETag: \(etag)")
         }
+        lines.append("Connection: close")
         return lines.joined(separator: "\r\n") + "\r\n\r\n"
+    }
+
+    private static func clampResponseEnd(byteStart: Int64, byteEnd: Int64, fileSize: Int64) -> Int64 {
+        let maxEnd = min(fileSize - 1, byteStart + maxResponseBodyBytes - 1)
+        return min(byteEnd, maxEnd)
     }
 
     private static func fileETag(size: Int64) -> String {
@@ -960,6 +968,7 @@ enum ExportLANServer {
                 }
                 byteEnd = readableEnd
             }
+            byteEnd = clampResponseEnd(byteStart: byteStart, byteEnd: byteEnd, fileSize: fileSize)
             status = 206
             phrase = "Partial Content"
         } else if hasRangeHeader {
@@ -969,7 +978,7 @@ enum ExportLANServer {
             // Serve the first readable span (usually file head or index tail) so browsers get moov without bytes=0- on the whole sparse file.
             if let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(from: 0, maxEnd: fileSize - 1) {
                 byteStart = 0
-                byteEnd = readableEnd
+                byteEnd = clampResponseEnd(byteStart: 0, byteEnd: readableEnd, fileSize: fileSize)
                 status = 206
                 phrase = "Partial Content"
             } else {
@@ -995,9 +1004,9 @@ enum ExportLANServer {
             }
         } else {
             byteStart = 0
-            byteEnd = fileSize - 1
-            status = 200
-            phrase = "OK"
+            byteEnd = clampResponseEnd(byteStart: 0, byteEnd: fileSize - 1, fileSize: fileSize)
+            status = byteEnd >= fileSize - 1 ? 200 : 206
+            phrase = status == 206 ? "Partial Content" : "OK"
         }
 
         let bodyLength = byteEnd - byteStart + 1
