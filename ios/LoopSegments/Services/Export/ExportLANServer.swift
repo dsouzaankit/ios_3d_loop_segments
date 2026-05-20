@@ -6,9 +6,9 @@ import Network
 /// True SMB is not available on iOS; WebDAV lets Windows map a drive letter to the same folder.
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
-    /// Skybox / many players require non-empty Basic auth in the UI; any value is accepted.
-    static let lanWebDAVUsername = "loop"
-    static let lanWebDAVPassword = "loop"
+    /// LAN WebDAV Basic auth (Skybox, mapped drives). GET without auth still works for PC sync.
+    static let lanWebDAVUsername = "admin"
+    static let lanWebDAVPassword = "iosadmin"
     private static let lanWebDAVRealm = "Loop Segments LAN"
     private static let enabledKey = "serveExportsOnLAN"
 
@@ -267,13 +267,27 @@ enum ExportLANServer {
         ["WWW-Authenticate: Basic realm=\"\(lanWebDAVRealm)\""]
     }
 
-    /// Accept any Basic credentials (Skybox requires non-empty user + password in the UI).
+    /// When `Authorization` is sent it must match `lanWebDAVUsername` / `lanWebDAVPassword`.
     private static func lanWebDAVAuthorizationOK(requestHeaders: String) -> Bool {
         guard let value = headerValue(named: "Authorization", in: requestHeaders) else {
             return true
         }
-        guard value.lowercased().hasPrefix("basic ") else { return true }
-        return true
+        guard let (user, password) = parseBasicAuthorization(value) else { return false }
+        return user == lanWebDAVUsername && password == lanWebDAVPassword
+    }
+
+    private static func parseBasicAuthorization(_ value: String) -> (user: String, password: String)? {
+        guard value.lowercased().hasPrefix("basic ") else { return nil }
+        let encoded = String(value.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+        guard let data = Data(base64Encoded: encoded),
+              let decoded = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        let parts = decoded.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let userPart = parts.first else { return nil }
+        let user = String(userPart)
+        let password = parts.count > 1 ? String(parts[1]) : ""
+        return (user, password)
     }
 
     private static func headerValue(named name: String, in requestHeaders: String) -> String? {
@@ -515,7 +529,10 @@ enum ExportLANServer {
     }
 
     private static func sendUnauthorized(connection: NWConnection, done: @escaping () -> Void) {
-        let body = Data("Basic auth required — use any username with password (default loop / loop).".utf8)
+        let body = Data(
+            "Basic auth required — username \(lanWebDAVUsername), password \(lanWebDAVPassword)."
+                .utf8
+        )
         var lines = [
             "HTTP/1.1 401 Unauthorized",
             "Content-Type: text/plain; charset=utf-8",

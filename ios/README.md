@@ -90,7 +90,7 @@ Skybox **requires Basic auth** in the UI and often probes `GET /` when adding a 
 1. Phone: **Serve Exports on Wi‑Fi** on, app in foreground, same Wi‑Fi as the headset.
 2. Skybox → **Network** → **Add WebDAV server**.
 3. **URL:** `http://<phone-ip>:8765/` (include `http://` and port **8765**).
-4. **Username:** `loop` · **Password:** `loop` (any non-empty values work; these are the defaults).
+4. **Username:** `admin` · **Password:** `iosadmin`
 5. Open **`op_00.mp4`** (full segment). Do **not** use `_export_source_working.mp4` (sparse; Skybox cannot play holes).
 
 If add-server still fails: confirm the browser on PC can open `http://<phone-ip>:8765/`; try rebooting the Quest Wi‑Fi. Easiest path for VR is still **PC DLNA** after `Sync-FromPhoneLAN.ps1 -Watch`.
