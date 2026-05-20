@@ -59,29 +59,35 @@ enum PCloudAuth {
 
         let usernames = uniqueUsernames(trimmedEmail)
         var lastError: Error?
+
+        // Fast path: regional API host only (skips getapiserver discovery round-trips).
+        for username in usernames {
+            if let hit = try? await tryAuthOnHost(
+                username: username,
+                password: trimmedPassword,
+                region: preferredRegion,
+                apiHost: preferredRegion.apiHost,
+                session: session
+            ) {
+                return hit
+            }
+        }
+
         for region in [preferredRegion, preferredRegion.alternate] {
             let hosts = await PCloudAPIHostResolver.hostsToTry(for: region, session: session)
             for host in hosts {
+                if region == preferredRegion, host == preferredRegion.apiHost {
+                    continue
+                }
                 for username in usernames {
                     do {
-                        let token = try await requestAuthTokenPlain(
+                        return try await tryAuthOnHost(
                             username: username,
                             password: trimmedPassword,
+                            region: region,
                             apiHost: host,
                             session: session
                         )
-                        return (token, region, host)
-                    } catch {
-                        lastError = error
-                    }
-                    do {
-                        let token = try await requestAuthTokenDigest(
-                            username: username.lowercased(),
-                            password: trimmedPassword,
-                            apiHost: host,
-                            session: session
-                        )
-                        return (token, region, host)
                     } catch {
                         lastError = error
                     }
@@ -93,6 +99,32 @@ enum PCloudAuth {
             throw lastError
         }
         throw PCloudAPIError.authenticationFailed(nil)
+    }
+
+    private static func tryAuthOnHost(
+        username: String,
+        password: String,
+        region: PCloudRegion,
+        apiHost: String,
+        session: URLSession
+    ) async throws -> (token: String, region: PCloudRegion, apiHost: String) {
+        do {
+            let token = try await requestAuthTokenPlain(
+                username: username,
+                password: password,
+                apiHost: apiHost,
+                session: session
+            )
+            return (token, region, apiHost)
+        } catch {
+            let token = try await requestAuthTokenDigest(
+                username: username.lowercased(),
+                password: password,
+                apiHost: apiHost,
+                session: session
+            )
+            return (token, region, apiHost)
+        }
     }
 
     private static func uniqueUsernames(_ email: String) -> [String] {

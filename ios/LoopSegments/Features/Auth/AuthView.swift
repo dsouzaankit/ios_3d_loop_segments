@@ -11,6 +11,7 @@ struct AuthView: View {
 
     var body: some View {
         NavigationStack {
+            ZStack {
             Form {
                 Section("pCloud region") {
                     Picker("Region", selection: $region) {
@@ -42,12 +43,22 @@ struct AuthView: View {
                     }
                 }
             }
+            .disabled(isBusy)
             .navigationTitle("Loop Segments")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Sign in") { Task { await signIn() } }
                         .disabled(isBusy || email.isEmpty || password.isEmpty)
                 }
+            }
+
+            if isBusy {
+                Color.black.opacity(0.15)
+                    .ignoresSafeArea()
+                ProgressView("Signing in to pCloud…")
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
             }
         }
     }

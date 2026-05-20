@@ -9,7 +9,7 @@ enum WebDAVSignIn {
             attempt.region = region
             do {
                 let client = WebDAVClient(credentials: attempt)
-                _ = try await client.list(path: "/")
+                try await client.verifyAccess()
                 return attempt
             } catch let error as WebDAVError {
                 lastError = error
