@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Network
+import UIKit
 
 /// Serves `Documents/Exports/` on the LAN when enabled (HTTP + read-only WebDAV).
 /// True SMB is not available on iOS; WebDAV lets Windows map a drive letter to the same folder.
@@ -1350,23 +1351,20 @@ enum ExportLANServer {
 
     // MARK: - IPv4
 
-    /// User-visible device label for mDNS (e.g. `johns-iphone` → `johns-iphone.local`).
+    /// User-visible device label for mDNS (Settings → General → About → Name).
     private static func deviceMDNSHostLabel() -> String {
-        if let localized = Host.current().localizedName?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !localized.isEmpty {
-            return sanitizeMDNSHostLabel(localized)
-        }
-        if let name = Host.current().name?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !name.isEmpty, name != "localhost" {
-            return sanitizeMDNSHostLabel(name)
+        let deviceName = UIDevice.current.name
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        if !deviceName.isEmpty {
+            return sanitizeMDNSHostLabel(deviceName)
         }
         var buffer = [CChar](repeating: 0, count: 256)
         if gethostname(&buffer, buffer.count) == 0 {
-            let host = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+            let host = String(cString: buffer)
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
             if !host.isEmpty, host != "localhost" {
-                return sanitizeMDNSHostLabel(host)
+                let base = host.hasSuffix(".local") ? String(host.dropLast(6)) : host
+                return sanitizeMDNSHostLabel(base)
             }
         }
         return "iphone"
