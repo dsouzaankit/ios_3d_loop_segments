@@ -70,7 +70,7 @@ enum ExportLANServer {
                         advertisedBaseURL = url
                         lock.unlock()
                         log("LAN export: \(url) — PC: Mount-LoopSegmentsRclone.ps1")
-                        log("LAN: HTTP + WebDAV — loop/op_00|01.mp4, _working.mp4, logs (not SMB)")
+                        log("LAN: HTTP + WebDAV — pcld_ios_media/loop/op_00|01, pcld_ios_media/_working.mp4, logs (not SMB)")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
                         Self.stopOnQueue(log: nil)
@@ -568,7 +568,7 @@ enum ExportLANServer {
         return p
     }
 
-    /// Relative path under `Exports/` (e.g. `loop/op_00.mp4`, `_working.mp4`).
+    /// Relative path under `Exports/` (e.g. `pcld_ios_media/loop/op_00.mp4`, `pcld_ios_media/_working.mp4`).
     private static func relativeExportPath(fromDAVPath path: String) -> String? {
         let p = webDAVResourcePath(path)
         guard p != "/" else { return nil }
@@ -582,7 +582,7 @@ enum ExportLANServer {
 
     private static func allowedServableRelativePaths() -> Set<String> {
         var names: Set<String> = [
-            ExportPaths.workingSourceURL.lastPathComponent,
+            ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL),
             ExportPaths.latestLogTextURL.lastPathComponent,
             ExportPaths.latestLogURL.lastPathComponent,
             ExportPaths.exportProgressURL.lastPathComponent,
@@ -749,12 +749,54 @@ enum ExportLANServer {
         var responses: [String] = []
 
         if let rel = relativeExportPath(fromDAVPath: davPath) {
-            if rel == ExportPaths.loopDirectoryName || rel == "\(ExportPaths.loopDirectoryName)/" {
+            let media = ExportPaths.mediaExportFolderName
+            let loopFolder = ExportPaths.segmentLoopFolderName
+            let loopUnderMedia = "\(media)/\(loopFolder)"
+
+            if rel == media || rel == "\(media)/" {
                 responses.append(
                     propfindEntryXML(
-                        href: davListingHref(path: "/\(ExportPaths.loopDirectoryName)/", isCollection: true),
+                        href: davListingHref(path: "/\(media)/", isCollection: true),
                         isCollection: true,
-                        displayName: ExportPaths.loopDirectoryName,
+                        displayName: media,
+                        size: nil,
+                        modified: nil
+                    )
+                )
+                if depth != 0 {
+                    responses.append(
+                        propfindEntryXML(
+                            href: davListingHref(path: "/\(loopUnderMedia)/", isCollection: true),
+                            isCollection: true,
+                            displayName: loopFolder,
+                            size: nil,
+                            modified: nil
+                        )
+                    )
+                    let workingRel = ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
+                    if let fileURL = resolveExportFile(relativePath: workingRel) {
+                        let fm = FileManager.default
+                        let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
+                        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+                        let modified = attrs?[.modificationDate] as? Date
+                        responses.append(
+                            propfindEntryXML(
+                                href: davListingHref(path: "/\(workingRel)", isCollection: false),
+                                isCollection: false,
+                                displayName: fileURL.lastPathComponent,
+                                size: size,
+                                modified: modified,
+                                contentType: mimeType(for: fileURL)
+                            )
+                        )
+                    }
+                }
+            } else if rel == loopUnderMedia || rel == "\(loopUnderMedia)/" {
+                responses.append(
+                    propfindEntryXML(
+                        href: davListingHref(path: "/\(loopUnderMedia)/", isCollection: true),
+                        isCollection: true,
+                        displayName: loopFolder,
                         size: nil,
                         modified: nil
                     )
@@ -812,9 +854,9 @@ enum ExportLANServer {
             if depth != 0 {
                 responses.append(
                     propfindEntryXML(
-                        href: davListingHref(path: "/\(ExportPaths.loopDirectoryName)/", isCollection: true),
+                        href: davListingHref(path: "/\(ExportPaths.mediaExportFolderName)/", isCollection: true),
                         isCollection: true,
-                        displayName: ExportPaths.loopDirectoryName,
+                        displayName: ExportPaths.mediaExportFolderName,
                         size: nil,
                         modified: nil
                     )
@@ -861,7 +903,7 @@ enum ExportLANServer {
         guard !relativePath.contains("..") else { return nil }
         guard allowedServableRelativePaths().contains(relativePath) else { return nil }
         if relativePath == "status.json" { return nil }
-        let url = ExportPaths.exportsDirectory.appendingPathComponent(relativePath)
+        let url = ExportPaths.urlUnderExports(relativePath: relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
     }
@@ -881,7 +923,7 @@ enum ExportLANServer {
                     .replacingOccurrences(of: "&", with: "&amp;")
                     .replacingOccurrences(of: "\"", with: "&quot;")
                 var note = ""
-                if name == ExportPaths.workingSourceURL.lastPathComponent {
+                if name == ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL) {
                     let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
                     let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
                     let href = "\(escaped)\(tFrag)"
@@ -890,8 +932,9 @@ enum ExportLANServer {
                         : " — sparse partial copy; fills as export runs"
                     items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(startNote)</li>")
                     continue
-                } else if name.hasSuffix(".mp4"), name.contains("loop/") {
-                    note = " — ~60s segment (Range supported)"
+                } else if name.hasSuffix(".mp4"),
+                          name.contains("\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/") {
+                    note = " — ~60s segment in loop/ (Range supported)"
                 } else if name.hasSuffix(".mp4") {
                     note = " — sparse in-progress source (#t= resume on link)"
                 }
@@ -914,8 +957,8 @@ enum ExportLANServer {
             </head><body>
             <h1>Loop Segments — LAN export</h1>
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
-            <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps loop/ and _working.mp4).</p>
-            <p><strong>Playback:</strong> <code>loop/op_00.mp4</code> / <code>loop/op_01.mp4</code> (complete segments). For <code>_working.mp4</code>, use the index link (<code>#t=</code> resume). Sparse middle minutes need export to catch up.</p>
+            <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
+            <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). <code>pcld_ios_media/_working.mp4</code> — use the index link; many browsers won’t play sparse HEVC. After export finishes, the index drops a stale <code>#t=</code> seek.</p>
             <ul>
             \(fileList)
             </ul>
@@ -937,13 +980,53 @@ enum ExportLANServer {
         if let names = try? fm.contentsOfDirectory(atPath: dir.path) {
             for name in names.sorted() {
                 guard resolveExportFile(relativePath: name) != nil
-                    || name.hasPrefix("\(ExportPaths.loopDirectoryName)/")
+                    || name.hasPrefix("\(ExportPaths.mediaExportFolderName)/")
                     || name.hasSuffix(".mp4")
                     || name.hasSuffix(".txt") else {
                     continue
                 }
                 let url = dir.appendingPathComponent(name)
                 var dict: [String: Any] = ["name": name]
+                if let attrs = try? fm.attributesOfItem(atPath: url.path) {
+                    if let size = attrs[.size] as? NSNumber {
+                        dict["bytes"] = size.int64Value
+                    }
+                    if let modified = attrs[.modificationDate] as? Date {
+                        dict["modified"] = ISO8601DateFormatter().string(from: modified)
+                    }
+                }
+                entries.append(dict)
+            }
+        }
+        let mediaPath = dir.appendingPathComponent(ExportPaths.mediaExportFolderName)
+        if fm.fileExists(atPath: mediaPath.path),
+           let mediaNames = try? fm.contentsOfDirectory(atPath: mediaPath.path) {
+            for child in mediaNames.sorted() {
+                if child == ExportPaths.segmentLoopFolderName {
+                    let loopPath = mediaPath.appendingPathComponent(child)
+                    guard let loopNames = try? fm.contentsOfDirectory(atPath: loopPath.path) else { continue }
+                    for f in loopNames.sorted() {
+                        let rel =
+                            "\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/\(f)"
+                        guard resolveExportFile(relativePath: rel) != nil else { continue }
+                        let url = ExportPaths.urlUnderExports(relativePath: rel)
+                        var dict: [String: Any] = ["name": rel]
+                        if let attrs = try? fm.attributesOfItem(atPath: url.path) {
+                            if let size = attrs[.size] as? NSNumber {
+                                dict["bytes"] = size.int64Value
+                            }
+                            if let modified = attrs[.modificationDate] as? Date {
+                                dict["modified"] = ISO8601DateFormatter().string(from: modified)
+                            }
+                        }
+                        entries.append(dict)
+                    }
+                    continue
+                }
+                let rel = "\(ExportPaths.mediaExportFolderName)/\(child)"
+                guard resolveExportFile(relativePath: rel) != nil else { continue }
+                let url = ExportPaths.urlUnderExports(relativePath: rel)
+                var dict: [String: Any] = ["name": rel]
                 if let attrs = try? fm.attributesOfItem(atPath: url.path) {
                     if let size = attrs[.size] as? NSNumber {
                         dict["bytes"] = size.int64Value
@@ -992,7 +1075,7 @@ enum ExportLANServer {
         let contentType = mimeType(for: fileURL)
         let modified = attrs[.modificationDate] as? Date
         let etag = fileETag(size: fileSize)
-        let isWorkingSource = fileURL.lastPathComponent == ExportPaths.workingSourceURL.lastPathComponent
+        let isWorkingSource = fileURL.standardizedFileURL.path == ExportPaths.workingSourceURL.standardizedFileURL.path
         if isWorkingSource {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: fileURL)
         }
@@ -1184,7 +1267,7 @@ enum ExportLANServer {
         let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
         let hint = active
             ? "Range not on disk yet. Export is still filling this part of the file; retry in a few seconds."
-            : "Range not on disk. Open http://<phone-ip>:8765/ and click _working.mp4 (not a typed URL). Resume at \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))) of ~\(formatLANClock(Int(durationSec.rounded(.down)))). For playback now use loop/op_00.mp4 on the same page, or VLC/ffplay on _working.mp4."
+            : "Range not on disk. Open http://<phone-ip>:8765/ and use the index link to pcld_ios_media/_working.mp4 (not a typed URL). Resume at \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))) of ~\(formatLANClock(Int(durationSec.rounded(.down)))). For playback now use pcld_ios_media/loop/op_00.mp4 on the same page, or VLC/ffplay on _working.mp4."
         sendResponse(
             connection: connection,
             status: status,

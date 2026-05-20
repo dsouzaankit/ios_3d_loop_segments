@@ -50,6 +50,13 @@ enum SegmentCleanup {
             removed += 1
             log?("Removed legacy \(legacy) from Exports")
         }
+        let legacyLoop = ExportPaths.exportsDirectory.appendingPathComponent("loop", isDirectory: true)
+        if FileManager.default.fileExists(atPath: legacyLoop.path),
+           (try? FileManager.default.contentsOfDirectory(atPath: legacyLoop.path))?.isEmpty == true {
+            try? FileManager.default.removeItem(at: legacyLoop)
+            removed += 1
+            log?("Removed empty legacy loop/ folder")
+        }
         return removed
     }
 }

@@ -3,31 +3,66 @@ import Foundation
 enum ExportPaths {
     static let segmentPattern = "op_%02d.mp4"
     static let segmentDurationSeconds = 60
-    static let loopDirectoryName = "loop"
-    /// Two slots under `Exports/loop/` — PC sees both via rclone mount (`Mount-LoopSegmentsRclone.ps1`).
+    /// Anchor folder for DLNA navigation (`L:\…\pcld_ios_media\`). Holds `_working.mp4`; segments live in `loop/`.
+    static let mediaExportFolderName = "pcld_ios_media"
+    /// Alternating segment slots for DLNA looping — `Exports/pcld_ios_media/loop/`.
+    static let segmentLoopFolderName = "loop"
+    /// Two slots rotating under `pcld_ios_media/loop/` — PC sees both via rclone mount (`Mount-LoopSegmentsRclone.ps1`).
     static let segmentFileCount = 2
 
-    static var loopDirectory: URL {
-        let dir = exportsDirectory.appendingPathComponent(loopDirectoryName, isDirectory: true)
+    /// Creates `Exports/pcld_ios_media/`.
+    static var mediaExportDirectory: URL {
+        let dir = exportsDirectory.appendingPathComponent(mediaExportFolderName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
+    /// Creates `Exports/pcld_ios_media/loop/` (segment pair for players that loop a folder).
+    static var segmentLoopDirectory: URL {
+        let dir = mediaExportDirectory.appendingPathComponent(segmentLoopFolderName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Path under `Exports/` for WebDAV and LAN ( POSIX, no leading slash).
+    static func pathRelativeToExports(_ url: URL) -> String {
+        let base = exportsDirectory.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(base) else { return url.lastPathComponent }
+        var rel = String(path.dropFirst(base.count))
+        while rel.hasPrefix("/") { rel = String(rel.dropFirst()) }
+        return rel.isEmpty ? url.lastPathComponent : rel
+    }
+
+    /// Join `Exports/` + relative path segments (avoids `appendingPathComponent` with embedded `/`).
+    static func urlUnderExports(relativePath: String) -> URL {
+        let trimmed = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var url = exportsDirectory
+        guard !trimmed.isEmpty else { return exportsDirectory }
+        for segment in trimmed.split(separator: "/") {
+            url = url.appendingPathComponent(String(segment))
+        }
+        return url
+    }
+
+    /// Legacy name: segment output directory (`pcld_ios_media/loop/`).
+    static var loopDirectory: URL { segmentLoopDirectory }
+
     static func segmentRelativePath(index: Int) -> String {
         let name = String(format: segmentPattern, index % segmentFileCount)
-        return "\(loopDirectoryName)/\(name)"
+        return "\(mediaExportFolderName)/\(segmentLoopFolderName)/\(name)"
     }
 
     static func segmentURL(index: Int) -> URL {
         let name = String(format: segmentPattern, index % segmentFileCount)
-        return loopDirectory.appendingPathComponent(name)
+        return segmentLoopDirectory.appendingPathComponent(name)
     }
 
-    /// Finished segment before wall-clock publish to `loop/op_*.mp4` (LAN must not list staging files).
+    /// Finished segment before wall-clock publish to `pcld_ios_media/loop/op_*.mp4` (LAN must not list staging files).
     static func segmentStagingURL(index: Int) -> URL {
         let finalName = String(format: segmentPattern, index % segmentFileCount)
         let stagingName = finalName.replacingOccurrences(of: ".mp4", with: ".staging.mp4")
-        return loopDirectory.appendingPathComponent(stagingName)
+        return segmentLoopDirectory.appendingPathComponent(stagingName)
     }
 
     /// Replace DLNA slot atomically after staging + wall-clock schedule (one update per ~60s).
@@ -78,19 +113,75 @@ enum ExportPaths {
         exportsDirectory.appendingPathComponent("export_progress.txt")
     }
 
-    /// Sparse full-source temp at Exports root; replaced when a new export starts (kept until next export).
+    /// Sparse full-source temp under `pcld_ios_media/` (sibling of `loop/`); replaced when a new export starts.
     static var workingSourceURL: URL {
-        exportsDirectory.appendingPathComponent("_working.mp4")
+        mediaExportDirectory.appendingPathComponent("_working.mp4")
     }
 
     static var workingSourceManifestURL: URL {
-        exportsDirectory.appendingPathComponent("_working.sparse.json")
+        mediaExportDirectory.appendingPathComponent("_working.sparse.json")
     }
 
     /// Rename legacy export filenames from older builds (idempotent).
     static func migrateLegacyExportFilenames(log: ((String) -> Void)? = nil) {
         let fm = FileManager.default
-        _ = loopDirectory
+        _ = segmentLoopDirectory
+
+        // Legacy layout: Exports/_working.* → pcld_ios_media/; Exports/loop/* and flat pcld_ios_media/op_* → pcld_ios_media/loop/
+        let rootWorking = exportsDirectory.appendingPathComponent("_working.mp4")
+        let rootManifest = exportsDirectory.appendingPathComponent("_working.sparse.json")
+        for (src, dst) in [(rootWorking, workingSourceURL), (rootManifest, workingSourceManifestURL)] {
+            guard fm.fileExists(atPath: src.path), !fm.fileExists(atPath: dst.path) else { continue }
+            do {
+                try fm.moveItem(at: src, to: dst)
+                log?("Migrated \(src.lastPathComponent) → \(pathRelativeToExports(dst))")
+            } catch {
+                log?("Could not migrate \(src.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        let oldLoop = exportsDirectory.appendingPathComponent("loop", isDirectory: true)
+        if fm.fileExists(atPath: oldLoop.path),
+           let loopNames = try? fm.contentsOfDirectory(atPath: oldLoop.path) {
+            for name in loopNames {
+                let src = oldLoop.appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: src.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+                let dst = segmentLoopDirectory.appendingPathComponent(name)
+                guard !fm.fileExists(atPath: dst.path) else { continue }
+                do {
+                    try fm.moveItem(at: src, to: dst)
+                    log?("Migrated loop/\(name) → \(pathRelativeToExports(dst))")
+                } catch {
+                    log?("Could not migrate loop/\(name): \(error.localizedDescription)")
+                }
+            }
+            if let left = try? fm.contentsOfDirectory(atPath: oldLoop.path), left.isEmpty {
+                try? fm.removeItem(at: oldLoop)
+            }
+        }
+
+        /// Flat segment files directly under `pcld_ios_media/` (older nested layout) → `pcld_ios_media/loop/`.
+        if let flatNames = try? fm.contentsOfDirectory(atPath: mediaExportDirectory.path) {
+            for name in flatNames where name != segmentLoopFolderName {
+                let src = mediaExportDirectory.appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: src.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+                let isSegment =
+                    name.hasPrefix("op_")
+                    && (name.hasSuffix(".mp4") || name.contains(".staging"))
+                guard isSegment else { continue }
+                let dst = segmentLoopDirectory.appendingPathComponent(name)
+                guard !fm.fileExists(atPath: dst.path) else { continue }
+                do {
+                    try fm.moveItem(at: src, to: dst)
+                    log?("Migrated \(mediaExportFolderName)/\(name) → \(pathRelativeToExports(dst))")
+                } catch {
+                    log?("Could not migrate \(name): \(error.localizedDescription)")
+                }
+            }
+        }
+
         let legacyPairs: [(String, URL)] = [
             ("_export_source_working.mp4", workingSourceURL),
             ("_export_source_working.sparse.json", workingSourceManifestURL),
@@ -104,7 +195,7 @@ enum ExportPaths {
             guard fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: destination.path) else { continue }
             do {
                 try fm.moveItem(at: legacy, to: destination)
-                log?("Migrated \(legacyName) → \(destination.path.replacingOccurrences(of: exportsDirectory.path + "/", with: ""))")
+                log?("Migrated \(legacyName) → \(pathRelativeToExports(destination))")
             } catch {
                 log?("Could not migrate \(legacyName): \(error.localizedDescription)")
             }
@@ -208,10 +299,19 @@ enum ExportPaths {
         for name in names.sorted() where name.hasSuffix(".mp4") {
             appendMP4(at: dir.appendingPathComponent(name), label: name)
         }
-        let loopDir = dir.appendingPathComponent(loopDirectoryName)
+        let mediaDir = dir.appendingPathComponent(mediaExportFolderName)
+        if let mediaNames = try? fm.contentsOfDirectory(atPath: mediaDir.path) {
+            for name in mediaNames.sorted() where name.hasSuffix(".mp4") {
+                appendMP4(at: mediaDir.appendingPathComponent(name), label: "\(mediaExportFolderName)/\(name)")
+            }
+        }
+        let loopDir = dir.appendingPathComponent(mediaExportFolderName).appendingPathComponent(segmentLoopFolderName)
         if let loopNames = try? fm.contentsOfDirectory(atPath: loopDir.path) {
             for name in loopNames.sorted() where name.hasSuffix(".mp4") {
-                appendMP4(at: loopDir.appendingPathComponent(name), label: "\(loopDirectoryName)/\(name)")
+                appendMP4(
+                    at: loopDir.appendingPathComponent(name),
+                    label: "\(mediaExportFolderName)/\(segmentLoopFolderName)/\(name)"
+                )
             }
         }
         if parts.isEmpty {
@@ -223,7 +323,8 @@ enum ExportPaths {
     /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).
     static func ensureExportDirectories() {
         _ = exportsDirectory
-        _ = loopDirectory
+        _ = mediaExportDirectory
+        _ = segmentLoopDirectory
         _ = logsDirectory
         migrateLegacyExportFilenames()
         SearchDebugLog.ensureReady()

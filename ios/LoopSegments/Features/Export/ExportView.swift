@@ -45,7 +45,7 @@ struct ExportView: View {
                         }
                     }
                 ))
-                Text("Phone and PC on same LAN (HTTP + WebDAV :8765). In-progress: LAN index → _working.mp4 (#t= resume). PC: Mount-LoopSegmentsRclone.ps1 maps full Exports (loop/ + _working.mp4).")
+                Text("Phone and PC on same LAN (HTTP + WebDAV :8765). In-progress: LAN index → pcld_ios_media/_working.mp4 (#t= resume while paused). PC: Mount-LoopSegmentsRclone.ps1 maps full Exports (pcld_ios_media/loop/ for segments + pcld_ios_media/_working).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if let lanExportURL {
@@ -84,7 +84,7 @@ struct ExportView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (loop/op_00.mp4). First segment can take a few minutes on large files.")
+                    Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (pcld_ios_media/loop/op_00.mp4). First segment can take a few minutes on large files.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Text("PC: Mount-LoopSegmentsRclone.ps1 (Wi‑Fi) or Apple Devices → Exports → Save to PC.")
@@ -110,7 +110,7 @@ struct ExportView: View {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
                 Text("1. Large files: sparse temp shell; each minute dense-fills only that window from pCloud (not the full file).")
-                Text("2. Passthrough to loop/op_*.mp4; PC: Mount-LoopSegmentsRclone.ps1")
+                Text("2. Passthrough to pcld_ios_media/loop/op_*.mp4; PC: Mount-LoopSegmentsRclone.ps1")
                 Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -134,7 +134,7 @@ struct ExportView: View {
                     showClearLogsConfirm = true
                 }
                 .disabled(session.isExportRunning)
-                Text("Media: loop/op_00|01.mp4, _working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
+                Text("Media: pcld_ios_media/loop/op_00|01.mp4, pcld_ios_media/_working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -347,6 +347,7 @@ struct ExportView: View {
 
     private func clearExportMedia() {
         guard !session.isExportRunning else { return }
+        ResumeStore.shared.clearPinnedCompletedExports()
         ResumeStore.shared.finishExport(for: item)
         let count = SegmentCleanup.removeExportMedia()
         liveLogTail = ""

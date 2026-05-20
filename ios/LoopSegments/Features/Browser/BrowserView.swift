@@ -16,6 +16,7 @@ struct BrowserView: View {
     @State private var searchModeNote = ""
     @State private var searchDebugStatus = ""
     @State private var selectedPausedEntry: ResumeEntry?
+    @State private var selectedPinnedEntry: ResumeEntry?
 
     private var currentPath: String { pathStack.last ?? "/" }
     private var isSearchActive: Bool {
@@ -76,6 +77,37 @@ struct BrowserView: View {
                                     .font(.footnote)
                             }
                         }
+                        if !isSearchActive, !resumeStore.pinnedCompletedEntries().isEmpty {
+                            Section {
+                                ForEach(resumeStore.pinnedCompletedEntries()) { entry in
+                                    Button {
+                                        selectedPinnedEntry = entry
+                                    } label: {
+                                        HStack(alignment: .center) {
+                                            pinnedCompletedRow(entry: entry)
+                                            Spacer(minLength: 4)
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .swipeActions(edge: .trailing) {
+                                        Button("Remove", role: .destructive) {
+                                            resumeStore.dismissPinnedCompleted(entry)
+                                        }
+                                    }
+                                }
+                            } header: {
+                                Text("Last finished export")
+                            } footer: {
+                                Text(
+                                    "Pinned when an export finishes and `\(ExportPaths.mediaExportFolderName)/_working.mp4` exists (segments in `\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/`). Opens Export for LAN paths and settings."
+                                )
+                                    .font(.footnote)
+                            }
+                        }
                         if isSearchActive, !searchModeNote.isEmpty {
                             Text(searchModeNote)
                                 .font(.caption)
@@ -125,6 +157,16 @@ struct BrowserView: View {
             .navigationTitle(navigationTitle)
             .navigationSubtitleIfAvailable(navigationSubtitle)
             .navigationDestination(item: $selectedPausedEntry) { entry in
+                PausedExportDestinationView(
+                    entry: entry,
+                    browsing: items,
+                    onSearchByName: { name in
+                        searchText = name
+                        searchToken += 1
+                    }
+                )
+            }
+            .navigationDestination(item: $selectedPinnedEntry) { entry in
                 PausedExportDestinationView(
                     entry: entry,
                     browsing: items,
@@ -204,6 +246,17 @@ struct BrowserView: View {
             Text(entry.displayName)
                 .lineLimit(2)
             Text("Paused at \(ResumeTimeFormat.formatMs(ms)) · \(ResumeTimeFormat.relative(entry.updatedAt))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func pinnedCompletedRow(entry: ResumeEntry) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(entry.displayName)
+                .lineLimit(2)
+            Text("Media on disk (\(ExportPaths.mediaExportFolderName)/) · \(ResumeTimeFormat.relative(entry.updatedAt))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

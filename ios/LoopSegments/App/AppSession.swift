@@ -154,6 +154,8 @@ final class AppSession: ObservableObject {
             let resumeMs: Int64 = result.reachedEnd ? 0 : result.lastMediaTimeMs
             ResumeStore.shared.saveSeekMs(resumeMs, for: item)
             ResumeStore.shared.finishExport(for: item)
+            WorkingSourceSparseCatalog.clearLANPlaybackStartHintAfterExportFinished(fileURL: ExportPaths.workingSourceURL)
+            ResumeStore.shared.pinCompletedExportIfMediaOnDisk(for: item)
         } catch let error {
             if userRequestedExportCancel {
                 ResumeStore.shared.finishExport(for: item)

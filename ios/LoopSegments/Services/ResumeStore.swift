@@ -13,6 +13,8 @@ struct ResumeEntry: Codable, Identifiable, Hashable {
     var exportInProgress: Bool = false
     /// Latest media position during an in-progress or interrupted export.
     var checkpointMediaMs: Int64?
+    /// Shown in Browse after a finished export when `_working.mp4` + segments exist on disk (like a bookmark to reopen Export / LAN).
+    var pinnedCompleted: Bool = false
 
     var id: String { fileKey }
 }
@@ -72,6 +74,7 @@ final class ResumeStore: ObservableObject {
 
     func beginExport(for item: WebDAVItem, seekMs: Int64, sourceDurationMs: Int64? = nil) {
         clearPausedExports(exceptFileKey: item.fileKey)
+        clearPinnedCompletedExports()
         upsert(item: item) { entry in
             entry.exportInProgress = true
             entry.checkpointMediaMs = max(0, seekMs)
@@ -179,6 +182,54 @@ final class ResumeStore: ObservableObject {
         load()
             .filter(\.exportInProgress)
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func pinnedCompletedEntries() -> [ResumeEntry] {
+        load()
+            .filter(\.pinnedCompleted)
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Pins the item in Browse when an export finishes and `_working.mp4` exists under `Exports/pcld_ios_media/` (clears other pins). Segments are under `pcld_ios_media/loop/`.
+    func pinCompletedExportIfMediaOnDisk(for item: WebDAVItem) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: ExportPaths.workingSourceURL.path) else { return }
+        var entries = load()
+        for i in entries.indices {
+            entries[i].pinnedCompleted = entries[i].fileKey == item.fileKey
+            if entries[i].fileKey == item.fileKey {
+                entries[i].updatedAt = Date()
+            }
+        }
+        if let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) {
+            entries[index].displayName = item.name
+            entries[index].href = item.href
+        } else {
+            var entry = ResumeEntry(fileKey: item.fileKey, displayName: item.name, href: item.href, lastSeekMs: 0, updatedAt: Date())
+            entry.pinnedCompleted = true
+            entries.append(entry)
+        }
+        persist(entries)
+    }
+
+    func dismissPinnedCompleted(_ entry: ResumeEntry) {
+        var entries = load()
+        guard let index = entries.firstIndex(where: { $0.fileKey == entry.fileKey }) else { return }
+        guard entries[index].pinnedCompleted else { return }
+        entries[index].pinnedCompleted = false
+        entries[index].updatedAt = Date()
+        persist(entries)
+    }
+
+    func clearPinnedCompletedExports() {
+        var entries = load()
+        var changed = false
+        for i in entries.indices where entries[i].pinnedCompleted {
+            entries[i].pinnedCompleted = false
+            entries[i].updatedAt = Date()
+            changed = true
+        }
+        if changed { persist(entries) }
     }
 
     func clearResume(for item: WebDAVItem) {
@@ -314,6 +365,14 @@ final class ResumeStore: ObservableObject {
 }
 
 extension ResumeStore {
+    nonisolated static func isExportInProgress(forFileKey fileKey: String) -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: ResumeStore.entriesKey),
+              let entries = try? JSONDecoder().decode([ResumeEntry].self, from: data) else {
+            return false
+        }
+        return entries.first(where: { $0.fileKey == fileKey })?.exportInProgress == true
+    }
+
     /// LAN / sparse manifest hints (safe off main actor — reads UserDefaults only).
     struct LANPlaybackHints: Sendable {
         let fileKey: String

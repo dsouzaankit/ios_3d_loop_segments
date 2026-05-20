@@ -170,7 +170,7 @@ final class SegmentExporter {
         var reachedEnd = false
 
         logHandler(
-            "Phone export: loop/op_00 ↔ op_01 per ~\(Int(Self.segmentDurationSeconds))s " +
+            "Phone export: pcld_ios_media/loop/op_00 ↔ op_01 per ~\(Int(Self.segmentDurationSeconds))s " +
                 (ExportDeliveryPolicy.keyframeAlignedBoundaries ? "(keyframe borders)" : "") +
                 "; PC: Mount-LoopSegmentsRclone.ps1"
         )

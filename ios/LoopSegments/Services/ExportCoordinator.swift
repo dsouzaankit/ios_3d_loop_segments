@@ -87,7 +87,7 @@ final class ExportCoordinator {
             } onCancel: {
                 self.exporter.cancel()
             }
-            logHandler("Export finished — loop/op_*.mp4 and _working.mp4 kept until next export or Clear media")
+            logHandler("Export finished — pcld_ios_media/loop/op_*.mp4 and pcld_ios_media/_working.mp4 kept until next export or Clear media")
             logHandler(ExportPaths.describeExportMediaOnDisk())
             logHandler("Files: On My iPhone → Loop Segments → Exports (same folder as export_latest.txt)")
             if PhotosSegmentPublisher.isEnabled {
@@ -112,7 +112,7 @@ final class ExportCoordinator {
         } catch SegmentExporterError.cancelled {
             if userRequestedCancel {
                 await SegmentCleanup.removeAllSegments(log: logHandler)
-                logHandler("Cleanup: removed loop/op_*.mp4 from Exports (_working.mp4 kept until next export)")
+                logHandler("Cleanup: removed pcld_ios_media/loop/op_*.mp4 from Exports (_working.mp4 kept until next export)")
                 logWriter.finish(status: "cancelled")
                 throw SegmentExporterError.cancelled
             }

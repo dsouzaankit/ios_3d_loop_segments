@@ -5,7 +5,7 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once
 .\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly
 .\Mount-LoopSegmentsRclone.ps1          # mount drive from json (default L:)
-# Skybox PC / DLNA: index <drive>\loop\ — see [windows/README.md](../windows/README.md)
+# Skybox PC / DLNA: index <drive>\pcld_ios_media\ — see [windows/README.md](../windows/README.md)
 
 Notes:
 phone must be unlocked, app in foreground, screen on:
@@ -41,7 +41,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
-- 60s segments; phone alternates **`loop/op_00.mp4`** / **`loop/op_01.mp4`**; sparse in-progress copy **`_working.mp4`** at Exports root. PC: **`Mount-LoopSegmentsRclone.ps1`** maps the whole folder. **Dense fill** per minute is the default.
+- 60s segments; phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. PC: **`Mount-LoopSegmentsRclone.ps1`** maps the whole folder. **Dense fill** per minute is the default.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file or **Stop**; **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 
@@ -60,16 +60,16 @@ cd ..\windows
 ```
 
 3. Point **Skybox PC** / your DLNA library at the mount:
-   - **`L:\loop\`** — only the two ~60s segments (cleaner library).
-   - **`L:\`** — whole Exports folder, including **`_working.mp4`** (in-progress sparse source).
+   - **`L:\pcld_ios_media\`** — anchor folder **\_working.mp4** plus **`loop\`** ( **`op_00` / `op_01`** for playlist/folder looping).
+   - **`L:\`** — whole Exports folder (logs, `export_latest.txt`, etc.).
 
-The mount exposes **everything** on the phone under `Documents/Exports/`, not just `loop/`. If your DLNA server indexes `L:\`, Skybox will **see** `_working.mp4` the same way it sees the segment files.
+The mount exposes **everything** under `Documents/Exports/`. Index **`L:\pcld_ios_media\`** for a clear DLNA tree (`loop\` vs working file); index **`L:\pcld_ios_media\loop\`** alone if the player should loop only the alternating segments.
 
-**`_working.mp4` on Skybox:** VLC on iOS plays it over plain HTTP with **Range** on dense-filled minutes only (same server rules). Skybox over **PC DLNA** may work too — especially with rclone **`--vfs-cache-mode full`** — but some DLNA servers choke on sparse “full size” files. Worth trying if you index `L:\`; if it stutters or fails, use **Pigasus** on Quest (`http://<ip>:8765/_working.mp4`) or index only **`L:\loop\`**.
+**`_working.mp4` on Skybox:** VLC on iOS plays it over plain HTTP with **Range** on dense-filled minutes only (same server rules). Skybox over **PC DLNA** may work too — especially with rclone **`--vfs-cache-mode full`** — but some DLNA servers choke on sparse “full size” files. Worth trying if you index `L:\`; if it stutters or fails, use **Pigasus** on Quest (`http://<ip>:8765/pcld_ios_media/_working.mp4`) or index **`L:\pcld_ios_media\`**.
 
 Legacy copy / `net use` scripts: [`../windows/archive/`](../windows/archive/).
 
-LAN serves `loop/op_*.mp4`, `_working.mp4`, and logs on port **8765**. **Browser / Pigasus:** `loop/op_00.mp4` for segments; `_working.mp4` for in-progress (`#t=` on the index page).
+LAN serves `pcld_ios_media/loop/op_*.mp4`, `pcld_ios_media/_working.mp4`, and logs on port **8765**. **Browser / Pigasus:** `pcld_ios_media/loop/op_00.mp4` for segments; `pcld_ios_media/_working.mp4` for the working file (`#t=` on the index clears after a finished export so it is not stuck on an old seek).
 
 ### SMB vs WebDAV on the phone
 
@@ -77,8 +77,8 @@ LAN serves `loop/op_*.mp4`, `_working.mp4`, and logs on port **8765**. **Browser
 
 | File | On mount `L:\` | Skybox via PC DLNA |
 |------|----------------|---------------------|
-| `loop/op_00.mp4`, `loop/op_01.mp4` | Yes | Usually OK |
-| `_working.mp4` | Yes (same folder tree) | May work (like VLC); sparse holes can break some servers |
+| `pcld_ios_media/loop/op_00.mp4`, `pcld_ios_media/loop/op_01.mp4` | Yes | Usually OK |
+| `pcld_ios_media/_working.mp4` | Yes | May work (like VLC); sparse holes can break some servers |
 
 ### Quest LAN playback (Skybox vs Pigasus)
 
@@ -86,13 +86,13 @@ LAN serves `loop/op_*.mp4`, `_working.mp4`, and logs on port **8765**. **Browser
 
 **Phone LAN** (`http://<ip>:8765`) = plain HTTP + optional WebDAV for the export folder. Players differ:
 
-| Player | `_working.mp4` (sparse) | `loop/op_00.mp4` (segment) |
+| Player | `pcld_ios_media/_working.mp4` (sparse) | `pcld_ios_media/loop/op_00.mp4` (segment) |
 |--------|----------------------------------------|------------------------|
 | **Pigasus** (direct URL / network file) | **Works** — uses HTTP **Range** (head + `moov` tail + dense minutes) | Should work |
 | **Skybox WebDAV** | Usually **fails** | Often **“too large to decode”** on 5K HEVC; use Pigasus/PC |
 | **Quest browser** (index link, `#t=`) | Works for dense-filled regions | Works (**build 173+** — skip broken faststart remux from 171–172) |
 
-**In-progress export on Quest:** use **Pigasus** with `http://<ip>:8765/_working.mp4` (or the LAN index link with `#t=` resume). No WebDAV setup required.
+**In-progress export on Quest:** use **Pigasus** with `http://<ip>:8765/pcld_ios_media/_working.mp4` (or the LAN index link with `#t=` resume). No WebDAV setup required.
 
 ### Skybox (Quest) WebDAV
 
@@ -101,19 +101,19 @@ Skybox over **WebDAV** on the phone is best-effort (not the same code path as Pi
 | | pCloud WebDAV | Loop Segments LAN |
 |--|----------------|-------------------|
 | Transport | **HTTPS** | **HTTP** (port 8765) |
-| Files | Full originals on cloud | `loop/op_00|01.mp4` (~60s), sparse `_working.mp4` |
+| Files | Full originals on cloud | `pcld_ios_media/loop/op_00|01.mp4` (~60s), sparse `pcld_ios_media/_working.mp4` |
 | Server | Mature WebDAV | Minimal in-app server |
 
-**Skybox on phone LAN:** build **173+** for playable segments in browser/Pigasus. Skybox may refuse **5K+ HEVC** (“video too large to decode”). For **`_working.mp4`**, use **Pigasus** or the browser index, not Skybox WebDAV.
+**Skybox on phone LAN:** build **173+** for playable segments in browser/Pigasus. Skybox may refuse **5K+ HEVC** (“video too large to decode”). For **`pcld_ios_media/_working.mp4`**, use **Pigasus** or the browser index, not Skybox WebDAV.
 
 1. Phone: **Serve Exports on Wi‑Fi** on, app **in foreground**, same Wi‑Fi as Quest.
 2. Skybox → **Add WebDAV server** → `http://10.0.100.10:8765/` · `admin` / `iosadmin`.
-3. Prefer **`loop/op_00.mp4` in Pigasus** (`http://<ip>:8765/loop/op_00.mp4`) after a new segment publishes.
+3. Prefer **`pcld_ios_media/loop/op_00.mp4` in Pigasus** (`http://<ip>:8765/pcld_ios_media/loop/op_00.mp4`) after a new segment publishes.
 
 **Reliable Skybox paths (same as pCloud-quality playback):**
 
 - **Full movie on pCloud** — use pCloud WebDAV in Skybox (what already works for you).
-- **Phone export segment** — `Mount-LoopSegmentsRclone.ps1`, DLNA index `L:\loop\`, or Skybox → **SMB** to a local PC folder.
+- **Phone export segment** — `Mount-LoopSegmentsRclone.ps1`, DLNA index `L:\pcld_ios_media\`, or Skybox → **SMB** to a local PC folder.
 
 **PC test:**
 
@@ -123,7 +123,7 @@ cd windows
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly
 ```
 
-Expect PROPFIND OK and `loop/op_00.mp4` listed. After mount, `L:\_working.mp4` is visible if export has run.
+Expect PROPFIND OK and `pcld_ios_media/loop/op_00.mp4` listed. After mount, `L:\pcld_ios_media\_working.mp4` is visible if export has run.
 
 ### Export transport
 
@@ -164,7 +164,7 @@ Export and folder browse use **WebDAV only** — you do not need search for thos
 
 ## Windows sync (LAN → DLNA)
 
-**`Documents/Exports/loop/op_00.mp4` (and `op_01`) are the segment sources; `_working.mp4` is the in-progress sparse copy.**
+**`Documents/Exports/pcld_ios_media/loop/op_00.mp4` (and `op_01`) are the rotating segment sources; `pcld_ios_media/_working.mp4` is the sparse working copy.**
 
 | Step | PowerShell |
 |------|------------|

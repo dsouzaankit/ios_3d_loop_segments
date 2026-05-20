@@ -171,10 +171,10 @@ function Test-PhoneLANExport {
             $response.Close()
         }
         Write-Host "  PROPFIND -> $status"
-        if ($content -match 'loop/op_00') {
-            Write-Host '  loop/op_00.mp4 listed - good'
+        if ($content -match 'pcld_ios_media/loop/op_00') {
+            Write-Host '  pcld_ios_media/loop/op_00.mp4 listed - good'
         } elseif ($content -match 'op_00') {
-            Write-Warning '  Found op_00 at root - install latest Loop Segments (loop/ subfolder).'
+            Write-Warning '  Found op_00 at root - install latest Loop Segments (pcld_ios_media/loop/ subfolder).'
         }
     } catch {
         Write-Warning "  PROPFIND probe skipped ($($_.Exception.Message)); rclone will verify WebDAV next."

@@ -131,14 +131,15 @@ enum WorkingSourceSparseCatalog {
             return
         }
         let hints = ResumeStore.lanPlaybackHints(fileKey: nil, href: nil)
+        let useHintsPlayback = hints.map { ResumeStore.isExportInProgress(forFileKey: $0.fileKey) } ?? false
         applyLayout(
             probed,
             totalLength: total,
-            playbackStartSeconds: hints?.playbackStartSeconds,
+            playbackStartSeconds: useHintsPlayback ? hints?.playbackStartSeconds : nil,
             durationSeconds: hints?.durationSeconds,
             exportCursorSeconds: hints?.exportCursorSeconds
         )
-        if let hints {
+        if let hints, useHintsPlayback {
             save(
                 fileKey: hints.fileKey,
                 totalLength: total,
@@ -151,6 +152,30 @@ enum WorkingSourceSparseCatalog {
                 exportCursorSeconds: hints.exportCursorSeconds
             )
         }
+    }
+
+    /// Clears seek-start hint in manifest after a finished export so the LAN index `#t=` link is not stuck on the old seek time.
+    static func clearLANPlaybackStartHintAfterExportFinished(fileURL: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path),
+              let total = (try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value,
+              total > 0,
+              let manifest = loadManifest(forFileAt: fileURL),
+              let lay = layout(from: manifest, fileURL: fileURL, totalLength: total) else {
+            return
+        }
+        save(
+            fileKey: manifest.fileKey,
+            totalLength: manifest.totalLength,
+            href: manifest.href,
+            filledRanges: lay.filledRanges,
+            headOnDisk: lay.headOnDisk,
+            tailOnDisk: lay.tailOnDisk,
+            playbackStartSeconds: nil,
+            durationSeconds: manifest.durationSeconds,
+            exportCursorSeconds: manifest.exportCursorSeconds
+        )
+        refreshPlaybackState(for: fileURL)
     }
 
     private struct ResolvedPlaybackFields {
@@ -181,7 +206,9 @@ enum WorkingSourceSparseCatalog {
         }
 
         if let hints = ResumeStore.lanPlaybackHints(fileKey: manifest.fileKey, href: manifest.href) {
-            if hints.playbackStartSeconds > 0, !ExportPlaybackState.shared.isLANExportActive {
+            if hints.playbackStartSeconds > 0,
+               !ExportPlaybackState.shared.isLANExportActive,
+               ResumeStore.isExportInProgress(forFileKey: manifest.fileKey) {
                 playback = hints.playbackStartSeconds
             }
             if duration == nil || duration == 0 {

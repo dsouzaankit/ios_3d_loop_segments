@@ -26,3 +26,4 @@ ios/logs/
 # Local PC config (per-machine)
 windows/loop-segments-lan-host.txt
 windows/loop-segments-destination.txt
+windows/loop-segments-windows.json

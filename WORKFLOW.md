@@ -64,7 +64,7 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # firs
 
 Per-PC rclone / WinFsp / drive letter: [windows/README.md](windows/README.md).
 
-Point your DLNA library at **`L:\loop\`** (segments) or **`L:\`** (includes `_working.mp4`). Keep the mount window open while exporting.
+Point your DLNA library at **`L:\pcld_ios_media\`** ( **`loop\`** for alternating segments + **`_working.mp4`**) or **`L:\`** (whole Exports). Keep the mount window open while exporting.
 
 Legacy local copy: [windows/archive/](windows/archive/).
 
