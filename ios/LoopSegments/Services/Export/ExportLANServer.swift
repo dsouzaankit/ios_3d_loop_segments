@@ -14,6 +14,32 @@ enum ExportLANServer {
     static let lanWebDAVPassword = "iosadmin"
     private static let lanWebDAVRealm = "Loop Segments LAN"
     private static let enabledKey = "serveExportsOnLAN"
+    private static let backgroundCutoffKey = "lanBackgroundPrefetchCutoffMbps"
+
+    /// Implied file bitrates at or above this cap sequential prefetch at exported+2 min (below = horizon EOF).
+    static let backgroundPrefetchCutoffOptions: [Double] = [21, 25, 29, 35, 42]
+    static let defaultBackgroundPrefetchCutoffMbps = 29.0
+
+    static var backgroundPrefetchCutoffMbps: Double {
+        get {
+            guard UserDefaults.standard.object(forKey: backgroundCutoffKey) != nil else {
+                return defaultBackgroundPrefetchCutoffMbps
+            }
+            let stored = UserDefaults.standard.double(forKey: backgroundCutoffKey)
+            return nearestBackgroundPrefetchCutoff(to: stored)
+        }
+        set {
+            UserDefaults.standard.set(
+                nearestBackgroundPrefetchCutoff(to: newValue),
+                forKey: backgroundCutoffKey
+            )
+        }
+    }
+
+    static func nearestBackgroundPrefetchCutoff(to value: Double) -> Double {
+        backgroundPrefetchCutoffOptions.min(by: { abs($0 - value) < abs($1 - value) })
+            ?? defaultBackgroundPrefetchCutoffMbps
+    }
 
     static var isEnabled: Bool {
         get {
@@ -979,7 +1005,7 @@ enum ExportLANServer {
             playbackStatusBlock = """
             <p><strong>\(escaped)</strong></p>
             \(statsLines)
-            <p><code>LAN browser cap till</code> = exported position + 2 min (scrubber limit). <code>EOF background on disk</code> can be much further ahead when prefetch is active. For browser playback prefer <code>loop/op_00.mp4</code> while export runs.</p>
+            <p><code>LAN playable till</code> = furthest contiguous dense bytes from playback start. Sequential prefetch fills toward EOF (low bitrate) or exported+2 min (high bitrate). Prefer <code>loop/op_00.mp4</code> while export runs.</p>
             \(startedNote)
             """
         }

@@ -136,20 +136,13 @@ final class SegmentExporter {
             seekSeconds: seekSeconds,
             impliedMbps: impliedMbps
         )
-        ExportPlaybackState.shared.setBackgroundPrefetchEnabled(lanPrefetch.useBackgroundDownload)
+        ExportPlaybackState.shared.setBackgroundPrefetchEnabled(lanPrefetch.prepareHeadAndIndex)
+        ExportPlaybackState.shared.setLANPrefetchHorizonToEOF(lanPrefetch.prefetchHorizonToEOF)
         if lanPrefetch.prepareHeadAndIndex {
-            if !lanPrefetch.useBackgroundDownload {
-                logHandler(
-                    String(
-                        format: "High bitrate (~%.1f Mbps) — LAN background prefetch off; dense fill per minute (+2 min lookahead)",
-                        impliedMbps
-                    )
-                )
-            }
             if seekSeconds <= 0.5 {
                 try Self.ensureExportDiskSpace(
                     fileBytes: fileSize,
-                    lanPrefetchToEOF: lanPrefetch.useBackgroundDownload
+                    lanPrefetchToEOF: lanPrefetch.prefetchHorizonToEOF
                 )
             } else {
                 try Self.ensureExportDiskSpace(fileBytes: fileSize)
@@ -159,7 +152,7 @@ final class SegmentExporter {
                 fileSize: fileSize,
                 seekSeconds: seekSeconds,
                 durationSeconds: durationSeconds,
-                useBackgroundDownload: lanPrefetch.useBackgroundDownload,
+                lanPrefetch: lanPrefetch,
                 impliedMbps: impliedMbps,
                 log: logHandler
             )
@@ -167,7 +160,7 @@ final class SegmentExporter {
         tempDownload?.beginExport(
             seekSeconds: seekSeconds,
             durationSeconds: durationSeconds,
-            useBackgroundDownload: lanPrefetch.useBackgroundDownload
+            sequentialLANPrefetch: lanPrefetch.prepareHeadAndIndex
         )
         await MainActor.run {
             ResumeStore.shared.setSourceDurationMs(durationMs, for: item)
@@ -177,7 +170,18 @@ final class SegmentExporter {
             durationSeconds: durationSeconds,
             totalBytes: fileSize
         )
-        downloader.resetLANExtendTimelineCursor(playbackStartSeconds: seekSeconds)
+        if lanPrefetch.prepareHeadAndIndex {
+            downloader.updateLANSequentialPrefetchHorizon(
+                playbackStartSeconds: seekSeconds,
+                horizonTimelineSeconds: Self.lanPrefetchHorizonSeconds(
+                    playbackStartSeconds: seekSeconds,
+                    exportCursorSeconds: seekSeconds,
+                    durationSeconds: durationSeconds,
+                    prefetchHorizonToEOF: lanPrefetch.prefetchHorizonToEOF
+                ),
+                durationSeconds: durationSeconds
+            )
+        }
         downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
 
         let reportProgress: @Sendable (Int64) -> Void = { [weak self] mediaMs in
@@ -338,9 +342,9 @@ final class SegmentExporter {
                     logHandler(
                         "Verifying reader for \(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) (large sparse files can take a few minutes)…"
                     )
-                    try await downloader.ensureFileHeadOnDisk()
-                    try await downloader.ensureIndexTailOnDisk()
-                    try await downloader.ensureContiguousRange(byteRange)
+                try await downloader.ensureFileHeadOnDisk()
+                try await downloader.ensureIndexTailOnDisk()
+                try await downloader.ensureContiguousRange(byteRange)
                     if isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
                         logHandler(
                             "Minute window already dense on _working.mp4 — passthrough from disk (no pCloud read for this segment)"
@@ -427,14 +431,16 @@ final class SegmentExporter {
 
                 lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
                 reportProgress(lastMediaTimeMs)
-                if lanPrefetch.extendThroughCursorEachMinute, !lanPrefetch.useBackgroundDownload {
-                    await extendLANPrefetchThroughExportCursor(
-                        downloader: downloader,
+                if lanPrefetch.prepareHeadAndIndex {
+                    downloader.updateLANSequentialPrefetchHorizon(
                         playbackStartSeconds: seekSeconds,
-                        mediaCursorSeconds: mediaCursorSeconds,
-                        durationSeconds: durationSeconds,
-                        fileSize: fileSize,
-                        log: logHandler
+                        horizonTimelineSeconds: Self.lanPrefetchHorizonSeconds(
+                            playbackStartSeconds: seekSeconds,
+                            exportCursorSeconds: mediaCursorSeconds,
+                            durationSeconds: durationSeconds,
+                            prefetchHorizonToEOF: lanPrefetch.prefetchHorizonToEOF
+                        ),
+                        durationSeconds: durationSeconds
                     )
                 }
                 if ExportLANServer.isEnabled {
@@ -469,11 +475,6 @@ final class SegmentExporter {
             skippedSegmentCount: skippedSegmentCount
         )
     }
-
-    /// LAN background prefetch toward EOF is disabled at or above this average file bitrate (saves cellular on multi‑GB HEVC).
-    /// Above this implied file bitrate, LAN skips EOF background (dense +2 min per minute only).
-    /// Matches ~cellular peak: background cannot outrun a file encoded faster than the link.
-    private static let highBitrateBackgroundCutoffMbps = 29.0
 
     /// Files above this or that do not fit on disk are exported by range reads (no full temp copy).
     private static let streamOnlyThresholdBytes: Int64 = 1_500_000_000
@@ -1304,11 +1305,10 @@ final class SegmentExporter {
         return true
     }
 
-    /// One LAN policy for all file sizes: head+index, background fill from seek, extend dense span each minute.
+    /// LAN: head+index + one sequential dense prefetch loop; horizon is EOF or exported+2 min by bitrate cutoff.
     private struct LANWorkingPrefetchPolicy {
         let prepareHeadAndIndex: Bool
-        let useBackgroundDownload: Bool
-        let extendThroughCursorEachMinute: Bool
+        let prefetchHorizonToEOF: Bool
         let waitForBackgroundAtEnd: Bool
     }
 
@@ -1329,27 +1329,41 @@ final class SegmentExporter {
         guard ExportLANServer.isEnabled else {
             return LANWorkingPrefetchPolicy(
                 prepareHeadAndIndex: false,
-                useBackgroundDownload: false,
-                extendThroughCursorEachMinute: false,
+                prefetchHorizonToEOF: false,
                 waitForBackgroundAtEnd: false
             )
         }
-        let useBackgroundDownload = impliedMbps < highBitrateBackgroundCutoffMbps
+        let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
+        let prefetchHorizonToEOF = impliedMbps < cutoff
         return LANWorkingPrefetchPolicy(
             prepareHeadAndIndex: true,
-            useBackgroundDownload: useBackgroundDownload,
-            extendThroughCursorEachMinute: true,
-            waitForBackgroundAtEnd: seekSeconds <= 0.5 && useBackgroundDownload
+            prefetchHorizonToEOF: prefetchHorizonToEOF,
+            waitForBackgroundAtEnd: seekSeconds <= 0.5 && prefetchHorizonToEOF
         )
     }
 
-    /// Head + index; background from export seek (or 0); dense first minute at seek so LAN can play there.
+    private static func lanPrefetchHorizonSeconds(
+        playbackStartSeconds: Double,
+        exportCursorSeconds: Double,
+        durationSeconds: Double,
+        prefetchHorizonToEOF: Bool
+    ) -> Double {
+        if prefetchHorizonToEOF {
+            return durationSeconds
+        }
+        return min(
+            durationSeconds,
+            exportCursorSeconds + segmentDurationSeconds * 2
+        )
+    }
+
+    /// Head + index; sequential dense prefetch from playback start (horizon grows each minute).
     private func preloadWorkingSourceForLANPlayback(
         downloader: WebDAVTempFileDownload,
         fileSize: Int64,
         seekSeconds: Double,
         durationSeconds: Double,
-        useBackgroundDownload: Bool,
+        lanPrefetch: LANWorkingPrefetchPolicy,
         impliedMbps: Double,
         log: @escaping (String) -> Void
     ) async throws {
@@ -1361,45 +1375,33 @@ final class SegmentExporter {
             log("LAN _working.mp4 — full file already on disk (seek anywhere)")
             return
         }
-        downloader.setDownloadHighWaterMark(fileSize)
-        let firstWindowEnd = min(
-            durationSeconds,
-            seekSeconds + Self.segmentDurationSeconds * 2
+        let horizonSeconds = Self.lanPrefetchHorizonSeconds(
+            playbackStartSeconds: seekSeconds,
+            exportCursorSeconds: seekSeconds,
+            durationSeconds: durationSeconds,
+            prefetchHorizonToEOF: lanPrefetch.prefetchHorizonToEOF
         )
-        let firstRange = downloader.byteRangeForTimeline(
-            timelineStartSeconds: seekSeconds,
-            timelineEndSeconds: firstWindowEnd,
+        downloader.updateLANSequentialPrefetchHorizon(
+            playbackStartSeconds: seekSeconds,
+            horizonTimelineSeconds: horizonSeconds,
             durationSeconds: durationSeconds
         )
-        if seekSeconds <= 0.5 {
-            if useBackgroundDownload {
-                log(
-                    "LAN preload — background fill to EOF (\(Self.formatBytes(fileSize)) _working.mp4 over cellular/pCloud; " +
-                        "LAN :8765 only serves dense bytes to the PC)"
-                )
-            } else {
-                log(
-                    String(
-                        format: "LAN preload — high bitrate (%.1f Mbps); no background to EOF; dense first ~2 min at 0:00",
-                        impliedMbps
-                    )
-                )
-                try await downloader.ensureContiguousRange(firstRange)
-            }
-        } else if useBackgroundDownload {
-            log(
-                "LAN preload — head+index; background from export seek " +
-                    "\(ExportTimelineLog.wallClock(seconds: seekSeconds)) toward EOF; " +
-                    "dense first ~2 min at seek for browser playback"
+        let horizonLabel = lanPrefetch.prefetchHorizonToEOF
+            ? "EOF (\(Self.formatBytes(fileSize)))"
+            : "exported+2 min (below \(Int(ExportLANServer.backgroundPrefetchCutoffMbps)) Mbps est.; file ~\(String(format: "%.1f", impliedMbps)) Mbps)"
+        log(
+            "LAN preload — sequential dense fill from \(ExportTimelineLog.wallClock(seconds: seekSeconds)) toward \(horizonLabel); " +
+                "LAN :8765 serves contiguous bytes only"
+        )
+        if seekSeconds > 0.5 {
+            let firstWindowEnd = min(
+                durationSeconds,
+                seekSeconds + Self.segmentDurationSeconds * 2
             )
-            try await downloader.ensureContiguousRange(firstRange)
-        } else {
-            log(
-                String(
-                    format: "LAN preload — high bitrate (%.1f Mbps); no background toward EOF; dense first ~2 min at %@",
-                    impliedMbps,
-                    ExportTimelineLog.wallClock(seconds: seekSeconds)
-                )
+            let firstRange = downloader.byteRangeForTimeline(
+                timelineStartSeconds: seekSeconds,
+                timelineEndSeconds: firstWindowEnd,
+                durationSeconds: durationSeconds
             )
             try await downloader.ensureContiguousRange(firstRange)
         }
@@ -1411,31 +1413,6 @@ final class SegmentExporter {
                 exportCursorSeconds: seekSeconds
             )
         )
-    }
-
-    /// Dense-fill `_working.mp4` from playback seek through export cursor (+2 min lookahead) for LAN range gating.
-    private func extendLANPrefetchThroughExportCursor(
-        downloader: WebDAVTempFileDownload,
-        playbackStartSeconds: Double,
-        mediaCursorSeconds: Double,
-        durationSeconds: Double,
-        fileSize: Int64,
-        log: @escaping (String) -> Void
-    ) async {
-        let lookahead = min(durationSeconds, mediaCursorSeconds + Self.segmentDurationSeconds * 2)
-        do {
-            try await downloader.ensureLANExtendTimelineRange(
-                playbackStartSeconds: playbackStartSeconds,
-                lookaheadEndSeconds: lookahead,
-                durationSeconds: durationSeconds
-            )
-            downloader.publishLANPlaybackState(mediaCursorSeconds: mediaCursorSeconds)
-        } catch {
-            log(
-                "LAN prefetch through \(ExportTimelineLog.wallClock(seconds: mediaCursorSeconds)) skipped: " +
-                    "\(error.localizedDescription)"
-            )
-        }
     }
 
     private func ensureSeekZeroRemainderOnDiskIfBeneficial(

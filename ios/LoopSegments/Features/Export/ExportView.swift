@@ -43,6 +43,20 @@ struct ExportView: View {
                         }
                     }
                 ))
+                Picker("Prefetch to EOF below (Mbps)", selection: Binding(
+                    get: { ExportLANServer.backgroundPrefetchCutoffMbps },
+                    set: { ExportLANServer.backgroundPrefetchCutoffMbps = $0 }
+                )) {
+                    ForEach(ExportLANServer.backgroundPrefetchCutoffOptions, id: \.self) { mbps in
+                        Text("\(Int(mbps)) Mbps").tag(mbps)
+                    }
+                }
+                .disabled(session.isExportRunning)
+                Text(
+                    "One sequential LAN prefetch for all files. Below this estimated Mbps the horizon is EOF; at or above it the horizon stays at exported+2 min (still one prefetch loop). Default 29 Mbps matches typical cellular peak."
+                )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Text("Same Wi‑Fi as the PC. Use the LAN IP line below on Windows. http://iphone.local:8765/ is not a default URL — it only matches if About → Name is exactly “iPhone” and your PC resolves .local (most Windows PCs need the numeric IP).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)

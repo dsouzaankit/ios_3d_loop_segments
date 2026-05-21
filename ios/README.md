@@ -7,7 +7,7 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once
 # Skybox (Quest): Add WebDAV → http://<phone-ip>:8765/ (IP from Export screen) · admin / iosadmin — see “Quest LAN playback” below
 
 Notes:
-2 min timeline prefetch at start (LAN scrubber cap = exported+2 min; EOF background can run further when enabled).
+LAN sequential prefetch from playback start (toward EOF if &lt;29 Mbps est., else exported+2 min horizon).
 _working.mp4 is streamable only when seek=0:00!
 Av1 is not supported, prefer h.265!
 phone must be unlocked, app in foreground, screen on:
@@ -63,7 +63,7 @@ LAN serves `pcld_ios_media/loop/op_*.mp4`, `pcld_ios_media/_working.mp4`, and lo
 
 ### `_working.mp4`: browser scrubber vs export logs
 
-`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Serve Exports on:** MP4 head+index on every export. **Seek 0:** background fill to EOF, then extend dense bytes from playback start through the export cursor each minute. **Seek &gt; 0 (e.g. 10:00):** background from the seek byte offset (not from 0:00), dense **first ~2 min at seek** for browser playback, then extend **seek → cursor+2 min** each minute. Export logs and **`http://&lt;phone-ip&gt;:8765/`** show **`LAN playable till 12:34, exported 11:00, started 10:00`** (max contiguous dense playback from the seek in file timeline; also in `status.json`). LAN only serves dense bytes — not the scrubber alone.
+`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Serve Exports on:** MP4 head+index on every export. **Sequential LAN prefetch** (one loop) fills contiguous dense bytes from playback start toward **EOF** (estimated below ~29 Mbps) or **exported+2 min** (high bitrate). Each export minute still dense-fills its window (pauses prefetch briefly). **Seek &gt; 0:** prefetch from the seek byte offset; dense **first ~2 min at seek** on preload. Export logs and **`http://&lt;phone-ip&gt;:8765/`** show **`LAN playable till 12:34, exported 11:00, started 10:00`** (max contiguous dense playback from the seek in file timeline; also in `status.json`). LAN only serves dense bytes — not the scrubber alone.
 
 Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + files; **Stop** clears paused state and removes published `op_*.mp4`.
 

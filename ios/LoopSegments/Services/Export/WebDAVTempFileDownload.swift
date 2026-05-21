@@ -47,8 +47,6 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private var exportWindowContiguousEnd: Int64 = 0
     /// Disjoint byte spans actually written (head, dense window, EOF index may be separate).
     private var filledRanges: [ClosedRange<Int64>] = []
-    /// End of timeline already covered by `extendLANPrefetchThroughExportCursor` (incremental +2 min extend).
-    private var lastLANExtendTimelineEndSeconds: Double = -1
     private let throughput = DownloadThroughput()
     private let sourceFileKey: String
     private let sourceHref: String?
@@ -112,18 +110,18 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
-    /// Position download at seek (or 0). Optionally start background range fetches (off when using dense-only per minute).
+    /// Position download at seek (or 0) and start sequential LAN prefetch when enabled.
     func beginExport(
         seekSeconds: Double,
         durationSeconds: Double,
-        useBackgroundDownload: Bool = true
+        sequentialLANPrefetch: Bool = true
     ) {
         throughput.reset()
         applyInitialPosition(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
-        if useBackgroundDownload {
+        if sequentialLANPrefetch {
             startBackgroundDownload()
         } else {
-            log("Dense-only temp — each minute downloaded once before passthrough (no background prefetch).")
+            log("LAN off — each minute dense-filled on demand only (no sequential prefetch).")
         }
     }
 
@@ -408,17 +406,26 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         log("Sparse temp — \(formatBytes(totalLength)) on disk (one dense window per 60s segment)…")
     }
 
-    /// Limit background range fetches to `[regionStart, highWaterMark)` (plus index tail).
+    /// Limit sequential prefetch to `[playbackStart, horizonByte)` (index tail fetched separately).
     func setDownloadHighWaterMark(_ highWaterMark: Int64) {
         lock.lock()
         downloadHighWaterMark = min(max(0, highWaterMark), totalLength)
         lock.unlock()
     }
 
-    func resetLANExtendTimelineCursor(playbackStartSeconds: Double) {
-        lock.lock()
-        lastLANExtendTimelineEndSeconds = max(0, playbackStartSeconds)
-        lock.unlock()
+    /// Advance the sequential prefetch horizon as export progresses (EOF or exported+2 min).
+    func updateLANSequentialPrefetchHorizon(
+        playbackStartSeconds: Double,
+        horizonTimelineSeconds: Double,
+        durationSeconds: Double
+    ) {
+        let horizonSeconds = min(max(playbackStartSeconds, horizonTimelineSeconds), durationSeconds)
+        let range = byteRangeForTimeline(
+            timelineStartSeconds: playbackStartSeconds,
+            timelineEndSeconds: horizonSeconds,
+            durationSeconds: durationSeconds
+        )
+        setDownloadHighWaterMark(range.end)
     }
 
     /// Map a file byte offset to timeline seconds (for LAN / export logs).
@@ -455,30 +462,6 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             exportCursorSeconds: exportCursorSeconds,
             durationSeconds: durationSeconds
         )
-    }
-
-    /// Incremental +2 min LAN extend: only dense-fill from the last extend position (not 0→cursor every minute).
-    func ensureLANExtendTimelineRange(
-        playbackStartSeconds: Double,
-        lookaheadEndSeconds: Double,
-        durationSeconds: Double
-    ) async throws {
-        lock.lock()
-        if lastLANExtendTimelineEndSeconds < 0 {
-            lastLANExtendTimelineEndSeconds = max(0, playbackStartSeconds)
-        }
-        let extendStartSec = lastLANExtendTimelineEndSeconds
-        lock.unlock()
-        guard extendStartSec < lookaheadEndSeconds - 0.01 else { return }
-        let range = byteRangeForTimeline(
-            timelineStartSeconds: extendStartSec,
-            timelineEndSeconds: lookaheadEndSeconds,
-            durationSeconds: durationSeconds
-        )
-        try await ensureContiguousRange(range)
-        lock.lock()
-        lastLANExtendTimelineEndSeconds = max(lastLANExtendTimelineEndSeconds, lookaheadEndSeconds)
-        lock.unlock()
     }
 
     private struct CloudChunk {

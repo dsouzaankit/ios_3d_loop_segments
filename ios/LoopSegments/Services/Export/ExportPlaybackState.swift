@@ -19,6 +19,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         var averageWanDownloadMbps: Double = 0
         var lastWanBurstMbps: Double = 0
         var backgroundPrefetchEnabled = false
+        var lanPrefetchHorizonToEOF = false
         var backgroundDownloadActive = false
         var backgroundFillPercent = 0
         var denseBytesOnDiskPercent = 0
@@ -58,6 +59,12 @@ final class ExportPlaybackState: @unchecked Sendable {
     func setBackgroundPrefetchEnabled(_ enabled: Bool) {
         lock.withLock {
             snapshot.backgroundPrefetchEnabled = enabled
+        }
+    }
+
+    func setLANPrefetchHorizonToEOF(_ toEOF: Bool) {
+        lock.withLock {
+            snapshot.lanPrefetchHorizonToEOF = toEOF
         }
     }
 
@@ -116,21 +123,13 @@ final class ExportPlaybackState: @unchecked Sendable {
         if snap.averageWanDownloadMbps > 0 {
             lines.append(String(format: "Avg WAN (active bursts): %.1f Mbps", snap.averageWanDownloadMbps))
         }
-        if snap.lanExportActive {
-            if snap.backgroundPrefetchEnabled {
-                lines.append(
-                    "LAN browser cap = furthest contiguous dense from start (grows with EOF background; not export+2 min)"
-                )
-            } else {
-                lines.append(
-                    "LAN browser cap till = exported+2 min (dense extend per minute when background off)"
-                )
-            }
-        }
         if snap.lanExportActive, snap.backgroundPrefetchEnabled {
             lines.append(
+                "LAN browser cap = furthest contiguous dense from playback start (sequential prefetch)"
+            )
+            lines.append(
                 String(
-                    format: "EOF contiguous fill from start: %d%% (~%@ in file)",
+                    format: "Sequential prefetch contiguous: %d%% (~%@ in file)",
                     snap.backgroundFillPercent,
                     Self.formatClock(snap.backgroundTimelineSeconds)
                 )
@@ -139,14 +138,14 @@ final class ExportPlaybackState: @unchecked Sendable {
         if snap.denseBytesOnDiskPercent > 0 {
             lines.append("Dense bytes on disk: \(snap.denseBytesOnDiskPercent)% of file")
         }
-        if snap.lanExportActive {
-            var prefetch = snap.backgroundPrefetchEnabled
-                ? "on (below 29 Mbps est.)"
-                : "off (≥29 Mbps est. or LAN disabled)"
-            if snap.backgroundPrefetchEnabled {
-                prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (pCloud fill)"
-            }
-            lines.append("Background prefetch: \(prefetch)")
+        if snap.lanExportActive, snap.backgroundPrefetchEnabled {
+            let cutoff = Int(ExportLANServer.backgroundPrefetchCutoffMbps.rounded())
+            let horizon = snap.lanPrefetchHorizonToEOF
+                ? "toward EOF (below \(cutoff) Mbps est.)"
+                : "toward exported+2 min (≥\(cutoff) Mbps est.)"
+            var prefetch = "on — \(horizon)"
+            prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (minute dense fill)"
+            lines.append("LAN sequential prefetch: \(prefetch)")
         }
         return lines
     }
@@ -397,9 +396,7 @@ final class ExportPlaybackState: @unchecked Sendable {
             playbackStartSeconds: from,
             durationSeconds: duration
         )
-        let tillNote = snap.backgroundPrefetchEnabled
-            ? "contiguous dense from start"
-            : "exported+2 min dense extend"
+        let tillNote = "contiguous dense from playback start"
         return
             "LAN playable till \(ExportTimelineLog.wallClock(seconds: till)) (\(tillNote)), " +
             "exported \(ExportTimelineLog.wallClock(seconds: export)), " +
