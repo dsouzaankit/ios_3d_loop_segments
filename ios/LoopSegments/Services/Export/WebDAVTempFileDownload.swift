@@ -50,6 +50,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private var exportWindowContiguousEnd: Int64 = 0
     /// Disjoint byte spans actually written (head, dense window, EOF index may be separate).
     private var filledRanges: [ClosedRange<Int64>] = []
+    /// Playback start (seconds) for the current export — anchor for contiguous frontier computation.
+    /// Avoid reading `ExportPlaybackState.shared.playbackStartSeconds` (stale across runs).
+    private var playbackStartSecondsForAnchor: Double = 0
+    /// Duration (seconds) for the current export — used to map anchor seconds to file byte.
+    private var anchorDurationSeconds: Double = 0
     private let throughput = DownloadThroughput()
     private let sourceFileKey: String
     private let sourceHref: String?
@@ -120,6 +125,10 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         sequentialLANPrefetch: Bool = true
     ) {
         throughput.reset()
+        lock.lock()
+        playbackStartSecondsForAnchor = max(0, seekSeconds)
+        anchorDurationSeconds = max(0, durationSeconds)
+        lock.unlock()
         applyInitialPosition(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
         if sequentialLANPrefetch {
             startBackgroundDownload()
@@ -296,12 +305,12 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     private func playbackAnchorByteLocked(total: Int64) -> Int64 {
-        let duration = ExportPlaybackState.shared.exportDurationSeconds
-        let startSec = ExportPlaybackState.shared.playbackStartSeconds
-        let effective = duration > 0
-            ? duration
+        let startSec = playbackStartSecondsForAnchor
+        guard startSec > 0 else { return 0 }
+        let duration = anchorDurationSeconds > 0
+            ? anchorDurationSeconds
             : Self.effectiveDurationSeconds(reported: 1, totalBytes: total)
-        return Self.timelineByteOffsetForSeconds(max(0, startSec), totalLength: total, durationSeconds: effective)
+        return Self.timelineByteOffsetForSeconds(startSec, totalLength: total, durationSeconds: duration)
     }
 
     private func contiguousDenseEndForLANPlaybackLocked(spans: [ClosedRange<Int64>], total: Int64) -> Int64 {
