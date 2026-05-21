@@ -37,8 +37,10 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     /// When set, background download stops at this byte (avoids pulling the rest of a multi‑GB file).
     private var downloadHighWaterMark: Int64 = 0
     private var backgroundPausedForStream = false
-    /// True when foreground `ensureContiguousRange` paused background so pCloud is not double-fetched.
-    private var backgroundResumeAfterForegroundFill = false
+    /// Nested `pauseBackgroundDownloadForForegroundFill` calls (segment + dense fill).
+    private var foregroundFillPauseDepth = 0
+    /// Background was running before the outermost foreground pause.
+    private var backgroundWasRunningBeforeForegroundFill = false
     /// Contiguous bytes downloaded from the active export window start (no holes — `regionFilledEnd` can lie).
     private var exportWindowStart: Int64 = 0
     private var exportWindowContiguousEnd: Int64 = 0
@@ -216,7 +218,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     func pauseBackgroundDownload() {
         lock.lock()
         backgroundPausedForStream = true
-        backgroundResumeAfterForegroundFill = false
+        foregroundFillPauseDepth = 0
+        backgroundWasRunningBeforeForegroundFill = false
         lock.unlock()
         downloadTask?.cancel()
         downloadTask = nil
@@ -225,7 +228,10 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     /// Pause LAN background prefetch while a minute window is dense-filled from pCloud (avoids duplicate bytes).
     func pauseBackgroundDownloadForForegroundFill() {
         lock.lock()
-        backgroundResumeAfterForegroundFill = downloadTask != nil && !backgroundPausedForStream
+        if foregroundFillPauseDepth == 0 {
+            backgroundWasRunningBeforeForegroundFill = downloadTask != nil && !backgroundPausedForStream
+        }
+        foregroundFillPauseDepth += 1
         lock.unlock()
         downloadTask?.cancel()
         downloadTask = nil
@@ -233,14 +239,28 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
     func resumeBackgroundDownloadAfterForegroundFill() {
         lock.lock()
-        let resume = backgroundResumeAfterForegroundFill
-        backgroundResumeAfterForegroundFill = false
+        guard foregroundFillPauseDepth > 0 else {
+            lock.unlock()
+            return
+        }
+        foregroundFillPauseDepth -= 1
+        let resume = foregroundFillPauseDepth == 0 && backgroundWasRunningBeforeForegroundFill
+        if foregroundFillPauseDepth == 0 {
+            backgroundWasRunningBeforeForegroundFill = false
+        }
         lock.unlock()
         guard resume else { return }
         lock.lock()
         restoreDownloadRegionFromFilledSpansLocked()
         lock.unlock()
         startBackgroundDownload()
+    }
+
+    func isBackgroundDownloadActive() -> Bool {
+        lock.lock()
+        let active = downloadTask != nil && !backgroundPausedForStream
+        lock.unlock()
+        return active
     }
 
     func ensureWriteHandleForDownload() throws {
@@ -485,7 +505,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             tailOnDisk: tail,
             playbackStartSeconds: playback > 0 ? playback : nil
         )
-        ExportPlaybackState.shared.updateAverageWanDownloadMbps(throughput.averageMbps())
+        ExportPlaybackState.shared.updateWanDownloadStats(
+            averageActiveMbps: throughput.averageActiveMbps(),
+            lastBurstMbps: throughput.lastBurstMbps(),
+            backgroundActive: isBackgroundDownloadActive()
+        )
         if let mediaCursorSeconds {
             ExportPlaybackState.shared.updateCursor(seconds: mediaCursorSeconds)
         }
@@ -915,20 +939,17 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             do {
                 try await self.runDownloadLoop()
             } catch is CancellationError {
-                self.lock.lock()
-                let paused = self.backgroundPausedForStream
-                self.lock.unlock()
-                if paused {
-                    self.log("Background download paused — filling this segment’s window on temp")
-                }
+                return
             } catch {
-                if !self.isCancelled() {
-                    self.log("Download stopped: \(error.localizedDescription) — export may continue via pCloud stream if enabled")
-                }
+                if self.isCancelled() { return }
+                let ns = error as NSError
+                if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
+                self.lock.lock()
+                let foregroundPaused = self.foregroundFillPauseDepth > 0
+                self.lock.unlock()
+                if foregroundPaused { return }
+                self.log("Download stopped: \(error.localizedDescription) — export may continue via pCloud stream if enabled")
             }
-        }
-    }
-
     private func runDownloadLoop() async throws {
         var lastLoggedPercent = -Self.progressStepPercent
         while true {
@@ -1080,6 +1101,9 @@ private final class DownloadThroughput: @unchecked Sendable {
     private var startedAt = CFAbsoluteTimeGetCurrent()
     private var lastSampleBytes: Int64 = 0
     private var lastSampleAt = CFAbsoluteTimeGetCurrent()
+    private var activeBytes: Int64 = 0
+    private var activeStartedAt: CFAbsoluteTime?
+    private var lastBurstMbps: Double = 0
 
     func reset() {
         lock.lock()
@@ -1087,14 +1111,27 @@ private final class DownloadThroughput: @unchecked Sendable {
         startedAt = CFAbsoluteTimeGetCurrent()
         lastSampleBytes = 0
         lastSampleAt = startedAt
+        activeBytes = 0
+        activeStartedAt = nil
+        lastBurstMbps = 0
         lock.unlock()
     }
 
     func recordNetworkBytes(_ bytes: Int) {
         guard bytes > 0 else { return }
         lock.lock()
+        let now = CFAbsoluteTimeGetCurrent()
         totalBytes += Int64(bytes)
+        if activeStartedAt == nil {
+            activeStartedAt = now
+        }
+        activeBytes += Int64(bytes)
         lock.unlock()
+        if let burst = intervalMbps() {
+            lock.lock()
+            lastBurstMbps = max(lastBurstMbps, burst)
+            lock.unlock()
+        }
     }
 
     /// Mbps since the previous progress log sample.
@@ -1117,6 +1154,25 @@ private final class DownloadThroughput: @unchecked Sendable {
         lock.unlock()
         guard elapsed >= 0.5, bytes > 0 else { return nil }
         return Self.mbps(bytes: bytes, seconds: elapsed)
+    }
+
+    /// Average Mbps counting only intervals when pCloud bytes were actually received (excludes export/passthrough idle).
+    func averageActiveMbps() -> Double? {
+        lock.lock()
+        let bytes = activeBytes
+        let started = activeStartedAt
+        lock.unlock()
+        guard let started, bytes > 0 else { return nil }
+        let elapsed = CFAbsoluteTimeGetCurrent() - started
+        guard elapsed >= 0.5 else { return nil }
+        return Self.mbps(bytes: bytes, seconds: elapsed)
+    }
+
+    func lastBurstMbps() -> Double? {
+        lock.lock()
+        let burst = lastBurstMbps
+        lock.unlock()
+        return burst > 0 ? burst : nil
     }
 
     private static func mbps(bytes: Int64, seconds: Double) -> Double {

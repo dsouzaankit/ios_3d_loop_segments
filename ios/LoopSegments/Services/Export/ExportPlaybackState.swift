@@ -17,7 +17,9 @@ final class ExportPlaybackState: @unchecked Sendable {
         var exportStartedAt: Date?
         var impliedMediaBitrateMbps: Double = 0
         var averageWanDownloadMbps: Double = 0
+        var lastWanBurstMbps: Double = 0
         var backgroundPrefetchEnabled = false
+        var backgroundDownloadActive = false
     }
 
     private let lock = NSLock()
@@ -45,6 +47,8 @@ final class ExportPlaybackState: @unchecked Sendable {
                 durationSeconds: durationSeconds
             )
             snapshot.averageWanDownloadMbps = 0
+            snapshot.lastWanBurstMbps = 0
+            snapshot.backgroundDownloadActive = false
         }
     }
 
@@ -54,10 +58,19 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
     }
 
-    func updateAverageWanDownloadMbps(_ mbps: Double?) {
-        guard let mbps, mbps > 0 else { return }
+    func updateWanDownloadStats(
+        averageActiveMbps: Double?,
+        lastBurstMbps: Double?,
+        backgroundActive: Bool
+    ) {
         lock.withLock {
-            snapshot.averageWanDownloadMbps = mbps
+            snapshot.backgroundDownloadActive = backgroundActive
+            if let averageActiveMbps, averageActiveMbps > 0 {
+                snapshot.averageWanDownloadMbps = averageActiveMbps
+            }
+            if let lastBurstMbps, lastBurstMbps > 0 {
+                snapshot.lastWanBurstMbps = max(snapshot.lastWanBurstMbps, lastBurstMbps)
+            }
         }
     }
 
@@ -85,11 +98,17 @@ final class ExportPlaybackState: @unchecked Sendable {
             let elapsed = max(0, Date().timeIntervalSince(started))
             lines.append("Export elapsed: \(Self.formatClock(elapsed))")
         }
+        if snap.lastWanBurstMbps > 0 {
+            lines.append(String(format: "Last WAN burst: %.1f Mbps", snap.lastWanBurstMbps))
+        }
         if snap.averageWanDownloadMbps > 0 {
-            lines.append(String(format: "Avg WAN download: %.1f Mbps", snap.averageWanDownloadMbps))
+            lines.append(String(format: "Avg WAN (while downloading): %.1f Mbps", snap.averageWanDownloadMbps))
         }
         if snap.lanExportActive {
-            let prefetch = snap.backgroundPrefetchEnabled ? "on (below 29 Mbps)" : "off (≥29 Mbps or LAN disabled)"
+            var prefetch = snap.backgroundPrefetchEnabled ? "on (below 29 Mbps)" : "off (≥29 Mbps or LAN disabled)"
+            if snap.backgroundPrefetchEnabled {
+                prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (segment/dense fill)"
+            }
             lines.append("Background prefetch: \(prefetch)")
         }
         return lines
@@ -280,7 +299,9 @@ final class ExportPlaybackState: @unchecked Sendable {
             "lanPlayableStatusLine": Self.lanPlayableStatusLine(snap: snap),
             "impliedMediaBitrateMbps": snap.impliedMediaBitrateMbps,
             "averageWanDownloadMbps": snap.averageWanDownloadMbps,
+            "lastWanBurstMbps": snap.lastWanBurstMbps,
             "backgroundPrefetchEnabled": snap.backgroundPrefetchEnabled,
+            "backgroundDownloadActive": snap.backgroundDownloadActive,
         ]
         if let started = snap.exportStartedAt {
             payload["exportStartedAt"] = ISO8601DateFormatter().string(from: started)
