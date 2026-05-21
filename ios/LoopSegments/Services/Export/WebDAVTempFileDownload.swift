@@ -543,8 +543,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return TimelineByteRange(start: denseStart, end: timelineOnly)
     }
 
-    func maxBrowserPlayable
-    StatusLog(
+    func maxBrowserPlayableStatusLog(
         playbackStartSeconds: Double,
         durationSeconds: Double,
         exportCursorSeconds: Double
