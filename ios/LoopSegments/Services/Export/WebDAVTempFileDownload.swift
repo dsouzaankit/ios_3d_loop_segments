@@ -263,15 +263,20 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return active
     }
 
-    /// Contiguous dense frontier from playback start as % of file (matches LAN playable growth).
+    /// Contiguous fill from playback start through the prefetch horizon, as % of that span.
     func backgroundPrefetchPercent() -> Int {
         lock.lock()
         let spans = filledRanges
         let total = totalLength
+        let horizon = downloadHighWaterMark > 0 ? downloadHighWaterMark : totalLength
         lock.unlock()
         guard total > 0 else { return 0 }
-        let frontier = contiguousDenseEndForLANPlaybackLocked(spans: spans, total: total)
-        return Int(min(100, frontier * 100 / total))
+        let anchor = playbackAnchorByteLocked(total: total)
+        let frontier = Self.contiguousDenseEndFromByte(anchor, spans: spans)
+        let horizonByte = min(total, max(anchor, horizon))
+        let filled = max(0, frontier - anchor)
+        let range = max(1, horizonByte - anchor)
+        return Int(min(100, filled * 100 / range))
     }
 
     /// Timeline position of the contiguous dense frontier from playback start.
@@ -281,19 +286,23 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let total = totalLength
         lock.unlock()
         guard total > 0, durationSeconds > 0 else { return 0 }
-        let frontier = contiguousDenseEndForLANPlaybackLocked(spans: spans, total: total)
+        let anchor = playbackAnchorByteLocked(total: total)
+        let frontier = Self.contiguousDenseEndFromByte(anchor, spans: spans)
         return Self.timelineSecondsForByteOffset(frontier, totalLength: total, durationSeconds: durationSeconds)
     }
 
-    private func contiguousDenseEndForLANPlaybackLocked(spans: [ClosedRange<Int64>], total: Int64) -> Int64 {
+    private func playbackAnchorByteLocked(total: Int64) -> Int64 {
         let duration = ExportPlaybackState.shared.exportDurationSeconds
         let startSec = ExportPlaybackState.shared.playbackStartSeconds
-        let startByte = Self.timelineByteOffsetForSeconds(
-            max(0, startSec),
-            totalLength: total,
-            durationSeconds: duration > 0 ? duration : Self.effectiveDurationSeconds(reported: 1, totalBytes: total)
-        )
-        return Self.contiguousDenseEndFromByte(startByte, spans: spans)
+        let effective = duration > 0
+            ? duration
+            : Self.effectiveDurationSeconds(reported: 1, totalBytes: total)
+        return Self.timelineByteOffsetForSeconds(max(0, startSec), totalLength: total, durationSeconds: effective)
+    }
+
+    private func contiguousDenseEndForLANPlaybackLocked(spans: [ClosedRange<Int64>], total: Int64) -> Int64 {
+        let anchor = playbackAnchorByteLocked(total: total)
+        return Self.contiguousDenseEndFromByte(anchor, spans: spans)
     }
 
     /// Furthest byte reachable from `startByte` without crossing a gap in `filledRanges`.
@@ -928,20 +937,22 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     private func restoreDownloadRegionFromFilledSpansLocked() {
-        guard let first = filledRanges.min(by: { $0.lowerBound < $1.lowerBound }) else {
-            regionStart = 0
-            regionFilledEnd = 0
-            downloadCursor = 0
+        let anchor = playbackAnchorByteLocked(total: totalLength)
+        regionStart = anchor
+        guard !filledRanges.isEmpty else {
+            regionFilledEnd = anchor
+            downloadCursor = anchor
             return
         }
-        regionStart = first.lowerBound
-        regionFilledEnd = Self.contiguousDenseEndFromByte(regionStart, spans: filledRanges)
+        regionFilledEnd = Self.contiguousDenseEndFromByte(anchor, spans: filledRanges)
         downloadCursor = regionFilledEnd
     }
 
     /// Next byte background should fetch (never leap over an unfilled gap).
     private func nextBackgroundFetchOffsetLocked() -> Int64 {
-        let contiguousEnd = Self.contiguousDenseEndFromByte(regionStart, spans: filledRanges)
+        let anchor = playbackAnchorByteLocked(total: totalLength)
+        regionStart = anchor
+        let contiguousEnd = Self.contiguousDenseEndFromByte(anchor, spans: filledRanges)
         regionFilledEnd = contiguousEnd
         if downloadCursor > contiguousEnd {
             return contiguousEnd
@@ -968,9 +979,16 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let length = totalLength
         lock.unlock()
         let playback = ExportPlaybackState.shared.frozenStatusPayload
-        let playbackStart = (playback["playbackStartSeconds"] as? Double) ?? 0
+        var playbackStart = (playback["playbackStartSeconds"] as? Double) ?? 0
         let duration = (playback["durationSeconds"] as? Double) ?? 0
-        let cursor = (playback["exportCursorSeconds"] as? Double) ?? 0
+        var cursor = (playback["exportCursorSeconds"] as? Double) ?? 0
+        if ExportPlaybackState.shared.isLANExportActive {
+            playbackStart = ExportPlaybackState.shared.playbackStartSeconds
+            cursor = ExportPlaybackState.shared.exportCursorSeconds
+        }
+        if playbackStart > 0, cursor > 0, cursor < playbackStart {
+            cursor = playbackStart
+        }
         WorkingSourceSparseCatalog.save(
             fileKey: key,
             totalLength: length,

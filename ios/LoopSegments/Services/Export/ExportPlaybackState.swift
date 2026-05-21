@@ -129,7 +129,7 @@ final class ExportPlaybackState: @unchecked Sendable {
             )
             lines.append(
                 String(
-                    format: "Sequential prefetch contiguous: %d%% (~%@ in file)",
+                    format: "Sequential prefetch from start: %d%% (~%@ reachable)",
                     snap.backgroundFillPercent,
                     Self.formatClock(snap.backgroundTimelineSeconds)
                 )
@@ -397,9 +397,16 @@ final class ExportPlaybackState: @unchecked Sendable {
             durationSeconds: duration
         )
         let tillNote = "contiguous dense from playback start"
+        let exportLabel: String
+        if export + 1 < from {
+            exportLabel =
+                "\(ExportTimelineLog.wallClock(seconds: export)) (before start — stale manifest or resume?)"
+        } else {
+            exportLabel = ExportTimelineLog.wallClock(seconds: export)
+        }
         return
             "LAN playable till \(ExportTimelineLog.wallClock(seconds: till)) (\(tillNote)), " +
-            "exported \(ExportTimelineLog.wallClock(seconds: export)), " +
+            "exported \(exportLabel), " +
             "started \(ExportTimelineLog.wallClock(seconds: from))"
     }
 
