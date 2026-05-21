@@ -150,9 +150,16 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     func ensureIndexTailOnDisk(force: Bool = false) async throws {
         try ensureWriteHandleForDownload()
         lock.lock()
-        let hasTail = tailOnDisk
+        let covered = indexTailCoveredOnDiskLocked()
+        if covered {
+            if !tailOnDisk { tailOnDisk = true }
+            lock.unlock()
+            if force {
+                log("MP4 index already at EOF on _working.mp4 — skip pCloud re-fetch")
+            }
+            return
+        }
         lock.unlock()
-        guard force || !hasTail else { return }
 
         let tailLen = Self.indexTailFetchBytes(totalLength: totalLength)
         let tailStart = max(0, totalLength - tailLen)
@@ -294,7 +301,20 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     func hasIndexTailOnDisk() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return tailOnDisk
+        return indexTailCoveredOnDiskLocked()
+    }
+
+    private func indexTailCoveredOnDiskLocked() -> Bool {
+        if tailOnDisk { return true }
+        let tailLen = Self.indexTailFetchBytes(totalLength: totalLength)
+        let tailStart = max(0, totalLength - tailLen)
+        let byteLen = totalLength - tailStart
+        guard byteLen > 0 else { return false }
+        return Self.rangeFullyCovered(
+            offset: tailStart,
+            length: Int(byteLen),
+            spans: filledRanges
+        )
     }
 
     func hasHeadOnDisk() -> Bool {

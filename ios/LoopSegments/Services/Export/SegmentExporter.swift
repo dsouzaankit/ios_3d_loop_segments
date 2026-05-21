@@ -344,7 +344,7 @@ final class SegmentExporter {
                     refreshMP4Index: { try await downloader.ensureIndexTailOnDisk(force: true) },
                     prepareSparseFileForReader: {
                         try await downloader.ensureFileHeadOnDisk()
-                        try await downloader.ensureIndexTailOnDisk(force: true)
+                        try await downloader.ensureIndexTailOnDisk()
                         try await downloader.ensureContiguousRange(byteRange)
                     },
                     isCancelled: cancelCheck,
@@ -1110,7 +1110,7 @@ final class SegmentExporter {
     ) async throws -> SegmentPassThroughResult {
         downloader.pauseBackgroundDownload()
         try await downloader.ensureFileHeadOnDisk()
-        try await downloader.ensureIndexTailOnDisk(force: true)
+        try await downloader.ensureIndexTailOnDisk()
         try await downloader.ensureContiguousRange(byteRange)
         guard downloader.isRangeFilled(byteRange),
               downloader.hasHeadOnDisk(),
@@ -1432,7 +1432,7 @@ final class SegmentExporter {
     ) async throws {
         log("Mid-file temp: ensuring file header + MP4 index + dense window before reader…")
         try await downloader.ensureFileHeadOnDisk()
-        try await downloader.ensureIndexTailOnDisk(force: true)
+        try await downloader.ensureIndexTailOnDisk()
         try await downloader.ensureContiguousRange(byteRange)
     }
 
