@@ -8,6 +8,7 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once
 
 Notes:
 _working.mp4 is streamable only when seek=0:00!
+Av1 is not supported, prefer h.265!
 phone must be unlocked, app in foreground, screen on:
   Optional: Settings > Display & Brightness > Auto-Lock > Never!
 
