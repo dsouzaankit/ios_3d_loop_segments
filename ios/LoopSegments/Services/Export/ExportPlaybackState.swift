@@ -163,6 +163,14 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock { Int(snapshot.playbackStartSeconds.rounded(.down)) }
     }
 
+    var indexTailStartByte: Int64 {
+        lock.withLock { snapshot.indexTailStart }
+    }
+
+    var tailOnDiskForLAN: Bool {
+        lock.withLock { snapshot.tailOnDisk }
+    }
+
     func maxBrowserPlayableTimelineSeconds(
         playbackStartSeconds: Double? = nil,
         durationSeconds: Double? = nil
@@ -274,21 +282,22 @@ final class ExportPlaybackState: @unchecked Sendable {
         maxEnd: Int64,
         snap: Snapshot
     ) -> Int64? {
+        var runEnd: Int64?
         if snap.headOnDisk {
             let headEnd = min(maxEnd, min(Int64(512 * 1024) - 1, snap.totalFileBytes - 1))
             if offset <= headEnd {
-                return headEnd
+                runEnd = headEnd
             }
         }
         for span in snap.filledSpans {
             if offset >= span.lowerBound, offset <= span.upperBound {
-                return min(maxEnd, span.upperBound)
+                runEnd = max(runEnd ?? span.lowerBound - 1, min(maxEnd, span.upperBound))
             }
         }
         if snap.tailOnDisk, offset >= snap.indexTailStart {
-            return maxEnd
+            runEnd = max(runEnd ?? snap.indexTailStart - 1, maxEnd)
         }
-        return nil
+        return runEnd
     }
 }
 

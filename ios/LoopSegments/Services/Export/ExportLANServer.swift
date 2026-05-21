@@ -1157,7 +1157,7 @@ enum ExportLANServer {
                     respondWorkingSourceUnreadable(connection: connection, done: done)
                     return
                 }
-                byteEnd = readableEnd
+                byteEnd = min(byteEnd, readableEnd)
             }
             byteEnd = clampResponseEnd(byteStart: byteStart, byteEnd: byteEnd, fileSize: fileSize)
             status = 206
@@ -1166,8 +1166,28 @@ enum ExportLANServer {
             sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
             return
         } else if isWorkingSource, method == "GET" {
-            // Serve the first readable span (usually file head or index tail) so browsers get moov without bytes=0- on the whole sparse file.
-            if let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(from: 0, maxEnd: fileSize - 1) {
+            let tailStart = ExportPlaybackState.shared.indexTailStartByte
+            let moovInHead = MP4NetworkOptimize.moovPresentInFirstBytes(
+                of: fileURL,
+                scanBytes: 512 * 1024
+            )
+            let preferTail = ExportPlaybackState.shared.tailOnDiskForLAN
+                && tailStart > 0
+                && tailStart < fileSize
+                && !moovInHead
+            if preferTail,
+               let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(
+                   from: tailStart,
+                   maxEnd: fileSize - 1
+               ) {
+                byteStart = tailStart
+                byteEnd = clampResponseEnd(byteStart: tailStart, byteEnd: readableEnd, fileSize: fileSize)
+                status = 206
+                phrase = "Partial Content"
+            } else if let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(
+                from: 0,
+                maxEnd: fileSize - 1
+            ) {
                 byteStart = 0
                 byteEnd = clampResponseEnd(byteStart: 0, byteEnd: readableEnd, fileSize: fileSize)
                 status = 206
