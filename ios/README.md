@@ -7,6 +7,7 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once
 # Skybox (Quest): Add WebDAV → http://<phone-ip>:8765/ (IP from Export screen) · admin / iosadmin — see “Quest LAN playback” below
 
 Notes:
+_working.mp4 is streamable only when seek=0:00!
 phone must be unlocked, app in foreground, screen on:
   Optional: Settings > Display & Brightness > Auto-Lock > Never!
 
