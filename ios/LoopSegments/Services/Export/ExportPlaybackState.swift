@@ -117,9 +117,15 @@ final class ExportPlaybackState: @unchecked Sendable {
             lines.append(String(format: "Avg WAN (active bursts): %.1f Mbps", snap.averageWanDownloadMbps))
         }
         if snap.lanExportActive {
-            lines.append(
-                "LAN browser cap till = exported+2 min (scrubber only; can be far behind actual download)"
-            )
+            if snap.backgroundPrefetchEnabled {
+                lines.append(
+                    "LAN browser cap = furthest contiguous dense from start (grows with EOF background; not export+2 min)"
+                )
+            } else {
+                lines.append(
+                    "LAN browser cap till = exported+2 min (dense extend per minute when background off)"
+                )
+            }
         }
         if snap.lanExportActive, snap.backgroundPrefetchEnabled {
             lines.append(
@@ -391,8 +397,11 @@ final class ExportPlaybackState: @unchecked Sendable {
             playbackStartSeconds: from,
             durationSeconds: duration
         )
+        let tillNote = snap.backgroundPrefetchEnabled
+            ? "contiguous dense from start"
+            : "exported+2 min dense extend"
         return
-            "LAN browser cap till \(ExportTimelineLog.wallClock(seconds: till)) (exported+2 min), " +
+            "LAN playable till \(ExportTimelineLog.wallClock(seconds: till)) (\(tillNote)), " +
             "exported \(ExportTimelineLog.wallClock(seconds: export)), " +
             "started \(ExportTimelineLog.wallClock(seconds: from))"
     }

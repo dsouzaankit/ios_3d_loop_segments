@@ -960,11 +960,10 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     private func restoreDownloadRegionFromFilledSpansLocked() {
-        let priorCursor = downloadCursor
         guard let first = filledRanges.min(by: { $0.lowerBound < $1.lowerBound }) else {
             regionStart = 0
             regionFilledEnd = 0
-            downloadCursor = priorCursor
+            downloadCursor = 0
             return
         }
         regionStart = first.lowerBound
@@ -974,7 +973,16 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 regionFilledEnd = max(regionFilledEnd, span.upperBound + 1)
             }
         }
-        downloadCursor = max(priorCursor, regionFilledEnd)
+        // Resume at the contiguous frontier — never skip holes by keeping a cursor that jumped ahead.
+        downloadCursor = regionFilledEnd
+    }
+
+    /// Next byte background should fetch (never leap over an unfilled gap).
+    private func nextBackgroundFetchOffsetLocked() -> Int64 {
+        if downloadCursor > regionFilledEnd {
+            return regionFilledEnd
+        }
+        return downloadCursor
     }
 
     private func scheduleManifestSave() {
@@ -1032,8 +1040,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         } else if offset >= regionStart, offset <= regionFilledEnd {
             if end > regionFilledEnd { regionFilledEnd = end }
         } else if offset > regionFilledEnd {
-            regionStart = offset
-            regionFilledEnd = end
+            // Discontiguous write (should not happen for sequential background) — still record bytes for LAN.
+            regionFilledEnd = max(regionFilledEnd, end)
         } else if offset < regionStart, end >= regionStart {
             regionStart = offset
             if end > regionFilledEnd { regionFilledEnd = end }
@@ -1106,9 +1114,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             if isCancelled() || Task.isCancelled { throw CancellationError() }
 
             lock.lock()
-            var start = downloadCursor
+            var start = nextBackgroundFetchOffsetLocked()
+            if start != downloadCursor {
+                downloadCursor = start
+            }
             if start >= totalLength {
                 lock.unlock()
+                if isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: totalLength)) {
+                    recordFullDenseFileForLANIfNeeded()
+                }
                 return
             }
             lock.unlock()
@@ -1155,7 +1169,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             try write(data, at: start)
 
             lock.lock()
-            downloadCursor = max(downloadCursor, end + 1)
+            downloadCursor = end + 1
+            regionFilledEnd = max(regionFilledEnd, end + 1)
             let cursor = downloadCursor
             lock.unlock()
 
@@ -1163,6 +1178,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             if pct >= lastLoggedPercent + Self.progressStepPercent || cursor >= totalLength {
                 lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
                 log("Download \(pct)% — \(formatBytes(cursor)) / \(formatBytes(totalLength))\(speedLogSuffix())")
+            }
+            if cursor >= totalLength {
+                recordFullDenseFileForLANIfNeeded()
             }
             await Task.yield()
         }

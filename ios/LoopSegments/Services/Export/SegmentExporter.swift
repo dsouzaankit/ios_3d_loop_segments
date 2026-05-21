@@ -427,7 +427,7 @@ final class SegmentExporter {
 
                 lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
                 reportProgress(lastMediaTimeMs)
-                if lanPrefetch.extendThroughCursorEachMinute {
+                if lanPrefetch.extendThroughCursorEachMinute, !lanPrefetch.useBackgroundDownload {
                     await extendLANPrefetchThroughExportCursor(
                         downloader: downloader,
                         playbackStartSeconds: seekSeconds,
