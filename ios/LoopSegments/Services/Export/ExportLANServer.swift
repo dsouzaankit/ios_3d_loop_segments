@@ -962,8 +962,23 @@ enum ExportLANServer {
             let startedNote = startedReadable
                 ? ""
                 : "<p><em>Started position is not dense on disk yet — use <code>pcld_ios_media/loop/op_00.mp4</code> for browser playback, or VLC on <code>_working.mp4</code>.</em></p>"
+            var statsLines = ""
+            let dashboard = ExportPlaybackState.shared.lanDashboardLines()
+            if !dashboard.isEmpty {
+                let statsEscaped = dashboard
+                    .map {
+                        $0.replacingOccurrences(of: "&", with: "&amp;")
+                            .replacingOccurrences(of: "<", with: "&lt;")
+                    }
+                    .map { "<li>\($0)</li>" }
+                    .joined()
+                statsLines = """
+                <ul>\(statsEscaped)</ul>
+                """
+            }
             playbackStatusBlock = """
             <p><strong>\(escaped)</strong></p>
+            \(statsLines)
             <p>Times are positions in the source file (0:00 = start). <code>till</code> is capped at exported+2min (prefetch may run further ahead). For browser playback prefer <code>loop/op_00.mp4</code> while export runs.</p>
             \(startedNote)
             """

@@ -136,6 +136,7 @@ final class SegmentExporter {
             seekSeconds: seekSeconds,
             impliedMbps: impliedMbps
         )
+        ExportPlaybackState.shared.setBackgroundPrefetchEnabled(lanPrefetch.useBackgroundDownload)
         if lanPrefetch.prepareHeadAndIndex {
             if !lanPrefetch.useBackgroundDownload {
                 logHandler(
@@ -619,15 +620,15 @@ final class SegmentExporter {
         }
 
         let midFileSegment = byteRange.start >= Self.midFilePrefetchThresholdBytes
+        downloader.pauseBackgroundDownloadForForegroundFill()
+        defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
         if midFileSegment {
             log(
                 "Mid-file segment — dense \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start))"
             )
-            downloader.pauseBackgroundDownload()
             try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
         }
 
-        downloader.pauseBackgroundDownload()
         if !isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
             try await downloader.ensureFileHeadOnDisk()
             try await downloader.ensureIndexTailOnDisk()
@@ -874,7 +875,8 @@ final class SegmentExporter {
                 log(
                     "Writer rejected passthrough (\(error.localizedDescription)) — re-downloading window, then capped hybrid reader"
                 )
-            downloader.pauseBackgroundDownload()
+                downloader.pauseBackgroundDownloadForForegroundFill()
+                defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
                 try await downloader.ensureFileHeadOnDisk()
                 try await downloader.ensureIndexTailOnDisk()
                 try await downloader.ensureContiguousRange(byteRange, force: true)
@@ -897,7 +899,8 @@ final class SegmentExporter {
                 log(
                     "Sparse temp not readable (\(error.localizedDescription)) — refreshing header, index, and window, then capped hybrid reader…"
                 )
-                downloader.pauseBackgroundDownload()
+                downloader.pauseBackgroundDownloadForForegroundFill()
+                defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
                 try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
                 useOnDiskFileURL = false
@@ -919,7 +922,8 @@ final class SegmentExporter {
                     "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
                 )
             }
-            downloader.pauseBackgroundDownload()
+            downloader.pauseBackgroundDownloadForForegroundFill()
+            defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
             try await downloader.ensureFileHeadOnDisk()
             try await downloader.ensureIndexTailOnDisk()
             try await downloader.ensureContiguousRange(byteRange)
@@ -1128,7 +1132,8 @@ final class SegmentExporter {
         priorError: Error?,
         log: @escaping (String) -> Void
     ) async throws -> SegmentPassThroughResult {
-        downloader.pauseBackgroundDownload()
+        downloader.pauseBackgroundDownloadForForegroundFill()
+        defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
         try await downloader.ensureFileHeadOnDisk()
         try await downloader.ensureIndexTailOnDisk()
         try await downloader.ensureContiguousRange(byteRange)

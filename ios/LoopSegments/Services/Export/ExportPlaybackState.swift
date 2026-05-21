@@ -14,6 +14,10 @@ final class ExportPlaybackState: @unchecked Sendable {
         var tailOnDisk = false
         var filledSpans: [ClosedRange<Int64>] = []
         var lanExportActive = false
+        var exportStartedAt: Date?
+        var impliedMediaBitrateMbps: Double = 0
+        var averageWanDownloadMbps: Double = 0
+        var backgroundPrefetchEnabled = false
     }
 
     private let lock = NSLock()
@@ -35,7 +39,71 @@ final class ExportPlaybackState: @unchecked Sendable {
             snapshot.tailOnDisk = false
             snapshot.filledSpans = []
             snapshot.lanExportActive = true
+            snapshot.exportStartedAt = Date()
+            snapshot.impliedMediaBitrateMbps = Self.impliedMediaBitrateMbps(
+                totalBytes: totalBytes,
+                durationSeconds: durationSeconds
+            )
+            snapshot.averageWanDownloadMbps = 0
         }
+    }
+
+    func setBackgroundPrefetchEnabled(_ enabled: Bool) {
+        lock.withLock {
+            snapshot.backgroundPrefetchEnabled = enabled
+        }
+    }
+
+    func updateAverageWanDownloadMbps(_ mbps: Double?) {
+        guard let mbps, mbps > 0 else { return }
+        lock.withLock {
+            snapshot.averageWanDownloadMbps = mbps
+        }
+    }
+
+    static func impliedMediaBitrateMbps(totalBytes: Int64, durationSeconds: Double) -> Double {
+        guard totalBytes > 0, durationSeconds > 0 else { return 0 }
+        let effective = WebDAVTempFileDownload.effectiveDurationSeconds(
+            reported: durationSeconds,
+            totalBytes: totalBytes
+        )
+        guard effective > 0 else { return 0 }
+        return (Double(totalBytes) * 8.0) / (effective * 1_000_000.0)
+    }
+
+    /// Human-readable lines for the LAN HTTP index (export timing + bitrates).
+    func lanDashboardLines() -> [String] {
+        let snap = lock.withLock { snapshot }
+        var lines: [String] = []
+        if snap.durationSeconds > 0 {
+            lines.append("Media duration: \(Self.formatClock(snap.durationSeconds))")
+        }
+        if snap.impliedMediaBitrateMbps > 0 {
+            lines.append(String(format: "Media bitrate (est.): %.1f Mbps", snap.impliedMediaBitrateMbps))
+        }
+        if let started = snap.exportStartedAt, snap.lanExportActive {
+            let elapsed = max(0, Date().timeIntervalSince(started))
+            lines.append("Export elapsed: \(Self.formatClock(elapsed))")
+        }
+        if snap.averageWanDownloadMbps > 0 {
+            lines.append(String(format: "Avg WAN download: %.1f Mbps", snap.averageWanDownloadMbps))
+        }
+        if snap.lanExportActive {
+            let prefetch = snap.backgroundPrefetchEnabled ? "on (below 29 Mbps)" : "off (≥29 Mbps or LAN disabled)"
+            lines.append("Background prefetch: \(prefetch)")
+        }
+        return lines
+    }
+
+    private static func formatClock(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded(.down)))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
     }
 
     func setLANExportActive(_ active: Bool) {
@@ -200,7 +268,7 @@ final class ExportPlaybackState: @unchecked Sendable {
     var frozenStatusPayload: [String: Any] {
         let snap = lock.withLock { snapshot }
         let till = Self.maxBrowserPlayableTimelineSeconds(snap: snap)
-        return [
+        var payload: [String: Any] = [
             "playbackStartSeconds": snap.playbackStartSeconds,
             "exportCursorSeconds": snap.exportCursorSeconds,
             "durationSeconds": snap.durationSeconds,
@@ -210,7 +278,15 @@ final class ExportPlaybackState: @unchecked Sendable {
             "tailOnDisk": snap.tailOnDisk,
             "lanPlayableTillSeconds": till,
             "lanPlayableStatusLine": Self.lanPlayableStatusLine(snap: snap),
+            "impliedMediaBitrateMbps": snap.impliedMediaBitrateMbps,
+            "averageWanDownloadMbps": snap.averageWanDownloadMbps,
+            "backgroundPrefetchEnabled": snap.backgroundPrefetchEnabled,
         ]
+        if let started = snap.exportStartedAt {
+            payload["exportStartedAt"] = ISO8601DateFormatter().string(from: started)
+            payload["exportElapsedSeconds"] = max(0, Date().timeIntervalSince(started))
+        }
+        return payload
     }
 
     private static func maxBrowserPlayableTimelineSeconds(

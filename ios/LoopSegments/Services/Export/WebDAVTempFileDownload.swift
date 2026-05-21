@@ -485,6 +485,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             tailOnDisk: tail,
             playbackStartSeconds: playback > 0 ? playback : nil
         )
+        ExportPlaybackState.shared.updateAverageWanDownloadMbps(throughput.averageMbps())
         if let mediaCursorSeconds {
             ExportPlaybackState.shared.updateCursor(seconds: mediaCursorSeconds)
         }
