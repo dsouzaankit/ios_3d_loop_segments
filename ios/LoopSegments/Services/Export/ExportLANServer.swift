@@ -1003,7 +1003,7 @@ enum ExportLANServer {
                 .replacingOccurrences(of: "<", with: "&lt;")
             let startedNote = startedReadable
                 ? ""
-                : "<p><em>Started position is not dense on disk yet — use <code>pcld_ios_media/loop/op_00.mp4</code> for browser playback, or VLC on <code>_working.mp4</code>.</em></p>"
+                : "<p><em>Started position is not dense on disk yet (need ~45s preroll before <code>#t=\(startSec)</code> for decode) — run export again from that seek on a new build, use <code>loop/op_00.mp4</code>, or VLC on <code>_working.mp4</code>.</em></p>"
             var statsLines = ""
             let dashboard = ExportPlaybackState.shared.lanDashboardLines()
             if !dashboard.isEmpty {

@@ -320,11 +320,31 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
     private func playbackAnchorByteLocked(total: Int64) -> Int64 {
         let startSec = playbackStartSecondsForAnchor
-        guard startSec > 0 else { return 0 }
+        guard startSec > 0.5 else { return 0 }
         let duration = anchorDurationSeconds > 0
             ? anchorDurationSeconds
             : Self.effectiveDurationSeconds(reported: 1, totalBytes: total)
-        return Self.timelineByteOffsetForSeconds(startSec, totalLength: total, durationSeconds: duration)
+        return Self.lanPlaybackDenseAnchorByte(
+            playbackStartSeconds: startSec,
+            totalLength: total,
+            durationSeconds: duration
+        )
+    }
+
+    /// Fill ~45s preroll before wall-clock seek so `#t=` / browser decode has keyframe bytes on disk.
+    func ensureLANPlaybackPrerollGapFilled(seekSeconds: Double, durationSeconds: Double) async throws {
+        guard seekSeconds > 0.5 else { return }
+        guard let gap = Self.lanPlaybackPrerollGapRange(
+            playbackStartSeconds: seekSeconds,
+            totalLength: totalLength,
+            durationSeconds: durationSeconds
+        ), gap.length > 0 else { return }
+        if isRangeFilled(gap) { return }
+        log(
+            "LAN playback preroll — dense fill \(formatBytes(gap.start))–\(formatBytes(gap.end)) " +
+                "(~\(Int(Self.timelineStartPrerollSeconds))s before \(ExportTimelineLog.wallClock(seconds: seekSeconds)) for decode)…"
+        )
+        try await ensureContiguousRange(gap)
     }
 
     private func contiguousDenseEndForLANPlaybackLocked(spans: [ClosedRange<Int64>], total: Int64) -> Int64 {
@@ -486,7 +506,45 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return min(totalLength, Int64(ratio * Double(totalLength)))
     }
 
-    func maxBrowserPlayableStatusLog(
+    /// First byte that must be dense for decode at `playbackStartSeconds` (includes ~45s preroll + keyframe slack).
+    static func lanPlaybackDenseAnchorByte(
+        playbackStartSeconds: Double,
+        totalLength: Int64,
+        durationSeconds: Double
+    ) -> Int64 {
+        guard playbackStartSeconds > 0.5, totalLength > 0, durationSeconds > 0 else { return 0 }
+        let endSec = min(durationSeconds, playbackStartSeconds + 1)
+        return byteRangeForTimeline(
+            totalLength: totalLength,
+            timelineStartSeconds: playbackStartSeconds,
+            timelineEndSeconds: endSec,
+            durationSeconds: durationSeconds
+        ).start
+    }
+
+    /// Sparse bytes between preroll anchor and naive timeline offset (legacy fills that skipped preroll).
+    static func lanPlaybackPrerollGapRange(
+        playbackStartSeconds: Double,
+        totalLength: Int64,
+        durationSeconds: Double
+    ) -> TimelineByteRange? {
+        guard playbackStartSeconds > 0.5, totalLength > 0, durationSeconds > 0 else { return nil }
+        let denseStart = lanPlaybackDenseAnchorByte(
+            playbackStartSeconds: playbackStartSeconds,
+            totalLength: totalLength,
+            durationSeconds: durationSeconds
+        )
+        let timelineOnly = timelineByteOffsetForSeconds(
+            playbackStartSeconds,
+            totalLength: totalLength,
+            durationSeconds: durationSeconds
+        )
+        guard denseStart < timelineOnly else { return nil }
+        return TimelineByteRange(start: denseStart, end: timelineOnly)
+    }
+
+    func maxBrowserPlayable
+    StatusLog(
         playbackStartSeconds: Double,
         durationSeconds: Double,
         exportCursorSeconds: Double
@@ -944,7 +1002,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             log("Download from file start — need ~\(formatBytes(range.end)) for first minute")
         } else {
             regionStart = min(regionStart, range.start)
-            if headOnDisk {
+            if headOnDisk, !lanPreloadExclusive {
                 regionStart = 0
             }
             exportWindowStart = range.start

@@ -577,6 +577,12 @@ final class SegmentExporter {
         try await downloader.waitUntilComplete(durationSeconds: durationSeconds) { timelineSec in
             reportProgress(Int64(timelineSec * 1000))
         }
+        if seekSeconds > 0.5 {
+            try await downloader.ensureLANPlaybackPrerollGapFilled(
+                seekSeconds: seekSeconds,
+                durationSeconds: durationSeconds
+            )
+        }
         let full = TimelineByteRange(start: 0, end: fileSize)
         let reachedEnd = downloader.isByteRangeFullyOnDisk(full)
         let lastMs = reachedEnd ? durationMs : Int64(
@@ -1564,6 +1570,10 @@ final class SegmentExporter {
             try await downloader.ensureContiguousRange(
                 firstRange,
                 bridgeLANGapBeforeWindow: lanPrefetch.prefetchHorizonToEOF
+            )
+            try await downloader.ensureLANPlaybackPrerollGapFilled(
+                seekSeconds: seekSeconds,
+                durationSeconds: durationSeconds
             )
         }
         downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)

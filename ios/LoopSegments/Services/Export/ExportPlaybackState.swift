@@ -173,9 +173,9 @@ final class ExportPlaybackState: @unchecked Sendable {
         let total = snap.totalFileBytes
         let duration = snap.durationSeconds
         let anchor: Int64 = {
-            guard snap.playbackStartSeconds > 0, duration > 0 else { return 0 }
-            return WebDAVTempFileDownload.timelineByteOffsetForSeconds(
-                snap.playbackStartSeconds,
+            guard snap.playbackStartSeconds > 0.5, duration > 0 else { return 0 }
+            return WebDAVTempFileDownload.lanPlaybackDenseAnchorByte(
+                playbackStartSeconds: snap.playbackStartSeconds,
                 totalLength: total,
                 durationSeconds: duration
             )
@@ -448,8 +448,8 @@ final class ExportPlaybackState: @unchecked Sendable {
         let start = max(0, playbackStartSeconds ?? snap.playbackStartSeconds)
         let duration = durationSeconds ?? snap.durationSeconds
         guard duration > 0, snap.totalFileBytes > 0 else { return start }
-        let startByte = WebDAVTempFileDownload.timelineByteOffsetForSeconds(
-            start,
+        let startByte = WebDAVTempFileDownload.lanPlaybackDenseAnchorByte(
+            playbackStartSeconds: start,
             totalLength: snap.totalFileBytes,
             durationSeconds: duration
         )
