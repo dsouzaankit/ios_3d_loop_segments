@@ -11,7 +11,6 @@ struct TimelineByteRange: Equatable {
 /// Downloads remote MP4 ranges into a sparse temp file for timed segment export.
 final class WebDAVTempFileDownload: @unchecked Sendable {
     private static let downloadChunkBytes: Int64 = 2 * 1024 * 1024
-    private static let downloadParallelism = 4
     private static let progressStepPercent = 5
     private static let timelineSlackBytes: Int64 = 24 * 1024 * 1024
     /// Extra timeline before `startSec` when mapping to file bytes (linear estimate can lag real moov sample times).
@@ -464,12 +463,6 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         )
     }
 
-    private struct CloudChunk {
-        let offset: Int64
-        let length: Int
-        let endInclusive: Int64
-    }
-
     private func downloadDenseRangeFromCloud(
         rangeStart: Int64,
         rangeEnd: Int64,
@@ -481,27 +474,18 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lastProgressLog: inout CFAbsoluteTime
     ) async throws {
         var offset = rangeStart
+        let auth = authorizationProvider()
         while offset < rangeEnd {
             if isCancelled() || Task.isCancelled { throw CancellationError() }
-            var batch: [CloudChunk] = []
-            var scan = offset
-            while scan < rangeEnd, batch.count < Self.downloadParallelism {
-                let end = min(scan + Self.downloadChunkBytes - 1, rangeEnd - 1)
-                let chunkLen = Int(end - scan + 1)
-                lock.lock()
-                let spans = filledRanges
-                lock.unlock()
-                if !force,
-                   Self.rangeFullyCovered(offset: scan, length: chunkLen, spans: spans) {
-                    skippedOnDisk += Int64(chunkLen)
-                    scan = end + 1
-                    continue
-                }
-                batch.append(CloudChunk(offset: scan, length: chunkLen, endInclusive: end))
-                scan = end + 1
-            }
-            if batch.isEmpty {
-                offset = scan
+            let end = min(offset + Self.downloadChunkBytes - 1, rangeEnd - 1)
+            let chunkLen = Int(end - offset + 1)
+            lock.lock()
+            let spans = filledRanges
+            lock.unlock()
+            if !force,
+               Self.rangeFullyCovered(offset: offset, length: chunkLen, spans: spans) {
+                skippedOnDisk += Int64(chunkLen)
+                offset = end + 1
                 logDenseFillProgressIfNeeded(
                     done: offset - rangeStart,
                     needLen: needLen,
@@ -511,14 +495,19 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 )
                 continue
             }
-            let auth = authorizationProvider()
-            let fetched = try await fetchCloudChunksParallel(authorization: auth, chunks: batch)
-            for (chunkOffset, data) in fetched.sorted(by: { $0.0 < $1.0 }) {
-                throughput.recordNetworkBytes(data.count)
-                try write(data, at: chunkOffset)
-                fetchedFromCloud += Int64(data.count)
+            let data = try await Self.fetchRange(
+                remoteURL: remoteURL,
+                authorization: auth,
+                offset: offset,
+                endInclusive: end
+            )
+            guard data.count == chunkLen else {
+                throw WebDAVResourceLoaderError.invalidResponse
             }
-            offset = scan
+            throughput.recordNetworkBytes(data.count)
+            try write(data, at: offset)
+            fetchedFromCloud += Int64(data.count)
+            offset = end + 1
             logDenseFillProgressIfNeeded(
                 done: offset - rangeStart,
                 needLen: needLen,
@@ -526,34 +515,6 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 lastLoggedPercent: &lastLoggedPercent,
                 lastProgressLog: &lastProgressLog
             )
-        }
-    }
-
-    private func fetchCloudChunksParallel(
-        authorization: String,
-        chunks: [CloudChunk]
-    ) async throws -> [(Int64, Data)] {
-        try await withThrowingTaskGroup(of: (Int64, Data).self) { group in
-            for chunk in chunks {
-                group.addTask {
-                    let data = try await Self.fetchRange(
-                        remoteURL: self.remoteURL,
-                        authorization: authorization,
-                        offset: chunk.offset,
-                        endInclusive: chunk.endInclusive
-                    )
-                    guard data.count == chunk.length else {
-                        throw WebDAVResourceLoaderError.invalidResponse
-                    }
-                    return (chunk.offset, data)
-                }
-            }
-            var out: [(Int64, Data)] = []
-            out.reserveCapacity(chunks.count)
-            for try await item in group {
-                out.append(item)
-            }
-            return out
         }
     }
 

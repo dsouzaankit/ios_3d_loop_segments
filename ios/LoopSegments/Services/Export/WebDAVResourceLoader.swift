@@ -86,7 +86,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private let readLocalBytes: ((Int64, Int) -> Data?)?
     private let logLine: ((String) -> Void)?
     private let throughput = LoaderThroughput()
-    private let rangeFetchGate = RangeFetchGate(maxSlots: 3)
+    private let rangeFetchGate = RangeFetchGate(maxSlots: 1)
 
     private var cachedContentLength: Int64?
     private let trustedContentLength: Int64?
@@ -611,7 +611,7 @@ private final class LoaderThroughput: @unchecked Sendable {
     }
 }
 
-/// Limits parallel pCloud range GETs when AVFoundation issues many loader requests at once.
+/// Serializes pCloud range GETs when AVFoundation issues overlapping loader requests.
 private actor RangeFetchGate {
     private let maxSlots: Int
     private var used = 0
