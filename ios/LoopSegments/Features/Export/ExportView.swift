@@ -16,8 +16,6 @@ struct ExportView: View {
     @State private var lanHostURL: String?
     @State private var lanIPURL: String?
     @State private var exportTask: Task<Void, Never>?
-    @State private var showClearMediaConfirm = false
-    @State private var showClearLogsConfirm = false
     @State private var showAutoLockHelp = false
     @State private var copiedLANURL = false
     @State private var prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
@@ -200,11 +198,11 @@ struct ExportView: View {
             }
             Section("Exports folder") {
                 Button("Clear media", role: .destructive) {
-                    showClearMediaConfirm = true
+                    clearExportMedia()
                 }
                 .disabled(session.isExportRunning)
                 Button("Clear logs", role: .destructive) {
-                    showClearLogsConfirm = true
+                    clearExportLogs()
                 }
                 .disabled(session.isExportRunning)
                 Text("Media: pcld_ios_media/loop/op_00|01.mp4, pcld_ios_media/_working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
@@ -257,26 +255,6 @@ struct ExportView: View {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
-        }
-        .confirmationDialog(
-            "Clear export media?",
-            isPresented: $showClearMediaConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Clear media", role: .destructive) { clearExportMedia() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Removes segment MP4s and temp source from Exports. Photos library is unchanged.")
-        }
-        .confirmationDialog(
-            "Clear export logs?",
-            isPresented: $showClearLogsConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Clear logs", role: .destructive) { clearExportLogs() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Removes export and search log files from Exports. loop_segments_ok.txt is kept.")
         }
         .alert("Auto-Lock", isPresented: $showAutoLockHelp) {
             Button("OK", role: .cancel) {}
