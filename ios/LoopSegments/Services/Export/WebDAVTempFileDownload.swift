@@ -1106,7 +1106,7 @@ private final class DownloadThroughput: @unchecked Sendable {
     private var lastSampleAt = CFAbsoluteTimeGetCurrent()
     private var activeBytes: Int64 = 0
     private var activeStartedAt: CFAbsoluteTime?
-    private var lastBurstMbps: Double = 0
+    private var peakBurstMbps: Double = 0
 
     func reset() {
         lock.lock()
@@ -1116,7 +1116,7 @@ private final class DownloadThroughput: @unchecked Sendable {
         lastSampleAt = startedAt
         activeBytes = 0
         activeStartedAt = nil
-        lastBurstMbps = 0
+        peakBurstMbps = 0
         lock.unlock()
     }
 
@@ -1132,7 +1132,7 @@ private final class DownloadThroughput: @unchecked Sendable {
         lock.unlock()
         if let burst = intervalMbps() {
             lock.lock()
-            lastBurstMbps = max(lastBurstMbps, burst)
+            peakBurstMbps = max(peakBurstMbps, burst)
             lock.unlock()
         }
     }
@@ -1173,7 +1173,7 @@ private final class DownloadThroughput: @unchecked Sendable {
 
     func lastBurstMbps() -> Double? {
         lock.lock()
-        let burst = lastBurstMbps
+        let burst = peakBurstMbps
         lock.unlock()
         return burst > 0 ? burst : nil
     }
