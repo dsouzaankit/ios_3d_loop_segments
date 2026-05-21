@@ -9,8 +9,6 @@ enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
     /// Per-response cap — open-ended `Range: bytes=0-` must not ship multi-GB (Quest browser / Safari OOM).
     private static let maxResponseBodyBytes: Int64 = 32 * 1024 * 1024
-    /// Sparse holes in `_working.mp4` return 206 with zero-filled bytes (pre–build 155 behavior). May cause scrubber/EOF quirks on moov-at-end files.
-    private static let serveWorkingSparseHolesAsZeroFilled206 = true
     /// LAN WebDAV Basic auth (Skybox, mapped drives). GET without auth still works for PC sync.
     static let lanWebDAVUsername = "admin"
     static let lanWebDAVPassword = "iosadmin"
@@ -1152,19 +1150,14 @@ enum ExportLANServer {
             byteStart = range.start
             byteEnd = range.end
             if isWorkingSource {
-                if let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(
+                guard let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(
                     from: byteStart,
                     maxEnd: byteEnd
-                ) {
-                    byteEnd = min(byteEnd, readableEnd)
-                } else if !serveWorkingSparseHolesAsZeroFilled206 {
-                    respondWorkingSourceUnreadable(
-                        connection: connection,
-                        rangeStart: byteStart,
-                        done: done
-                    )
+                ) else {
+                    respondWorkingSourceUnreadable(connection: connection, done: done)
                     return
                 }
+                byteEnd = min(byteEnd, readableEnd)
             }
             byteEnd = clampResponseEnd(byteStart: byteStart, byteEnd: byteEnd, fileSize: fileSize)
             status = 206
@@ -1233,15 +1226,8 @@ enum ExportLANServer {
             return
         }
 
-        if isWorkingSource,
-           method != "HEAD",
-           !serveWorkingSparseHolesAsZeroFilled206,
-           !ExportPlaybackState.shared.rangeIsReadable(start: byteStart, end: byteEnd) {
-            respondWorkingSourceUnreadable(
-                connection: connection,
-                rangeStart: byteStart,
-                done: done
-            )
+        if isWorkingSource, method != "HEAD", !ExportPlaybackState.shared.rangeIsReadable(start: byteStart, end: byteEnd) {
+            respondWorkingSourceUnreadable(connection: connection, done: done)
             return
         }
 
@@ -1297,7 +1283,6 @@ enum ExportLANServer {
                 handle: handle,
                 offset: byteStart,
                 remaining: bodyLength,
-                padSparseHoles: isWorkingSource && serveWorkingSparseHolesAsZeroFilled206,
                 done: done
             )
         })
@@ -1308,7 +1293,6 @@ enum ExportLANServer {
         handle: FileHandle,
         offset: Int64,
         remaining: Int64,
-        padSparseHoles: Bool,
         done: @escaping () -> Void
     ) {
         if remaining <= 0 {
@@ -1320,10 +1304,7 @@ enum ExportLANServer {
         let chunkSize = min(remaining, 512 * 1024)
         do {
             try handle.seek(toOffset: UInt64(offset))
-            var data = handle.readData(ofLength: Int(chunkSize))
-            if padSparseHoles {
-                data = paddedSparseHoleChunk(requested: Int(chunkSize), read: data, remaining: remaining)
-            }
+            let data = handle.readData(ofLength: Int(chunkSize))
             guard !data.isEmpty else {
                 try? handle.close()
                 connection.cancel()
@@ -1343,7 +1324,6 @@ enum ExportLANServer {
                     handle: handle,
                     offset: offset + sent,
                     remaining: remaining - sent,
-                    padSparseHoles: padSparseHoles,
                     done: done
                 )
             })
@@ -1354,32 +1334,25 @@ enum ExportLANServer {
         }
     }
 
-    /// Unallocated sparse temp bytes may read short; pad with zeros so the 206 body length matches Content-Length.
-    private static func paddedSparseHoleChunk(requested: Int, read: Data, remaining: Int64) -> Data {
-        let target = min(requested, Int(remaining))
-        guard target > 0 else { return read }
-        if read.isEmpty {
-            return Data(count: target)
-        }
-        if read.count >= target {
-            return read.prefix(target)
-        }
-        var out = read
-        out.append(Data(count: target - read.count))
-        return out
-    }
-
     private static func respondWorkingSourceUnreadable(
         connection: NWConnection,
-        rangeStart: Int64,
         done: @escaping () -> Void
     ) {
-        let failure = ExportPlaybackState.shared.workingSourceRangeFailure(rangeStart: rangeStart)
+        let snap = ExportPlaybackState.shared.frozenStatusPayload
+        let startSec = (snap["playbackStartSeconds"] as? Double) ?? 0
+        let cursorSec = (snap["exportCursorSeconds"] as? Double) ?? 0
+        let durationSec = (snap["durationSeconds"] as? Double) ?? 0
+        let active = ExportPlaybackState.shared.isLANExportActive
+        let status = active ? 503 : 416
+        let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+        let hint = active
+            ? "Range not on disk yet. Export is still filling this part of the file; retry in a few seconds."
+            : "Range not on disk. Open http://<phone-ip>:8765/ and use the index link to pcld_ios_media/_working.mp4 (not a typed URL). Resume at \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))) of ~\(formatLANClock(Int(durationSec.rounded(.down)))). For playback now use pcld_ios_media/loop/op_00.mp4 on the same page, or VLC/ffplay on _working.mp4."
         sendResponse(
             connection: connection,
-            status: failure.status,
+            status: status,
             contentType: "text/plain; charset=utf-8",
-            body: Data(failure.hint.utf8),
+            body: Data(hint.utf8),
             done: done
         )
     }
