@@ -11,6 +11,10 @@ struct TimelineByteRange: Equatable {
 /// Downloads remote MP4 ranges into a sparse temp file for timed segment export.
 final class WebDAVTempFileDownload: @unchecked Sendable {
     private static let downloadChunkBytes: Int64 = 2 * 1024 * 1024
+    /// Concurrent range fetches inside the background prefetch loop (single Task; saturates cellular).
+    private static let backgroundPrefetchParallelism = 4
+    /// Retry backoff (seconds) after a transient background error before reopening the loop.
+    private static let backgroundRetryDelaysSeconds: [UInt64] = [1, 2, 5, 10, 20]
     private static let progressStepPercent = 5
     private static let timelineSlackBytes: Int64 = 24 * 1024 * 1024
     /// Extra timeline before `startSec` when mapping to file bytes (linear estimate can lag real moov sample times).
@@ -1057,19 +1061,34 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         downloadTask?.cancel()
         downloadTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            do {
-                try await self.runDownloadLoop()
-            } catch is CancellationError {
-                return
-            } catch {
-                if self.isCancelled() { return }
-                let ns = error as NSError
-                if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
-                self.lock.lock()
-                let foregroundPaused = self.foregroundFillPauseDepth > 0
-                self.lock.unlock()
-                if foregroundPaused { return }
-                self.log("Download stopped: \(error.localizedDescription) — export may continue via pCloud stream if enabled")
+            var attempt = 0
+            while !self.isCancelled(), !Task.isCancelled {
+                do {
+                    try await self.runDownloadLoop()
+                    return
+                } catch is CancellationError {
+                    return
+                } catch {
+                    if self.isCancelled() { return }
+                    let ns = error as NSError
+                    if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
+                    self.lock.lock()
+                    let foregroundPaused = self.foregroundFillPauseDepth > 0
+                    self.lock.unlock()
+                    if foregroundPaused { return }
+                    let delaySec = Self.backgroundRetryDelaysSeconds[
+                        min(attempt, Self.backgroundRetryDelaysSeconds.count - 1)
+                    ]
+                    self.log(
+                        "Background prefetch hit \(error.localizedDescription) — retrying in \(delaySec)s (attempt \(attempt + 1))"
+                    )
+                    attempt += 1
+                    do {
+                        try await Task.sleep(nanoseconds: delaySec * 1_000_000_000)
+                    } catch {
+                        return
+                    }
+                }
             }
         }
     }
@@ -1101,55 +1120,100 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 try await Task.sleep(nanoseconds: 500_000_000)
                 continue
             }
-            let end = min(start + Self.downloadChunkBytes - 1, stopAt - 1, totalLength - 1)
-            let length = Int(end - start + 1)
             lock.lock()
             let spans = filledRanges
             let contiguousEnd = contiguousDenseEndForLANPlaybackLocked(spans: spans, total: totalLength)
             lock.unlock()
-            let chunkEnd = end + 1
-            if Self.rangeFullyCovered(offset: start, length: length, spans: spans),
-               chunkEnd <= contiguousEnd {
+            var batch: [(offset: Int64, end: Int64, length: Int)] = []
+            var scan = start
+            while scan < stopAt, batch.count < Self.backgroundPrefetchParallelism {
+                if isCancelled() || Task.isCancelled { throw CancellationError() }
+                let end = min(scan + Self.downloadChunkBytes - 1, stopAt - 1, totalLength - 1)
+                let length = Int(end - scan + 1)
+                let chunkEnd = end + 1
+                if Self.rangeFullyCovered(offset: scan, length: length, spans: spans),
+                   chunkEnd <= contiguousEnd {
+                    lock.lock()
+                    if chunkEnd > downloadCursor { downloadCursor = chunkEnd }
+                    regionFilledEnd = Self.contiguousDenseEndFromByte(regionStart, spans: filledRanges)
+                    lock.unlock()
+                    scan = chunkEnd
+                    continue
+                }
+                batch.append((offset: scan, end: end, length: length))
+                scan = chunkEnd
+            }
+            if batch.isEmpty {
                 lock.lock()
-                if chunkEnd > downloadCursor { downloadCursor = chunkEnd }
-                regionFilledEnd = Self.contiguousDenseEndFromByte(regionStart, spans: filledRanges)
                 let cursor = regionFilledEnd
                 lock.unlock()
-                let pct = totalLength > 0 ? Int(cursor * 100 / totalLength) : 0
-                if pct >= lastLoggedPercent + Self.progressStepPercent || cursor >= totalLength {
-                    lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
-                    log("Download \(pct)% — \(formatBytes(cursor)) / \(formatBytes(totalLength)) (on disk)\(speedLogSuffix())")
-                }
+                logBackgroundProgressIfNeeded(
+                    cursor: cursor,
+                    onDisk: true,
+                    lastLoggedPercent: &lastLoggedPercent
+                )
                 await Task.yield()
                 continue
             }
             let auth = authorizationProvider()
-            let data = try await Self.fetchRange(
-                remoteURL: remoteURL,
-                authorization: auth,
-                offset: start,
-                endInclusive: end
-            )
-            guard data.count == length else {
-                throw WebDAVResourceLoaderError.invalidResponse
+            let fetched = try await fetchBackgroundChunksParallel(authorization: auth, chunks: batch)
+            for (offset, data) in fetched.sorted(by: { $0.0 < $1.0 }) {
+                throughput.recordNetworkBytes(data.count)
+                try write(data, at: offset)
             }
-            throughput.recordNetworkBytes(data.count)
-            try write(data, at: start)
-
             lock.lock()
             restoreDownloadRegionFromFilledSpansLocked()
             let cursor = downloadCursor
             lock.unlock()
-
-            let pct = totalLength > 0 ? Int(cursor * 100 / totalLength) : 0
-            if pct >= lastLoggedPercent + Self.progressStepPercent || cursor >= totalLength {
-                lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
-                log("Download \(pct)% — \(formatBytes(cursor)) / \(formatBytes(totalLength))\(speedLogSuffix())")
-            }
+            logBackgroundProgressIfNeeded(
+                cursor: cursor,
+                onDisk: false,
+                lastLoggedPercent: &lastLoggedPercent
+            )
             if cursor >= totalLength {
                 recordFullDenseFileForLANIfNeeded()
             }
             await Task.yield()
+        }
+    }
+
+    private func logBackgroundProgressIfNeeded(
+        cursor: Int64,
+        onDisk: Bool,
+        lastLoggedPercent: inout Int
+    ) {
+        let pct = totalLength > 0 ? Int(cursor * 100 / totalLength) : 0
+        guard pct >= lastLoggedPercent + Self.progressStepPercent || cursor >= totalLength else { return }
+        lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
+        let suffix = onDisk ? " (on disk)" : ""
+        log("Download \(pct)% — \(formatBytes(cursor)) / \(formatBytes(totalLength))\(suffix)\(speedLogSuffix())")
+    }
+
+    private func fetchBackgroundChunksParallel(
+        authorization: String,
+        chunks: [(offset: Int64, end: Int64, length: Int)]
+    ) async throws -> [(Int64, Data)] {
+        try await withThrowingTaskGroup(of: (Int64, Data).self) { group in
+            for chunk in chunks {
+                group.addTask {
+                    let data = try await Self.fetchRange(
+                        remoteURL: self.remoteURL,
+                        authorization: authorization,
+                        offset: chunk.offset,
+                        endInclusive: chunk.end
+                    )
+                    guard data.count == chunk.length else {
+                        throw WebDAVResourceLoaderError.invalidResponse
+                    }
+                    return (chunk.offset, data)
+                }
+            }
+            var out: [(Int64, Data)] = []
+            out.reserveCapacity(chunks.count)
+            for try await item in group {
+                out.append(item)
+            }
+            return out
         }
     }
 
