@@ -950,6 +950,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 if foregroundPaused { return }
                 self.log("Download stopped: \(error.localizedDescription) — export may continue via pCloud stream if enabled")
             }
+        }
+    }
+
     private func runDownloadLoop() async throws {
         var lastLoggedPercent = -Self.progressStepPercent
         while true {
