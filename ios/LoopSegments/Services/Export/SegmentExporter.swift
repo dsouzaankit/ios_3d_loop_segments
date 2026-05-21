@@ -523,7 +523,7 @@ final class SegmentExporter {
         durationMs: Int64,
         fileSize: Int64,
         impliedMbps: Double,
-        reportProgress: @Sendable (Int64) -> Void,
+        reportProgress: @escaping @Sendable (Int64) -> Void,
         logHandler: @escaping (String) -> Void
     ) async throws -> SegmentExportResult {
         let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
