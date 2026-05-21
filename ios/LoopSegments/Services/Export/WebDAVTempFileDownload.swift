@@ -997,8 +997,10 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
     /// Next byte background should fetch (never leap over an unfilled gap).
     private func nextBackgroundFetchOffsetLocked() -> Int64 {
-        if downloadCursor > regionFilledEnd {
-            return regionFilledEnd
+        let contiguousEnd = Self.contiguousDenseEndFromByte(regionStart, spans: filledRanges)
+        regionFilledEnd = contiguousEnd
+        if downloadCursor > contiguousEnd {
+            return contiguousEnd
         }
         return downloadCursor
     }
@@ -1141,11 +1143,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             let length = Int(end - start + 1)
             lock.lock()
             let spans = filledRanges
+            let contiguousEnd = contiguousDenseEndForLANPlaybackLocked(spans: spans, total: totalLength)
             lock.unlock()
-            if Self.rangeFullyCovered(offset: start, length: length, spans: spans) {
+            let chunkEnd = end + 1
+            if Self.rangeFullyCovered(offset: start, length: length, spans: spans),
+               chunkEnd <= contiguousEnd {
                 lock.lock()
-                restoreDownloadRegionFromFilledSpansLocked()
-                let cursor = downloadCursor
+                if chunkEnd > downloadCursor { downloadCursor = chunkEnd }
+                regionFilledEnd = Self.contiguousDenseEndFromByte(regionStart, spans: filledRanges)
+                let cursor = regionFilledEnd
                 lock.unlock()
                 let pct = totalLength > 0 ? Int(cursor * 100 / totalLength) : 0
                 if pct >= lastLoggedPercent + Self.progressStepPercent || cursor >= totalLength {
