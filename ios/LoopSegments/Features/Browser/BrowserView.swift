@@ -3,6 +3,7 @@ import SwiftUI
 struct BrowserView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
+    @ObservedObject private var folderBookmarkStore = FolderBookmarkStore.shared
     @State private var items: [WebDAVItem] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -18,6 +19,7 @@ struct BrowserView: View {
     @State private var selectedPinnedEntry: ResumeEntry?
     @State private var pausedSidebarEntries: [ResumeEntry] = []
     @State private var pinnedSidebarEntries: [ResumeEntry] = []
+    @State private var folderBookmarkEntries: [FolderBookmark] = []
     @State private var resumeByFileKey: [String: ResumeStatus] = [:]
     @State private var didSyncResumeManifest = false
 
@@ -27,6 +29,11 @@ struct BrowserView: View {
     }
 
     private var currentPath: String { pathStack.last ?? "/" }
+    private var currentFolderDisplayName: String {
+        if currentPath == "/" { return "Root" }
+        let trimmed = currentPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return (trimmed as NSString).lastPathComponent
+    }
     private var isSearchActive: Bool {
         !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -55,6 +62,35 @@ struct BrowserView: View {
                         }
                         if !isSearchActive, pathStack.count > 1 {
                             Button("↑ Up") { goUp() }
+                        }
+                        if !isSearchActive, !folderBookmarkEntries.isEmpty {
+                            Section {
+                                ForEach(folderBookmarkEntries) { bookmark in
+                                    Button {
+                                        openBookmark(bookmark)
+                                    } label: {
+                                        HStack(alignment: .center) {
+                                            Label(bookmark.displayName, systemImage: "folder.fill")
+                                            Spacer(minLength: 4)
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .swipeActions(edge: .trailing) {
+                                        Button("Remove", role: .destructive) {
+                                            folderBookmarkStore.remove(bookmark)
+                                        }
+                                    }
+                                }
+                            } header: {
+                                Text("Bookmarks")
+                            } footer: {
+                                Text("Saved folder shortcuts. Use the bookmark button in the toolbar while browsing a folder.")
+                                    .font(.footnote)
+                            }
                         }
                         if !isSearchActive, !pausedSidebarEntries.isEmpty {
                             Section {
@@ -192,6 +228,27 @@ struct BrowserView: View {
                     Button("Sign out") { session.signOut() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    if !isSearchActive, currentPath != "/" {
+                        Button {
+                            folderBookmarkStore.toggleBookmark(
+                                listingPath: currentPath,
+                                displayName: currentFolderDisplayName
+                            )
+                        } label: {
+                            Image(
+                                systemName: folderBookmarkStore.isBookmarked(listingPath: currentPath)
+                                    ? "bookmark.fill"
+                                    : "bookmark"
+                            )
+                        }
+                        .accessibilityLabel(
+                            folderBookmarkStore.isBookmarked(listingPath: currentPath)
+                                ? "Remove folder bookmark"
+                                : "Bookmark this folder"
+                        )
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Refresh") {
                         if isSearchActive {
                             searchToken += 1
@@ -205,6 +262,7 @@ struct BrowserView: View {
                 SearchDebugLog.ensureReady()
                 searchDebugStatus = SearchDebugLog.statusLine()
                 refreshResumeSidebar()
+                refreshFolderBookmarks()
                 if !didSyncResumeManifest {
                     didSyncResumeManifest = true
                     resumeStore.reconcilePausedWithWorkingSource()
@@ -213,6 +271,9 @@ struct BrowserView: View {
             }
             .onChange(of: resumeStore.revision) { _, _ in
                 refreshResumeSidebar()
+            }
+            .onChange(of: folderBookmarkStore.revision) { _, _ in
+                refreshFolderBookmarks()
             }
             .task(id: listToken) {
                 guard !isSearchActive else { return }
@@ -282,6 +343,21 @@ struct BrowserView: View {
     private func refreshResumeSidebar() {
         pausedSidebarEntries = resumeStore.interruptedEntries()
         pinnedSidebarEntries = resumeStore.pinnedCompletedEntries()
+    }
+
+    private func refreshFolderBookmarks() {
+        folderBookmarkEntries = folderBookmarkStore.bookmarks()
+    }
+
+    private func openBookmark(_ bookmark: FolderBookmark) {
+        searchText = ""
+        searchResults = []
+        isSearching = false
+        pathStack = pathStack(forFolderListingPath: bookmark.listingPath)
+        items = []
+        resumeByFileKey = [:]
+        isLoading = true
+        listToken += 1
     }
 
     private func refreshResumeBadges(for loaded: [WebDAVItem], entries: [ResumeEntry]) {
