@@ -57,6 +57,8 @@ final class SegmentExporter {
         inputURL: URL,
         catalogContentLength: Int64? = nil,
         seekMs: Int64,
+        continueLANExport: Bool = false,
+        resumeCursorMs: Int64? = nil,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         logHandler: @escaping (String) -> Void,
         onMediaProgress: (@Sendable (Int64) -> Void)? = nil
@@ -75,7 +77,6 @@ final class SegmentExporter {
             retainedAsset = nil
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
-
 
         let rangeCache = WebDAVRangeCache()
         logHandler("Prefetching from pCloud (size + MP4 index)…")
@@ -141,6 +142,31 @@ final class SegmentExporter {
         )
         ExportPlaybackState.shared.setBackgroundPrefetchEnabled(lanPrefetch.prepareHeadAndIndex)
         ExportPlaybackState.shared.setLANPrefetchHorizonToEOF(lanPrefetch.prefetchHorizonToEOF)
+        ExportPlaybackState.shared.beginExport(
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds,
+            totalBytes: fileSize
+        )
+        if continueLANExport {
+            logHandler(
+                "LAN dashboard — resume export (started \(ExportTimelineLog.wallClock(seconds: seekSeconds)), " +
+                    "exported cursor from checkpoint/manifest)"
+            )
+        } else {
+            logHandler(
+                "LAN dashboard — fresh export (reset manifest playback/export cursor to " +
+                    "\(ExportTimelineLog.wallClock(seconds: seekSeconds)))"
+            )
+        }
+        WorkingSourceSparseCatalog.bootstrapLANMetricsForExport(
+            fileURL: downloader.fileURL,
+            fileKey: item.fileKey,
+            href: item.href,
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds,
+            resume: continueLANExport,
+            resumeCursorSeconds: resumeCursorMs.map { Double($0) / 1000.0 }
+        )
         if lanPrefetch.prepareHeadAndIndex {
             if seekSeconds <= 0.5 {
                 try Self.ensureExportDiskSpace(
@@ -170,24 +196,20 @@ final class SegmentExporter {
         await MainActor.run {
             ResumeStore.shared.setSourceDurationMs(durationMs, for: item)
         }
-        ExportPlaybackState.shared.beginExport(
-            seekSeconds: seekSeconds,
-            durationSeconds: durationSeconds,
-            totalBytes: fileSize
-        )
+        let lanExportCursorSeconds = ExportPlaybackState.shared.exportCursorSeconds
         if lanPrefetch.prepareHeadAndIndex {
             downloader.updateLANSequentialPrefetchHorizon(
                 playbackStartSeconds: seekSeconds,
                 horizonTimelineSeconds: Self.lanPrefetchHorizonSeconds(
                     playbackStartSeconds: seekSeconds,
-                    exportCursorSeconds: seekSeconds,
+                    exportCursorSeconds: lanExportCursorSeconds,
                     durationSeconds: durationSeconds,
                     prefetchHorizonToEOF: lanPrefetch.prefetchHorizonToEOF
                 ),
                 durationSeconds: durationSeconds
             )
         }
-        downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
+        downloader.publishLANPlaybackState(mediaCursorSeconds: lanExportCursorSeconds)
 
         let reportProgress: @Sendable (Int64) -> Void = { [weak self] mediaMs in
             onMediaProgress?(mediaMs)
@@ -209,8 +231,8 @@ final class SegmentExporter {
 
         let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
         var minuteIndex = 0
-        var mediaCursorSeconds = seekSeconds
-        var lastMediaTimeMs = seekMs
+        var mediaCursorSeconds = lanExportCursorSeconds
+        var lastMediaTimeMs = Int64(lanExportCursorSeconds * 1000)
         var reachedEnd = false
 
             logHandler(
@@ -538,17 +560,18 @@ final class SegmentExporter {
             "Sequential fill to EOF on _working.mp4 (8 parallel chunks) — target wall time ~½× media duration at your link speed"
         )
         logHandler("Play on LAN :8765 → pcld_ios_media/_working.mp4; raise cutoff if you need PC op_*.mp4 segments")
+        let cursorSeconds = ExportPlaybackState.shared.exportCursorSeconds
         downloader.updateLANSequentialPrefetchHorizon(
             playbackStartSeconds: seekSeconds,
             horizonTimelineSeconds: durationSeconds,
             durationSeconds: durationSeconds
         )
-        reportProgress(Int64(seekSeconds * 1000))
+        reportProgress(Int64(cursorSeconds * 1000))
         logHandler(
             downloader.maxBrowserPlayableStatusLog(
                 playbackStartSeconds: seekSeconds,
                 durationSeconds: durationSeconds,
-                exportCursorSeconds: seekSeconds
+                exportCursorSeconds: cursorSeconds
             )
         )
         try await downloader.waitUntilComplete(durationSeconds: durationSeconds) { timelineSec in

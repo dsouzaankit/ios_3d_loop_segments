@@ -76,8 +76,84 @@ enum WorkingSourceSparseCatalog {
         try? FileManager.default.removeItem(at: manifestURL)
     }
 
+    /// Seed LAN dashboard metrics at export start (fresh = reset to UI seek; resume = keep manifest cursor).
+    static func bootstrapLANMetricsForExport(
+        fileURL: URL,
+        fileKey: String,
+        href: String?,
+        seekSeconds: Double,
+        durationSeconds: Double,
+        resume: Bool,
+        resumeCursorSeconds: Double?
+    ) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path),
+              let sizeNum = try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber,
+              sizeNum.int64Value > 0 else {
+            return
+        }
+        let total = sizeNum.int64Value
+        let layout = mergedLayoutOnDisk(fileURL: fileURL, totalLength: total)
+        let playback = max(0, seekSeconds)
+        var cursor = playback
+        if resume {
+            if let resumeCursorSeconds, resumeCursorSeconds > playback {
+                cursor = resumeCursorSeconds
+            }
+            if let manifest = loadManifest(forFileAt: fileURL),
+               manifest.fileKey == fileKey,
+               let prev = manifest.exportCursorSeconds, prev > cursor {
+                cursor = prev
+            }
+        }
+        applyLayout(
+            layout,
+            totalLength: total,
+            playbackStartSeconds: playback,
+            durationSeconds: durationSeconds,
+            exportCursorSeconds: cursor
+        )
+        save(
+            fileKey: fileKey,
+            totalLength: total,
+            href: href,
+            filledRanges: layout.filledRanges,
+            headOnDisk: layout.headOnDisk,
+            tailOnDisk: layout.tailOnDisk,
+            playbackStartSeconds: playback,
+            durationSeconds: durationSeconds > 0 ? durationSeconds : nil,
+            exportCursorSeconds: cursor
+        )
+    }
+
     /// Reload dense spans from disk into `ExportPlaybackState` (LAN playback when export is idle).
     static func refreshPlaybackState(for fileURL: URL) {
+        if ExportPlaybackState.shared.isLANExportActive {
+            refreshDiskLayoutOnly(for: fileURL)
+            return
+        }
+        refreshPlaybackStateFromDisk(for: fileURL)
+    }
+
+    /// During export: refresh fill % / playable till from disk spans only (keep live seek + cursor).
+    static func refreshDiskLayoutOnly(for fileURL: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path),
+              let sizeNum = try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber,
+              sizeNum.int64Value > 0 else {
+            return
+        }
+        let total = sizeNum.int64Value
+        let layout = mergedLayoutOnDisk(fileURL: fileURL, totalLength: total)
+        ExportPlaybackState.shared.updateDiskLayout(
+            totalBytes: total,
+            filledSpans: layout.filledRanges,
+            headOnDisk: layout.headOnDisk,
+            tailOnDisk: layout.tailOnDisk
+        )
+    }
+
+    private static func refreshPlaybackStateFromDisk(for fileURL: URL) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: fileURL.path),
               let sizeNum = try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber,
@@ -195,26 +271,21 @@ enum WorkingSourceSparseCatalog {
         var cursor = exportCursorSeconds
 
         if ExportPlaybackState.shared.isLANExportActive {
-            let live = ExportPlaybackState.shared.playbackStartSeconds
-            if live > 0 {
-                playback = live
-            }
-            let liveCursor = ExportPlaybackState.shared.exportCursorSeconds
-            if liveCursor > 0 {
-                cursor = liveCursor
-            }
+            playback = ExportPlaybackState.shared.playbackStartSeconds
+            cursor = ExportPlaybackState.shared.exportCursorSeconds
         }
 
         if let hints = ResumeStore.lanPlaybackHints(fileKey: manifest.fileKey, href: manifest.href) {
-            if hints.playbackStartSeconds > 0,
-               !ExportPlaybackState.shared.isLANExportActive,
+            if !ExportPlaybackState.shared.isLANExportActive,
                ResumeStore.isExportInProgress(forFileKey: manifest.fileKey) {
                 playback = hints.playbackStartSeconds
             }
             if duration == nil || duration == 0 {
                 duration = hints.durationSeconds > 0 ? hints.durationSeconds : nil
             }
-            if cursor == nil || cursor == 0 {
+            if !ExportPlaybackState.shared.isLANExportActive,
+               ResumeStore.isExportInProgress(forFileKey: manifest.fileKey),
+               (cursor ?? 0) <= 0 {
                 cursor = hints.exportCursorSeconds
             }
         }
@@ -249,6 +320,19 @@ enum WorkingSourceSparseCatalog {
             playbackStartSeconds: needsPlayback ? playbackStartSeconds : manifest.playbackStartSeconds,
             durationSeconds: needsDuration ? durationSeconds : manifest.durationSeconds,
             exportCursorSeconds: needsCursor ? exportCursorSeconds : manifest.exportCursorSeconds
+        )
+    }
+
+    private static func mergedLayoutOnDisk(fileURL: URL, totalLength: Int64) -> AdoptedLayout {
+        let probed = probeLayoutOnDisk(fileURL: fileURL, totalLength: totalLength)
+        guard let manifest = loadManifest(forFileAt: fileURL),
+              let manifestLayout = layout(from: manifest, fileURL: fileURL, totalLength: totalLength) else {
+            return probed
+        }
+        return AdoptedLayout(
+            filledRanges: manifestLayout.filledRanges,
+            headOnDisk: manifestLayout.headOnDisk || probed.headOnDisk,
+            tailOnDisk: manifestLayout.tailOnDisk || probed.tailOnDisk
         )
     }
 

@@ -21,6 +21,8 @@ final class ExportCoordinator {
         item: WebDAVItem,
         credentials: WebDAVCredentials,
         seekMs: Int64,
+        continueLANExport: Bool = false,
+        resumeCursorMs: Int64? = nil,
         onMediaProgress: (@Sendable (Int64) -> Void)? = nil
     ) async throws -> SegmentExportResult {
         lock.lock()
@@ -80,6 +82,8 @@ final class ExportCoordinator {
                         inputURL: inputURL,
                         catalogContentLength: item.contentLength,
                         seekMs: seekMs,
+                        continueLANExport: continueLANExport,
+                        resumeCursorMs: resumeCursorMs,
                         authorizationProvider: authProvider,
                         logHandler: logHandler,
                         onMediaProgress: onMediaProgress

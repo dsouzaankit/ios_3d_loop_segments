@@ -686,12 +686,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let head = hasHeadOnDisk()
         let tail = hasIndexTailOnDisk()
         let playback = ExportPlaybackState.shared.playbackStartSeconds
+        let playbackHint: Double? = ExportPlaybackState.shared.isLANExportActive
+            ? playback
+            : (playback > 0 ? playback : nil)
         ExportPlaybackState.shared.syncSparseLayout(
             totalBytes: totalLength,
             filledSpans: spans,
             headOnDisk: head,
             tailOnDisk: tail,
-            playbackStartSeconds: playback > 0 ? playback : nil
+            playbackStartSeconds: playbackHint
         )
         let durationSeconds = ExportPlaybackState.shared.exportDurationSeconds
         ExportPlaybackState.shared.updateWanDownloadStats(
@@ -1074,7 +1077,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         var playbackStart = (playback["playbackStartSeconds"] as? Double) ?? 0
         let duration = (playback["durationSeconds"] as? Double) ?? 0
         var cursor = (playback["exportCursorSeconds"] as? Double) ?? 0
-        if ExportPlaybackState.shared.isLANExportActive {
+        let exportActive = ExportPlaybackState.shared.isLANExportActive
+        if exportActive {
             playbackStart = ExportPlaybackState.shared.playbackStartSeconds
             cursor = ExportPlaybackState.shared.exportCursorSeconds
         }
@@ -1088,9 +1092,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             filledRanges: spans,
             headOnDisk: head,
             tailOnDisk: tail,
-            playbackStartSeconds: playbackStart > 0 ? playbackStart : nil,
+            playbackStartSeconds: exportActive || playbackStart > 0 ? playbackStart : nil,
             durationSeconds: duration > 0 ? duration : nil,
-            exportCursorSeconds: cursor > 0 ? cursor : nil
+            exportCursorSeconds: exportActive || cursor > 0 ? cursor : nil
         )
     }
 

@@ -149,6 +149,11 @@ final class AppSession: ObservableObject {
         exportCoordinator.userRequestedCancel = false
         exportCoordinator.userRequestedPause = false
         activeExportItem = item
+        let priorResume = ResumeStore.shared.resumeStatus(for: item)
+        let continueLANExport = priorResume.isPaused
+            && priorResume.effectiveMs > 250
+            && abs(priorResume.effectiveMs - seekMs) < 5_000
+        let resumeCursorMs = continueLANExport ? priorResume.effectiveMs : nil
         ResumeStore.shared.beginExport(for: item, seekMs: seekMs)
         isExportRunning = true
         ExportAutoLockCoordinator.exportDidStart()
@@ -169,6 +174,8 @@ final class AppSession: ObservableObject {
                 item: item,
                 credentials: credentials,
                 seekMs: seekMs,
+                continueLANExport: continueLANExport,
+                resumeCursorMs: resumeCursorMs,
                 onMediaProgress: onProgress
             )
             let resumeMs: Int64 = result.reachedEnd ? 0 : result.lastMediaTimeMs

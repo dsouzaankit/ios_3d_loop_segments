@@ -42,9 +42,6 @@ final class ExportPlaybackState: @unchecked Sendable {
                 0,
                 totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
             )
-            snapshot.headOnDisk = false
-            snapshot.tailOnDisk = false
-            snapshot.filledSpans = []
             snapshot.lanExportActive = true
             snapshot.exportStartedAt = Date()
             snapshot.impliedMediaBitrateMbps = Self.impliedMediaBitrateMbps(
@@ -264,6 +261,25 @@ final class ExportPlaybackState: @unchecked Sendable {
         )
     }
 
+    /// Updates dense spans / head / tail from disk without changing playback start or export cursor.
+    func updateDiskLayout(
+        totalBytes: Int64,
+        filledSpans: [ClosedRange<Int64>],
+        headOnDisk: Bool,
+        tailOnDisk: Bool
+    ) {
+        lock.withLock {
+            snapshot.totalFileBytes = totalBytes
+            snapshot.filledSpans = filledSpans
+            snapshot.headOnDisk = headOnDisk
+            snapshot.tailOnDisk = tailOnDisk
+            snapshot.indexTailStart = max(
+                0,
+                totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
+            )
+        }
+    }
+
     /// Reload LAN gating from disk manifest (export may be idle).
     func restoreLANPlayback(
         totalBytes: Int64,
@@ -283,8 +299,8 @@ final class ExportPlaybackState: @unchecked Sendable {
                 0,
                 totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
             )
-            if let playbackStartSeconds, playbackStartSeconds > 0 {
-                snapshot.playbackStartSeconds = playbackStartSeconds
+            if let playbackStartSeconds {
+                snapshot.playbackStartSeconds = max(0, playbackStartSeconds)
             }
             if let durationSeconds, durationSeconds > 0 {
                 snapshot.durationSeconds = durationSeconds
