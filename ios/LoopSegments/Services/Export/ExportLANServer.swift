@@ -954,12 +954,18 @@ enum ExportLANServer {
         if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
+            let startSec = ExportPlaybackState.shared.playbackStartSeconds
+            let startedReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
             let escaped = line
                 .replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "<", with: "&lt;")
+            let startedNote = startedReadable
+                ? ""
+                : "<p><em>Started position is not dense on disk yet — use <code>pcld_ios_media/loop/op_00.mp4</code> for browser playback, or VLC on <code>_working.mp4</code>.</em></p>"
             playbackStatusBlock = """
             <p><strong>\(escaped)</strong></p>
-            <p>Times are positions in the source file (0:00 = start). <code>till</code> is the furthest contiguous dense playback from <code>started</code>; the scrubber may still show full duration.</p>
+            <p>Times are positions in the source file (0:00 = start). <code>till</code> is capped at exported+2min (prefetch may run further ahead). For browser playback prefer <code>loop/op_00.mp4</code> while export runs.</p>
+            \(startedNote)
             """
         }
         var items: [String] = []

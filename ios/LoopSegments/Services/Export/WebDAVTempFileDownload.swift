@@ -417,9 +417,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
     /// Write manifest + sync LAN state after export ends (before temp downloader is torn down).
     func flushLANPlaybackManifestForExportEnd() {
+        syncLANPlaybackManifestNow(mediaCursorSeconds: nil)
+    }
+
+    /// Publish dense spans + write manifest immediately (per-minute LAN status must not wait on debounced save).
+    func syncLANPlaybackManifestNow(mediaCursorSeconds: Double?) {
         manifestSaveTask?.cancel()
         manifestSaveTask = nil
-        publishLANPlaybackState()
+        publishLANPlaybackState(mediaCursorSeconds: mediaCursorSeconds)
         persistManifestNow()
     }
 
