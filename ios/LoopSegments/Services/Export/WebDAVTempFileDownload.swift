@@ -263,6 +263,40 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return active
     }
 
+    /// Background download cursor as % of file (EOF prefetch progress).
+    func backgroundPrefetchPercent() -> Int {
+        lock.lock()
+        let cursor = downloadCursor
+        let total = totalLength
+        lock.unlock()
+        guard total > 0 else { return 0 }
+        return Int(min(100, cursor * 100 / total))
+    }
+
+    /// Timeline position reached by background cursor (linear map).
+    func backgroundTimelineSeconds(durationSeconds: Double) -> Double {
+        lock.lock()
+        let cursor = downloadCursor
+        let total = totalLength
+        lock.unlock()
+        guard total > 0, durationSeconds > 0 else { return 0 }
+        return Self.timelineSecondsForByteOffset(cursor, totalLength: total, durationSeconds: durationSeconds)
+    }
+
+    /// Sum of dense `filledRanges` as % of file size.
+    func denseBytesOnDiskPercent() -> Int {
+        lock.lock()
+        let spans = filledRanges
+        let total = totalLength
+        lock.unlock()
+        guard total > 0 else { return 0 }
+        var sum: Int64 = 0
+        for span in spans {
+            sum += span.upperBound - span.lowerBound + 1
+        }
+        return Int(min(100, sum * 100 / total))
+    }
+
     func ensureWriteHandleForDownload() throws {
         lock.lock()
         let needsHandle = writeHandle == nil
@@ -505,10 +539,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             tailOnDisk: tail,
             playbackStartSeconds: playback > 0 ? playback : nil
         )
+        let durationSeconds = ExportPlaybackState.shared.exportDurationSeconds
         ExportPlaybackState.shared.updateWanDownloadStats(
             averageActiveMbps: throughput.averageActiveMbps(),
             lastBurstMbps: throughput.lastBurstMbps(),
-            backgroundActive: isBackgroundDownloadActive()
+            backgroundActive: isBackgroundDownloadActive(),
+            backgroundFillPercent: backgroundPrefetchPercent(),
+            denseBytesOnDiskPercent: denseBytesOnDiskPercent(),
+            backgroundTimelineSeconds: backgroundTimelineSeconds(durationSeconds: durationSeconds)
         )
         if let mediaCursorSeconds {
             ExportPlaybackState.shared.updateCursor(seconds: mediaCursorSeconds)
@@ -1106,7 +1144,9 @@ private final class DownloadThroughput: @unchecked Sendable {
     private var lastSampleAt = CFAbsoluteTimeGetCurrent()
     private var activeBytes: Int64 = 0
     private var activeStartedAt: CFAbsoluteTime?
+    private var lastNetworkAt = CFAbsoluteTimeGetCurrent()
     private var peakBurstMbps: Double = 0
+    private static let activeIdleGapSeconds = 3.0
 
     func reset() {
         lock.lock()
@@ -1116,6 +1156,7 @@ private final class DownloadThroughput: @unchecked Sendable {
         lastSampleAt = startedAt
         activeBytes = 0
         activeStartedAt = nil
+        lastNetworkAt = startedAt
         peakBurstMbps = 0
         lock.unlock()
     }
@@ -1124,6 +1165,11 @@ private final class DownloadThroughput: @unchecked Sendable {
         guard bytes > 0 else { return }
         lock.lock()
         let now = CFAbsoluteTimeGetCurrent()
+        if now - lastNetworkAt > Self.activeIdleGapSeconds {
+            activeBytes = 0
+            activeStartedAt = now
+        }
+        lastNetworkAt = now
         totalBytes += Int64(bytes)
         if activeStartedAt == nil {
             activeStartedAt = now

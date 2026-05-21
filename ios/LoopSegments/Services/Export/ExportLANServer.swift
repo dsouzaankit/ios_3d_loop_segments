@@ -979,7 +979,7 @@ enum ExportLANServer {
             playbackStatusBlock = """
             <p><strong>\(escaped)</strong></p>
             \(statsLines)
-            <p>Times are positions in the source file (0:00 = start). <code>till</code> is capped at exported+2min (prefetch may run further ahead). For browser playback prefer <code>loop/op_00.mp4</code> while export runs.</p>
+            <p><code>LAN browser cap till</code> = exported position + 2 min (scrubber limit). <code>EOF background on disk</code> can be much further ahead when prefetch is active. For browser playback prefer <code>loop/op_00.mp4</code> while export runs.</p>
             \(startedNote)
             """
         }

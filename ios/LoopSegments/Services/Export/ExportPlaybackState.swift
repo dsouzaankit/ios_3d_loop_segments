@@ -20,6 +20,9 @@ final class ExportPlaybackState: @unchecked Sendable {
         var lastWanBurstMbps: Double = 0
         var backgroundPrefetchEnabled = false
         var backgroundDownloadActive = false
+        var backgroundFillPercent = 0
+        var denseBytesOnDiskPercent = 0
+        var backgroundTimelineSeconds: Double = 0
     }
 
     private let lock = NSLock()
@@ -61,10 +64,16 @@ final class ExportPlaybackState: @unchecked Sendable {
     func updateWanDownloadStats(
         averageActiveMbps: Double?,
         lastBurstMbps: Double?,
-        backgroundActive: Bool
+        backgroundActive: Bool,
+        backgroundFillPercent: Int,
+        denseBytesOnDiskPercent: Int,
+        backgroundTimelineSeconds: Double
     ) {
         lock.withLock {
             snapshot.backgroundDownloadActive = backgroundActive
+            snapshot.backgroundFillPercent = backgroundFillPercent
+            snapshot.denseBytesOnDiskPercent = denseBytesOnDiskPercent
+            snapshot.backgroundTimelineSeconds = backgroundTimelineSeconds
             if let averageActiveMbps, averageActiveMbps > 0 {
                 snapshot.averageWanDownloadMbps = averageActiveMbps
             }
@@ -99,15 +108,29 @@ final class ExportPlaybackState: @unchecked Sendable {
             lines.append("Export elapsed: \(Self.formatClock(elapsed))")
         }
         if snap.lastWanBurstMbps > 0 {
-            lines.append(String(format: "Last WAN burst: %.1f Mbps", snap.lastWanBurstMbps))
+            lines.append(String(format: "Peak WAN burst (session): %.1f Mbps", snap.lastWanBurstMbps))
         }
         if snap.averageWanDownloadMbps > 0 {
-            lines.append(String(format: "Avg WAN (while downloading): %.1f Mbps", snap.averageWanDownloadMbps))
+            lines.append(String(format: "Avg WAN (active bursts): %.1f Mbps", snap.averageWanDownloadMbps))
+        }
+        if snap.lanExportActive, snap.backgroundPrefetchEnabled {
+            lines.append(
+                String(
+                    format: "EOF background on disk: %d%% (~%@ in file)",
+                    snap.backgroundFillPercent,
+                    Self.formatClock(snap.backgroundTimelineSeconds)
+                )
+            )
+        }
+        if snap.denseBytesOnDiskPercent > 0 {
+            lines.append("Dense bytes on disk: \(snap.denseBytesOnDiskPercent)% of file")
         }
         if snap.lanExportActive {
-            var prefetch = snap.backgroundPrefetchEnabled ? "on (below 29 Mbps)" : "off (≥29 Mbps or LAN disabled)"
+            var prefetch = snap.backgroundPrefetchEnabled
+                ? "on (below 42 Mbps est.)"
+                : "off (≥42 Mbps est. or LAN disabled)"
             if snap.backgroundPrefetchEnabled {
-                prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (segment/dense fill)"
+                prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (pCloud fill)"
             }
             lines.append("Background prefetch: \(prefetch)")
         }
@@ -246,6 +269,10 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock { snapshot.exportCursorSeconds }
     }
 
+    var exportDurationSeconds: Double {
+        lock.withLock { snapshot.durationSeconds }
+    }
+
     var frozenPlaybackStartSecondsInt: Int {
         lock.withLock { Int(snapshot.playbackStartSeconds.rounded(.down)) }
     }
@@ -302,6 +329,9 @@ final class ExportPlaybackState: @unchecked Sendable {
             "lastWanBurstMbps": snap.lastWanBurstMbps,
             "backgroundPrefetchEnabled": snap.backgroundPrefetchEnabled,
             "backgroundDownloadActive": snap.backgroundDownloadActive,
+            "backgroundFillPercent": snap.backgroundFillPercent,
+            "denseBytesOnDiskPercent": snap.denseBytesOnDiskPercent,
+            "backgroundTimelineSeconds": snap.backgroundTimelineSeconds,
         ]
         if let started = snap.exportStartedAt {
             payload["exportStartedAt"] = ISO8601DateFormatter().string(from: started)
@@ -349,7 +379,7 @@ final class ExportPlaybackState: @unchecked Sendable {
             durationSeconds: duration
         )
         return
-            "LAN playable till \(ExportTimelineLog.wallClock(seconds: till)), " +
+            "LAN browser cap till \(ExportTimelineLog.wallClock(seconds: till)) (exported+2 min), " +
             "exported \(ExportTimelineLog.wallClock(seconds: export)), " +
             "started \(ExportTimelineLog.wallClock(seconds: from))"
     }
