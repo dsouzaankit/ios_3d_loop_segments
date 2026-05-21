@@ -266,24 +266,48 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return active
     }
 
-    /// Contiguous dense frontier from file start as % of file (matches LAN playable growth).
+    /// Contiguous dense frontier from playback start as % of file (matches LAN playable growth).
     func backgroundPrefetchPercent() -> Int {
         lock.lock()
-        let frontier = regionFilledEnd
+        let spans = filledRanges
         let total = totalLength
         lock.unlock()
         guard total > 0 else { return 0 }
+        let frontier = contiguousDenseEndForLANPlaybackLocked(spans: spans, total: total)
         return Int(min(100, frontier * 100 / total))
     }
 
-    /// Timeline position of the contiguous dense frontier from file start.
+    /// Timeline position of the contiguous dense frontier from playback start.
     func backgroundTimelineSeconds(durationSeconds: Double) -> Double {
         lock.lock()
-        let frontier = regionFilledEnd
+        let spans = filledRanges
         let total = totalLength
         lock.unlock()
         guard total > 0, durationSeconds > 0 else { return 0 }
+        let frontier = contiguousDenseEndForLANPlaybackLocked(spans: spans, total: total)
         return Self.timelineSecondsForByteOffset(frontier, totalLength: total, durationSeconds: durationSeconds)
+    }
+
+    private func contiguousDenseEndForLANPlaybackLocked(spans: [ClosedRange<Int64>], total: Int64) -> Int64 {
+        let duration = ExportPlaybackState.shared.exportDurationSeconds
+        let startSec = ExportPlaybackState.shared.playbackStartSeconds
+        let startByte = Self.timelineByteOffsetForSeconds(
+            max(0, startSec),
+            totalLength: total,
+            durationSeconds: duration > 0 ? duration : Self.effectiveDurationSeconds(reported: 1, totalBytes: total)
+        )
+        return Self.contiguousDenseEndFromByte(startByte, spans: spans)
+    }
+
+    /// Furthest byte reachable from `startByte` without crossing a gap in `filledRanges`.
+    private static func contiguousDenseEndFromByte(_ startByte: Int64, spans: [ClosedRange<Int64>]) -> Int64 {
+        var frontier = startByte
+        for span in spans.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if span.upperBound < frontier { continue }
+            if span.lowerBound > frontier { break }
+            frontier = max(frontier, span.upperBound + 1)
+        }
+        return frontier
     }
 
     /// Sum of dense `filledRanges` as % of file size.
@@ -967,13 +991,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             return
         }
         regionStart = first.lowerBound
-        regionFilledEnd = first.lowerBound
-        for span in filledRanges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
-            if span.lowerBound <= regionFilledEnd + 1 {
-                regionFilledEnd = max(regionFilledEnd, span.upperBound + 1)
-            }
-        }
-        // Resume at the contiguous frontier — never skip holes by keeping a cursor that jumped ahead.
+        regionFilledEnd = Self.contiguousDenseEndFromByte(regionStart, spans: filledRanges)
         downloadCursor = regionFilledEnd
     }
 
@@ -1029,22 +1047,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             markIndexTailIfComplete(writeEnd: end)
             return
         }
-        if regionFilledEnd == 0, regionStart == 0, offset == 0 {
-            regionStart = 0
-            regionFilledEnd = end
-        } else if offset == regionFilledEnd {
-            regionFilledEnd = end
-        } else if end <= regionStart {
-            regionStart = offset
-            regionFilledEnd = max(regionFilledEnd, end)
-        } else if offset >= regionStart, offset <= regionFilledEnd {
-            if end > regionFilledEnd { regionFilledEnd = end }
-        } else if offset > regionFilledEnd {
-            // Minute-window dense fill ahead of background frontier — filledRanges only.
-        } else if offset < regionStart, end >= regionStart {
-            regionStart = offset
-            if end > regionFilledEnd { regionFilledEnd = end }
-        }
+        restoreDownloadRegionFromFilledSpansLocked()
         extendExportWindowContiguous(offset: offset, end: end)
         markIndexTailIfComplete(writeEnd: end)
     }
@@ -1141,9 +1144,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             lock.unlock()
             if Self.rangeFullyCovered(offset: start, length: length, spans: spans) {
                 lock.lock()
-                let next = end + 1
-                if next > downloadCursor { downloadCursor = next }
-                if next > regionFilledEnd { regionFilledEnd = next }
+                restoreDownloadRegionFromFilledSpansLocked()
                 let cursor = downloadCursor
                 lock.unlock()
                 let pct = totalLength > 0 ? Int(cursor * 100 / totalLength) : 0
@@ -1168,8 +1169,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             try write(data, at: start)
 
             lock.lock()
-            downloadCursor = end + 1
-            regionFilledEnd = max(regionFilledEnd, end + 1)
+            restoreDownloadRegionFromFilledSpansLocked()
             let cursor = downloadCursor
             lock.unlock()
 
