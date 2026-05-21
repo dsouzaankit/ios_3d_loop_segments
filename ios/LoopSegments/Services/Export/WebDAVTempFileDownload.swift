@@ -122,6 +122,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
+    /// LAN bridge / playable-till anchor (call before preload `ensureContiguousRange` when seek &gt; 0).
+    func setPlaybackAnchor(seekSeconds: Double, durationSeconds: Double) {
+        lock.lock()
+        playbackStartSecondsForAnchor = max(0, seekSeconds)
+        anchorDurationSeconds = max(0, durationSeconds)
+        lock.unlock()
+    }
+
     /// Position download at seek (or 0) and start sequential LAN prefetch when enabled.
     func beginExport(
         seekSeconds: Double,

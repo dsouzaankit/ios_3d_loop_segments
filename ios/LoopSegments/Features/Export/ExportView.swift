@@ -23,6 +23,7 @@ struct ExportView: View {
     var body: some View {
         Form {
             exportControlsSection
+            exportsFolderSection
             if !status.isEmpty {
                 Section("Status") {
                     Text(status).font(.caption)
@@ -196,19 +197,6 @@ struct ExportView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            Section("Exports folder") {
-                Button("Clear media", role: .destructive) {
-                    clearExportMedia()
-                }
-                .disabled(session.isExportRunning)
-                Button("Clear logs", role: .destructive) {
-                    clearExportLogs()
-                }
-                .disabled(session.isExportRunning)
-                Text("Media: pcld_ios_media/loop/op_00|01.mp4, pcld_ios_media/_working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
         }
         .navigationTitle("Export")
         .onAppear {
@@ -371,6 +359,22 @@ struct ExportView: View {
         } footer: {
             Text("Pause keeps the checkpoint and files on disk. Stop clears paused state and removes published segment files.")
                 .font(.footnote)
+        }
+    }
+
+    private var exportsFolderSection: some View {
+        Section("Exports folder") {
+            Button("Clear media", role: .destructive) {
+                clearExportMedia()
+            }
+            .disabled(session.isExportRunning)
+            Button("Clear logs", role: .destructive) {
+                clearExportLogs()
+            }
+            .disabled(session.isExportRunning)
+            Text("Media: pcld_ios_media/loop/op_00|01.mp4, pcld_ios_media/_working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 

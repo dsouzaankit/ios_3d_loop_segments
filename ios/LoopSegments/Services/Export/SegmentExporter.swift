@@ -1501,6 +1501,7 @@ final class SegmentExporter {
         impliedMbps: Double,
         log: @escaping (String) -> Void
     ) async throws {
+        downloader.setPlaybackAnchor(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
         let full = TimelineByteRange(start: 0, end: fileSize)
         try await downloader.ensureFileHeadOnDisk()
         try await downloader.ensureIndexTailOnDisk()
