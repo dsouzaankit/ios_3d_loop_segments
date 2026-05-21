@@ -356,7 +356,10 @@ final class SegmentExporter {
                     )
                 try await downloader.ensureFileHeadOnDisk()
                 try await downloader.ensureIndexTailOnDisk()
-                try await downloader.ensureContiguousRange(byteRange)
+                try await downloader.ensureContiguousRange(
+                    byteRange,
+                    bridgeLANGapBeforeWindow: lanPrefetch.prefetchHorizonToEOF
+                )
                     if isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
                         logHandler(
                             "Minute window already dense on _working.mp4 — passthrough from disk (no pCloud read for this segment)"
@@ -380,7 +383,10 @@ final class SegmentExporter {
                     prepareSparseFileForReader: {
                         try await downloader.ensureFileHeadOnDisk()
                         try await downloader.ensureIndexTailOnDisk()
-                        try await downloader.ensureContiguousRange(byteRange)
+                        try await downloader.ensureContiguousRange(
+                            byteRange,
+                            bridgeLANGapBeforeWindow: lanPrefetch.prefetchHorizonToEOF
+                        )
                     },
                     isCancelled: cancelCheck,
                     log: logHandler
@@ -646,13 +652,21 @@ final class SegmentExporter {
             log(
                 "Mid-file segment — dense \(Self.formatBytes(byteRange.length)) at \(Self.formatBytes(byteRange.start))"
             )
-            try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
+            try await prepareMidFileTempForReader(
+                downloader: downloader,
+                byteRange: byteRange,
+                bridgeLANGapBeforeWindow: preferDenseFillOnWorkingForLAN,
+                log: log
+            )
         }
 
         if !isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
             try await downloader.ensureFileHeadOnDisk()
             try await downloader.ensureIndexTailOnDisk()
-            try await downloader.ensureContiguousRange(byteRange)
+            try await downloader.ensureContiguousRange(
+                byteRange,
+                bridgeLANGapBeforeWindow: preferDenseFillOnWorkingForLAN
+            )
         }
 
         var windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
@@ -899,7 +913,11 @@ final class SegmentExporter {
                 defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
                 try await downloader.ensureFileHeadOnDisk()
                 try await downloader.ensureIndexTailOnDisk()
-                try await downloader.ensureContiguousRange(byteRange, force: true)
+                try await downloader.ensureContiguousRange(
+                    byteRange,
+                    force: true,
+                    bridgeLANGapBeforeWindow: preferDenseFillOnWorkingForLAN
+                )
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
                 downloader.closeWriteHandleForPassthroughRead(log: log)
                 return try await runPassthrough(
@@ -921,7 +939,12 @@ final class SegmentExporter {
                 )
                 downloader.pauseBackgroundDownloadForForegroundFill()
                 defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
-                try await prepareMidFileTempForReader(downloader: downloader, byteRange: byteRange, log: log)
+                try await prepareMidFileTempForReader(
+                    downloader: downloader,
+                    byteRange: byteRange,
+                    bridgeLANGapBeforeWindow: preferDenseFillOnWorkingForLAN,
+                    log: log
+                )
                 windowDense = isDenseWindowReady(downloader: downloader, byteRange: byteRange)
                 useOnDiskFileURL = false
                 downloader.closeWriteHandleForPassthroughRead(log: log)
@@ -1159,7 +1182,10 @@ final class SegmentExporter {
         defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
         try await downloader.ensureFileHeadOnDisk()
         try await downloader.ensureIndexTailOnDisk()
-        try await downloader.ensureContiguousRange(byteRange)
+        try await downloader.ensureContiguousRange(
+            byteRange,
+            bridgeLANGapBeforeWindow: ExportPlaybackState.shared.lanPrefetchHorizonToEOF
+        )
         guard downloader.isRangeFilled(byteRange),
               downloader.hasHeadOnDisk(),
               downloader.hasIndexTailOnDisk() else {
@@ -1424,7 +1450,10 @@ final class SegmentExporter {
                 timelineEndSeconds: firstWindowEnd,
                 durationSeconds: durationSeconds
             )
-            try await downloader.ensureContiguousRange(firstRange)
+            try await downloader.ensureContiguousRange(
+                firstRange,
+                bridgeLANGapBeforeWindow: lanPrefetch.prefetchHorizonToEOF
+            )
         }
         downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
         log(
@@ -1485,12 +1514,16 @@ final class SegmentExporter {
     private func prepareMidFileTempForReader(
         downloader: WebDAVTempFileDownload,
         byteRange: TimelineByteRange,
+        bridgeLANGapBeforeWindow: Bool = false,
         log: @escaping (String) -> Void
     ) async throws {
         log("Mid-file temp: ensuring file header + MP4 index + dense window before reader…")
         try await downloader.ensureFileHeadOnDisk()
         try await downloader.ensureIndexTailOnDisk()
-        try await downloader.ensureContiguousRange(byteRange)
+        try await downloader.ensureContiguousRange(
+            byteRange,
+            bridgeLANGapBeforeWindow: bridgeLANGapBeforeWindow
+        )
     }
 
     private func makeHTTPSPassthroughAsset(

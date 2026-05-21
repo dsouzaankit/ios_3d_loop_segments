@@ -559,21 +559,39 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     /// Fill every byte in `range` from pCloud (dense on disk) so AVFoundation can open the sparse temp.
-    func ensureContiguousRange(_ range: TimelineByteRange, force: Bool = false) async throws {
+    /// When `bridgeLANGapBeforeWindow` is true, also fills `[contiguous frontier, range.start)` so LAN playback grows from playback start.
+    func ensureContiguousRange(
+        _ range: TimelineByteRange,
+        force: Bool = false,
+        bridgeLANGapBeforeWindow: Bool = false
+    ) async throws {
         guard range.length > 0 else { return }
         try ensureWriteHandleForDownload()
         let tailStart = max(0, totalLength - Self.indexTailFetchBytes(totalLength: totalLength))
         let rangeEnd = min(range.end, totalLength)
-        let needLen = rangeEnd - range.start
+
+        var fillSpans: [(start: Int64, end: Int64)] = []
+        if bridgeLANGapBeforeWindow {
+            lock.lock()
+            let spans = filledRanges
+            let anchor = playbackAnchorByteLocked(total: totalLength)
+            let frontier = Self.contiguousDenseEndFromByte(anchor, spans: spans)
+            lock.unlock()
+            if frontier < range.start {
+                fillSpans.append((frontier, range.start))
+            }
+        }
+        fillSpans.append((range.start, rangeEnd))
 
         lock.lock()
-        let bytesOnDisk = Self.rangeFullyCovered(
-            offset: range.start,
-            length: Int(needLen),
-            spans: filledRanges
-        )
+        let spansSnapshot = filledRanges
         lock.unlock()
-        if !force, bytesOnDisk {
+        let allOnDisk = !force && fillSpans.allSatisfy { span in
+            let len = span.end - span.start
+            guard len > 0 else { return true }
+            return Self.rangeFullyCovered(offset: span.start, length: Int(len), spans: spansSnapshot)
+        }
+        if allOnDisk {
             lock.lock()
             exportWindowStart = range.start
             exportWindowContiguousEnd = max(exportWindowContiguousEnd, rangeEnd)
@@ -581,29 +599,43 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             log(
                 "Window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) already dense on _working.mp4 — skip pCloud re-download"
             )
+            logContiguousWindowOnDisk(playbackAnchorOnly: bridgeLANGapBeforeWindow)
+            publishLANPlaybackState()
             return
         }
 
         pauseBackgroundDownloadForForegroundFill()
         defer { resumeBackgroundDownloadAfterForegroundFill() }
 
-        log(
-            "pCloud dense fill — window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) (\(formatBytes(needLen)); LAN scrubber may show full duration before this span is local)…"
-        )
         var skippedOnDisk: Int64 = 0
         var fetchedFromCloud: Int64 = 0
         var lastLoggedPercent = -Self.progressStepPercent
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
-        try await downloadDenseRangeFromCloud(
-            rangeStart: range.start,
-            rangeEnd: rangeEnd,
-            needLen: needLen,
-            force: force,
-            skippedOnDisk: &skippedOnDisk,
-            fetchedFromCloud: &fetchedFromCloud,
-            lastLoggedPercent: &lastLoggedPercent,
-            lastProgressLog: &lastProgressLog
-        )
+        for (index, span) in fillSpans.enumerated() {
+            let spanLen = span.end - span.start
+            guard spanLen > 0 else { continue }
+            if index == 0, span.start < range.start {
+                log(
+                    "LAN bridge — dense fill \(formatBytes(span.start))–\(formatBytes(span.end)) " +
+                        "(\(formatBytes(spanLen)) gap before minute window)…"
+                )
+            } else {
+                log(
+                    "pCloud dense fill — window \(formatBytes(span.start))–\(formatBytes(span.end)) " +
+                        "(\(formatBytes(spanLen)); LAN scrubber may show full duration before this span is local)…"
+                )
+            }
+            try await downloadDenseRangeFromCloud(
+                rangeStart: span.start,
+                rangeEnd: span.end,
+                needLen: spanLen,
+                force: force,
+                skippedOnDisk: &skippedOnDisk,
+                fetchedFromCloud: &fetchedFromCloud,
+                lastLoggedPercent: &lastLoggedPercent,
+                lastProgressLog: &lastProgressLog
+            )
+        }
         if skippedOnDisk > 0 {
             log(
                 "Dense fill — reused \(formatBytes(skippedOnDisk)) already on _working.mp4, fetched \(formatBytes(fetchedFromCloud)) from pCloud"
@@ -617,11 +649,21 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         exportWindowStart = range.start
         exportWindowContiguousEnd = max(exportWindowContiguousEnd, rangeEnd)
         lock.unlock()
-        log(
-            "Window on disk — contiguous \(formatBytes(range.start))–\(formatBytes(exportWindowContiguousEnd))\(averageSpeedLogSuffix())"
-        )
+        logContiguousWindowOnDisk(playbackAnchorOnly: bridgeLANGapBeforeWindow)
         persistManifestNow()
         publishLANPlaybackState()
+    }
+
+    private func logContiguousWindowOnDisk(playbackAnchorOnly: Bool) {
+        lock.lock()
+        let spans = filledRanges
+        let anchor = playbackAnchorByteLocked(total: totalLength)
+        let contiguousEnd = Self.contiguousDenseEndFromByte(anchor, spans: spans)
+        let startLabel = playbackAnchorOnly ? anchor : exportWindowStart
+        lock.unlock()
+        log(
+            "Window on disk — contiguous \(formatBytes(startLabel))–\(formatBytes(contiguousEnd))\(averageSpeedLogSuffix())"
+        )
     }
 
     /// Updates LAN range gating + playback start hint for `_working.mp4`.

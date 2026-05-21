@@ -225,6 +225,10 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock { snapshot.lanExportActive }
     }
 
+    var lanPrefetchHorizonToEOF: Bool {
+        lock.withLock { snapshot.lanPrefetchHorizonToEOF }
+    }
+
     func updateCursor(seconds: Double) {
         lock.withLock {
             snapshot.exportCursorSeconds = max(0, seconds)
