@@ -130,7 +130,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         if snap.lanExportActive, snap.backgroundPrefetchEnabled {
             lines.append(
                 String(
-                    format: "EOF background on disk: %d%% (~%@ in file)",
+                    format: "EOF contiguous fill from start: %d%% (~%@ in file)",
                     snap.backgroundFillPercent,
                     Self.formatClock(snap.backgroundTimelineSeconds)
                 )

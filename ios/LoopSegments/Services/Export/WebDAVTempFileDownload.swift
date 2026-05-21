@@ -266,24 +266,24 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return active
     }
 
-    /// Background download cursor as % of file (EOF prefetch progress).
+    /// Contiguous dense frontier from file start as % of file (matches LAN playable growth).
     func backgroundPrefetchPercent() -> Int {
         lock.lock()
-        let cursor = downloadCursor
+        let frontier = regionFilledEnd
         let total = totalLength
         lock.unlock()
         guard total > 0 else { return 0 }
-        return Int(min(100, cursor * 100 / total))
+        return Int(min(100, frontier * 100 / total))
     }
 
-    /// Timeline position reached by background cursor (linear map).
+    /// Timeline position of the contiguous dense frontier from file start.
     func backgroundTimelineSeconds(durationSeconds: Double) -> Double {
         lock.lock()
-        let cursor = downloadCursor
+        let frontier = regionFilledEnd
         let total = totalLength
         lock.unlock()
         guard total > 0, durationSeconds > 0 else { return 0 }
-        return Self.timelineSecondsForByteOffset(cursor, totalLength: total, durationSeconds: durationSeconds)
+        return Self.timelineSecondsForByteOffset(frontier, totalLength: total, durationSeconds: durationSeconds)
     }
 
     /// Sum of dense `filledRanges` as % of file size.
@@ -1040,8 +1040,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         } else if offset >= regionStart, offset <= regionFilledEnd {
             if end > regionFilledEnd { regionFilledEnd = end }
         } else if offset > regionFilledEnd {
-            // Discontiguous write (should not happen for sequential background) — still record bytes for LAN.
-            regionFilledEnd = max(regionFilledEnd, end)
+            // Minute-window dense fill ahead of background frontier — filledRanges only.
         } else if offset < regionStart, end >= regionStart {
             regionStart = offset
             if end > regionFilledEnd { regionFilledEnd = end }
