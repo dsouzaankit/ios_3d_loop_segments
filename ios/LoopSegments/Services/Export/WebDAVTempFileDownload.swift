@@ -860,7 +860,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     /// Wait for background prefetch at EOF, or return once background was paused (export uses disk per minute).
     func waitUntilComplete(
         durationSeconds: Double = 0,
-        onProgress: (@escaping (Double) -> Void)? = nil
+        onProgress: ((Double) -> Void)? = nil
     ) async throws {
         var lastLoggedPercent = -Self.progressStepPercent
         while true {
