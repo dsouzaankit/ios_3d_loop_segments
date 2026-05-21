@@ -37,6 +37,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     /// When set, background download stops at this byte (avoids pulling the rest of a multi‑GB file).
     private var downloadHighWaterMark: Int64 = 0
     private var backgroundPausedForStream = false
+    /// True when foreground `ensureContiguousRange` paused background so pCloud is not double-fetched.
+    private var backgroundResumeAfterForegroundFill = false
     /// Contiguous bytes downloaded from the active export window start (no holes — `regionFilledEnd` can lie).
     private var exportWindowStart: Int64 = 0
     private var exportWindowContiguousEnd: Int64 = 0
@@ -207,9 +209,31 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     func pauseBackgroundDownload() {
         lock.lock()
         backgroundPausedForStream = true
+        backgroundResumeAfterForegroundFill = false
         lock.unlock()
         downloadTask?.cancel()
         downloadTask = nil
+    }
+
+    /// Pause LAN background prefetch while a minute window is dense-filled from pCloud (avoids duplicate bytes).
+    func pauseBackgroundDownloadForForegroundFill() {
+        lock.lock()
+        backgroundResumeAfterForegroundFill = downloadTask != nil && !backgroundPausedForStream
+        lock.unlock()
+        downloadTask?.cancel()
+        downloadTask = nil
+    }
+
+    func resumeBackgroundDownloadAfterForegroundFill() {
+        lock.lock()
+        let resume = backgroundResumeAfterForegroundFill
+        backgroundResumeAfterForegroundFill = false
+        lock.unlock()
+        guard resume else { return }
+        lock.lock()
+        restoreDownloadRegionFromFilledSpansLocked()
+        lock.unlock()
+        startBackgroundDownload()
     }
 
     func ensureWriteHandleForDownload() throws {
@@ -352,15 +376,40 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             return
         }
 
+        pauseBackgroundDownloadForForegroundFill()
+        defer { resumeBackgroundDownloadAfterForegroundFill() }
+
         log(
             "pCloud dense fill — window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) (\(formatBytes(needLen)); LAN scrubber may show full duration before this span is local)…"
         )
         var offset = range.start
+        var skippedOnDisk: Int64 = 0
+        var fetchedFromCloud: Int64 = 0
         var lastLoggedPercent = -Self.progressStepPercent
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         while offset < rangeEnd {
             if isCancelled() || Task.isCancelled { throw CancellationError() }
             let end = min(offset + Self.downloadChunkBytes - 1, rangeEnd - 1)
+            let chunkLen = end - offset + 1
+            lock.lock()
+            let spans = filledRanges
+            lock.unlock()
+            if !force,
+               Self.rangeFullyCovered(offset: offset, length: Int(chunkLen), spans: spans) {
+                skippedOnDisk += chunkLen
+                offset = end + 1
+                let done = offset - range.start
+                let now = CFAbsoluteTimeGetCurrent()
+                let pct = needLen > 0 ? Int(done * 100 / needLen) : 100
+                if pct >= lastLoggedPercent + Self.progressStepPercent || now - lastProgressLog >= 20 {
+                    lastProgressLog = now
+                    lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
+                    log(
+                        "Downloading window \(pct)% — \(formatBytes(done)) / \(formatBytes(needLen)) (dense, on disk)\(speedLogSuffix())"
+                    )
+                }
+                continue
+            }
             let auth = authorizationProvider()
             let data = try await Self.fetchRange(
                 remoteURL: remoteURL,
@@ -370,6 +419,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             )
             throughput.recordNetworkBytes(data.count)
             try write(data, at: offset)
+            fetchedFromCloud += Int64(data.count)
             offset = end + 1
             let done = offset - range.start
             let now = CFAbsoluteTimeGetCurrent()
@@ -381,6 +431,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                     "Downloading window \(pct)% — \(formatBytes(done)) / \(formatBytes(needLen)) (dense)\(speedLogSuffix())"
                 )
             }
+        }
+        if skippedOnDisk > 0 {
+            log(
+                "Dense fill — reused \(formatBytes(skippedOnDisk)) already on _working.mp4, fetched \(formatBytes(fetchedFromCloud)) from pCloud"
+            )
         }
         if tailStart < totalLength, !hasIndexTailOnDisk() {
             try await ensureIndexTailOnDisk()
@@ -876,6 +931,24 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             }
             let end = min(start + Self.downloadChunkBytes - 1, stopAt - 1, totalLength - 1)
             let length = Int(end - start + 1)
+            lock.lock()
+            let spans = filledRanges
+            lock.unlock()
+            if Self.rangeFullyCovered(offset: start, length: length, spans: spans) {
+                lock.lock()
+                let next = end + 1
+                if next > downloadCursor { downloadCursor = next }
+                if next > regionFilledEnd { regionFilledEnd = next }
+                let cursor = downloadCursor
+                lock.unlock()
+                let pct = totalLength > 0 ? Int(cursor * 100 / totalLength) : 0
+                if pct >= lastLoggedPercent + Self.progressStepPercent || cursor >= totalLength {
+                    lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
+                    log("Download \(pct)% — \(formatBytes(cursor)) / \(formatBytes(totalLength)) (on disk)\(speedLogSuffix())")
+                }
+                await Task.yield()
+                continue
+            }
             let auth = authorizationProvider()
             let data = try await Self.fetchRange(
                 remoteURL: remoteURL,
