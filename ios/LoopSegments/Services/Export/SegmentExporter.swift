@@ -7,6 +7,8 @@ struct SegmentExportResult {
     let reachedEnd: Bool
     /// Minutes that failed after retries; export continued and dense-filled later windows when possible.
     let skippedSegmentCount: Int
+    /// Below LAN bitrate cutoff: filled `_working.mp4` only (no `op_*.mp4` segments).
+    let lanPreloadOnly: Bool
 }
 
 /// Stream-copy export to one rotating 60s MP4 on the phone (AVFoundation, WebDAV input).
@@ -161,8 +163,10 @@ final class SegmentExporter {
         tempDownload?.beginExport(
             seekSeconds: seekSeconds,
             durationSeconds: durationSeconds,
-            sequentialLANPrefetch: lanPrefetch.prepareHeadAndIndex
+            sequentialLANPrefetch: lanPrefetch.prepareHeadAndIndex,
+            lanPreloadExclusive: lanPrefetch.lanPreloadOnly
         )
+        ExportPlaybackState.shared.setLANPreloadOnly(lanPrefetch.lanPreloadOnly)
         await MainActor.run {
             ResumeStore.shared.setSourceDurationMs(durationMs, for: item)
         }
@@ -218,6 +222,20 @@ final class SegmentExporter {
             guard let downloader = tempDownload else {
                 throw SegmentExporterError.readerSetupFailed
             }
+
+        if lanPrefetch.lanPreloadOnly {
+            return try await runLANPreloadOnly(
+                downloader: downloader,
+                seekSeconds: seekSeconds,
+                durationSeconds: durationSeconds,
+                durationMs: durationMs,
+                fileSize: fileSize,
+                impliedMbps: impliedMbps,
+                reportProgress: reportProgress,
+                logHandler: logHandler
+            )
+        }
+
         logHandler(
             "Publishing ~\(Int(Self.segmentDurationSeconds))s segments — dense fill each window, then passthrough " +
                 "(per-minute failsafe: skip on error and continue; _working.mp4 on LAN when serve is on)"
@@ -492,7 +510,72 @@ final class SegmentExporter {
         return SegmentExportResult(
             lastMediaTimeMs: lastMediaTimeMs,
             reachedEnd: reachedEnd,
-            skippedSegmentCount: skippedSegmentCount
+            skippedSegmentCount: skippedSegmentCount,
+            lanPreloadOnly: false
+        )
+    }
+
+    /// Below LAN bitrate cutoff: sequential fill to EOF only (no `op_*.mp4` — full WAN for `_working.mp4`).
+    private func runLANPreloadOnly(
+        downloader: WebDAVTempFileDownload,
+        seekSeconds: Double,
+        durationSeconds: Double,
+        durationMs: Int64,
+        fileSize: Int64,
+        impliedMbps: Double,
+        reportProgress: @Sendable (Int64) -> Void,
+        logHandler: @escaping (String) -> Void
+    ) async throws -> SegmentExportResult {
+        let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
+        logHandler(
+            String(
+                format: "LAN preload only — file ~%.1f Mbps (below %.0f Mbps cutoff); op_00/op_01 export disabled",
+                impliedMbps,
+                cutoff
+            )
+        )
+        logHandler(
+            "Sequential fill to EOF on _working.mp4 (8 parallel chunks) — target wall time ~½× media duration at your link speed"
+        )
+        logHandler("Play on LAN :8765 → pcld_ios_media/_working.mp4; raise cutoff if you need PC op_*.mp4 segments")
+        downloader.updateLANSequentialPrefetchHorizon(
+            playbackStartSeconds: seekSeconds,
+            horizonTimelineSeconds: durationSeconds,
+            durationSeconds: durationSeconds
+        )
+        reportProgress(Int64(seekSeconds * 1000))
+        logHandler(
+            downloader.maxBrowserPlayableStatusLog(
+                playbackStartSeconds: seekSeconds,
+                durationSeconds: durationSeconds,
+                exportCursorSeconds: seekSeconds
+            )
+        )
+        try await downloader.waitUntilComplete(durationSeconds: durationSeconds) { timelineSec in
+            reportProgress(Int64(timelineSec * 1000))
+        }
+        let full = TimelineByteRange(start: 0, end: fileSize)
+        let reachedEnd = downloader.isByteRangeFullyOnDisk(full)
+        let lastMs = reachedEnd ? durationMs : Int64(
+            downloader.backgroundTimelineSeconds(durationSeconds: durationSeconds) * 1000
+        )
+        logHandler(
+            downloader.maxBrowserPlayableStatusLog(
+                playbackStartSeconds: seekSeconds,
+                durationSeconds: durationSeconds,
+                exportCursorSeconds: Double(lastMs) / 1000.0
+            )
+        )
+        if reachedEnd {
+            logHandler("LAN preload complete — full \(Self.formatBytes(fileSize)) contiguous on disk for browser playback")
+        } else {
+            logHandler("LAN preload stopped before EOF — partial contiguous fill on _working.mp4")
+        }
+        return SegmentExportResult(
+            lastMediaTimeMs: lastMs,
+            reachedEnd: reachedEnd,
+            skippedSegmentCount: 0,
+            lanPreloadOnly: true
         )
     }
 
@@ -1358,6 +1441,7 @@ final class SegmentExporter {
         let prepareHeadAndIndex: Bool
         let prefetchHorizonToEOF: Bool
         let waitForBackgroundAtEnd: Bool
+        let lanPreloadOnly: Bool
     }
 
     private static func impliedAverageMbps(fileBytes: Int64, durationSeconds: Double) -> Double {
@@ -1378,7 +1462,8 @@ final class SegmentExporter {
             return LANWorkingPrefetchPolicy(
                 prepareHeadAndIndex: false,
                 prefetchHorizonToEOF: false,
-                waitForBackgroundAtEnd: false
+                waitForBackgroundAtEnd: false,
+                lanPreloadOnly: false
             )
         }
         let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
@@ -1386,7 +1471,8 @@ final class SegmentExporter {
         return LANWorkingPrefetchPolicy(
             prepareHeadAndIndex: true,
             prefetchHorizonToEOF: prefetchHorizonToEOF,
-            waitForBackgroundAtEnd: seekSeconds <= 0.5 && prefetchHorizonToEOF
+            waitForBackgroundAtEnd: seekSeconds <= 0.5 && prefetchHorizonToEOF,
+            lanPreloadOnly: prefetchHorizonToEOF
         )
     }
 
