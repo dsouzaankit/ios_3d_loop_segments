@@ -306,12 +306,24 @@ final class SegmentExporter {
                 let skipDenseMidFileRemote = midFileRemotePassthrough
                     && fileSize >= Self.streamOnlyThresholdBytes
                     && !Self.isHEVCFormat(videoFormat)
+                    && !lanPrefetch.prefetchHorizonToEOF
+                let lanDenseMidFileOnWorking = midFileRemotePassthrough
+                    && fileSize >= Self.streamOnlyThresholdBytes
+                    && !Self.isHEVCFormat(videoFormat)
+                    && lanPrefetch.prefetchHorizonToEOF
                 if largeHEVCDenseLocal {
                     logHandler(
                         "Large HEVC (\(Self.formatBytes(fileSize))) — dense fill + capped hybrid for " +
                             "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
                             "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) " +
                             "(~\(Self.formatBytes(byteRange.length)); remote passthrough skipped on multi‑GB HEVC)"
+                    )
+                } else if lanDenseMidFileOnWorking {
+                    logHandler(
+                        "LAN (<\(Int(ExportLANServer.backgroundPrefetchCutoffMbps)) Mbps est.) — dense fill on _working.mp4 for " +
+                            "\(Int(windowStartSeconds / 60)):\(String(format: "%02d", Int(windowStartSeconds) % 60))–" +
+                            "\(Int(windowEndSeconds / 60)):\(String(format: "%02d", Int(windowEndSeconds) % 60)) " +
+                            "(~\(Self.formatBytes(byteRange.length)); grows contiguous LAN, not remote passthrough)"
                     )
                 } else if skipDenseMidFileRemote {
                     logHandler(
@@ -389,6 +401,7 @@ final class SegmentExporter {
                     rangeStart: rangeStart,
                     rangeDuration: rangeDuration,
                     outputURL: stagingURL,
+                    preferDenseFillOnWorkingForLAN: lanPrefetch.prefetchHorizonToEOF,
                     isCancelled: cancelCheck,
                     log: logHandler
                 )
@@ -592,6 +605,7 @@ final class SegmentExporter {
         rangeStart: CMTime,
         rangeDuration: CMTime,
         outputURL: URL,
+        preferDenseFillOnWorkingForLAN: Bool = false,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
     ) async throws -> SegmentPassThroughResult {
@@ -601,7 +615,11 @@ final class SegmentExporter {
             "Export segment — source \(ExportTimelineLog.sourceRange(start: rangeStart, end: rangeEnd)) " +
                 "file bytes \(Self.formatBytes(byteRange.start))–\(Self.formatBytes(byteRange.end))"
         )
-        if shouldUseRemotePassthroughForMidFile(byteRange: byteRange, downloader: downloader) {
+        if shouldUseRemotePassthroughForMidFile(
+            byteRange: byteRange,
+            downloader: downloader,
+            preferDenseFillOnWorkingForLAN: preferDenseFillOnWorkingForLAN
+        ) {
             log(
                 "Mid-file segment — reading this minute from pCloud (window not dense on _working.mp4 yet); Mbps in log is pCloud, not LAN playback"
             )
@@ -950,10 +968,13 @@ final class SegmentExporter {
     }
 
     /// Mid-file on a sparse temp: hybrid/`file://` often fails — use pCloud only when the minute window is not dense on `_working.mp4` yet.
+    /// Below the LAN bitrate cutoff, prefer dense fill on `_working.mp4` so contiguous LAN playback grows with export.
     private func shouldUseRemotePassthroughForMidFile(
         byteRange: TimelineByteRange,
-        downloader: WebDAVTempFileDownload
+        downloader: WebDAVTempFileDownload,
+        preferDenseFillOnWorkingForLAN: Bool = false
     ) -> Bool {
+        if preferDenseFillOnWorkingForLAN { return false }
         guard byteRange.start > 0 else { return false }
         if isDenseWindowReady(downloader: downloader, byteRange: byteRange) {
             return false
