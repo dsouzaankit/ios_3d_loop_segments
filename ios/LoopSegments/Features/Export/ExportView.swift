@@ -20,6 +20,7 @@ struct ExportView: View {
     @State private var showClearLogsConfirm = false
     @State private var showAutoLockHelp = false
     @State private var copiedLANURL = false
+    @State private var prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
 
     var body: some View {
         Form {
@@ -35,6 +36,7 @@ struct ExportView: View {
                     set: { enabled in
                         ExportLANServer.isEnabled = enabled
                         if enabled {
+                            prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
                             ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
                         } else {
                             ExportLANServer.stop(log: nil)
@@ -43,20 +45,41 @@ struct ExportView: View {
                         }
                     }
                 ))
-                Picker("Prefetch to EOF below (Mbps)", selection: Binding(
-                    get: { ExportLANServer.backgroundPrefetchCutoffMbps },
-                    set: { ExportLANServer.backgroundPrefetchCutoffMbps = $0 }
-                )) {
-                    ForEach(ExportLANServer.backgroundPrefetchCutoffOptions, id: \.self) { mbps in
-                        Text("\(Int(mbps)) Mbps").tag(mbps)
+                if ExportLANServer.isEnabled {
+                    Picker(
+                        "Prefetch to EOF when below",
+                        selection: $prefetchCutoffMbps
+                    ) {
+                        ForEach(ExportLANServer.backgroundPrefetchCutoffOptions, id: \.self) { mbps in
+                            Text(ExportLANServer.prefetchCutoffOptionLabel(mbps: mbps))
+                                .tag(mbps)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .disabled(session.isExportRunning)
+                    .onChange(of: prefetchCutoffMbps) { _, newValue in
+                        ExportLANServer.backgroundPrefetchCutoffMbps = newValue
+                    }
+                    .onAppear {
+                        prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
+                    }
+                    if session.isExportRunning {
+                        Text("Cutoff locked while export is running.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(
+                        "Sequential LAN prefetch fills toward EOF when the file’s estimated bitrate is below this; otherwise it stops at exported+2 min. 29 Mbps (default) matches a typical ~30 Mbps cellular peak."
+                    )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(
+                        "Turn on Serve Exports to set the prefetch cutoff (default 29 Mbps)."
+                    )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                .disabled(session.isExportRunning)
-                Text(
-                    "One sequential LAN prefetch for all files. Below this estimated Mbps the horizon is EOF; at or above it the horizon stays at exported+2 min (still one prefetch loop). Default 29 Mbps matches typical cellular peak."
-                )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 Text("Same Wi‑Fi as the PC. Use the LAN IP line below on Windows. http://iphone.local:8765/ is not a default URL — it only matches if About → Name is exactly “iPhone” and your PC resolves .local (most Windows PCs need the numeric IP).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)

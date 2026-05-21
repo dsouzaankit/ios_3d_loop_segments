@@ -17,8 +17,24 @@ enum ExportLANServer {
     private static let backgroundCutoffKey = "lanBackgroundPrefetchCutoffMbps"
 
     /// Implied file bitrates at or above this cap sequential prefetch at exported+2 min (below = horizon EOF).
-    static let backgroundPrefetchCutoffOptions: [Double] = [21, 25, 29, 35, 42]
+    static let backgroundPrefetchCutoffOptions: [Double] = [21, 25, 27, 29, 32, 35, 42]
     static let defaultBackgroundPrefetchCutoffMbps = 29.0
+
+    static func prefetchCutoffOptionLabel(mbps: Double) -> String {
+        let value = Int(mbps.rounded())
+        if mbps == defaultBackgroundPrefetchCutoffMbps {
+            return "\(value) Mbps (default)"
+        }
+        return "\(value) Mbps"
+    }
+
+    static var prefetchCutoffSummary: String {
+        let mbps = Int(backgroundPrefetchCutoffMbps.rounded())
+        if backgroundPrefetchCutoffMbps == defaultBackgroundPrefetchCutoffMbps {
+            return "\(mbps) Mbps (default) — prefetch to EOF below this"
+        }
+        return "\(mbps) Mbps — prefetch to EOF below this"
+    }
 
     static var backgroundPrefetchCutoffMbps: Double {
         get {
