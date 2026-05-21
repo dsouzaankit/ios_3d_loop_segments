@@ -66,6 +66,7 @@ final class SegmentExporter {
         defer {
             tempDownload?.flushLANPlaybackManifestForExportEnd()
             ExportPlaybackState.shared.setLANExportActive(false)
+            ExportPlaybackState.shared.setLANPreloadOnly(false)
             tempDownload?.cancel()
             tempDownload = nil
             retainedWebDAVLoader = nil

@@ -24,6 +24,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         var backgroundFillPercent = 0
         var denseBytesOnDiskPercent = 0
         var backgroundTimelineSeconds: Double = 0
+        var lanPreloadOnly = false
     }
 
     private let lock = NSLock()
@@ -53,6 +54,13 @@ final class ExportPlaybackState: @unchecked Sendable {
             snapshot.averageWanDownloadMbps = 0
             snapshot.lastWanBurstMbps = 0
             snapshot.backgroundDownloadActive = false
+            snapshot.lanPreloadOnly = false
+        }
+    }
+
+    func setLANPreloadOnly(_ enabled: Bool) {
+        lock.withLock {
+            snapshot.lanPreloadOnly = enabled
         }
     }
 
@@ -145,6 +153,9 @@ final class ExportPlaybackState: @unchecked Sendable {
                 ? "toward EOF (below \(cutoff) Mbps est.)"
                 : "toward exported+2 min (≥\(cutoff) Mbps est.)"
             var prefetch = "on — \(horizon)"
+            if snap.lanPreloadOnly {
+                prefetch += " — LAN preload only (no op_*.mp4)"
+            }
             prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (minute dense fill)"
             lines.append("LAN sequential prefetch: \(prefetch)")
         }
@@ -459,9 +470,10 @@ final class ExportPlaybackState: @unchecked Sendable {
         } else {
             exportLabel = ExportTimelineLog.wallClock(seconds: export)
         }
+        let progressLabel = snap.lanPreloadOnly ? "filled" : "exported"
         return
             "LAN playable till \(ExportTimelineLog.wallClock(seconds: till)) (\(tillNote)), " +
-            "exported \(exportLabel), " +
+            "\(progressLabel) \(exportLabel), " +
             "started \(ExportTimelineLog.wallClock(seconds: from))"
     }
 

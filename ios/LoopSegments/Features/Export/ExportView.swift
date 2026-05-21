@@ -67,7 +67,7 @@ struct ExportView: View {
                             .foregroundStyle(.secondary)
                     }
                     Text(
-                        "Sequential LAN prefetch fills toward EOF when the file’s estimated bitrate is below this; otherwise it stops at exported+2 min. 29 Mbps (default) matches a typical ~30 Mbps cellular peak."
+                        "Below this cutoff (default 29 Mbps), Start export runs LAN preload only: fills _working.mp4 to EOF with full WAN (no op_00/op_01 segments). At or above, segments export and prefetch stops at exported+2 min."
                     )
                         .font(.footnote)
                         .foregroundStyle(.secondary)

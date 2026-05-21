@@ -88,10 +88,16 @@ final class ExportCoordinator {
             } onCancel: {
                 self.exporter.cancel()
             }
-            logHandler("Export finished — pcld_ios_media/loop/op_*.mp4 and pcld_ios_media/_working.mp4 kept until next export or Clear media")
+            if result.lanPreloadOnly {
+                logHandler(
+                    "LAN preload finished — pcld_ios_media/_working.mp4 on disk (no op_*.mp4; below bitrate cutoff). Play via :8765"
+                )
+            } else {
+                logHandler("Export finished — pcld_ios_media/loop/op_*.mp4 and pcld_ios_media/_working.mp4 kept until next export or Clear media")
+            }
             logHandler(ExportPaths.describeExportMediaOnDisk())
             logHandler("Files: On My iPhone → Loop Segments → Exports (same folder as export_latest.txt)")
-            if PhotosSegmentPublisher.isEnabled {
+            if PhotosSegmentPublisher.isEnabled, !result.lanPreloadOnly {
                 logHandler("Photos: syncing finished segments to library…")
                 await PhotosSegmentPublisher.publishAllSegmentsFromExports(log: logHandler)
             }

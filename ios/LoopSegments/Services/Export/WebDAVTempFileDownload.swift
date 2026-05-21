@@ -13,6 +13,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private static let downloadChunkBytes: Int64 = 2 * 1024 * 1024
     /// Concurrent range fetches inside the background prefetch loop (single Task; saturates cellular).
     private static let backgroundPrefetchParallelism = 4
+    /// LAN preload-only (no segment export): more parallel chunks, no foreground pause contention.
+    private static let lanPreloadOnlyParallelism = 8
     /// Retry backoff (seconds) after a transient background error before reopening the loop.
     private static let backgroundRetryDelaysSeconds: [UInt64] = [1, 2, 5, 10, 20]
     private static let progressStepPercent = 5
@@ -55,6 +57,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private var playbackStartSecondsForAnchor: Double = 0
     /// Duration (seconds) for the current export — used to map anchor seconds to file byte.
     private var anchorDurationSeconds: Double = 0
+    /// Below-bitrate LAN preload: segment export off; background uses higher parallelism only.
+    private var lanPreloadExclusive = false
     private let throughput = DownloadThroughput()
     private let sourceFileKey: String
     private let sourceHref: String?
@@ -122,12 +126,14 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     func beginExport(
         seekSeconds: Double,
         durationSeconds: Double,
-        sequentialLANPrefetch: Bool = true
+        sequentialLANPrefetch: Bool = true,
+        lanPreloadExclusive: Bool = false
     ) {
         throughput.reset()
         lock.lock()
         playbackStartSecondsForAnchor = max(0, seekSeconds)
         anchorDurationSeconds = max(0, durationSeconds)
+        lanPreloadExclusive = lanPreloadExclusive
         lock.unlock()
         applyInitialPosition(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
         if sequentialLANPrefetch {
@@ -852,21 +858,44 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     /// Wait for background prefetch at EOF, or return once background was paused (export uses disk per minute).
-    func waitUntilComplete() async throws {
+    func waitUntilComplete(
+        durationSeconds: Double = 0,
+        onProgress: ((Double) -> Void)? = nil
+    ) async throws {
+        var lastLoggedPercent = -Self.progressStepPercent
         while true {
             if isCancelled() { throw SegmentExporterError.cancelled }
             if isByteRangeFullyOnDisk(TimelineByteRange(start: 0, end: totalLength)) {
                 log("Temp copy complete — \(formatBytes(totalLength))\(averageSpeedLogSuffix())")
+                onProgress?(durationSeconds > 0 ? durationSeconds : 0)
+                publishLANPlaybackState(mediaCursorSeconds: durationSeconds > 0 ? durationSeconds : nil)
                 return
             }
             lock.lock()
-            let atEOF = regionFilledEnd >= totalLength
+            let spans = filledRanges
+            let anchor = playbackAnchorByteLocked(total: totalLength)
+            let contiguousEnd = Self.contiguousDenseEndFromByte(anchor, spans: spans)
             let backgroundActive = downloadTask != nil && !backgroundPausedForStream
-            let contiguousEnd = regionFilledEnd
             lock.unlock()
-            if atEOF {
+            if contiguousEnd >= totalLength {
                 log("Temp copy complete — \(formatBytes(totalLength))\(averageSpeedLogSuffix())")
+                onProgress?(durationSeconds > 0 ? durationSeconds : 0)
+                publishLANPlaybackState(mediaCursorSeconds: durationSeconds > 0 ? durationSeconds : nil)
                 return
+            }
+            if durationSeconds > 0 {
+                let timelineSec = Self.timelineSecondsForByteOffset(
+                    contiguousEnd,
+                    totalLength: totalLength,
+                    durationSeconds: durationSeconds
+                )
+                onProgress?(timelineSec)
+                publishLANPlaybackState(mediaCursorSeconds: timelineSec)
+                logBackgroundProgressIfNeeded(
+                    cursor: contiguousEnd,
+                    onDisk: !backgroundActive,
+                    lastLoggedPercent: &lastLoggedPercent
+                )
             }
             if !backgroundActive {
                 log(
@@ -1177,7 +1206,12 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             lock.unlock()
             var batch: [(offset: Int64, end: Int64, length: Int)] = []
             var scan = start
-            while scan < stopAt, batch.count < Self.backgroundPrefetchParallelism {
+            lock.lock()
+            let parallelism = lanPreloadExclusive
+                ? Self.lanPreloadOnlyParallelism
+                : Self.backgroundPrefetchParallelism
+            lock.unlock()
+            while scan < stopAt, batch.count < parallelism {
                 if isCancelled() || Task.isCancelled { throw CancellationError() }
                 let end = min(scan + Self.downloadChunkBytes - 1, stopAt - 1, totalLength - 1)
                 let length = Int(end - scan + 1)
