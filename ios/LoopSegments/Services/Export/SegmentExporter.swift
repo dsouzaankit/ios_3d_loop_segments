@@ -177,6 +177,7 @@ final class SegmentExporter {
             durationSeconds: durationSeconds,
             totalBytes: fileSize
         )
+        downloader.resetLANExtendTimelineCursor(playbackStartSeconds: seekSeconds)
         downloader.publishLANPlaybackState(mediaCursorSeconds: seekSeconds)
 
         let reportProgress: @Sendable (Int64) -> Void = { [weak self] mediaMs in
@@ -1422,14 +1423,12 @@ final class SegmentExporter {
         log: @escaping (String) -> Void
     ) async {
         let lookahead = min(durationSeconds, mediaCursorSeconds + Self.segmentDurationSeconds * 2)
-        let range = downloader.byteRangeForTimeline(
-            timelineStartSeconds: playbackStartSeconds,
-            timelineEndSeconds: lookahead,
-            durationSeconds: durationSeconds
-        )
-        guard !downloader.isByteRangeFullyOnDisk(range) else { return }
         do {
-            try await downloader.ensureContiguousRange(range)
+            try await downloader.ensureLANExtendTimelineRange(
+                playbackStartSeconds: playbackStartSeconds,
+                lookaheadEndSeconds: lookahead,
+                durationSeconds: durationSeconds
+            )
             downloader.publishLANPlaybackState(mediaCursorSeconds: mediaCursorSeconds)
         } catch {
             log(

@@ -97,6 +97,9 @@ final class ExportPlaybackState: @unchecked Sendable {
     func lanDashboardLines() -> [String] {
         let snap = lock.withLock { snapshot }
         var lines: [String] = []
+        if snap.totalFileBytes > 0 {
+            lines.append(String(format: "Media file size: %.1f MB", Self.fileSizeMB(snap.totalFileBytes)))
+        }
         if snap.durationSeconds > 0 {
             lines.append("Media duration: \(Self.formatClock(snap.durationSeconds))")
         }
@@ -112,6 +115,11 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
         if snap.averageWanDownloadMbps > 0 {
             lines.append(String(format: "Avg WAN (active bursts): %.1f Mbps", snap.averageWanDownloadMbps))
+        }
+        if snap.lanExportActive {
+            lines.append(
+                "LAN browser cap till = exported+2 min (scrubber only; can be far behind actual download)"
+            )
         }
         if snap.lanExportActive, snap.backgroundPrefetchEnabled {
             lines.append(
@@ -135,6 +143,10 @@ final class ExportPlaybackState: @unchecked Sendable {
             lines.append("Background prefetch: \(prefetch)")
         }
         return lines
+    }
+
+    private static func fileSizeMB(_ bytes: Int64) -> Double {
+        Double(bytes) / 1_048_576.0
     }
 
     private static func formatClock(_ seconds: Double) -> String {
@@ -319,6 +331,7 @@ final class ExportPlaybackState: @unchecked Sendable {
             "exportCursorSeconds": snap.exportCursorSeconds,
             "durationSeconds": snap.durationSeconds,
             "totalBytes": snap.totalFileBytes,
+            "mediaFileSizeMB": Self.fileSizeMB(snap.totalFileBytes),
             "indexTailStart": snap.indexTailStart,
             "headOnDisk": snap.headOnDisk,
             "tailOnDisk": snap.tailOnDisk,

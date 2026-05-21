@@ -11,6 +11,7 @@ struct TimelineByteRange: Equatable {
 /// Downloads remote MP4 ranges into a sparse temp file for timed segment export.
 final class WebDAVTempFileDownload: @unchecked Sendable {
     private static let downloadChunkBytes: Int64 = 2 * 1024 * 1024
+    private static let downloadParallelism = 4
     private static let progressStepPercent = 5
     private static let timelineSlackBytes: Int64 = 24 * 1024 * 1024
     /// Extra timeline before `startSec` when mapping to file bytes (linear estimate can lag real moov sample times).
@@ -46,6 +47,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private var exportWindowContiguousEnd: Int64 = 0
     /// Disjoint byte spans actually written (head, dense window, EOF index may be separate).
     private var filledRanges: [ClosedRange<Int64>] = []
+    /// End of timeline already covered by `extendLANPrefetchThroughExportCursor` (incremental +2 min extend).
+    private var lastLANExtendTimelineEndSeconds: Double = -1
     private let throughput = DownloadThroughput()
     private let sourceFileKey: String
     private let sourceHref: String?
@@ -388,6 +391,12 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.unlock()
     }
 
+    func resetLANExtendTimelineCursor(playbackStartSeconds: Double) {
+        lock.lock()
+        lastLANExtendTimelineEndSeconds = max(0, playbackStartSeconds)
+        lock.unlock()
+    }
+
     /// Map a file byte offset to timeline seconds (for LAN / export logs).
     static func timelineSecondsForByteOffset(
         _ byteOffset: Int64,
@@ -424,6 +433,141 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         )
     }
 
+    /// Incremental +2 min LAN extend: only dense-fill from the last extend position (not 0→cursor every minute).
+    func ensureLANExtendTimelineRange(
+        playbackStartSeconds: Double,
+        lookaheadEndSeconds: Double,
+        durationSeconds: Double
+    ) async throws {
+        lock.lock()
+        if lastLANExtendTimelineEndSeconds < 0 {
+            lastLANExtendTimelineEndSeconds = max(0, playbackStartSeconds)
+        }
+        let extendStartSec = lastLANExtendTimelineEndSeconds
+        lock.unlock()
+        guard extendStartSec < lookaheadEndSeconds - 0.01 else { return }
+        let range = byteRangeForTimeline(
+            timelineStartSeconds: extendStartSec,
+            timelineEndSeconds: lookaheadEndSeconds,
+            durationSeconds: durationSeconds
+        )
+        try await ensureContiguousRange(range)
+        lock.lock()
+        lastLANExtendTimelineEndSeconds = max(lastLANExtendTimelineEndSeconds, lookaheadEndSeconds)
+        lock.unlock()
+    }
+
+    private struct CloudChunk {
+        let offset: Int64
+        let length: Int
+        let endInclusive: Int64
+    }
+
+    private func downloadDenseRangeFromCloud(
+        rangeStart: Int64,
+        rangeEnd: Int64,
+        needLen: Int64,
+        force: Bool,
+        skippedOnDisk: inout Int64,
+        fetchedFromCloud: inout Int64,
+        lastLoggedPercent: inout Int,
+        lastProgressLog: inout CFAbsoluteTime
+    ) async throws {
+        var offset = rangeStart
+        while offset < rangeEnd {
+            if isCancelled() || Task.isCancelled { throw CancellationError() }
+            var batch: [CloudChunk] = []
+            var scan = offset
+            while scan < rangeEnd, batch.count < Self.downloadParallelism {
+                let end = min(scan + Self.downloadChunkBytes - 1, rangeEnd - 1)
+                let chunkLen = Int(end - scan + 1)
+                lock.lock()
+                let spans = filledRanges
+                lock.unlock()
+                if !force,
+                   Self.rangeFullyCovered(offset: scan, length: chunkLen, spans: spans) {
+                    skippedOnDisk += Int64(chunkLen)
+                    scan = end + 1
+                    continue
+                }
+                batch.append(CloudChunk(offset: scan, length: chunkLen, endInclusive: end))
+                scan = end + 1
+            }
+            if batch.isEmpty {
+                offset = scan
+                logDenseFillProgressIfNeeded(
+                    done: offset - rangeStart,
+                    needLen: needLen,
+                    onDisk: true,
+                    lastLoggedPercent: &lastLoggedPercent,
+                    lastProgressLog: &lastProgressLog
+                )
+                continue
+            }
+            let auth = authorizationProvider()
+            let fetched = try await fetchCloudChunksParallel(authorization: auth, chunks: batch)
+            for (chunkOffset, data) in fetched.sorted(by: { $0.0 < $1.0 }) {
+                throughput.recordNetworkBytes(data.count)
+                try write(data, at: chunkOffset)
+                fetchedFromCloud += Int64(data.count)
+            }
+            offset = scan
+            logDenseFillProgressIfNeeded(
+                done: offset - rangeStart,
+                needLen: needLen,
+                onDisk: false,
+                lastLoggedPercent: &lastLoggedPercent,
+                lastProgressLog: &lastProgressLog
+            )
+        }
+    }
+
+    private func fetchCloudChunksParallel(
+        authorization: String,
+        chunks: [CloudChunk]
+    ) async throws -> [(Int64, Data)] {
+        try await withThrowingTaskGroup(of: (Int64, Data).self) { group in
+            for chunk in chunks {
+                group.addTask {
+                    let data = try await Self.fetchRange(
+                        remoteURL: self.remoteURL,
+                        authorization: authorization,
+                        offset: chunk.offset,
+                        endInclusive: chunk.endInclusive
+                    )
+                    guard data.count == chunk.length else {
+                        throw WebDAVResourceLoaderError.invalidResponse
+                    }
+                    return (chunk.offset, data)
+                }
+            }
+            var out: [(Int64, Data)] = []
+            out.reserveCapacity(chunks.count)
+            for try await item in group {
+                out.append(item)
+            }
+            return out
+        }
+    }
+
+    private func logDenseFillProgressIfNeeded(
+        done: Int64,
+        needLen: Int64,
+        onDisk: Bool,
+        lastLoggedPercent: inout Int,
+        lastProgressLog: inout CFAbsoluteTime
+    ) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let pct = needLen > 0 ? Int(done * 100 / needLen) : 100
+        guard pct >= lastLoggedPercent + Self.progressStepPercent || now - lastProgressLog >= 20 else { return }
+        lastProgressLog = now
+        lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
+        let suffix = onDisk ? " (dense, on disk)" : " (dense)"
+        log(
+            "Downloading window \(pct)% — \(formatBytes(done)) / \(formatBytes(needLen))\(suffix)\(speedLogSuffix())"
+        )
+    }
+
     /// Fill every byte in `range` from pCloud (dense on disk) so AVFoundation can open the sparse temp.
     func ensureContiguousRange(_ range: TimelineByteRange, force: Bool = false) async throws {
         guard range.length > 0 else { return }
@@ -456,56 +600,20 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         log(
             "pCloud dense fill — window \(formatBytes(range.start))–\(formatBytes(rangeEnd)) (\(formatBytes(needLen)); LAN scrubber may show full duration before this span is local)…"
         )
-        var offset = range.start
         var skippedOnDisk: Int64 = 0
         var fetchedFromCloud: Int64 = 0
         var lastLoggedPercent = -Self.progressStepPercent
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
-        while offset < rangeEnd {
-            if isCancelled() || Task.isCancelled { throw CancellationError() }
-            let end = min(offset + Self.downloadChunkBytes - 1, rangeEnd - 1)
-            let chunkLen = end - offset + 1
-            lock.lock()
-            let spans = filledRanges
-            lock.unlock()
-            if !force,
-               Self.rangeFullyCovered(offset: offset, length: Int(chunkLen), spans: spans) {
-                skippedOnDisk += chunkLen
-                offset = end + 1
-                let done = offset - range.start
-                let now = CFAbsoluteTimeGetCurrent()
-                let pct = needLen > 0 ? Int(done * 100 / needLen) : 100
-                if pct >= lastLoggedPercent + Self.progressStepPercent || now - lastProgressLog >= 20 {
-                    lastProgressLog = now
-                    lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
-                    log(
-                        "Downloading window \(pct)% — \(formatBytes(done)) / \(formatBytes(needLen)) (dense, on disk)\(speedLogSuffix())"
-                    )
-                }
-                continue
-            }
-            let auth = authorizationProvider()
-            let data = try await Self.fetchRange(
-                remoteURL: remoteURL,
-                authorization: auth,
-                offset: offset,
-                endInclusive: end
-            )
-            throughput.recordNetworkBytes(data.count)
-            try write(data, at: offset)
-            fetchedFromCloud += Int64(data.count)
-            offset = end + 1
-            let done = offset - range.start
-            let now = CFAbsoluteTimeGetCurrent()
-            let pct = needLen > 0 ? Int(done * 100 / needLen) : 100
-            if pct >= lastLoggedPercent + Self.progressStepPercent || now - lastProgressLog >= 20 {
-                lastProgressLog = now
-                lastLoggedPercent = (pct / Self.progressStepPercent) * Self.progressStepPercent
-                log(
-                    "Downloading window \(pct)% — \(formatBytes(done)) / \(formatBytes(needLen)) (dense)\(speedLogSuffix())"
-                )
-            }
-        }
+        try await downloadDenseRangeFromCloud(
+            rangeStart: range.start,
+            rangeEnd: rangeEnd,
+            needLen: needLen,
+            force: force,
+            skippedOnDisk: &skippedOnDisk,
+            fetchedFromCloud: &fetchedFromCloud,
+            lastLoggedPercent: &lastLoggedPercent,
+            lastProgressLog: &lastProgressLog
+        )
         if skippedOnDisk > 0 {
             log(
                 "Dense fill — reused \(formatBytes(skippedOnDisk)) already on _working.mp4, fetched \(formatBytes(fetchedFromCloud)) from pCloud"
@@ -852,10 +960,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     private func restoreDownloadRegionFromFilledSpansLocked() {
+        let priorCursor = downloadCursor
         guard let first = filledRanges.min(by: { $0.lowerBound < $1.lowerBound }) else {
             regionStart = 0
             regionFilledEnd = 0
-            downloadCursor = 0
+            downloadCursor = priorCursor
             return
         }
         regionStart = first.lowerBound
@@ -865,7 +974,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 regionFilledEnd = max(regionFilledEnd, span.upperBound + 1)
             }
         }
-        downloadCursor = regionFilledEnd
+        downloadCursor = max(priorCursor, regionFilledEnd)
     }
 
     private func scheduleManifestSave() {
@@ -1046,7 +1155,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             try write(data, at: start)
 
             lock.lock()
-            downloadCursor = regionFilledEnd
+            downloadCursor = max(downloadCursor, end + 1)
             let cursor = downloadCursor
             lock.unlock()
 
