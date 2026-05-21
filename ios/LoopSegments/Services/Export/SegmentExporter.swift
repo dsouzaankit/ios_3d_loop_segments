@@ -471,7 +471,8 @@ final class SegmentExporter {
 
     /// LAN background prefetch toward EOF is disabled at or above this average file bitrate (saves cellular on multi‑GB HEVC).
     /// Above this implied file bitrate, LAN skips EOF background (dense +2 min per minute only).
-    private static let highBitrateBackgroundCutoffMbps = 42.0
+    /// Matches ~cellular peak: background cannot outrun a file encoded faster than the link.
+    private static let highBitrateBackgroundCutoffMbps = 29.0
 
     /// Files above this or that do not fit on disk are exported by range reads (no full temp copy).
     private static let streamOnlyThresholdBytes: Int64 = 1_500_000_000

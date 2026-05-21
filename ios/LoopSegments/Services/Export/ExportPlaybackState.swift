@@ -127,8 +127,8 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
         if snap.lanExportActive {
             var prefetch = snap.backgroundPrefetchEnabled
-                ? "on (below 42 Mbps est.)"
-                : "off (≥42 Mbps est. or LAN disabled)"
+                ? "on (below 29 Mbps est.)"
+                : "off (≥29 Mbps est. or LAN disabled)"
             if snap.backgroundPrefetchEnabled {
                 prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (pCloud fill)"
             }
