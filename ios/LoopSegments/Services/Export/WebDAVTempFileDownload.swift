@@ -133,7 +133,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.lock()
         playbackStartSecondsForAnchor = max(0, seekSeconds)
         anchorDurationSeconds = max(0, durationSeconds)
-        lanPreloadExclusive = lanPreloadExclusive
+        self.lanPreloadExclusive = lanPreloadExclusive
         lock.unlock()
         applyInitialPosition(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
         if sequentialLANPrefetch {
