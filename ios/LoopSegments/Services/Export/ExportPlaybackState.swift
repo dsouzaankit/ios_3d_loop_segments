@@ -123,6 +123,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         if snap.averageWanDownloadMbps > 0 {
             lines.append(String(format: "Avg WAN (active bursts): %.1f Mbps", snap.averageWanDownloadMbps))
         }
+        let live = Self.liveFillStats(snap: snap)
         if snap.lanExportActive, snap.backgroundPrefetchEnabled {
             lines.append(
                 "LAN browser cap = furthest contiguous dense from playback start (sequential prefetch)"
@@ -130,13 +131,13 @@ final class ExportPlaybackState: @unchecked Sendable {
             lines.append(
                 String(
                     format: "Sequential prefetch from start: %d%% (~%@ reachable)",
-                    snap.backgroundFillPercent,
-                    Self.formatClock(snap.backgroundTimelineSeconds)
+                    live.backgroundFillPercent,
+                    Self.formatClock(live.backgroundTimelineSeconds)
                 )
             )
         }
-        if snap.denseBytesOnDiskPercent > 0 {
-            lines.append("Dense bytes on disk: \(snap.denseBytesOnDiskPercent)% of file")
+        if live.denseBytesOnDiskPercent > 0 {
+            lines.append("Dense bytes on disk: \(live.denseBytesOnDiskPercent)% of file")
         }
         if snap.lanExportActive, snap.backgroundPrefetchEnabled {
             let cutoff = Int(ExportLANServer.backgroundPrefetchCutoffMbps.rounded())
@@ -148,6 +149,55 @@ final class ExportPlaybackState: @unchecked Sendable {
             lines.append("LAN sequential prefetch: \(prefetch)")
         }
         return lines
+    }
+
+    private struct LiveFillStats {
+        let backgroundFillPercent: Int
+        let backgroundTimelineSeconds: Double
+        let denseBytesOnDiskPercent: Int
+    }
+
+    /// Dashboard metrics derived live from `snap.filledSpans` (refreshed from disk on each HTTP request).
+    private static func liveFillStats(snap: Snapshot) -> LiveFillStats {
+        guard snap.totalFileBytes > 0 else {
+            return LiveFillStats(backgroundFillPercent: 0, backgroundTimelineSeconds: 0, denseBytesOnDiskPercent: 0)
+        }
+        let total = snap.totalFileBytes
+        let duration = snap.durationSeconds
+        let anchor: Int64 = {
+            guard snap.playbackStartSeconds > 0, duration > 0 else { return 0 }
+            return WebDAVTempFileDownload.timelineByteOffsetForSeconds(
+                snap.playbackStartSeconds,
+                totalLength: total,
+                durationSeconds: duration
+            )
+        }()
+        let frontier = contiguousDenseEndFromByte(anchor, spans: snap.filledSpans)
+        let horizonByte = total
+        let filled = max(0, frontier - anchor)
+        let range = max(1, horizonByte - anchor)
+        let bgPercent = Int(min(100, filled * 100 / range))
+        let bgTimeline: Double = duration > 0
+            ? WebDAVTempFileDownload.timelineSecondsForByteOffset(frontier, totalLength: total, durationSeconds: duration)
+            : 0
+        var dense: Int64 = 0
+        for span in snap.filledSpans { dense += span.upperBound - span.lowerBound + 1 }
+        let densePercent = Int(min(100, dense * 100 / max(1, total)))
+        return LiveFillStats(
+            backgroundFillPercent: bgPercent,
+            backgroundTimelineSeconds: bgTimeline,
+            denseBytesOnDiskPercent: densePercent
+        )
+    }
+
+    private static func contiguousDenseEndFromByte(_ startByte: Int64, spans: [ClosedRange<Int64>]) -> Int64 {
+        var frontier = startByte
+        for span in spans.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if span.upperBound < frontier { continue }
+            if span.lowerBound > frontier { break }
+            frontier = max(frontier, span.upperBound + 1)
+        }
+        return frontier
     }
 
     private static func fileSizeMB(_ bytes: Int64) -> Double {
@@ -331,6 +381,7 @@ final class ExportPlaybackState: @unchecked Sendable {
     var frozenStatusPayload: [String: Any] {
         let snap = lock.withLock { snapshot }
         let till = Self.maxBrowserPlayableTimelineSeconds(snap: snap)
+        let live = Self.liveFillStats(snap: snap)
         var payload: [String: Any] = [
             "playbackStartSeconds": snap.playbackStartSeconds,
             "exportCursorSeconds": snap.exportCursorSeconds,
@@ -347,9 +398,9 @@ final class ExportPlaybackState: @unchecked Sendable {
             "lastWanBurstMbps": snap.lastWanBurstMbps,
             "backgroundPrefetchEnabled": snap.backgroundPrefetchEnabled,
             "backgroundDownloadActive": snap.backgroundDownloadActive,
-            "backgroundFillPercent": snap.backgroundFillPercent,
-            "denseBytesOnDiskPercent": snap.denseBytesOnDiskPercent,
-            "backgroundTimelineSeconds": snap.backgroundTimelineSeconds,
+            "backgroundFillPercent": live.backgroundFillPercent,
+            "denseBytesOnDiskPercent": live.denseBytesOnDiskPercent,
+            "backgroundTimelineSeconds": live.backgroundTimelineSeconds,
         ]
         if let started = snap.exportStartedAt {
             payload["exportStartedAt"] = ISO8601DateFormatter().string(from: started)
