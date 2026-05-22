@@ -174,7 +174,7 @@ struct ExportView: View {
                         showAutoLockHelp = true
                     }
                 }
-                Text("Optional: Auto-Lock → Never only if you must leave the app during a long run. Path: \(ExportAutoLockCoordinator.manualPath).")
+                Text("Screen stays on while this Export page is open. Optional: Auto-Lock → Never if you leave the app during a run. Path: \(ExportAutoLockCoordinator.manualPath).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -200,14 +200,24 @@ struct ExportView: View {
         }
         .navigationTitle("Export")
         .onAppear {
+            ExportAutoLockCoordinator.setExportPageVisible(true)
             applyForegroundResume()
             if PhotosSegmentPublisher.workflowEnabled, PhotosSegmentPublisher.isEnabled {
                 Task { await requestPhotosAccess() }
             }
         }
+        .onDisappear {
+            ExportAutoLockCoordinator.setExportPageVisible(false)
+        }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
+            switch phase {
+            case .active:
+                ExportAutoLockCoordinator.setExportPageVisible(true)
                 applyForegroundResume()
+            case .inactive, .background:
+                ExportAutoLockCoordinator.setExportPageVisible(false)
+            @unknown default:
+                break
             }
         }
         .onChange(of: resumeStore.revision) { _, _ in
