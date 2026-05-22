@@ -667,6 +667,7 @@ enum ExportLANServer {
         var names: Set<String> = [
             ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL),
             ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL),
+            ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL),
             ExportPaths.latestLogTextURL.lastPathComponent,
             ExportPaths.latestLogURL.lastPathComponent,
             ExportPaths.exportProgressURL.lastPathComponent,
@@ -675,7 +676,24 @@ enum ExportLANServer {
         for slot in 0 ..< ExportPaths.segmentFileCount {
             names.insert(ExportPaths.segmentRelativePath(index: slot))
         }
+        let fm = FileManager.default
+        let mediaDir = ExportPaths.mediaExportDirectory
+        if let listed = try? fm.contentsOfDirectory(at: mediaDir, includingPropertiesForKeys: nil) {
+            for url in listed where url.lastPathComponent.hasPrefix("_vanilla_download.") {
+                names.insert(ExportPaths.pathRelativeToExports(url))
+            }
+        }
         return names
+    }
+
+    /// Non-loop files under `pcld_ios_media/` that may be served (working, transcode, vanilla).
+    private static func mediaFolderServableRelativePaths() -> [String] {
+        let media = ExportPaths.mediaExportFolderName
+        let loop = ExportPaths.segmentLoopFolderName
+        let loopPrefix = "\(media)/\(loop)/"
+        return allowedServableRelativePaths()
+            .filter { $0.hasPrefix("\(media)/") && !$0.hasPrefix(loopPrefix) }
+            .sorted()
     }
 
     private static func xmlEscape(_ text: String) -> String {
@@ -857,15 +875,15 @@ enum ExportLANServer {
                             modified: nil
                         )
                     )
-                    let workingRel = ExportPaths.lanInProgressWorkingRelativePath
-                    if let fileURL = resolveExportFile(relativePath: workingRel) {
-                        let fm = FileManager.default
+                    let fm = FileManager.default
+                    for fileRel in mediaFolderServableRelativePaths() {
+                        guard let fileURL = resolveExportFile(relativePath: fileRel) else { continue }
                         let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
                         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
                         let modified = attrs?[.modificationDate] as? Date
                         responses.append(
                             propfindEntryXML(
-                                href: davListingHref(path: "/\(workingRel)", isCollection: false),
+                                href: davListingHref(path: "/\(fileRel)", isCollection: false),
                                 isCollection: false,
                                 displayName: fileURL.lastPathComponent,
                                 size: size,
