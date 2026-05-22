@@ -873,9 +873,14 @@ final class SegmentExporter {
 
         let containerFormat = MediaContainerFormat.from(filename: item.name)
         var exportAssetURL = downloadURL
-        if usesFastStartDuringDownload,
-           FileManager.default.fileExists(atPath: ExportPaths.vanillaFastStartURL.path) {
-            exportAssetURL = ExportPaths.vanillaFastStartURL
+        if usesFastStartDuringDownload {
+            if FileManager.default.fileExists(atPath: ExportPaths.vanillaFastStartURL.path) {
+                exportAssetURL = ExportPaths.vanillaFastStartURL
+            } else if MP4NetworkOptimize.sourceAlreadyNetworkOptimized(at: downloadURL) {
+                logHandler(
+                    "Using \(downloadURL.lastPathComponent) for export — moov already at head (pCloud pre-faststart)"
+                )
+            }
         }
 
         let durationSeconds: Double

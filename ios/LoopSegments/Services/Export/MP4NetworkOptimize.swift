@@ -14,7 +14,7 @@ enum MP4NetworkOptimize {
         let size = (try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         guard size > 8192 else { return }
 
-        if moovPresentInFirstBytes(of: fileURL, scanBytes: moovScanBytes) {
+        if sourceAlreadyNetworkOptimized(at: fileURL) {
             log("Segment moov in file head — OK for Skybox / LAN streaming")
             return
         }
@@ -41,27 +41,50 @@ enum MP4NetworkOptimize {
         return data.range(of: Data("moov".utf8)) != nil
     }
 
+    /// True when the first ~768 KiB already contain `moov` (pCloud / upload faststart).
+    static func sourceAlreadyNetworkOptimized(at fileURL: URL) -> Bool {
+        moovPresentInFirstBytes(of: fileURL, scanBytes: moovScanBytes)
+    }
+
     /// Network-optimized MP4 at `destinationURL` (leaves `sourceURL` unchanged when paths differ).
+    /// Skips remux when `sourceURL` already has `moov` at head — pCloud file was pre-faststarted.
+    @discardableResult
     static func writeNetworkOptimizedCopy(
         from sourceURL: URL,
         to destinationURL: URL,
         log: @escaping (String) -> Void
-    ) async throws {
-        if moovPresentInFirstBytes(of: sourceURL, scanBytes: moovScanBytes),
-           sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
-            log("Source moov already in file head — skipping faststart copy")
-            return
+    ) async throws -> Bool {
+        if sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
+            if sourceAlreadyNetworkOptimized(at: sourceURL) {
+                log("Moov already in file head — OK for Skybox / LAN (no remux)")
+                return false
+            }
+            log("Moov-at-end — remuxing in place (network optimize)")
+            try await remuxWithFastStart(from: sourceURL, to: destinationURL, log: log)
+            return true
+        }
+        if sourceAlreadyNetworkOptimized(at: sourceURL) {
+            log(
+                "Download already faststart (moov in head) — skipping \(destinationURL.lastPathComponent); " +
+                    "LAN/export use \(ExportPaths.pathRelativeToExports(sourceURL))"
+            )
+            let fm = FileManager.default
+            if fm.fileExists(atPath: destinationURL.path) {
+                try? fm.removeItem(at: destinationURL)
+            }
+            return false
         }
         log(
-            "Writing faststart copy → \(ExportPaths.pathRelativeToExports(destinationURL)) " +
-                "(original \(ExportPaths.pathRelativeToExports(sourceURL)) unchanged)"
+            "Writing faststart sidecar → \(ExportPaths.pathRelativeToExports(destinationURL)) " +
+                "(\(ExportPaths.pathRelativeToExports(sourceURL)) unchanged)"
         )
         try await remuxWithFastStart(from: sourceURL, to: destinationURL, log: log)
         if moovPresentInFirstBytes(of: destinationURL, scanBytes: moovScanBytes) {
-            log("Faststart copy ready — moov at head of \(destinationURL.lastPathComponent)")
+            log("Faststart sidecar ready — moov at head of \(destinationURL.lastPathComponent)")
         } else {
-            log("Faststart copy finished (moov may still be past head on very large files)")
+            log("Faststart sidecar finished (moov may still be past head on very large files)")
         }
+        return true
     }
 
     private static func remuxWithFastStart(

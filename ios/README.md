@@ -139,7 +139,7 @@ Default export is still **one ~60s segment at a time** with passthrough on devic
 | Output | When |
 |--------|------|
 | **`loop/op_00.mp4`**, **`op_01.mp4`** | After each segment is written, if `moov` is still at EOF (Skybox / LAN players) |
-| **`_vanilla_faststart.mp4`** | After vanilla download of MP4/MOV/M4V; **`_vanilla_download.mp4`** left unchanged |
+| **`_vanilla_faststart.mp4`** | Only if **`_vanilla_download.mp4`** has moov-at-end; skipped when download already faststart |
 
 **Pre-faststarting files on pCloud** (ffmpeg before upload) is optional for “play full movie from pCloud WebDAV”; it does **not** fix WMV probe failures, doubles handling if you remux after upload, and invalidates in-progress sparse resume if you replace the cloud object. The app keeps cloud originals untouched.
 

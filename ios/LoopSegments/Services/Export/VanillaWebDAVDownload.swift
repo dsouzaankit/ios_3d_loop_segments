@@ -49,14 +49,15 @@ enum VanillaWebDAVDownload {
         )
         if let fastStartDestinationURL {
             log(
-                "MP4 faststart copy → \(ExportPaths.pathRelativeToExports(fastStartDestinationURL)) " +
-                    "(refreshed every \(faststartRefreshStepPercent)% during download when possible)"
+                "MP4 faststart sidecar → \(ExportPaths.pathRelativeToExports(fastStartDestinationURL)) " +
+                    "only if download lacks moov-at-head (skipped when pCloud source is pre-faststarted)"
             )
         }
 
         var offset: Int64 = 0
         var lastLoggedPercent = -1
         var lastFaststartPercent = 0
+        var skipFaststartSidecar = false
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         let auth = authorizationProvider()
 
@@ -85,14 +86,18 @@ enum VanillaWebDAVDownload {
                 log("Vanilla download \(pct)% — \(formatBytes(offset)) / \(formatBytes(totalLength))")
             }
             if let fastStartDestinationURL,
+               !skipFaststartSidecar,
                pct >= lastFaststartPercent + faststartRefreshStepPercent {
                 lastFaststartPercent = (pct / faststartRefreshStepPercent) * faststartRefreshStepPercent
-                await refreshFaststartCopyIfPossible(
+                if await refreshFaststartCopyIfPossible(
                     from: destinationURL,
                     to: fastStartDestinationURL,
                     downloadedBytes: offset,
                     log: log
-                )
+                ) == false,
+                   MP4NetworkOptimize.sourceAlreadyNetworkOptimized(at: destinationURL) {
+                    skipFaststartSidecar = true
+                }
             }
         }
         try handle.synchronize()
@@ -101,7 +106,7 @@ enum VanillaWebDAVDownload {
             throw WebDAVResourceLoaderError.invalidResponse
         }
         if let fastStartDestinationURL {
-            try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
+            _ = try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
                 from: destinationURL,
                 to: fastStartDestinationURL,
                 log: log
@@ -110,15 +115,20 @@ enum VanillaWebDAVDownload {
         log("Vanilla download complete — \(formatBytes(onDisk)) at \(rel)")
     }
 
+    /// `true` when a sidecar was written/updated; `false` when source is already faststart.
+    @discardableResult
     private static func refreshFaststartCopyIfPossible(
         from sourceURL: URL,
         to destinationURL: URL,
         downloadedBytes: Int64,
         log: @escaping (String) -> Void
-    ) async {
-        guard downloadedBytes > 8 * 1024 * 1024 else { return }
+    ) async -> Bool {
+        guard downloadedBytes > 8 * 1024 * 1024 else { return false }
+        if MP4NetworkOptimize.sourceAlreadyNetworkOptimized(at: sourceURL) {
+            return false
+        }
         do {
-            try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
+            return try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
                 from: sourceURL,
                 to: destinationURL,
                 log: log
@@ -128,6 +138,7 @@ enum VanillaWebDAVDownload {
                 "Faststart refresh skipped at \(formatBytes(downloadedBytes)) — " +
                     "\(error.localizedDescription)"
             )
+            return false
         }
     }
 
