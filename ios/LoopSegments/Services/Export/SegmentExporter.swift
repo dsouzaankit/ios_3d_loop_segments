@@ -1819,7 +1819,7 @@ final class SegmentExporter {
         if let exportError = error as? SegmentExporterError {
             switch exportError {
             case .cancelled, .paused, .readerInterrupted, .seekPastEnd, .noVideoTrack,
-                 .unsupportedCodec, .missingFormatDescription, .insufficientDiskSpace:
+                 .containerProbeFailed, .unsupportedCodec, .missingFormatDescription, .insufficientDiskSpace:
                 return false
             case .readerSetupFailed, .readerFailed, .writerSetupFailed, .writerFailed,
                  .writerBackpressure, .writerAudioStall, .noKeyframeInWindow,
@@ -1841,8 +1841,8 @@ final class SegmentExporter {
                 return isSparseContainerOpenFailure(underlying)
             case .writerFailed, .writerBackpressure:
                 return true
-            case .cancelled, .paused, .readerInterrupted, .seekPastEnd, .noVideoTrack, .unsupportedCodec,
-                 .missingFormatDescription, .writerSetupFailed, .writerAudioStall,
+            case .cancelled, .paused, .readerInterrupted, .seekPastEnd, .noVideoTrack, .containerProbeFailed,
+                 .unsupportedCodec, .missingFormatDescription, .writerSetupFailed, .writerAudioStall,
                  .insufficientDiskSpace, .midFileTempUnreadable:
                 return false
             }
