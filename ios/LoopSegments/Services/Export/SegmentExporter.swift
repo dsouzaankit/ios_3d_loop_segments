@@ -574,6 +574,12 @@ final class SegmentExporter {
                 exportCursorSeconds: cursorSeconds
             )
         )
+        if seekSeconds > 0.5 {
+            try await downloader.ensureLANPrefixBeforeSeekFilled(
+                seekSeconds: seekSeconds,
+                durationSeconds: durationSeconds
+            )
+        }
         try await downloader.waitUntilComplete(durationSeconds: durationSeconds) { timelineSec in
             reportProgress(Int64(timelineSec * 1000))
         }
@@ -1558,6 +1564,15 @@ final class SegmentExporter {
                 "LAN :8765 serves contiguous bytes only"
         )
         if seekSeconds > 0.5 {
+            if lanPrefetch.prefetchHorizonToEOF {
+                log(
+                    "LAN prefix — dense fill 0:00 → \(ExportTimelineLog.wallClock(seconds: seekSeconds)) from pCloud first (below cutoff)…"
+                )
+                try await downloader.ensureLANPrefixBeforeSeekFilled(
+                    seekSeconds: seekSeconds,
+                    durationSeconds: durationSeconds
+                )
+            }
             let firstWindowEnd = min(
                 durationSeconds,
                 seekSeconds + Self.segmentDurationSeconds * 2

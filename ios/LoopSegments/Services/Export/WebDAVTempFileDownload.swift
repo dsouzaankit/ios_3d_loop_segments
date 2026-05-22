@@ -38,6 +38,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private var tailOnDisk = false
     private var headOnDisk = false
     private var downloadTask: Task<Void, Error>?
+    /// Fills `[0, seek)` from pCloud while segment export is idle (high bitrate); low bitrate fills in preload.
+    private var prefixDownloadTask: Task<Void, Error>?
     private var writeHandle: FileHandle?
     private var downloadCursor: Int64 = 0
     /// When set, background download stops at this byte (avoids pulling the rest of a multi‑GB file).
@@ -145,6 +147,9 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.unlock()
         applyInitialPosition(seekSeconds: seekSeconds, durationSeconds: durationSeconds)
         if sequentialLANPrefetch {
+            if !lanPreloadExclusive, seekSeconds > 0.5 {
+                startPrefixFillBeforeSeekIfNeeded()
+            }
             startBackgroundDownload()
         } else {
             log("LAN off — each minute dense-filled on demand only (no sequential prefetch).")
@@ -238,6 +243,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         manifestSaveTask?.cancel()
         persistManifestNow()
         downloadTask?.cancel()
+        prefixDownloadTask?.cancel()
         try? writeHandle?.close()
     }
 
@@ -250,6 +256,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.unlock()
         downloadTask?.cancel()
         downloadTask = nil
+        prefixDownloadTask?.cancel()
+        prefixDownloadTask = nil
     }
 
     /// Pause LAN background prefetch while a minute window is dense-filled from pCloud (avoids duplicate bytes).
@@ -262,6 +270,8 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.unlock()
         downloadTask?.cancel()
         downloadTask = nil
+        prefixDownloadTask?.cancel()
+        prefixDownloadTask = nil
     }
 
     func resumeBackgroundDownloadAfterForegroundFill() {
@@ -280,6 +290,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.lock()
         restoreDownloadRegionFromFilledSpansLocked()
         lock.unlock()
+        startPrefixFillBeforeSeekIfNeeded()
         startBackgroundDownload()
     }
 
@@ -329,6 +340,41 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
             totalLength: total,
             durationSeconds: duration
         )
+    }
+
+    /// Byte span `[0, seek preroll anchor)` — real media from pCloud for scrub/`#t=` before export seek.
+    func lanPrefixBeforeSeekRange(seekSeconds: Double, durationSeconds: Double) -> TimelineByteRange? {
+        guard seekSeconds > 0.5, totalLength > 0, durationSeconds > 0 else { return nil }
+        let end = Self.lanPlaybackDenseAnchorByte(
+            playbackStartSeconds: seekSeconds,
+            totalLength: totalLength,
+            durationSeconds: durationSeconds
+        )
+        guard end > 0 else { return nil }
+        return TimelineByteRange(start: 0, end: end)
+    }
+
+    func isLANPrefixBeforeSeekOnDisk(seekSeconds: Double, durationSeconds: Double) -> Bool {
+        guard let range = lanPrefixBeforeSeekRange(
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds
+        ) else { return true }
+        return isByteRangeFullyOnDisk(range)
+    }
+
+    /// Dense-fill 0:00 → seek (incl. preroll anchor) from pCloud. Low bitrate: call at preload start; high bitrate: background when idle.
+    func ensureLANPrefixBeforeSeekFilled(seekSeconds: Double, durationSeconds: Double) async throws {
+        guard let range = lanPrefixBeforeSeekRange(
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds
+        ) else { return }
+        guard !isByteRangeFullyOnDisk(range) else { return }
+        log(
+            "LAN prefix — dense fill \(formatBytes(range.start))–\(formatBytes(range.end)) " +
+                "(0:00 → \(ExportTimelineLog.wallClock(seconds: seekSeconds)) from pCloud)…"
+        )
+        try await ensureContiguousRange(range, bridgeLANGapBeforeWindow: true)
+        publishLANPlaybackState()
     }
 
     /// Fill ~45s preroll before wall-clock seek so `#t=` / browser decode has keyframe bytes on disk.
@@ -1204,6 +1250,70 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         noteWrite(offset: offset, length: data.count)
         markHeadIfComplete(writeEnd: offset + Int64(data.count))
         lock.unlock()
+    }
+
+    private func startPrefixFillBeforeSeekIfNeeded() {
+        lock.lock()
+        let seek = playbackStartSecondsForAnchor
+        let duration = anchorDurationSeconds
+        let exclusive = lanPreloadExclusive
+        let already = prefixDownloadTask != nil
+        lock.unlock()
+        guard seek > 0.5, duration > 0, !exclusive, !already else { return }
+        guard !isLANPrefixBeforeSeekOnDisk(seekSeconds: seek, durationSeconds: duration) else { return }
+        log(
+            "LAN prefix — filling 0:00 → \(ExportTimelineLog.wallClock(seconds: seek)) from pCloud " +
+                "in background while segment export is idle…"
+        )
+        prefixDownloadTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            defer {
+                self.lock.lock()
+                self.prefixDownloadTask = nil
+                self.lock.unlock()
+            }
+            var attempt = 0
+            while !self.isCancelled(), !Task.isCancelled {
+                do {
+                    try await self.runPrefixFillBeforeSeekLoop()
+                    return
+                } catch is CancellationError {
+                    return
+                } catch {
+                    if self.isCancelled() { return }
+                    let delaySec = Self.backgroundRetryDelaysSeconds[
+                        min(attempt, Self.backgroundRetryDelaysSeconds.count - 1)
+                    ]
+                    self.log(
+                        "LAN prefix fill — \(error.localizedDescription); retry in \(delaySec)s " +
+                            "(attempt \(attempt + 1))…"
+                    )
+                    attempt += 1
+                    try? await Task.sleep(nanoseconds: delaySec * 1_000_000_000)
+                }
+            }
+        }
+    }
+
+    private func runPrefixFillBeforeSeekLoop() async throws {
+        while !isCancelled(), !Task.isCancelled {
+            lock.lock()
+            let paused = foregroundFillPauseDepth > 0
+            let seek = playbackStartSecondsForAnchor
+            let duration = anchorDurationSeconds
+            lock.unlock()
+            if paused {
+                try await Task.sleep(nanoseconds: 500_000_000)
+                continue
+            }
+            guard seek > 0.5, duration > 0 else { return }
+            if isLANPrefixBeforeSeekOnDisk(seekSeconds: seek, durationSeconds: duration) {
+                log("LAN prefix — 0:00 → \(ExportTimelineLog.wallClock(seconds: seek)) dense on disk")
+                return
+            }
+            try await ensureLANPrefixBeforeSeekFilled(seekSeconds: seek, durationSeconds: duration)
+            return
+        }
     }
 
     private func startBackgroundDownload() {
