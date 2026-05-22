@@ -79,11 +79,17 @@ final class SegmentExporter {
         }
 
         let rangeCache = WebDAVRangeCache()
-        logHandler("Prefetching from pCloud (size + MP4 index)…")
+        let containerFormat = MediaContainerFormat.from(filename: item.name)
+        logHandler(
+            containerFormat.needsMP4IndexAtEOF
+                ? "Prefetching from pCloud (size + MP4 index)…"
+                : "Prefetching from pCloud (size + \(containerFormat.displayName) header)…"
+        )
         try await WebDAVPrefetch.warmUp(
             remoteURL: inputURL,
             authorization: authorizationProvider(),
             cache: rangeCache,
+            container: containerFormat,
             catalogContentLength: catalogContentLength,
             log: logHandler
         )
@@ -112,6 +118,7 @@ final class SegmentExporter {
                 sourceHref: item.href,
                 remoteURL: inputURL,
                 rangeCache: rangeCache,
+                containerFormat: containerFormat,
                 authorizationProvider: authorizationProvider,
                 isCancelled: cancelCheck,
                 log: logHandler
@@ -119,7 +126,8 @@ final class SegmentExporter {
             tempDownload = downloader
             downloader.logDownloadStarted()
             try await downloader.ensureIndexTailOnDisk()
-        let (durationSeconds, videoFormat, audioFormat) = try await probeMetadataPreferLocal(
+        let (durationSeconds, videoFormat, audioFormat) = try await probeExportMetadata(
+                containerFormat: containerFormat,
                 fileURL: downloader.fileURL,
                 inputURL: inputURL,
                 authorizationProvider: authorizationProvider,
@@ -1891,6 +1899,36 @@ final class SegmentExporter {
         return asset
     }
 
+    private func probeExportMetadata(
+        containerFormat: MediaContainerFormat,
+        fileURL: URL,
+        inputURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        log: @escaping (String) -> Void
+    ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
+        if containerFormat.probesSparseTempAsMP4 {
+            return try await probeMetadataPreferLocal(
+                fileURL: fileURL,
+                inputURL: inputURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                log: log
+            )
+        }
+        log(
+            "Probing \(containerFormat.displayName) via pCloud — sparse _working.mp4 temp is not this container; " +
+                "using source filename for AVFoundation…"
+        )
+        return try await probeStreamMetadataOnly(
+            inputURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            containerFormat: containerFormat,
+            log: log
+        )
+    }
+
     private func probeMetadataPreferLocal(
         fileURL: URL,
         inputURL: URL,
@@ -1904,6 +1942,22 @@ final class SegmentExporter {
         } catch SegmentExporterError.noVideoTrack {
             log("Local temp had no video track — probing via pCloud (prefetch cache, no full download)")
         }
+        return try await probeStreamMetadataOnly(
+            inputURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            containerFormat: .mp4,
+            log: log
+        )
+    }
+
+    private func probeStreamMetadataOnly(
+        inputURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        containerFormat: MediaContainerFormat,
+        log: @escaping (String) -> Void
+    ) async throws -> (Double, CMFormatDescription, CMFormatDescription?) {
         let streamingAsset = try await openStreamingAsset(
             inputURL: inputURL,
             authorizationProvider: authorizationProvider,
@@ -1916,7 +1970,11 @@ final class SegmentExporter {
             retainedWebDAVLoader = nil
             retainedAsset = nil
         }
-        return try await probeStreamMetadata(asset: streamingAsset, log: log)
+        do {
+            return try await probeStreamMetadata(asset: streamingAsset, log: log)
+        } catch SegmentExporterError.readerSetupFailed {
+            throw SegmentExporterError.containerProbeFailed(containerFormat)
+        }
     }
 
     private func probeLocalMetadata(
@@ -2252,6 +2310,7 @@ enum SegmentExporterError: LocalizedError {
     case readerInterrupted
     case seekPastEnd
     case noVideoTrack
+    case containerProbeFailed(MediaContainerFormat)
     case unsupportedCodec(String)
     case missingFormatDescription
     case readerSetupFailed
@@ -2278,10 +2337,21 @@ enum SegmentExporterError: LocalizedError {
             return "Start position is at or past the end of the file."
         case .noVideoTrack:
             return "No video track found in this file."
+        case .containerProbeFailed(let container):
+            switch container {
+            case .asf:
+                return "Could not open this WMV/ASF file from pCloud on this device. Re-encode to MP4 or MKV with H.264 or HEVC (hvc1/hev1) and AAC."
+            case .mpegTransportStream:
+                return "Could not open this MPEG-TS (.ts) file from pCloud. Remux to MP4 or MKV with H.264 or HEVC and AAC, then export again."
+            default:
+                return "Could not open this \(container.displayName) file from pCloud. Use MP4/MKV with H.264 or HEVC (hvc1/hev1) and AAC for 60s segment export."
+            }
         case .unsupportedCodec(let fourCC):
             switch fourCC.lowercased() {
             case "av01", "dav1":
                 return "AV1 (\(fourCC)) is not supported for 60s MP4 segments. Re-encode the source to HEVC (hvc1/hev1) or H.264 with AAC."
+            case "wmv3", "wvc1", "wmv2", "wmv1":
+                return "WMV video (\(fourCC)) cannot be stream-copied to MP4 segments on iOS. Re-encode to H.264 or HEVC (hvc1/hev1) with AAC in MP4 or MKV."
             default:
                 return "Codec ‘\(fourCC)’ cannot be stream-copied to MP4 on this device. Use H.264 or HEVC (hvc1/hev1) with AAC."
             }

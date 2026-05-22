@@ -64,6 +64,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private let throughput = DownloadThroughput()
     private let sourceFileKey: String
     private let sourceHref: String?
+    private let containerFormat: MediaContainerFormat
     private var manifestSaveTask: Task<Void, Never>?
 
     init(
@@ -71,10 +72,12 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         sourceHref: String?,
         remoteURL: URL,
         rangeCache: WebDAVRangeCache,
+        containerFormat: MediaContainerFormat,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
     ) throws {
+        self.containerFormat = containerFormat
         self.sourceFileKey = fileKey
         self.sourceHref = sourceHref
         guard let total = rangeCache.contentLengthValue(), total > 0 else {
@@ -169,7 +172,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         log(
             "Temp sparse layout — file size \(formatBytes(onDisk)), contiguous \(formatBytes(span.start))–\(formatBytes(span.end)), index tail: \(hasTail ? "yes" : "no")"
         )
-        if !hasTail {
+        if containerFormat.needsMP4IndexAtEOF, !hasTail {
             log("Warning: MP4 index not on disk yet — track probe may use pCloud")
         }
     }
@@ -182,6 +185,12 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     func ensureIndexTailOnDisk(force: Bool = false) async throws {
+        guard containerFormat.needsMP4IndexAtEOF else {
+            lock.lock()
+            if headOnDisk { tailOnDisk = true }
+            lock.unlock()
+            return
+        }
         try ensureWriteHandleForDownload()
         lock.lock()
         let covered = indexTailCoveredOnDiskLocked()
@@ -479,6 +488,11 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     func hasIndexTailOnDisk() -> Bool {
+        if !containerFormat.needsMP4IndexAtEOF {
+            lock.lock()
+            defer { lock.unlock() }
+            return headOnDisk
+        }
         lock.lock()
         defer { lock.unlock() }
         return indexTailCoveredOnDiskLocked()

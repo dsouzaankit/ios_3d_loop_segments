@@ -2,17 +2,15 @@ import Foundation
 
 /// HEAD + index bytes before AVAsset opens the file (avoids ~30s AVFoundation loader timeout).
 enum WebDAVPrefetch {
-    private static let headPrefixBytes: Int64 = 512 * 1024
-    private static let tailSuffixBytes: Int64 = 2 * 1024 * 1024
-
     static func warmUp(
         remoteURL: URL,
         authorization: String,
         cache: WebDAVRangeCache,
+        container: MediaContainerFormat,
         catalogContentLength: Int64? = nil,
         log: ((String) -> Void)? = nil
     ) async throws {
-        log?("Prefetch: HEAD (file size)")
+        log?("Prefetch: HEAD (file size) — \(container.displayName)")
         let headLength = try await fetchContentLength(
             remoteURL: remoteURL,
             authorization: authorization,
@@ -34,25 +32,31 @@ enum WebDAVPrefetch {
             return
         }
 
+        let headPrefixBytes = container.prefetchHeadBytes
         let firstEnd = min(headPrefixBytes, length) - 1
-        let tailLen = min(tailSuffixBytes, length)
-        let tailStart = max(0, length - tailLen)
-
-        // Index at EOF first — required for large moov-at-end files to expose video tracks.
-        if tailStart > firstEnd + 1 {
-            log?("Prefetch: downloading last \(formatBytes(length - tailStart)) (MP4 index at EOF)")
-            let tailData = try await fetchRange(
-                remoteURL: remoteURL,
-                authorization: authorization,
-                offset: tailStart,
-                endInclusive: length - 1,
-                log: log
-            )
-            cache.storeRange(offset: tailStart, data: tailData, isIndexTail: true)
+        let tailSuffixBytes = container.prefetchTailBytes
+        let tailStart: Int64
+        if let tailSuffixBytes {
+            let tailLen = min(tailSuffixBytes, length)
+            tailStart = max(0, length - tailLen)
+            if tailStart > firstEnd + 1 {
+                log?("Prefetch: downloading last \(formatBytes(length - tailStart)) (MP4 index at EOF)")
+                let tailData = try await fetchRange(
+                    remoteURL: remoteURL,
+                    authorization: authorization,
+                    offset: tailStart,
+                    endInclusive: length - 1,
+                    log: log
+                )
+                cache.storeRange(offset: tailStart, data: tailData, isIndexTail: true)
+            }
+        } else {
+            tailStart = length
+            log?("Prefetch: \(container.displayName) — header at file start (no MP4 index at EOF)")
         }
 
         if firstEnd >= 0 {
-            log?("Prefetch: downloading first \(formatBytes(firstEnd + 1))")
+            log?("Prefetch: downloading first \(formatBytes(firstEnd + 1)) (\(container.displayName) header)")
             let data = try await fetchRange(
                 remoteURL: remoteURL,
                 authorization: authorization,
@@ -63,8 +67,8 @@ enum WebDAVPrefetch {
             cache.storeRange(offset: 0, data: data)
         }
 
-        if tailStart <= firstEnd + 1 {
-            log?("Prefetch: complete (file smaller than head+tail window)")
+        if tailSuffixBytes == nil || tailStart <= firstEnd + 1 {
+            log?("Prefetch: complete — \(formatBytes(length)) file, header cached for export")
             return
         }
         log?("Prefetch: complete — \(formatBytes(length)) file, head + index cached for export")

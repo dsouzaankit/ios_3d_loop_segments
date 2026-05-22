@@ -288,7 +288,7 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                 )
             }
         } else if dataRequest.requestsAllDataToEndOfResource {
-            totalLength = min(bytesRemaining, 16 * 1024 * 1024)
+            totalLength = min(bytesRemaining, 32 * 1024 * 1024)
         } else {
             totalLength = min(requested, bytesRemaining)
         }
@@ -559,6 +559,10 @@ final class WebDAVResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             return "video/webm"
         case "avi":
             return "video/avi"
+        case "wmv", "asf":
+            return "video/x-ms-wmv"
+        case "ts", "m2ts", "mts":
+            return "video/mp2t"
         default:
             return "application/octet-stream"
         }
