@@ -663,37 +663,37 @@ enum ExportLANServer {
         return rel
     }
 
-    private static func allowedServableRelativePaths() -> Set<String> {
-        var names: Set<String> = [
-            ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL),
-            ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL),
-            ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL),
+    private static func rootServableRelativePaths() -> Set<String> {
+        [
             ExportPaths.latestLogTextURL.lastPathComponent,
             ExportPaths.latestLogURL.lastPathComponent,
             ExportPaths.exportProgressURL.lastPathComponent,
             "status.json",
         ]
-        for slot in 0 ..< ExportPaths.segmentFileCount {
-            names.insert(ExportPaths.segmentRelativePath(index: slot))
-        }
-        let fm = FileManager.default
-        let mediaDir = ExportPaths.mediaExportDirectory
-        if let listed = try? fm.contentsOfDirectory(at: mediaDir, includingPropertiesForKeys: nil) {
-            for url in listed where url.lastPathComponent.hasPrefix("_vanilla_download.") {
-                names.insert(ExportPaths.pathRelativeToExports(url))
-            }
+    }
+
+    private static func allowedServableRelativePaths() -> Set<String> {
+        var names = rootServableRelativePaths()
+        for rel in ExportPaths.lanBrowsableMediaRelativePaths() {
+            names.insert(rel)
         }
         return names
     }
 
-    /// Non-loop files under `pcld_ios_media/` that may be served (working, transcode, vanilla).
+    /// Non-loop files directly under `pcld_ios_media/` (working, transcode, vanilla, …).
     private static func mediaFolderServableRelativePaths() -> [String] {
         let media = ExportPaths.mediaExportFolderName
         let loop = ExportPaths.segmentLoopFolderName
         let loopPrefix = "\(media)/\(loop)/"
-        return allowedServableRelativePaths()
+        return ExportPaths.lanBrowsableMediaRelativePaths()
             .filter { $0.hasPrefix("\(media)/") && !$0.hasPrefix(loopPrefix) }
-            .sorted()
+    }
+
+    private static func loopFolderServableRelativePaths() -> [String] {
+        let loopPrefix =
+            "\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/"
+        return ExportPaths.lanBrowsableMediaRelativePaths()
+            .filter { $0.hasPrefix(loopPrefix) }
     }
 
     private static func xmlEscape(_ text: String) -> String {
@@ -904,10 +904,9 @@ enum ExportLANServer {
                     )
                 )
                 if depth != 0 {
-                    for slot in 0 ..< ExportPaths.segmentFileCount {
-                        let segmentRel = ExportPaths.segmentRelativePath(index: slot)
+                    let fm = FileManager.default
+                    for segmentRel in loopFolderServableRelativePaths() {
                         guard let fileURL = resolveExportFile(relativePath: segmentRel) else { continue }
-                        let fm = FileManager.default
                         let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
                         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
                         let modified = attrs?[.modificationDate] as? Date
@@ -1003,8 +1002,10 @@ enum ExportLANServer {
 
     private static func resolveExportFile(relativePath: String) -> URL? {
         guard !relativePath.contains("..") else { return nil }
-        guard allowedServableRelativePaths().contains(relativePath) else { return nil }
         if relativePath == "status.json" { return nil }
+        let allowed = ExportPaths.isLANBrowsableMediaRelativePath(relativePath)
+            || rootServableRelativePaths().contains(relativePath)
+        guard allowed else { return nil }
         let url = ExportPaths.urlUnderExports(relativePath: relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
@@ -1150,68 +1151,19 @@ enum ExportLANServer {
 
     private static func sendStatusJSON(_ connection: NWConnection, done: @escaping () -> Void) {
         let fm = FileManager.default
-        let dir = ExportPaths.exportsDirectory
         var entries: [[String: Any]] = []
-        if let names = try? fm.contentsOfDirectory(atPath: dir.path) {
-            for name in names.sorted() {
-                guard resolveExportFile(relativePath: name) != nil
-                    || name.hasPrefix("\(ExportPaths.mediaExportFolderName)/")
-                    || name.hasSuffix(".mp4")
-                    || name.hasSuffix(".txt") else {
-                    continue
+        for rel in rootServableRelativePaths().union(Set(ExportPaths.lanBrowsableMediaRelativePaths())).sorted() {
+            guard let url = resolveExportFile(relativePath: rel) else { continue }
+            var dict: [String: Any] = ["name": rel]
+            if let attrs = try? fm.attributesOfItem(atPath: url.path) {
+                if let size = attrs[.size] as? NSNumber {
+                    dict["bytes"] = size.int64Value
                 }
-                let url = dir.appendingPathComponent(name)
-                var dict: [String: Any] = ["name": name]
-                if let attrs = try? fm.attributesOfItem(atPath: url.path) {
-                    if let size = attrs[.size] as? NSNumber {
-                        dict["bytes"] = size.int64Value
-                    }
-                    if let modified = attrs[.modificationDate] as? Date {
-                        dict["modified"] = ISO8601DateFormatter().string(from: modified)
-                    }
+                if let modified = attrs[.modificationDate] as? Date {
+                    dict["modified"] = ISO8601DateFormatter().string(from: modified)
                 }
-                entries.append(dict)
             }
-        }
-        let mediaPath = dir.appendingPathComponent(ExportPaths.mediaExportFolderName)
-        if fm.fileExists(atPath: mediaPath.path),
-           let mediaNames = try? fm.contentsOfDirectory(atPath: mediaPath.path) {
-            for child in mediaNames.sorted() {
-                if child == ExportPaths.segmentLoopFolderName {
-                    let loopPath = mediaPath.appendingPathComponent(child)
-                    guard let loopNames = try? fm.contentsOfDirectory(atPath: loopPath.path) else { continue }
-                    for f in loopNames.sorted() {
-                        let rel =
-                            "\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/\(f)"
-                        guard resolveExportFile(relativePath: rel) != nil else { continue }
-                        let url = ExportPaths.urlUnderExports(relativePath: rel)
-                        var dict: [String: Any] = ["name": rel]
-                        if let attrs = try? fm.attributesOfItem(atPath: url.path) {
-                            if let size = attrs[.size] as? NSNumber {
-                                dict["bytes"] = size.int64Value
-                            }
-                            if let modified = attrs[.modificationDate] as? Date {
-                                dict["modified"] = ISO8601DateFormatter().string(from: modified)
-                            }
-                        }
-                        entries.append(dict)
-                    }
-                    continue
-                }
-                let rel = "\(ExportPaths.mediaExportFolderName)/\(child)"
-                guard resolveExportFile(relativePath: rel) != nil else { continue }
-                let url = ExportPaths.urlUnderExports(relativePath: rel)
-                var dict: [String: Any] = ["name": rel]
-                if let attrs = try? fm.attributesOfItem(atPath: url.path) {
-                    if let size = attrs[.size] as? NSNumber {
-                        dict["bytes"] = size.int64Value
-                    }
-                    if let modified = attrs[.modificationDate] as? Date {
-                        dict["modified"] = ISO8601DateFormatter().string(from: modified)
-                    }
-                }
-                entries.append(dict)
-            }
+            entries.append(dict)
         }
         var payload: [String: Any] = [
             "exportsDirectory": "Exports",
@@ -1516,6 +1468,12 @@ enum ExportLANServer {
     private static func mimeType(for url: URL) -> String {
         switch url.pathExtension.lowercased() {
         case "mp4", "m4v": return "video/mp4"
+        case "mov": return "video/quicktime"
+        case "mkv": return "video/x-matroska"
+        case "webm": return "video/webm"
+        case "wmv", "asf": return "video/x-ms-wmv"
+        case "avi": return "video/x-msvideo"
+        case "ts", "m2ts", "mts": return "video/mp2t"
         case "txt", "log": return "text/plain; charset=utf-8"
         case "json": return "application/json"
         default: return "application/octet-stream"

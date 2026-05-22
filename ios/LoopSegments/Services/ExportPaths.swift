@@ -139,6 +139,58 @@ enum ExportPaths {
         mediaExportDirectory.appendingPathComponent("_vanilla_faststart.mp4")
     }
 
+    private static let lanMediaPrefix = "\(mediaExportFolderName)/"
+
+    /// Extensions served from `pcld_ios_media/` on home LAN (matches browser video list).
+    static var lanBrowsableMediaExtensions: Set<String> {
+        WebDAVItem.videoExtensions.union(["m2ts", "mts"])
+    }
+
+    /// Staging, sparse manifest, and temp remux files must not be served (partial / internal).
+    static func isExcludedFromLANMediaServe(fileName: String) -> Bool {
+        let lower = fileName.lowercased()
+        if lower.hasPrefix(".") { return true }
+        if lower.contains(".staging.") { return true }
+        if lower.hasSuffix(".sparse.json") { return true }
+        if lower.hasPrefix(".faststart-") { return true }
+        if lower.hasPrefix("_working_pcloud_transcode.staging") { return true }
+        return false
+    }
+
+    static func isLANBrowsableMediaFile(fileName: String) -> Bool {
+        guard !isExcludedFromLANMediaServe(fileName: fileName) else { return false }
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        return lanBrowsableMediaExtensions.contains(ext)
+    }
+
+    /// All playable media under `pcld_ios_media/` (recursive). New files appear on LAN without allowlist updates.
+    static func lanBrowsableMediaRelativePaths() -> [String] {
+        let fm = FileManager.default
+        let root = mediaExportDirectory
+        guard fm.fileExists(atPath: root.path) else { return [] }
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var paths: [String] = []
+        for case let url as URL in enumerator {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
+                continue
+            }
+            let name = url.lastPathComponent
+            guard isLANBrowsableMediaFile(fileName: name) else { continue }
+            paths.append(pathRelativeToExports(url))
+        }
+        return paths.sorted()
+    }
+
+    static func isLANBrowsableMediaRelativePath(_ relativePath: String) -> Bool {
+        guard relativePath.hasPrefix(lanMediaPrefix), !relativePath.contains("..") else { return false }
+        let fileName = (relativePath as NSString).lastPathComponent
+        return isLANBrowsableMediaFile(fileName: fileName)
+    }
+
     /// LAN / index path while export uses pCloud transcode instead of sparse WebDAV mirror.
     static var lanInProgressWorkingRelativePath: String {
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
@@ -367,15 +419,9 @@ enum ExportPaths {
             appendMP4(at: dir.appendingPathComponent(name), label: name)
         }
         let mediaDir = dir.appendingPathComponent(mediaExportFolderName)
-        if let mediaNames = try? fm.contentsOfDirectory(atPath: mediaDir.path) {
-            for name in mediaNames.sorted() {
-                let url = mediaDir.appendingPathComponent(name)
-                if name.hasPrefix("_vanilla_download.") {
-                    appendFile(at: url, label: "\(mediaExportFolderName)/\(name)")
-                } else if name.hasSuffix(".mp4") {
-                    appendMP4(at: url, label: "\(mediaExportFolderName)/\(name)")
-                }
-            }
+        for rel in lanBrowsableMediaRelativePaths() {
+            let url = urlUnderExports(relativePath: rel)
+            appendFile(at: url, label: rel)
         }
         let transcoded = workingTranscodedURL
         if fm.fileExists(atPath: transcoded.path) {
