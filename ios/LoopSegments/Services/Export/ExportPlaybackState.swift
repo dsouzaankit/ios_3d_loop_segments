@@ -27,6 +27,9 @@ final class ExportPlaybackState: @unchecked Sendable {
         var lanPreloadOnly = false
         var pcloudTranscodedWorkingActive = false
         var transcodedWorkingFileBytes: Int64 = 0
+        var vanillaDownloadActive = false
+        var vanillaLANRelativePath = ""
+        var vanillaUsesFastStartForExport = false
     }
 
     private let lock = NSLock()
@@ -74,6 +77,63 @@ final class ExportPlaybackState: @unchecked Sendable {
 
     func usesPCloudTranscodedWorkingForLAN() -> Bool {
         lock.withLock { snapshot.pcloudTranscodedWorkingActive }
+    }
+
+    func setVanillaDownloadActive(_ active: Bool) {
+        lock.withLock {
+            snapshot.vanillaDownloadActive = active
+            if !active {
+                snapshot.vanillaLANRelativePath = ""
+                snapshot.vanillaUsesFastStartForExport = false
+            }
+        }
+    }
+
+    func usesVanillaDownloadForLAN() -> Bool {
+        lock.withLock { snapshot.vanillaDownloadActive }
+    }
+
+    func beginVanillaExport(
+        downloadRelativePath: String,
+        fastStartRelativePath: String?,
+        seekSeconds: Double,
+        durationSeconds: Double,
+        totalBytes: Int64
+    ) {
+        lock.withLock {
+            snapshot.vanillaDownloadActive = true
+            snapshot.vanillaLANRelativePath = downloadRelativePath
+            snapshot.vanillaUsesFastStartForExport = fastStartRelativePath != nil
+            snapshot.pcloudTranscodedWorkingActive = false
+            snapshot.playbackStartSeconds = max(0, seekSeconds)
+            snapshot.exportCursorSeconds = snapshot.playbackStartSeconds
+            snapshot.durationSeconds = max(0, durationSeconds)
+            snapshot.totalFileBytes = totalBytes
+            snapshot.lanExportActive = true
+            snapshot.exportStartedAt = Date()
+            snapshot.backgroundPrefetchEnabled = false
+            snapshot.lanPreloadOnly = false
+            snapshot.headOnDisk = true
+            snapshot.tailOnDisk = true
+        }
+    }
+
+    func vanillaLANRelativePath() -> String {
+        lock.withLock { snapshot.vanillaLANRelativePath }
+    }
+
+    func vanillaDownloadUserNotice() -> String? {
+        lock.withLock {
+            guard snapshot.vanillaDownloadActive else { return nil }
+            let path = snapshot.vanillaLANRelativePath
+            let fast = snapshot.vanillaUsesFastStartForExport
+                ? " Export uses \(ExportPaths.vanillaFastStartURL.lastPathComponent); original download file unchanged."
+                : ""
+            return """
+            Vanilla download backup — LAN plays \(path) (full file, original extension).\(fast) \
+            Segments from local copy when codecs allow.
+            """
+        }
     }
 
     func updateTranscodedWorkingFileBytes(_ bytes: Int64) {

@@ -12,6 +12,7 @@ enum PCloudTranscodedWorkingWriter {
     static func prepareForNewExport(log: @escaping (String) -> Void) {
         ExportPaths.removeWorkingSourceCopy(log: log)
         ExportPaths.removeTranscodedWorkingCopy(log: log)
+        ExportPaths.removeVanillaDownloadCopies(log: log)
         ExportPlaybackState.shared.setPCloudTranscodedWorkingActive(true)
     }
 

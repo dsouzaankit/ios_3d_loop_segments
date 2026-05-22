@@ -127,12 +127,47 @@ enum ExportPaths {
         mediaExportDirectory.appendingPathComponent("_working_pcloud_transcode.mp4")
     }
 
+    /// Full WebDAV copy with original extension (`_vanilla_download.wmv`, etc.).
+    static func vanillaDownloadURL(preservingExtensionFrom filename: String) -> URL {
+        let ext = (filename as NSString).pathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = ext.isEmpty ? "bin" : ext.lowercased()
+        return mediaExportDirectory.appendingPathComponent("_vanilla_download.\(suffix)")
+    }
+
+    /// Faststart MP4 derived from vanilla download (separate file; vanilla bytes unchanged).
+    static var vanillaFastStartURL: URL {
+        mediaExportDirectory.appendingPathComponent("_vanilla_faststart.mp4")
+    }
+
     /// LAN / index path while export uses pCloud transcode instead of sparse WebDAV mirror.
     static var lanInProgressWorkingRelativePath: String {
+        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
+            return pathRelativeToExports(ExportPlaybackState.shared.vanillaLANRelativePath())
+        }
         if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
             return pathRelativeToExports(workingTranscodedURL)
         }
         return pathRelativeToExports(workingSourceURL)
+    }
+
+    @discardableResult
+    static func removeVanillaDownloadCopies(log: ((String) -> Void)? = nil) -> Bool {
+        let fm = FileManager.default
+        var removed = false
+        for url in [vanillaFastStartURL] + (try? fm.contentsOfDirectory(
+            at: mediaExportDirectory,
+            includingPropertiesForKeys: nil
+        ))?.filter({ $0.lastPathComponent.hasPrefix("_vanilla_download.") }) ?? [] {
+            guard fm.fileExists(atPath: url.path) else { continue }
+            do {
+                try fm.removeItem(at: url)
+                removed = true
+                log?("Removed \(pathRelativeToExports(url))")
+            } catch {
+                log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        return removed
     }
 
     /// Rename legacy export filenames from older builds (idempotent).
@@ -320,17 +355,25 @@ enum ExportPaths {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         var parts: [String] = []
-        func appendMP4(at url: URL, label: String) {
+        func appendFile(at url: URL, label: String) {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             parts.append("\(label) \(formatter.string(fromByteCount: size))")
+        }
+        func appendMP4(at url: URL, label: String) {
+            appendFile(at: url, label: label)
         }
         for name in names.sorted() where name.hasSuffix(".mp4") {
             appendMP4(at: dir.appendingPathComponent(name), label: name)
         }
         let mediaDir = dir.appendingPathComponent(mediaExportFolderName)
         if let mediaNames = try? fm.contentsOfDirectory(atPath: mediaDir.path) {
-            for name in mediaNames.sorted() where name.hasSuffix(".mp4") {
-                appendMP4(at: mediaDir.appendingPathComponent(name), label: "\(mediaExportFolderName)/\(name)")
+            for name in mediaNames.sorted() {
+                let url = mediaDir.appendingPathComponent(name)
+                if name.hasPrefix("_vanilla_download.") {
+                    appendFile(at: url, label: "\(mediaExportFolderName)/\(name)")
+                } else if name.hasSuffix(".mp4") {
+                    appendMP4(at: url, label: "\(mediaExportFolderName)/\(name)")
+                }
             }
         }
         let transcoded = workingTranscodedURL

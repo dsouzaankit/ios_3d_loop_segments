@@ -208,7 +208,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         let tailStart = max(0, totalLength - tailLen)
         log("Fetching MP4 index from pCloud (\(formatBytes(tailLen)) at EOF)…")
         let auth = authorizationProvider()
-        let data = try await Self.fetchRange(
+        let data = try await Self.fetchRemoteRange(
             remoteURL: remoteURL,
             authorization: auth,
             offset: tailStart,
@@ -233,7 +233,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         guard headLen > 0 else { return }
         log("Fetching MP4 file header from pCloud (\(formatBytes(headLen)) at start)…")
         let auth = authorizationProvider()
-        let data = try await Self.fetchRange(
+        let data = try await Self.fetchRemoteRange(
             remoteURL: remoteURL,
             authorization: auth,
             offset: 0,
@@ -648,7 +648,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
                 )
                 continue
             }
-            let data = try await Self.fetchRange(
+            let data = try await Self.fetchRemoteRange(
                 remoteURL: remoteURL,
                 authorization: auth,
                 offset: offset,
@@ -1474,7 +1474,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         try await withThrowingTaskGroup(of: (Int64, Data).self) { group in
             for chunk in chunks {
                 group.addTask {
-                    let data = try await Self.fetchRange(
+                    let data = try await Self.fetchRemoteRange(
                         remoteURL: self.remoteURL,
                         authorization: authorization,
                         offset: chunk.offset,
@@ -1514,7 +1514,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         return max(0, exportWindowContiguousEnd - range.start)
     }
 
-    private static func ensureFreeDiskSpace(forBytes needed: Int64) throws {
+    static func ensureFreeDiskSpace(forBytes needed: Int64) throws {
         let path = ExportPaths.exportsDirectory.path
         guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
               let freeNumber = attrs[.systemFreeSize] as? NSNumber else {
@@ -1529,7 +1529,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
-    private static func fetchRange(
+    static func fetchRemoteRange(
         remoteURL: URL,
         authorization: String,
         offset: Int64,

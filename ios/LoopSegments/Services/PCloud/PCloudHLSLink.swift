@@ -2,8 +2,49 @@ import Foundation
 
 /// pCloud REST `gethlslink` → HTTPS `master.m3u8` for AVFoundation (transcoded H.264/AAC).
 enum PCloudHLSLink {
-    /// Only use HLS transcode when estimated source bitrate exceeds this (Mbps).
-    static let minSourceMbpsForTranscode = 2.5
+    /// Base cutoff at 1× (Mbps) — WMV/ASF HLS fallback when WebDAV probe fails.
+    static let defaultTranscodeMinSourceMbps = 2.5
+    static let transcodeCutoffMultipliers: [Double] = [0.25, 0.5, 1, 2, 4]
+    private static let transcodeCutoffMultiplierKey = "pcloudHLSTranscodeCutoffMultiplier"
+
+    /// Effective minimum source bitrate for pCloud HLS transcode (`default × multiplier`).
+    static var transcodeMinSourceMbps: Double {
+        defaultTranscodeMinSourceMbps * transcodeCutoffMultiplier
+    }
+
+    static var transcodeCutoffMultiplier: Double {
+        get {
+            guard UserDefaults.standard.object(forKey: transcodeCutoffMultiplierKey) != nil else {
+                return 1
+            }
+            let stored = UserDefaults.standard.double(forKey: transcodeCutoffMultiplierKey)
+            return nearestTranscodeCutoffMultiplier(to: stored)
+        }
+        set {
+            UserDefaults.standard.set(
+                nearestTranscodeCutoffMultiplier(to: newValue),
+                forKey: transcodeCutoffMultiplierKey
+            )
+        }
+    }
+
+    static func transcodeMinSourceMbps(for multiplier: Double) -> Double {
+        defaultTranscodeMinSourceMbps * nearestTranscodeCutoffMultiplier(to: multiplier)
+    }
+
+    static func transcodeCutoffOptionLabel(multiplier: Double) -> String {
+        let mbps = transcodeMinSourceMbps(for: multiplier)
+        let mult = nearestTranscodeCutoffMultiplier(to: multiplier)
+        let multText = mult == 1 ? "1× default" : String(format: "%.2g×", mult)
+        if mbps < 2 {
+            return String(format: "%.2f Mbps (%@)", mbps, multText)
+        }
+        return String(format: "%.1f Mbps (%@)", mbps, multText)
+    }
+
+    static func nearestTranscodeCutoffMultiplier(to value: Double) -> Double {
+        transcodeCutoffMultipliers.min(by: { abs($0 - value) < abs($1 - value) }) ?? 1
+    }
 
     /// `gethlslink` caps per pCloud API (request maximum).
     static let maxTranscodeVideoKbps = 4000

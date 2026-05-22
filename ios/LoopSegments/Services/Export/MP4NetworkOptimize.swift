@@ -20,7 +20,7 @@ enum MP4NetworkOptimize {
         }
 
         log("Segment has moov-at-end — remuxing with network optimize (Skybox / WebDAV)")
-        try await remuxWithFastStart(at: fileURL, log: log)
+        try await remuxWithFastStart(from: fileURL, to: fileURL, log: log)
         if moovPresentInFirstBytes(of: fileURL, scanBytes: moovScanBytes) {
             log("Faststart remux finished — moov now in file head")
         } else {
@@ -41,18 +41,43 @@ enum MP4NetworkOptimize {
         return data.range(of: Data("moov".utf8)) != nil
     }
 
-    private static func remuxWithFastStart(
-        at fileURL: URL,
+    /// Network-optimized MP4 at `destinationURL` (leaves `sourceURL` unchanged when paths differ).
+    static func writeNetworkOptimizedCopy(
+        from sourceURL: URL,
+        to destinationURL: URL,
         log: @escaping (String) -> Void
     ) async throws {
-        let asset = AVURLAsset(url: fileURL)
+        if moovPresentInFirstBytes(of: sourceURL, scanBytes: moovScanBytes),
+           sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
+            log("Source moov already in file head — skipping faststart copy")
+            return
+        }
+        log(
+            "Writing faststart copy → \(ExportPaths.pathRelativeToExports(destinationURL)) " +
+                "(original \(ExportPaths.pathRelativeToExports(sourceURL)) unchanged)"
+        )
+        try await remuxWithFastStart(from: sourceURL, to: destinationURL, log: log)
+        if moovPresentInFirstBytes(of: destinationURL, scanBytes: moovScanBytes) {
+            log("Faststart copy ready — moov at head of \(destinationURL.lastPathComponent)")
+        } else {
+            log("Faststart copy finished (moov may still be past head on very large files)")
+        }
+    }
+
+    private static func remuxWithFastStart(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        log: @escaping (String) -> Void
+    ) async throws {
+        let asset = AVURLAsset(url: sourceURL)
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
             throw SegmentExporterError.writerSetupFailed
         }
-        let temp = fileURL.deletingLastPathComponent()
+        let temp = destinationURL.deletingLastPathComponent()
             .appendingPathComponent(".faststart-\(UUID().uuidString).mp4")
         defer { try? FileManager.default.removeItem(at: temp) }
         try? FileManager.default.removeItem(at: temp)
+        try? FileManager.default.removeItem(at: destinationURL)
         session.outputURL = temp
         session.outputFileType = .mp4
         session.shouldOptimizeForNetworkUse = true
@@ -68,7 +93,11 @@ enum MP4NetworkOptimize {
             guard bytes > 8192 else {
                 throw SegmentExporterError.segmentOutputTooSmall(0)
             }
-            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temp, backupItemName: nil, options: [])
+            if destinationURL.standardizedFileURL == sourceURL.standardizedFileURL {
+                _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: temp, backupItemName: nil, options: [])
+            } else {
+                try FileManager.default.moveItem(at: temp, to: destinationURL)
+            }
         case .failed:
             let err = session.error ?? NSError(domain: "MP4NetworkOptimize", code: -1)
             log("Faststart remux failed: \(err.localizedDescription)")

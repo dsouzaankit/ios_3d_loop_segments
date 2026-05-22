@@ -994,9 +994,20 @@ enum ExportLANServer {
 
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         var playbackStatusBlock = ""
-        let usesTranscoded = ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
-            || FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path)
-        if usesTranscoded, FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
+        let usesVanilla = ExportPlaybackState.shared.usesVanillaDownloadForLAN()
+        if usesVanilla {
+            let rel = ExportPlaybackState.shared.vanillaLANRelativePath()
+            let line = ExportPlaybackState.shared.lanPlayableStatusLine()
+            let escaped = line
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+            playbackStatusBlock = """
+            <p><strong>\(escaped)</strong></p>
+            <p><em>Vanilla download — <code>\(rel)</code> (full file, original extension; not sparse <code>_working.mp4</code>).</em></p>
+            <p>MP4 faststart copy (when built): <code>pcld_ios_media/_vanilla_faststart.mp4</code>. Prefer <code>loop/op_00.mp4</code> when segments exist.</p>
+            """
+        } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
+            || FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
             let escaped = line
                 .replacingOccurrences(of: "&", with: "&amp;")
@@ -1049,6 +1060,14 @@ enum ExportLANServer {
                     .replacingOccurrences(of: "&", with: "&amp;")
                     .replacingOccurrences(of: "\"", with: "&quot;")
                 var note = ""
+                if name.hasPrefix("\(ExportPaths.mediaExportFolderName)/_vanilla_download.")
+                    || name == ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL) {
+                    let vanillaNote = name.contains("_vanilla_faststart")
+                        ? " — faststart MP4 copy (original download unchanged)"
+                        : " — full vanilla WebDAV download (original extension)"
+                    items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(vanillaNote)</li>")
+                    continue
+                }
                 if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
                     let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
                     items.append(

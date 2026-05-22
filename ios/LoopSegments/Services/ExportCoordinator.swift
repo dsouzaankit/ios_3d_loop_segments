@@ -98,7 +98,14 @@ final class ExportCoordinator {
                     "LAN preload finished — pcld_ios_media/_working.mp4 on disk (no op_*.mp4; below bitrate cutoff). Play via :8765"
                 )
             } else {
-                if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
+                if FileManager.default.fileExists(
+                    atPath: ExportPaths.vanillaDownloadURL(preservingExtensionFrom: item.name).path
+                ) {
+                    logHandler(
+                        "Export finished — pcld_ios_media/loop/op_*.mp4 and vanilla download " +
+                            "(pcld_ios_media/_vanilla_download.*) kept until next export or Clear media"
+                    )
+                } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
                     || FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
                     logHandler(
                         "Export finished — pcld_ios_media/loop/op_*.mp4 and " +

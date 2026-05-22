@@ -44,6 +44,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
 - 60s segments; phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute is the default.
+- **Recovery when sparse probe fails:** (1) **pCloud HLS** transcode if estimated source bitrate is above the **HLS cutoff** (export screen; default **2.5 Mbps at 1×**, multipliers **0.25×–4×**) → **`_working_pcloud_transcode.mp4`**; (2) optional **vanilla download backup** (toggle on export screen) → full WebDAV file as **`_vanilla_download.<ext>`** (original extension); MP4/MOV/M4V also get **`_vanilla_faststart.mp4`** (passthrough remux, `moov` at head — source download unchanged). Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 
@@ -75,6 +76,9 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 |------|--------------------------------------|---------------------|
 | `pcld_ios_media/loop/op_00.mp4`, `pcld_ios_media/loop/op_01.mp4` | Yes | Usually OK |
 | `pcld_ios_media/_working.mp4` | Yes | May work (like VLC); sparse holes can break some servers |
+| `pcld_ios_media/_working_pcloud_transcode.mp4` | Yes | HLS transcode in progress (not original WMV/MKV) |
+| `pcld_ios_media/_vanilla_download.*` | Yes | Full dense copy (e.g. `.wmv`); Pigasus / Skybox HTTP |
+| `pcld_ios_media/_vanilla_faststart.mp4` | Yes | Faststart MP4 sidecar when vanilla backup ran on MP4 |
 
 ### Quest LAN playback (Skybox vs Pigasus)
 
@@ -121,10 +125,31 @@ Expect **GET** **`status.json`** and index **`/`** OK. **`rclone`** drive mappin
 | **Large HEVC mid-file** | **≥ ~1.5 GB**, HEVC, minute not at byte 0 (e.g. seek **30:00**) | **Dense-fill ~1 GB window** → **local export session** (remote passthrough skipped; matches seek‑0 minute‑1 success). |
 | **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
 | **Hybrid (capped)** | Mid-file on **smaller** large sources where custom URL + sparse temp still opens | Head + dense window + MP4 index at EOF; falls back to HTTPS if reader fails |
+| **pCloud HLS transcode** | Sparse/WebDAV probe fails; file large enough vs **HLS cutoff** | `gethlslink` → segments + growing **`_working_pcloud_transcode.mp4`** |
+| **Vanilla download** | HLS skipped/failed and backup enabled | Sequential full download → **`_vanilla_download.<ext>`**; segments from local file when AVFoundation opens it |
 
-Export needs enough free space for the sparse shell plus one minute’s dense window (or HTTPS range reads). Check `export_latest.txt` for which path ran.
+Export needs enough free space for the sparse shell plus one minute’s dense window (or HTTPS range reads). **Vanilla backup** needs space for the **entire** source file (plus **`_vanilla_faststart.mp4`** for MP4). Check `export_latest.txt` for which path ran.
 
-**Not** a full-file download to the phone and **not** the old ffmpeg stream-export path — still one ~60s segment at a time, still passthrough on device, still LAN/USB to PC.
+Default export is still **one ~60s segment at a time** with passthrough on device (not ffmpeg on phone). Vanilla is an **optional full-file** fallback, not the normal path.
+
+### Faststart remux (on phone)
+
+**Faststart** = MP4 with **`moov` at the file head** (network-friendly layout) via `AVAssetExportSession` passthrough + `shouldOptimizeForNetworkUse` — **no re-encode**, container rearrange only (`MP4NetworkOptimize.swift`).
+
+| Output | When |
+|--------|------|
+| **`loop/op_00.mp4`**, **`op_01.mp4`** | After each segment is written, if `moov` is still at EOF (Skybox / LAN players) |
+| **`_vanilla_faststart.mp4`** | After vanilla download of MP4/MOV/M4V; **`_vanilla_download.mp4`** left unchanged |
+
+**Pre-faststarting files on pCloud** (ffmpeg before upload) is optional for “play full movie from pCloud WebDAV”; it does **not** fix WMV probe failures, doubles handling if you remux after upload, and invalidates in-progress sparse resume if you replace the cloud object. The app keeps cloud originals untouched.
+
+### Export screen settings (LAN section)
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| **Prefetch to EOF when below** | 29 Mbps | LAN sparse preload horizon vs segment export |
+| **pCloud HLS if WebDAV fails above** | 2.5 Mbps (1×) | Minimum estimated source bitrate for HLS fallback (0.25× / 0.5× / 2× / 4×) |
+| **Vanilla download backup** | On | Full WebDAV download after HLS fails or is skipped |
 
 ## Photos library (deactivated in app)
 

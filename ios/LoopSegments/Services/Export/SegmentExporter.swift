@@ -77,8 +77,11 @@ final class SegmentExporter {
             retainedWebDAVLoader = nil
             retainedAsset = nil
             ExportPlaybackState.shared.setPCloudTranscodedWorkingActive(false)
+            ExportPlaybackState.shared.setVanillaDownloadActive(false)
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
+
+        ExportPaths.removeVanillaDownloadCopies(log: logHandler)
 
         let rangeCache = WebDAVRangeCache()
         let containerFormat = MediaContainerFormat.from(filename: item.name)
@@ -141,27 +144,19 @@ final class SegmentExporter {
                 log: logHandler
             )
         } catch {
-            guard Self.shouldAttemptPCloudHLSFallback(
-                error: error,
-                containerFormat: containerFormat,
-                fileBytes: fileSize
-            ) else {
-                throw error
-            }
             tempDownload?.cancel()
             tempDownload = nil
-            logHandler(
-                "WebDAV probe failed for \(containerFormat.displayName) — trying pCloud HLS transcode " +
-                    "(>\(Self.pcloudHLSTranscodeMinSourceMbps) Mbps est., max \(PCloudHLSLink.maxTranscodeResolution)) → " +
-                    "\(ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL))"
-            )
-            return try await runPCloudHLSExport(
+            return try await attemptRecoveryExport(
+                probeError: error,
                 item: item,
+                inputURL: inputURL,
                 credentials: credentials,
+                containerFormat: containerFormat,
                 fileBytes: fileSize,
                 seekMs: seekMs,
                 continueLANExport: continueLANExport,
                 resumeCursorMs: resumeCursorMs,
+                authorizationProvider: authorizationProvider,
                 isCancelled: cancelCheck,
                 logHandler: logHandler,
                 onMediaProgress: onMediaProgress
@@ -579,9 +574,6 @@ final class SegmentExporter {
     }
 
     /// pCloud `gethlslink` → segments + progressive `_working_pcloud_transcode.mp4` (not sparse WebDAV).
-    /// Source must exceed this implied bitrate before pCloud HLS transcode is used.
-    private static let pcloudHLSTranscodeMinSourceMbps = PCloudHLSLink.minSourceMbpsForTranscode
-
     private func runPCloudHLSExport(
         item: WebDAVItem,
         credentials: WebDAVCredentials,
@@ -631,7 +623,7 @@ final class SegmentExporter {
                     impliedSourceMbps,
                     Self.formatBytes(effectiveBytes),
                     durationSeconds,
-                    Self.pcloudHLSTranscodeMinSourceMbps
+                    PCloudHLSLink.transcodeMinSourceMbps
                 )
             )
             throw SegmentExporterError.containerProbeFailed(.asf)
@@ -640,7 +632,7 @@ final class SegmentExporter {
             String(
                 format: "Source ~%.1f Mbps — above %.1f Mbps cutoff; pCloud HLS max %@ @ %d kbps video",
                 impliedSourceMbps,
-                Self.pcloudHLSTranscodeMinSourceMbps,
+                PCloudHLSLink.transcodeMinSourceMbps,
                 PCloudHLSLink.maxTranscodeResolution,
                 PCloudHLSLink.maxTranscodeVideoKbps
             )
@@ -764,6 +756,282 @@ final class SegmentExporter {
             skippedSegmentCount > 0
                 ? "HLS export finished — \(publishedSegmentCount) segment(s), \(skippedSegmentCount) skipped"
                 : (reachedEnd ? "HLS export reached end of transcode." : "HLS export stopped.")
+        )
+        return SegmentExportResult(
+            lastMediaTimeMs: lastMediaTimeMs,
+            reachedEnd: reachedEnd,
+            skippedSegmentCount: skippedSegmentCount,
+            lanPreloadOnly: false
+        )
+    }
+
+    private func attemptRecoveryExport(
+        probeError: Error,
+        item: WebDAVItem,
+        inputURL: URL,
+        credentials: WebDAVCredentials,
+        containerFormat: MediaContainerFormat,
+        fileBytes: Int64,
+        seekMs: Int64,
+        continueLANExport: Bool,
+        resumeCursorMs: Int64?,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        isCancelled: @escaping () -> Bool,
+        logHandler: @escaping (String) -> Void,
+        onMediaProgress: (@Sendable (Int64) -> Void)?
+    ) async throws -> SegmentExportResult {
+        if Self.shouldAttemptPCloudHLSFallback(
+            error: probeError,
+            containerFormat: containerFormat,
+            fileBytes: fileBytes
+        ) {
+            logHandler(
+                "WebDAV probe failed for \(containerFormat.displayName) — trying pCloud HLS transcode " +
+                    "(>\(PCloudHLSLink.transcodeMinSourceMbps) Mbps est., max \(PCloudHLSLink.maxTranscodeResolution)) → " +
+                    "\(ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL))"
+            )
+            do {
+                return try await runPCloudHLSExport(
+                    item: item,
+                    credentials: credentials,
+                    fileBytes: fileBytes,
+                    seekMs: seekMs,
+                    continueLANExport: continueLANExport,
+                    resumeCursorMs: resumeCursorMs,
+                    isCancelled: isCancelled,
+                    logHandler: logHandler,
+                    onMediaProgress: onMediaProgress
+                )
+            } catch {
+                logHandler("pCloud HLS failed — \(error.localizedDescription)")
+            }
+        }
+        guard VanillaWebDAVDownload.isBackupEnabled else { throw probeError }
+        logHandler(
+            "Trying vanilla WebDAV download backup — full file, original extension, optional faststart MP4 copy"
+        )
+        return try await runVanillaDownloadExport(
+            item: item,
+            inputURL: inputURL,
+            fileBytes: fileBytes,
+            seekMs: seekMs,
+            continueLANExport: continueLANExport,
+            resumeCursorMs: resumeCursorMs,
+            authorizationProvider: authorizationProvider,
+            isCancelled: isCancelled,
+            logHandler: logHandler,
+            onMediaProgress: onMediaProgress
+        )
+    }
+
+    /// Dense full-file download + segment export from local copy (not sparse `_working.mp4`).
+    private func runVanillaDownloadExport(
+        item: WebDAVItem,
+        inputURL: URL,
+        fileBytes: Int64,
+        seekMs: Int64,
+        continueLANExport: Bool,
+        resumeCursorMs: Int64?,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        isCancelled: @escaping () -> Bool,
+        logHandler: @escaping (String) -> Void,
+        onMediaProgress: (@Sendable (Int64) -> Void)?
+    ) async throws -> SegmentExportResult {
+        ExportPaths.removeVanillaDownloadCopies(log: logHandler)
+        ExportPlaybackState.shared.setPCloudTranscodedWorkingActive(false)
+
+        let downloadURL = ExportPaths.vanillaDownloadURL(preservingExtensionFrom: item.name)
+        let effectiveBytes = fileBytes > 0 ? fileBytes : (item.contentLength ?? 0)
+        guard effectiveBytes > 0 else { throw WebDAVResourceLoaderError.missingContentLength }
+
+        try await VanillaWebDAVDownload.downloadFullFile(
+            remoteURL: inputURL,
+            destinationURL: downloadURL,
+            totalLength: effectiveBytes,
+            authorizationProvider: authorizationProvider,
+            isCancelled: isCancelled,
+            log: logHandler
+        )
+
+        let containerFormat = MediaContainerFormat.from(filename: item.name)
+        var exportAssetURL = downloadURL
+        var fastStartRelative: String?
+        if containerFormat == .mp4 || (item.name as NSString).pathExtension.lowercased() == "mov"
+            || (item.name as NSString).pathExtension.lowercased() == "m4v" {
+            do {
+                try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
+                    from: downloadURL,
+                    to: ExportPaths.vanillaFastStartURL,
+                    log: logHandler
+                )
+                exportAssetURL = ExportPaths.vanillaFastStartURL
+                fastStartRelative = ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL)
+            } catch {
+                logHandler(
+                    "Faststart copy skipped (\(error.localizedDescription)) — export/LAN use " +
+                        "\(downloadURL.lastPathComponent)"
+                )
+            }
+        }
+
+        let durationSeconds: Double
+        let videoFormat: CMFormatDescription
+        let audioFormat: CMFormatDescription?
+        do {
+            (durationSeconds, videoFormat, audioFormat) = try await probeLocalMetadata(
+                fileURL: exportAssetURL,
+                log: logHandler
+            )
+        } catch {
+            let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
+            ExportPlaybackState.shared.beginVanillaExport(
+                downloadRelativePath: downloadRel,
+                fastStartRelativePath: fastStartRelative,
+                seekSeconds: Double(seekMs) / 1000.0,
+                durationSeconds: 0,
+                totalBytes: effectiveBytes
+            )
+            logHandler(
+                "Vanilla file saved at \(downloadRel) — segment export unavailable (\(error.localizedDescription)). " +
+                    "Play the download on LAN :8765 or copy to PC."
+            )
+            return SegmentExportResult(
+                lastMediaTimeMs: seekMs,
+                reachedEnd: false,
+                skippedSegmentCount: 0,
+                lanPreloadOnly: false
+            )
+        }
+
+        let durationMs = Int64(durationSeconds * 1000)
+        let seekSeconds = Double(seekMs) / 1000.0
+        if durationMs > 0, seekMs >= durationMs - 250 {
+            throw SegmentExporterError.seekPastEnd
+        }
+
+        let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
+        ExportPlaybackState.shared.beginVanillaExport(
+            downloadRelativePath: downloadRel,
+            fastStartRelativePath: fastStartRelative,
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds,
+            totalBytes: effectiveBytes
+        )
+        if let notice = ExportPlaybackState.shared.vanillaDownloadUserNotice() {
+            logHandler(notice)
+        }
+        await MainActor.run {
+            ResumeStore.shared.setSourceDurationMs(durationMs, for: item)
+        }
+
+        let reportProgress: @Sendable (Int64) -> Void = { mediaMs in
+            onMediaProgress?(mediaMs)
+            ExportPlaybackState.shared.updateCursor(seconds: Double(mediaMs) / 1000.0)
+        }
+
+        var mediaCursorSeconds = seekSeconds
+        if continueLANExport, let resumeCursorMs, resumeCursorMs > 0 {
+            mediaCursorSeconds = min(durationSeconds, Double(resumeCursorMs) / 1000.0)
+        }
+        reportProgress(Int64(mediaCursorSeconds * 1000))
+
+        logHandler(
+            "Video codec \(CodecSupport.fourCCString(videoFormat))" +
+                (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio") +
+                " (vanilla local file)"
+        )
+        logHandler(
+            "Publishing ~\(Int(Self.segmentDurationSeconds))s segments from \(exportAssetURL.lastPathComponent) — " +
+                "op_00/op_01; LAN full file at \(downloadRel)"
+        )
+
+        let localAsset = AVURLAsset(
+            url: exportAssetURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        retainedAsset = localAsset
+        defer { retainedAsset = nil }
+
+        let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
+        var minuteIndex = 0
+        var lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
+        var reachedEnd = false
+        var skippedSegmentCount = 0
+        var publishedSegmentCount = 0
+
+        while true {
+            if isCancelled() { throw SegmentExporterError.cancelled }
+
+            let windowStartSeconds = mediaCursorSeconds
+            if windowStartSeconds >= durationSeconds - 0.05 {
+                reachedEnd = true
+                break
+            }
+            let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
+            if windowEndSeconds - windowStartSeconds < 0.5 {
+                reachedEnd = true
+                break
+            }
+
+            logHandler(
+                ExportTimelineLog.processingMinute(
+                    index: minuteIndex,
+                    startSeconds: windowStartSeconds,
+                    endSeconds: windowEndSeconds
+                )
+            )
+
+            let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
+            let rangeDuration = CMTime(
+                seconds: windowEndSeconds - windowStartSeconds,
+                preferredTimescale: 600
+            )
+            let slot = minuteIndex % Self.segmentFileCount
+            let stagingURL = ExportPaths.segmentStagingURL(index: slot)
+
+            do {
+                let boundary = try await SegmentPassThroughExporter.exportWindow(
+                    asset: localAsset,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: stagingURL,
+                    sourceLabel: "vanilla download",
+                    isCancelled: isCancelled,
+                    log: logHandler
+                )
+                try await publishValidatedSegment(
+                    minuteIndex: minuteIndex,
+                    slot: slot,
+                    stagingURL: stagingURL,
+                    rangeDuration: CMTime(seconds: boundary.segmentDurationSeconds, preferredTimescale: 600),
+                    wallOrigin: dlnaPublishOrigin,
+                    log: logHandler
+                )
+                publishedSegmentCount += 1
+                mediaCursorSeconds = boundary.nextSegmentStartSeconds
+            } catch {
+                if isCancelled() { throw SegmentExporterError.cancelled }
+                if !Self.shouldSkipMinuteAndContinue(after: error) { throw error }
+                skippedSegmentCount += 1
+                try? FileManager.default.removeItem(at: stagingURL)
+                logHandler("Minute skipped (vanilla failsafe): \(error.localizedDescription)")
+                mediaCursorSeconds = windowEndSeconds
+            }
+
+            lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
+            reportProgress(lastMediaTimeMs)
+            minuteIndex += 1
+        }
+
+        logHandler(
+            skippedSegmentCount > 0
+                ? "Vanilla export finished — \(publishedSegmentCount) segment(s), \(skippedSegmentCount) skipped; " +
+                    "full source remains at \(downloadRel)"
+                : (reachedEnd
+                    ? "Vanilla export reached end of file — \(downloadRel) on disk for LAN/PC"
+                    : "Vanilla export stopped — \(downloadRel) on disk")
         )
         return SegmentExportResult(
             lastMediaTimeMs: lastMediaTimeMs,
@@ -2048,7 +2316,7 @@ final class SegmentExporter {
     ) -> Bool {
         guard fileBytes > 0, durationSeconds > 0 else { return false }
         return impliedAverageMbps(fileBytes: fileBytes, durationSeconds: durationSeconds)
-            > pcloudHLSTranscodeMinSourceMbps
+            > PCloudHLSLink.transcodeMinSourceMbps
     }
 
     private static func shouldAttemptPCloudHLSFallback(
@@ -2069,7 +2337,7 @@ final class SegmentExporter {
         // Pre-check: file must be large enough that a 45 min movie could still exceed 2.5 Mbps.
         let heuristicSeconds = 45.0 * 60.0
         return impliedAverageMbps(fileBytes: fileBytes, durationSeconds: heuristicSeconds)
-            > pcloudHLSTranscodeMinSourceMbps
+            > PCloudHLSLink.transcodeMinSourceMbps
     }
 
     /// Per-minute failsafe: keep dense-filling the sparse temp and serving it on LAN; do not abort the whole export.

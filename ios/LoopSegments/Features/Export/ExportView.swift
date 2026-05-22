@@ -19,6 +19,8 @@ struct ExportView: View {
     @State private var showAutoLockHelp = false
     @State private var copiedLANURL = false
     @State private var prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
+    @State private var hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
+    @State private var vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled
 
     var body: some View {
         Form {
@@ -112,10 +114,44 @@ struct ExportView: View {
                 Text("Skybox WebDAV: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword). Bonjour: \(ExportLANServer.bonjourServiceName)._http._tcp")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Text(inProgressLANFootnote)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("Vanilla download backup", isOn: $vanillaDownloadBackup)
+                    .disabled(session.isExportRunning)
+                    .onChange(of: vanillaDownloadBackup) { _, enabled in
+                        VanillaWebDAVDownload.isBackupEnabled = enabled
+                    }
+                    .onAppear { vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled }
                 Text(
-                    ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
-                        ? "In-progress: pCloud transcode → pcld_ios_media/_working_pcloud_transcode.mp4 (not the original file). Segments: loop/op_*.mp4"
-                        : "In-progress: index → pcld_ios_media/_working.mp4 (#t= resume while paused). Segments: pcld_ios_media/loop/op_*.mp4"
+                    "After sparse probe and optional HLS fail: full WebDAV download to pcld_ios_media/_vanilla_download.<ext> (original extension). MP4/MOV also get _vanilla_faststart.mp4 for export/LAN without overwriting the download."
+                )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Picker(
+                    "pCloud HLS if WebDAV fails above",
+                    selection: $hlsTranscodeCutoffMultiplier
+                ) {
+                    ForEach(PCloudHLSLink.transcodeCutoffMultipliers, id: \.self) { mult in
+                        Text(PCloudHLSLink.transcodeCutoffOptionLabel(multiplier: mult))
+                            .tag(mult)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(session.isExportRunning)
+                .onChange(of: hlsTranscodeCutoffMultiplier) { _, newValue in
+                    PCloudHLSLink.transcodeCutoffMultiplier = newValue
+                }
+                .onAppear {
+                    hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
+                }
+                if session.isExportRunning {
+                    Text("HLS cutoff locked while export is running.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Text(
+                    "WMV/ASF and similar: after WebDAV probe fails, use pCloud transcode only when estimated source bitrate is above this (default 2.5 Mbps at 1×)."
                 )
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -266,6 +302,17 @@ struct ExportView: View {
                     "On recent iOS versions Apple often only opens the Settings app — the path above is required."
             )
         }
+    }
+
+    private var inProgressLANFootnote: String {
+        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
+            let path = ExportPlaybackState.shared.vanillaLANRelativePath()
+            return "In-progress: vanilla download → \(path) (full file). Segments: pcld_ios_media/loop/op_*.mp4 when export runs."
+        }
+        if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
+            return "In-progress: pCloud transcode → pcld_ios_media/_working_pcloud_transcode.mp4 (not the original file). Segments: loop/op_*.mp4"
+        }
+        return "In-progress: index → pcld_ios_media/_working.mp4 (#t= resume while paused). Segments: pcld_ios_media/loop/op_*.mp4"
     }
 
     @ViewBuilder
