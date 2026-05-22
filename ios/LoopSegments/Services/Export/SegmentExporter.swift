@@ -847,11 +847,25 @@ final class SegmentExporter {
         let effectiveBytes = fileBytes > 0 ? fileBytes : (item.contentLength ?? 0)
         guard effectiveBytes > 0 else { throw WebDAVResourceLoaderError.missingContentLength }
 
+        let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
+        let ext = (item.name as NSString).pathExtension.lowercased()
+        let usesFastStartDuringDownload = ["mp4", "mov", "m4v"].contains(ext)
+        let fastStartURL = usesFastStartDuringDownload ? ExportPaths.vanillaFastStartURL : nil
+        let fastStartRelative = fastStartURL.map { ExportPaths.pathRelativeToExports($0) }
+
+        ExportPlaybackState.shared.beginVanillaExport(
+            downloadRelativePath: downloadRel,
+            fastStartRelativePath: fastStartRelative,
+            seekSeconds: Double(seekMs) / 1000.0,
+            durationSeconds: 0,
+            totalBytes: effectiveBytes
+        )
+
         try await VanillaWebDAVDownload.downloadFullFile(
             remoteURL: inputURL,
             destinationURL: downloadURL,
-            sourceFilename: item.name,
             totalLength: effectiveBytes,
+            fastStartDestinationURL: fastStartURL,
             authorizationProvider: authorizationProvider,
             isCancelled: isCancelled,
             log: logHandler
@@ -859,23 +873,9 @@ final class SegmentExporter {
 
         let containerFormat = MediaContainerFormat.from(filename: item.name)
         var exportAssetURL = downloadURL
-        var fastStartRelative: String?
-        if containerFormat == .mp4 || (item.name as NSString).pathExtension.lowercased() == "mov"
-            || (item.name as NSString).pathExtension.lowercased() == "m4v" {
-            do {
-                try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
-                    from: downloadURL,
-                    to: ExportPaths.vanillaFastStartURL,
-                    log: logHandler
-                )
-                exportAssetURL = ExportPaths.vanillaFastStartURL
-                fastStartRelative = ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL)
-            } catch {
-                logHandler(
-                    "Faststart copy skipped (\(error.localizedDescription)) — export/LAN use " +
-                        "\(downloadURL.lastPathComponent)"
-                )
-            }
+        if usesFastStartDuringDownload,
+           FileManager.default.fileExists(atPath: ExportPaths.vanillaFastStartURL.path) {
+            exportAssetURL = ExportPaths.vanillaFastStartURL
         }
 
         let durationSeconds: Double
@@ -913,7 +913,6 @@ final class SegmentExporter {
             throw SegmentExporterError.seekPastEnd
         }
 
-        let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
         ExportPlaybackState.shared.beginVanillaExport(
             downloadRelativePath: downloadRel,
             fastStartRelativePath: fastStartRelative,

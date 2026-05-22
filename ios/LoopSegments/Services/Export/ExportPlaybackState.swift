@@ -130,7 +130,7 @@ final class ExportPlaybackState: @unchecked Sendable {
                 ? " Export uses \(ExportPaths.vanillaFastStartURL.lastPathComponent); original download file unchanged."
                 : ""
             return """
-            Vanilla download backup — LAN plays \(path) (full file, original extension).\(fast) \
+            Vanilla download — LAN plays \(path) while download runs (growing dense file).\(fast) \
             Segments from local copy when codecs allow.
             """
         }

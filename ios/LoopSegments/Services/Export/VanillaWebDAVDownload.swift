@@ -5,6 +5,7 @@ enum VanillaWebDAVDownload {
     private static let enabledKey = "vanillaDownloadBackupEnabled"
     private static let chunkBytes: Int64 = 2 * 1024 * 1024
     private static let progressStepPercent = 5
+    private static let faststartRefreshStepPercent = 25
 
     static var isBackupEnabled: Bool {
         get {
@@ -17,8 +18,8 @@ enum VanillaWebDAVDownload {
     static func downloadFullFile(
         remoteURL: URL,
         destinationURL: URL,
-        sourceFilename: String,
         totalLength: Int64,
+        fastStartDestinationURL: URL? = nil,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void
@@ -29,26 +30,33 @@ enum VanillaWebDAVDownload {
         try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: totalLength)
 
         let fm = FileManager.default
-        let inProgressURL = ExportPaths.vanillaDownloadInProgressURL(
-            preservingExtensionFrom: sourceFilename
-        )
-        for url in [destinationURL, inProgressURL] {
-            if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
+        if fm.fileExists(atPath: destinationURL.path) {
+            try fm.removeItem(at: destinationURL)
         }
-        guard fm.createFile(atPath: inProgressURL.path, contents: nil) else {
+        if let fastStartDestinationURL, fm.fileExists(atPath: fastStartDestinationURL.path) {
+            try? fm.removeItem(at: fastStartDestinationURL)
+        }
+        guard fm.createFile(atPath: destinationURL.path, contents: nil) else {
             throw SegmentExporterError.writerSetupFailed
         }
-        let handle = try FileHandle(forWritingTo: inProgressURL)
+        let handle = try FileHandle(forWritingTo: destinationURL)
         defer { try? handle.close() }
 
+        let rel = ExportPaths.pathRelativeToExports(destinationURL)
         log(
-            "Vanilla download — \(ExportPaths.pathRelativeToExports(inProgressURL)) " +
-                "(hidden on LAN until complete → \(destinationURL.lastPathComponent), " +
-                "\(formatBytes(totalLength)))"
+            "Vanilla download — \(rel) (\(formatBytes(totalLength)), extension preserved; " +
+                "LAN serves \(destinationURL.lastPathComponent) while bytes arrive)"
         )
+        if let fastStartDestinationURL {
+            log(
+                "MP4 faststart copy → \(ExportPaths.pathRelativeToExports(fastStartDestinationURL)) " +
+                    "(refreshed every \(faststartRefreshStepPercent)% during download when possible)"
+            )
+        }
 
         var offset: Int64 = 0
         var lastLoggedPercent = -1
+        var lastFaststartPercent = 0
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         let auth = authorizationProvider()
 
@@ -76,18 +84,51 @@ enum VanillaWebDAVDownload {
                 lastLoggedPercent = (pct / progressStepPercent) * progressStepPercent
                 log("Vanilla download \(pct)% — \(formatBytes(offset)) / \(formatBytes(totalLength))")
             }
+            if let fastStartDestinationURL,
+               pct >= lastFaststartPercent + faststartRefreshStepPercent {
+                lastFaststartPercent = (pct / faststartRefreshStepPercent) * faststartRefreshStepPercent
+                await refreshFaststartCopyIfPossible(
+                    from: destinationURL,
+                    to: fastStartDestinationURL,
+                    downloadedBytes: offset,
+                    log: log
+                )
+            }
         }
         try handle.synchronize()
-        let onDisk = (try? fm.attributesOfItem(atPath: inProgressURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         guard onDisk == totalLength else {
-            try? fm.removeItem(at: inProgressURL)
             throw WebDAVResourceLoaderError.invalidResponse
         }
-        if fm.fileExists(atPath: destinationURL.path) {
-            try fm.removeItem(at: destinationURL)
+        if let fastStartDestinationURL {
+            try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
+                from: destinationURL,
+                to: fastStartDestinationURL,
+                log: log
+            )
         }
-        try fm.moveItem(at: inProgressURL, to: destinationURL)
-        log("Vanilla download complete — \(formatBytes(onDisk)) at \(ExportPaths.pathRelativeToExports(destinationURL))")
+        log("Vanilla download complete — \(formatBytes(onDisk)) at \(rel)")
+    }
+
+    private static func refreshFaststartCopyIfPossible(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        downloadedBytes: Int64,
+        log: @escaping (String) -> Void
+    ) async {
+        guard downloadedBytes > 8 * 1024 * 1024 else { return }
+        do {
+            try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
+                from: sourceURL,
+                to: destinationURL,
+                log: log
+            )
+        } catch {
+            log(
+                "Faststart refresh skipped at \(formatBytes(downloadedBytes)) — " +
+                    "\(error.localizedDescription)"
+            )
+        }
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {

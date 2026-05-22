@@ -124,7 +124,7 @@ struct ExportView: View {
                     }
                     .onAppear { vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled }
                 Text(
-                    "After sparse probe fails: full WebDAV download first (no API token). pCloud HLS runs only if vanilla is off or fails. Files: _vanilla_download.<ext>; MP4/MOV also get _vanilla_faststart.mp4."
+                    "After sparse probe fails: WebDAV download to _vanilla_download.<ext> (visible on LAN while downloading). MP4/MOV/M4V also refresh _vanilla_faststart.mp4 during download."
                 )
                     .font(.footnote)
                     .foregroundStyle(.secondary)
