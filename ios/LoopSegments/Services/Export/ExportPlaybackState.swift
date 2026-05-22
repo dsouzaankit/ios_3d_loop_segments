@@ -25,6 +25,8 @@ final class ExportPlaybackState: @unchecked Sendable {
         var denseBytesOnDiskPercent = 0
         var backgroundTimelineSeconds: Double = 0
         var lanPreloadOnly = false
+        var pcloudTranscodedWorkingActive = false
+        var transcodedWorkingFileBytes: Int64 = 0
     }
 
     private let lock = NSLock()
@@ -58,6 +60,55 @@ final class ExportPlaybackState: @unchecked Sendable {
     func setLANPreloadOnly(_ enabled: Bool) {
         lock.withLock {
             snapshot.lanPreloadOnly = enabled
+        }
+    }
+
+    func setPCloudTranscodedWorkingActive(_ active: Bool) {
+        lock.withLock {
+            snapshot.pcloudTranscodedWorkingActive = active
+            if !active {
+                snapshot.transcodedWorkingFileBytes = 0
+            }
+        }
+    }
+
+    func usesPCloudTranscodedWorkingForLAN() -> Bool {
+        lock.withLock { snapshot.pcloudTranscodedWorkingActive }
+    }
+
+    func updateTranscodedWorkingFileBytes(_ bytes: Int64) {
+        lock.withLock {
+            snapshot.transcodedWorkingFileBytes = max(0, bytes)
+            snapshot.totalFileBytes = max(snapshot.totalFileBytes, bytes)
+        }
+    }
+
+    func beginTranscodedExport(seekSeconds: Double, durationSeconds: Double) {
+        lock.withLock {
+            snapshot.pcloudTranscodedWorkingActive = true
+            snapshot.playbackStartSeconds = max(0, seekSeconds)
+            snapshot.exportCursorSeconds = snapshot.playbackStartSeconds
+            snapshot.durationSeconds = max(0, durationSeconds)
+            snapshot.lanExportActive = true
+            snapshot.exportStartedAt = Date()
+            snapshot.backgroundPrefetchEnabled = false
+            snapshot.lanPreloadOnly = false
+            snapshot.transcodedWorkingFileBytes = 0
+            snapshot.totalFileBytes = 0
+            snapshot.headOnDisk = false
+            snapshot.tailOnDisk = false
+            snapshot.filledSpans = []
+        }
+    }
+
+    /// User-facing note for Export screen / logs.
+    func pcloudTranscodedWorkingUserNotice() -> String? {
+        lock.withLock {
+            guard snapshot.pcloudTranscodedWorkingActive else { return nil }
+            return """
+            pCloud transcode — LAN uses pcld_ios_media/_working_pcloud_transcode.mp4 (grows with export). \
+            Not the original file; op_00/op_01 also come from the transcode.
+            """
         }
     }
 

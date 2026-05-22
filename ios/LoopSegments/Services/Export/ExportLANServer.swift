@@ -666,6 +666,7 @@ enum ExportLANServer {
     private static func allowedServableRelativePaths() -> Set<String> {
         var names: Set<String> = [
             ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL),
+            ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL),
             ExportPaths.latestLogTextURL.lastPathComponent,
             ExportPaths.latestLogURL.lastPathComponent,
             ExportPaths.exportProgressURL.lastPathComponent,
@@ -856,7 +857,7 @@ enum ExportLANServer {
                             modified: nil
                         )
                     )
-                    let workingRel = ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
+                    let workingRel = ExportPaths.lanInProgressWorkingRelativePath
                     if let fileURL = resolveExportFile(relativePath: workingRel) {
                         let fm = FileManager.default
                         let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
@@ -993,7 +994,19 @@ enum ExportLANServer {
 
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         var playbackStatusBlock = ""
-        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
+        let usesTranscoded = ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
+            || FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path)
+        if usesTranscoded, FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
+            let line = ExportPlaybackState.shared.lanPlayableStatusLine()
+            let escaped = line
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+            playbackStatusBlock = """
+            <p><strong>\(escaped)</strong></p>
+            <p><em>pCloud HLS transcode — <code>pcld_ios_media/_working_pcloud_transcode.mp4</code> grows with export (real MP4, not the original WMV/MKV file).</em></p>
+            <p>Prefer <code>loop/op_00.mp4</code> while export runs.</p>
+            """
+        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
             let startSec = ExportPlaybackState.shared.playbackStartSeconds
@@ -1036,6 +1049,14 @@ enum ExportLANServer {
                     .replacingOccurrences(of: "&", with: "&amp;")
                     .replacingOccurrences(of: "\"", with: "&quot;")
                 var note = ""
+                if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
+                    let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
+                    items.append(
+                        "<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)" +
+                            " — pCloud transcode (grows through ~\(formatLANClock(cursorSec)); not original file)</li>"
+                    )
+                    continue
+                }
                 if name == ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL) {
                     let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
                     let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
@@ -1074,7 +1095,7 @@ enum ExportLANServer {
             <h1>Loop Segments — LAN export</h1>
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
-            <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). <code>pcld_ios_media/_working.mp4</code> — use the index link; many browsers won’t play sparse HEVC. After export finishes, the index drops a stale <code>#t=</code> seek.</p>
+            <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             \(playbackStatusBlock)
             <ul>
             \(fileList)
@@ -1192,10 +1213,14 @@ enum ExportLANServer {
         let contentType = mimeType(for: fileURL)
         let modified = attrs[.modificationDate] as? Date
         let etag = fileETag(size: fileSize)
-        let isWorkingSource = fileURL.standardizedFileURL.path == ExportPaths.workingSourceURL.standardizedFileURL.path
-        if isWorkingSource {
+        let isSparseWorkingSource = fileURL.standardizedFileURL.path
+            == ExportPaths.workingSourceURL.standardizedFileURL.path
+        let isTranscodedWorking = fileURL.standardizedFileURL.path
+            == ExportPaths.workingTranscodedURL.standardizedFileURL.path
+        if isSparseWorkingSource {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: fileURL)
         }
+        let isWorkingSource = isSparseWorkingSource || isTranscodedWorking
 
         let byteStart: Int64
         var byteEnd: Int64
@@ -1206,7 +1231,7 @@ enum ExportLANServer {
         if let range = parseByteRange(requestHeaders: requestHeaders, fileSize: fileSize) {
             byteStart = range.start
             byteEnd = range.end
-            if isWorkingSource {
+            if isSparseWorkingSource {
                 guard let readableEnd = ExportPlaybackState.shared.maxContiguousReadableEnd(
                     from: byteStart,
                     maxEnd: byteEnd
@@ -1222,7 +1247,7 @@ enum ExportLANServer {
         } else if hasRangeHeader {
             sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
             return
-        } else if isWorkingSource, method == "GET" {
+        } else if isSparseWorkingSource, method == "GET" {
             let tailStart = ExportPlaybackState.shared.indexTailStartByte
             let moovInHead = MP4NetworkOptimize.moovPresentInFirstBytes(
                 of: fileURL,

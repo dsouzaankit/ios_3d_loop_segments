@@ -55,6 +55,7 @@ final class SegmentExporter {
     func run(
         item: WebDAVItem,
         inputURL: URL,
+        credentials: WebDAVCredentials,
         catalogContentLength: Int64? = nil,
         seekMs: Int64,
         continueLANExport: Bool = false,
@@ -75,6 +76,7 @@ final class SegmentExporter {
             tempDownload = nil
             retainedWebDAVLoader = nil
             retainedAsset = nil
+            ExportPlaybackState.shared.setPCloudTranscodedWorkingActive(false)
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
 
@@ -126,7 +128,11 @@ final class SegmentExporter {
             tempDownload = downloader
             downloader.logDownloadStarted()
             try await downloader.ensureIndexTailOnDisk()
-        let (durationSeconds, videoFormat, audioFormat) = try await probeExportMetadata(
+        let durationSeconds: Double
+        let videoFormat: CMFormatDescription
+        let audioFormat: CMFormatDescription?
+        do {
+            (durationSeconds, videoFormat, audioFormat) = try await probeExportMetadata(
                 containerFormat: containerFormat,
                 fileURL: downloader.fileURL,
                 inputURL: inputURL,
@@ -134,6 +140,33 @@ final class SegmentExporter {
                 rangeCache: rangeCache,
                 log: logHandler
             )
+        } catch {
+            guard Self.shouldAttemptPCloudHLSFallback(
+                error: error,
+                containerFormat: containerFormat,
+                fileBytes: fileSize
+            ) else {
+                throw error
+            }
+            tempDownload?.cancel()
+            tempDownload = nil
+            logHandler(
+                "WebDAV probe failed for \(containerFormat.displayName) — trying pCloud HLS transcode " +
+                    "(>\(Self.pcloudHLSTranscodeMinSourceMbps) Mbps est., max \(PCloudHLSLink.maxTranscodeResolution)) → " +
+                    "\(ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL))"
+            )
+            return try await runPCloudHLSExport(
+                item: item,
+                credentials: credentials,
+                fileBytes: fileSize,
+                seekMs: seekMs,
+                continueLANExport: continueLANExport,
+                resumeCursorMs: resumeCursorMs,
+                isCancelled: cancelCheck,
+                logHandler: logHandler,
+                onMediaProgress: onMediaProgress
+            )
+        }
 
         let durationMs = Int64(durationSeconds * 1000)
         let seekSeconds = Double(seekMs) / 1000.0
@@ -537,6 +570,201 @@ final class SegmentExporter {
         } else {
         logHandler(reachedEnd ? "Reached end of file — all segments published." : "Export stopped.")
         }
+        return SegmentExportResult(
+            lastMediaTimeMs: lastMediaTimeMs,
+            reachedEnd: reachedEnd,
+            skippedSegmentCount: skippedSegmentCount,
+            lanPreloadOnly: false
+        )
+    }
+
+    /// pCloud `gethlslink` → segments + progressive `_working_pcloud_transcode.mp4` (not sparse WebDAV).
+    /// Source must exceed this implied bitrate before pCloud HLS transcode is used.
+    private static let pcloudHLSTranscodeMinSourceMbps = PCloudHLSLink.minSourceMbpsForTranscode
+
+    private func runPCloudHLSExport(
+        item: WebDAVItem,
+        credentials: WebDAVCredentials,
+        fileBytes: Int64,
+        seekMs: Int64,
+        continueLANExport: Bool,
+        resumeCursorMs: Int64?,
+        isCancelled: @escaping () -> Bool,
+        logHandler: @escaping (String) -> Void,
+        onMediaProgress: (@Sendable (Int64) -> Void)? = nil
+    ) async throws -> SegmentExportResult {
+        PCloudTranscodedWorkingWriter.prepareForNewExport(log: logHandler)
+        if let notice = ExportPlaybackState.shared.pcloudTranscodedWorkingUserNotice() {
+            logHandler(notice)
+        }
+        logHandler(
+            "pCloud transcode export — \(item.name); original file stays on pCloud; " +
+                "LAN plays \(ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL)) as export advances"
+        )
+
+        let link = try await PCloudHLSLink.resolveMasterPlaylist(
+            credentials: credentials,
+            sourceHref: item.href,
+            log: logHandler
+        )
+        let hlsAsset = AVURLAsset(
+            url: link.masterPlaylistURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        retainedAsset = hlsAsset
+        defer { retainedAsset = nil }
+
+        let (durationSeconds, videoFormat, audioFormat) = try await probeStreamMetadata(asset: hlsAsset, log: logHandler)
+        let effectiveBytes = fileBytes > 0 ? fileBytes : (item.contentLength ?? 0)
+        let impliedSourceMbps = Self.impliedAverageMbps(
+            fileBytes: effectiveBytes,
+            durationSeconds: durationSeconds
+        )
+        guard Self.sourceQualifiesForPCloudHLSTranscode(
+            fileBytes: effectiveBytes,
+            durationSeconds: durationSeconds
+        ) else {
+            logHandler(
+                String(
+                    format: "Source ~%.1f Mbps (file %@, %.0f s) — at or below %.1f Mbps cutoff; " +
+                        "pCloud HLS transcode not used",
+                    impliedSourceMbps,
+                    Self.formatBytes(effectiveBytes),
+                    durationSeconds,
+                    Self.pcloudHLSTranscodeMinSourceMbps
+                )
+            )
+            throw SegmentExporterError.containerProbeFailed(.asf)
+        }
+        logHandler(
+            String(
+                format: "Source ~%.1f Mbps — above %.1f Mbps cutoff; pCloud HLS max %@ @ %d kbps video",
+                impliedSourceMbps,
+                Self.pcloudHLSTranscodeMinSourceMbps,
+                PCloudHLSLink.maxTranscodeResolution,
+                PCloudHLSLink.maxTranscodeVideoKbps
+            )
+        )
+        let durationMs = Int64(durationSeconds * 1000)
+        let seekSeconds = Double(seekMs) / 1000.0
+        if durationMs > 0, seekMs >= durationMs - 250 {
+            throw SegmentExporterError.seekPastEnd
+        }
+
+        ExportPlaybackState.shared.beginTranscodedExport(
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds
+        )
+        ExportPlaybackState.shared.setBackgroundPrefetchEnabled(false)
+        await MainActor.run {
+            ResumeStore.shared.setSourceDurationMs(durationMs, for: item)
+        }
+
+        let reportProgress: @Sendable (Int64) -> Void = { mediaMs in
+            onMediaProgress?(mediaMs)
+            let seconds = Double(mediaMs) / 1000.0
+            ExportPlaybackState.shared.updateCursor(seconds: seconds)
+        }
+
+        var mediaCursorSeconds = seekSeconds
+        if continueLANExport, let resumeCursorMs, resumeCursorMs > 0 {
+            mediaCursorSeconds = min(durationSeconds, Double(resumeCursorMs) / 1000.0)
+        }
+        reportProgress(Int64(mediaCursorSeconds * 1000))
+
+        logHandler(
+            "Video codec \(CodecSupport.fourCCString(videoFormat))" +
+                (audioFormat.map { ", audio \(CodecSupport.fourCCString($0))" } ?? ", no audio") +
+                " (pCloud HLS transcode)"
+        )
+        logHandler(
+            "Publishing ~\(Int(Self.segmentDurationSeconds))s segments from HLS — " +
+                "op_00/op_01 + growing \(ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL))"
+        )
+
+        let dlnaPublishOrigin = CFAbsoluteTimeGetCurrent()
+        var minuteIndex = 0
+        var lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
+        var reachedEnd = false
+        var skippedSegmentCount = 0
+        var publishedSegmentCount = 0
+
+        while true {
+            if isCancelled() { throw SegmentExporterError.cancelled }
+
+            let windowStartSeconds = mediaCursorSeconds
+            if windowStartSeconds >= durationSeconds - 0.05 {
+                reachedEnd = true
+                break
+            }
+            let windowEndSeconds = min(windowStartSeconds + Self.segmentDurationSeconds, durationSeconds)
+            if windowEndSeconds - windowStartSeconds < 0.5 {
+                reachedEnd = true
+                break
+            }
+
+            logHandler(
+                ExportTimelineLog.processingMinute(
+                    index: minuteIndex,
+                    startSeconds: windowStartSeconds,
+                    endSeconds: windowEndSeconds
+                )
+            )
+
+            let rangeStart = CMTime(seconds: windowStartSeconds, preferredTimescale: 600)
+            let rangeDuration = CMTime(
+                seconds: windowEndSeconds - windowStartSeconds,
+                preferredTimescale: 600
+            )
+            let slot = minuteIndex % Self.segmentFileCount
+            let stagingURL = ExportPaths.segmentStagingURL(index: slot)
+
+            do {
+                let boundary = try await SegmentPassThroughExporter.exportWindow(
+                    asset: hlsAsset,
+                    videoFormat: videoFormat,
+                    audioFormat: audioFormat,
+                    rangeStart: rangeStart,
+                    rangeDuration: rangeDuration,
+                    outputURL: stagingURL,
+                    sourceLabel: "pCloud HLS",
+                    isCancelled: isCancelled,
+                    log: logHandler
+                )
+                try await publishValidatedSegment(
+                    minuteIndex: minuteIndex,
+                    slot: slot,
+                    stagingURL: stagingURL,
+                    rangeDuration: CMTime(seconds: boundary.segmentDurationSeconds, preferredTimescale: 600),
+                    wallOrigin: dlnaPublishOrigin,
+                    log: logHandler
+                )
+                publishedSegmentCount += 1
+                mediaCursorSeconds = boundary.nextSegmentStartSeconds
+                try await PCloudTranscodedWorkingWriter.updateProgressive(
+                    asset: hlsAsset,
+                    throughSeconds: windowEndSeconds,
+                    log: logHandler
+                )
+            } catch {
+                if isCancelled() { throw SegmentExporterError.cancelled }
+                if !Self.shouldSkipMinuteAndContinue(after: error) { throw error }
+                skippedSegmentCount += 1
+                try? FileManager.default.removeItem(at: stagingURL)
+                logHandler("Minute skipped (HLS failsafe): \(error.localizedDescription)")
+                mediaCursorSeconds = windowEndSeconds
+            }
+
+            lastMediaTimeMs = Int64(mediaCursorSeconds * 1000)
+            reportProgress(lastMediaTimeMs)
+            minuteIndex += 1
+        }
+
+        logHandler(
+            skippedSegmentCount > 0
+                ? "HLS export finished — \(publishedSegmentCount) segment(s), \(skippedSegmentCount) skipped"
+                : (reachedEnd ? "HLS export reached end of transcode." : "HLS export stopped.")
+        )
         return SegmentExportResult(
             lastMediaTimeMs: lastMediaTimeMs,
             reachedEnd: reachedEnd,
@@ -1813,6 +2041,36 @@ final class SegmentExporter {
     /// At seek 0, dense-fill bytes after the minute window so `file://` passthrough does not read zero-filled mdat.
     private static let seekZeroDenseEntireFileMaxBytes: Int64 = 1024 * 1024 * 1024
     private static let seekZeroDenseTailMaxBytes: Int64 = 256 * 1024 * 1024
+
+    private static func sourceQualifiesForPCloudHLSTranscode(
+        fileBytes: Int64,
+        durationSeconds: Double
+    ) -> Bool {
+        guard fileBytes > 0, durationSeconds > 0 else { return false }
+        return impliedAverageMbps(fileBytes: fileBytes, durationSeconds: durationSeconds)
+            > pcloudHLSTranscodeMinSourceMbps
+    }
+
+    private static func shouldAttemptPCloudHLSFallback(
+        error: Error,
+        containerFormat: MediaContainerFormat,
+        fileBytes: Int64
+    ) -> Bool {
+        guard fileBytes > 0 else { return false }
+        guard let exportError = error as? SegmentExporterError else { return false }
+        switch exportError {
+        case .containerProbeFailed:
+            break
+        case .noVideoTrack:
+            guard !containerFormat.probesSparseTempAsMP4 else { return false }
+        default:
+            return false
+        }
+        // Pre-check: file must be large enough that a 45 min movie could still exceed 2.5 Mbps.
+        let heuristicSeconds = 45.0 * 60.0
+        return impliedAverageMbps(fileBytes: fileBytes, durationSeconds: heuristicSeconds)
+            > pcloudHLSTranscodeMinSourceMbps
+    }
 
     /// Per-minute failsafe: keep dense-filling the sparse temp and serving it on LAN; do not abort the whole export.
     private static func shouldSkipMinuteAndContinue(after error: Error) -> Bool {

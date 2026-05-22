@@ -80,6 +80,7 @@ final class ExportCoordinator {
                     try await self.exporter.run(
                         item: item,
                         inputURL: inputURL,
+                        credentials: credentials,
                         catalogContentLength: item.contentLength,
                         seekMs: seekMs,
                         continueLANExport: continueLANExport,
@@ -97,7 +98,15 @@ final class ExportCoordinator {
                     "LAN preload finished — pcld_ios_media/_working.mp4 on disk (no op_*.mp4; below bitrate cutoff). Play via :8765"
                 )
             } else {
-                logHandler("Export finished — pcld_ios_media/loop/op_*.mp4 and pcld_ios_media/_working.mp4 kept until next export or Clear media")
+                if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
+                    || FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
+                    logHandler(
+                        "Export finished — pcld_ios_media/loop/op_*.mp4 and " +
+                            "pcld_ios_media/_working_pcloud_transcode.mp4 (pCloud transcode) kept until next export or Clear media"
+                    )
+                } else {
+                    logHandler("Export finished — pcld_ios_media/loop/op_*.mp4 and pcld_ios_media/_working.mp4 kept until next export or Clear media")
+                }
             }
             logHandler(ExportPaths.describeExportMediaOnDisk())
             logHandler("Files: On My iPhone → Loop Segments → Exports (same folder as export_latest.txt)")

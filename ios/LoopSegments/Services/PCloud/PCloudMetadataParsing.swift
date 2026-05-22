@@ -207,12 +207,16 @@ enum PCloudMetadataParsing {
         return WebDAVURLBuilder.canonicalBrowsePath("/\(name)")
     }
 
-    private static func normalizeAPIPath(_ path: String) -> String {
+    static func normalizeAPIPathForREST(_ path: String) -> String {
         let trimmed = path
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\", with: "/")
         guard !trimmed.isEmpty else { return "" }
         return WebDAVURLBuilder.canonicalBrowsePath(trimmed)
+    }
+
+    private static func normalizeAPIPath(_ path: String) -> String {
+        normalizeAPIPathForREST(path)
     }
 
     static func boolField(_ value: Any?) -> Bool {

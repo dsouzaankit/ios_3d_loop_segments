@@ -15,6 +15,9 @@ enum SegmentCleanup {
         if ExportPaths.removeWorkingSourceCopy(log: log) {
             removed += 1
         }
+        if ExportPaths.removeTranscodedWorkingCopy(log: log) {
+            removed += 1
+        }
         return removed
     }
 

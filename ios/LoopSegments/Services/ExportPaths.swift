@@ -122,6 +122,19 @@ enum ExportPaths {
         mediaExportDirectory.appendingPathComponent("_working.sparse.json")
     }
 
+    /// Progressive pCloud HLS transcode (real MP4 on disk). Not sparse; separate from `_working.mp4`.
+    static var workingTranscodedURL: URL {
+        mediaExportDirectory.appendingPathComponent("_working_pcloud_transcode.mp4")
+    }
+
+    /// LAN / index path while export uses pCloud transcode instead of sparse WebDAV mirror.
+    static var lanInProgressWorkingRelativePath: String {
+        if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
+            return pathRelativeToExports(workingTranscodedURL)
+        }
+        return pathRelativeToExports(workingSourceURL)
+    }
+
     /// Rename legacy export filenames from older builds (idempotent).
     static func migrateLegacyExportFilenames(log: ((String) -> Void)? = nil) {
         let fm = FileManager.default
@@ -199,6 +212,21 @@ enum ExportPaths {
             } catch {
                 log?("Could not migrate \(legacyName): \(error.localizedDescription)")
             }
+        }
+    }
+
+    @discardableResult
+    static func removeTranscodedWorkingCopy(log: ((String) -> Void)? = nil) -> Bool {
+        let fm = FileManager.default
+        let url = workingTranscodedURL
+        guard fm.fileExists(atPath: url.path) else { return false }
+        do {
+            try fm.removeItem(at: url)
+            log?("Removed \(url.lastPathComponent) from Exports")
+            return true
+        } catch {
+            log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -304,6 +332,10 @@ enum ExportPaths {
             for name in mediaNames.sorted() where name.hasSuffix(".mp4") {
                 appendMP4(at: mediaDir.appendingPathComponent(name), label: "\(mediaExportFolderName)/\(name)")
             }
+        }
+        let transcoded = workingTranscodedURL
+        if fm.fileExists(atPath: transcoded.path) {
+            appendMP4(at: transcoded, label: pathRelativeToExports(transcoded))
         }
         let loopDir = dir.appendingPathComponent(mediaExportFolderName).appendingPathComponent(segmentLoopFolderName)
         if let loopNames = try? fm.contentsOfDirectory(atPath: loopDir.path) {

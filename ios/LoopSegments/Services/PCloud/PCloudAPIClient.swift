@@ -116,6 +116,46 @@ final class PCloudAPIClient {
         return normalizedAPIPath(json["path"])
     }
 
+    /// HTTPS `master.m3u8` from pCloud transcode (`gethlslink`).
+    func fetchHLSMasterPlaylist(
+        apiPath: String,
+        log: ((String) -> Void)? = nil
+    ) async throws -> PCloudHLSLink.ResolvedLink {
+        let creds = resolvedCredentials()
+        let token = try await ensureAuthToken(credentials: creds)
+        let hosts = await searchHostsToTry(credentials: creds)
+        var lastError: Error?
+        for host in hosts {
+            do {
+                var parameters: [String: String] = [
+                    "auth": token,
+                    "path": apiPath,
+                    "skipfilename": "1",
+                ]
+                for (key, value) in PCloudHLSLink.transcodeQualityParameters {
+                    parameters[key] = value
+                }
+                let json = try await PCloudAPIRequest.get(
+                    host: host,
+                    method: "gethlslink",
+                    parameters: parameters,
+                    session: session
+                )
+                try PCloudAPIRequest.throwIfAPIError(json)
+                let link = try Self.parseStreamingLinkJSON(json, apiHost: host)
+                authAPIHost = host
+                log?(
+                    "pCloud HLS — master playlist on \(link.masterPlaylistURL.host ?? "?") " +
+                        "(expires \(link.expires ?? "unknown"))"
+                )
+                return link
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError ?? PCloudAPIError.unexpectedResponse
+    }
+
     func apiPath(folderId: Int64) async throws -> String? {
         let creds = resolvedCredentials()
         let token = try await ensureAuthToken(credentials: creds)
@@ -283,6 +323,38 @@ final class PCloudAPIClient {
         updated.apiAuthToken = token
         updated.apiAuthHost = apiHost
         CredentialStore().save(updated)
+    }
+
+    private static func parseStreamingLinkJSON(
+        _ json: [String: Any],
+        apiHost: String
+    ) throws -> PCloudHLSLink.ResolvedLink {
+        guard let path = json["path"] as? String, !path.isEmpty else {
+            throw PCloudAPIError.unexpectedResponse
+        }
+        let hosts = json["hosts"] as? [String] ?? []
+        guard let host = hosts.first, !host.isEmpty else {
+            throw PCloudAPIError.unexpectedResponse
+        }
+        let playlistPath: String
+        if path.hasSuffix(".m3u8") {
+            playlistPath = path.hasPrefix("/") ? path : "/\(path)"
+        } else {
+            let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            playlistPath = trimmed.isEmpty ? "/master.m3u8" : "/\(trimmed)/master.m3u8"
+        }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = host
+        components.percentEncodedPath = playlistPath
+        guard let url = components.url else {
+            throw PCloudAPIError.unexpectedResponse
+        }
+        return PCloudHLSLink.ResolvedLink(
+            masterPlaylistURL: url,
+            expires: json["expires"] as? String,
+            apiHost: apiHost
+        )
     }
 
     private func normalizedAPIPath(_ value: Any?) -> String? {
