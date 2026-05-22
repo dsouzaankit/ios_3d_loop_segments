@@ -19,4 +19,21 @@ enum ExportDeliveryPolicy {
     static var prioritizeFirstPhotosPublish: Bool {
         true
     }
+
+    /// `op_00` / `op_01` passthrough segments — off when LAN serve is on or vanilla file is already network-ready.
+    static func shouldRun60sSegments(vanillaSourceAlreadyFaststart: Bool = false) -> Bool {
+        if ExportLANServer.isEnabled { return false }
+        if vanillaSourceAlreadyFaststart { return false }
+        return true
+    }
+
+    static func skip60sSegmentsLogReason(vanillaSourceAlreadyFaststart: Bool = false) -> String {
+        if ExportLANServer.isEnabled {
+            return "60s segments skipped — Serve Exports on Wi‑Fi serves the source on LAN (turn off Serve Exports to build op_00/op_01)"
+        }
+        if vanillaSourceAlreadyFaststart {
+            return "60s segments skipped — vanilla download is already faststart (moov at head); use _vanilla_download on LAN"
+        }
+        return "60s segments skipped"
+    }
 }

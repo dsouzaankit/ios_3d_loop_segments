@@ -70,7 +70,7 @@ struct ExportView: View {
                             .foregroundStyle(.secondary)
                     }
                     Text(
-                        "Below this cutoff (default 29 Mbps), Start export runs LAN preload only: fills _working.mp4 to EOF with full WAN (no op_00/op_01 segments). At or above, segments export and prefetch stops at exported+2 min."
+                        "Serve Exports on: LAN only — no op_00/op_01 segments (full/sparse/vanilla on :8765). Turn off Serve Exports to build 60s segments. Prefetch cutoff still applies when segments are enabled (Serve Exports off)."
                     )
                         .font(.footnote)
                         .foregroundStyle(.secondary)

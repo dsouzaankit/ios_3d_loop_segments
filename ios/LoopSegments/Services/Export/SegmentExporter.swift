@@ -335,6 +335,9 @@ final class SegmentExporter {
             }
 
         if lanPrefetch.lanPreloadOnly {
+            if !ExportDeliveryPolicy.shouldRun60sSegments() {
+                logHandler(ExportDeliveryPolicy.skip60sSegmentsLogReason())
+            }
             return try await runLANPreloadOnly(
                 downloader: downloader,
                 seekSeconds: seekSeconds,
@@ -349,7 +352,7 @@ final class SegmentExporter {
 
         logHandler(
             "Publishing ~\(Int(Self.segmentDurationSeconds))s segments — dense fill each window, then passthrough " +
-                "(per-minute failsafe: skip on error and continue; _working.mp4 on LAN when serve is on)"
+                "(Serve Exports off; per-minute failsafe: skip on error and continue)"
         )
 
         var skippedSegmentCount = 0
@@ -818,6 +821,51 @@ final class SegmentExporter {
         )
     }
 
+    private func finishVanillaWithout60sSegments(
+        downloadURL: URL,
+        downloadRel: String,
+        fastStartRelative: String?,
+        seekMs: Int64,
+        effectiveBytes: Int64,
+        reason: String,
+        logHandler: @escaping (String) -> Void
+    ) async throws -> SegmentExportResult {
+        let durationSeconds = (try? await probeLocalDurationSeconds(fileURL: downloadURL, log: logHandler)) ?? 0
+        let seekSeconds = Double(seekMs) / 1000.0
+        ExportPlaybackState.shared.beginVanillaExport(
+            downloadRelativePath: downloadRel,
+            fastStartRelativePath: fastStartRelative,
+            seekSeconds: seekSeconds,
+            durationSeconds: durationSeconds,
+            totalBytes: effectiveBytes
+        )
+        ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: effectiveBytes)
+        logHandler("Vanilla download complete — \(downloadRel). \(reason)")
+        return SegmentExportResult(
+            lastMediaTimeMs: seekMs,
+            reachedEnd: false,
+            skippedSegmentCount: 0,
+            lanPreloadOnly: false
+        )
+    }
+
+    private func probeLocalDurationSeconds(
+        fileURL: URL,
+        log: @escaping (String) -> Void
+    ) async throws -> Double {
+        let asset = AVURLAsset(
+            url: fileURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        let duration = try await asset.load(.duration)
+        var seconds = CMTimeGetSeconds(duration)
+        if !seconds.isFinite || seconds <= 0 {
+            log("Duration not available from vanilla file index")
+            return 0
+        }
+        return seconds
+    }
+
     /// Probe failed or vanilla/HLS recovery — sparse `_working.mp4` is not the LAN source anymore.
     private func abandonSparseWorkingForRecovery(logHandler: @escaping (String) -> Void) {
         tempDownload?.prepareForAbandon()
@@ -964,14 +1012,32 @@ final class SegmentExporter {
 
         let containerFormat = MediaContainerFormat.from(filename: item.name)
         var exportAssetURL = downloadURL
+        var vanillaSourceAlreadyFaststart = false
         if usesFastStartDuringDownload {
             if FileManager.default.fileExists(atPath: ExportPaths.vanillaFastStartURL.path) {
                 exportAssetURL = ExportPaths.vanillaFastStartURL
             } else if MP4NetworkOptimize.sourceAlreadyNetworkOptimized(at: downloadURL) {
+                vanillaSourceAlreadyFaststart = true
                 logHandler(
                     "Using \(downloadURL.lastPathComponent) for export — moov already at head (pCloud pre-faststart)"
                 )
             }
+        }
+
+        if !ExportDeliveryPolicy.shouldRun60sSegments(
+            vanillaSourceAlreadyFaststart: vanillaSourceAlreadyFaststart
+        ) {
+            return try await finishVanillaWithout60sSegments(
+                downloadURL: downloadURL,
+                downloadRel: downloadRel,
+                fastStartRelative: fastStartRelative,
+                seekMs: seekMs,
+                effectiveBytes: effectiveBytes,
+                reason: ExportDeliveryPolicy.skip60sSegmentsLogReason(
+                    vanillaSourceAlreadyFaststart: vanillaSourceAlreadyFaststart
+                ),
+                logHandler: logHandler
+            )
         }
 
         let durationSeconds: Double
@@ -1151,14 +1217,18 @@ final class SegmentExporter {
         reportProgress: @escaping @Sendable (Int64) -> Void,
         logHandler: @escaping (String) -> Void
     ) async throws -> SegmentExportResult {
-        let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
-        logHandler(
-            String(
-                format: "LAN preload only — file ~%.1f Mbps (below %.0f Mbps cutoff); op_00/op_01 export disabled",
-                impliedMbps,
-                cutoff
+        if !ExportDeliveryPolicy.shouldRun60sSegments() {
+            logHandler(ExportDeliveryPolicy.skip60sSegmentsLogReason())
+        } else {
+            let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
+            logHandler(
+                String(
+                    format: "LAN preload only — file ~%.1f Mbps (below %.0f Mbps cutoff); op_00/op_01 export disabled",
+                    impliedMbps,
+                    cutoff
+                )
             )
-        )
+        }
         logHandler(
             "Sequential fill to EOF on _working.mp4 (8 parallel chunks) — target wall time ~½× media duration at your link speed"
         )
@@ -2105,12 +2175,13 @@ final class SegmentExporter {
             )
         }
         let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
-        let prefetchHorizonToEOF = impliedMbps < cutoff
+        let belowCutoff = impliedMbps < cutoff
+        let lanPreloadOnly = !ExportDeliveryPolicy.shouldRun60sSegments()
         return LANWorkingPrefetchPolicy(
             prepareHeadAndIndex: true,
-            prefetchHorizonToEOF: prefetchHorizonToEOF,
-            waitForBackgroundAtEnd: seekSeconds <= 0.5 && prefetchHorizonToEOF,
-            lanPreloadOnly: prefetchHorizonToEOF
+            prefetchHorizonToEOF: lanPreloadOnly || belowCutoff,
+            waitForBackgroundAtEnd: seekSeconds <= 0.5 && (lanPreloadOnly || belowCutoff),
+            lanPreloadOnly: lanPreloadOnly
         )
     }
 
