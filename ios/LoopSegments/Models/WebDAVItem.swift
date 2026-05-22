@@ -14,7 +14,7 @@ struct WebDAVItem: Identifiable, Hashable {
     }
 
     static let videoExtensions: Set<String> = [
-        "mkv", "mp4", "avi", "mov", "m4v", "webm"
+        "mkv", "mp4", "avi", "mov", "m4v", "webm", "wmv", "ts"
     ]
 
     var isVideo: Bool {
