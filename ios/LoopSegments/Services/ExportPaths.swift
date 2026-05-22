@@ -157,7 +157,22 @@ enum ExportPaths {
         return false
     }
 
+    static func vanillaDownloadCopyExistsOnDisk() -> Bool {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: mediaExportDirectory.path) else { return false }
+        return names.contains { $0.lowercased().hasPrefix("_vanilla_download.") }
+    }
+
+    /// Hide stale sparse `_working.mp4` on LAN while vanilla (or transcode) is the active source.
+    static func shouldHideSparseWorkingFromLAN() -> Bool {
+        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() { return true }
+        if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() { return true }
+        if vanillaDownloadCopyExistsOnDisk(), ExportPlaybackState.shared.isLANExportActive { return true }
+        return false
+    }
+
     static func isLANBrowsableMediaFile(fileName: String) -> Bool {
+        if fileName == "_working.mp4", shouldHideSparseWorkingFromLAN() { return false }
         guard !isExcludedFromLANMediaServe(fileName: fileName) else { return false }
         let ext = (fileName as NSString).pathExtension.lowercased()
         return lanBrowsableMediaExtensions.contains(ext)

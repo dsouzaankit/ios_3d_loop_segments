@@ -66,6 +66,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     private let sourceHref: String?
     private let containerFormat: MediaContainerFormat
     private var manifestSaveTask: Task<Void, Never>?
+    private var suppressManifestPersist = false
 
     init(
         fileKey: String,
@@ -250,10 +251,22 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
 
     deinit {
         manifestSaveTask?.cancel()
-        persistManifestNow()
+        if !suppressManifestPersist {
+            persistManifestNow()
+        }
         downloadTask?.cancel()
         prefixDownloadTask?.cancel()
         try? writeHandle?.close()
+    }
+
+    /// Drop sparse temp for vanilla/HLS recovery — stop writers and do not rewrite the manifest on teardown.
+    func prepareForAbandon() {
+        suppressManifestPersist = true
+        manifestSaveTask?.cancel()
+        manifestSaveTask = nil
+        pauseBackgroundDownload()
+        try? writeHandle?.close()
+        writeHandle = nil
     }
 
     /// Stop background range fetches but keep the sparse temp file (e.g. before pCloud stream export).

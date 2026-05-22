@@ -22,7 +22,8 @@ enum VanillaWebDAVDownload {
         fastStartDestinationURL: URL? = nil,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         isCancelled: @escaping () -> Bool,
-        log: @escaping (String) -> Void
+        log: @escaping (String) -> Void,
+        onDownloadedBytes: ((Int64) -> Void)? = nil
     ) async throws {
         guard totalLength > 0 else {
             throw WebDAVResourceLoaderError.missingContentLength
@@ -77,6 +78,7 @@ enum VanillaWebDAVDownload {
             try handle.seek(toOffset: UInt64(offset))
             try handle.write(contentsOf: data)
             offset = end + 1
+            onDownloadedBytes?(offset)
 
             let pct = Int(offset * 100 / totalLength)
             let now = CFAbsoluteTimeGetCurrent()

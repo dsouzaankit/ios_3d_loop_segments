@@ -1011,18 +1011,39 @@ enum ExportLANServer {
         return url
     }
 
+    private static func htmlDashboardStatsBlock() -> String {
+        let dashboard = ExportPlaybackState.shared.lanDashboardLines()
+        guard !dashboard.isEmpty else { return "" }
+        let statsEscaped = dashboard
+            .map {
+                $0.replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "<", with: "&lt;")
+            }
+            .map { "<li>\($0)</li>" }
+            .joined()
+        return """
+        <ul>\(statsEscaped)</ul>
+        """
+    }
+
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         var playbackStatusBlock = ""
         let usesVanilla = ExportPlaybackState.shared.usesVanillaDownloadForLAN()
         if usesVanilla {
             let rel = ExportPlaybackState.shared.vanillaLANRelativePath()
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
+            let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
             let escaped = line
                 .replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "<", with: "&lt;")
+            let seekNote = startSec > 0
+                ? "<p><em>Export seek <code>\(formatLANClock(startSec))</code> — use the index link with <code>#t=\(startSec)</code> on the vanilla file (or faststart copy). Download grows from 0:00; playback at your seek works once that timeline is on disk.</em></p>"
+                : ""
             playbackStatusBlock = """
             <p><strong>\(escaped)</strong></p>
+            \(htmlDashboardStatsBlock())
             <p><em>Vanilla download — <code>\(rel)</code> (full file, original extension; not sparse <code>_working.mp4</code>).</em></p>
+            \(seekNote)
             <p>MP4 faststart copy (when built): <code>pcld_ios_media/_vanilla_faststart.mp4</code>. Prefer <code>loop/op_00.mp4</code> when segments exist.</p>
             """
         } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
@@ -1036,7 +1057,8 @@ enum ExportLANServer {
             <p><em>pCloud HLS transcode — <code>pcld_ios_media/_working_pcloud_transcode.mp4</code> grows with export (real MP4, not the original WMV/MKV file).</em></p>
             <p>Prefer <code>loop/op_00.mp4</code> while export runs.</p>
             """
-        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
+        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
+                  !ExportPaths.shouldHideSparseWorkingFromLAN() {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
             let startSec = ExportPlaybackState.shared.playbackStartSeconds
@@ -1047,23 +1069,9 @@ enum ExportLANServer {
             let startedNote = startedReadable
                 ? ""
                 : "<p><em>Started position is not dense on disk yet (need ~45s preroll before <code>#t=\(startSec)</code> for decode) — run export again from that seek on a new build, use <code>loop/op_00.mp4</code>, or VLC on <code>_working.mp4</code>.</em></p>"
-            var statsLines = ""
-            let dashboard = ExportPlaybackState.shared.lanDashboardLines()
-            if !dashboard.isEmpty {
-                let statsEscaped = dashboard
-                    .map {
-                        $0.replacingOccurrences(of: "&", with: "&amp;")
-                            .replacingOccurrences(of: "<", with: "&lt;")
-                    }
-                    .map { "<li>\($0)</li>" }
-                    .joined()
-                statsLines = """
-                <ul>\(statsEscaped)</ul>
-                """
-            }
             playbackStatusBlock = """
             <p><strong>\(escaped)</strong></p>
-            \(statsLines)
+            \(htmlDashboardStatsBlock())
             <p><code>LAN playable till</code> = furthest contiguous dense bytes from playback start. Sequential prefetch fills toward EOF (low bitrate) or exported+2 min (high bitrate). Prefer <code>loop/op_00.mp4</code> while export runs.</p>
             \(startedNote)
             """
@@ -1081,10 +1089,16 @@ enum ExportLANServer {
                 var note = ""
                 if name.hasPrefix("\(ExportPaths.mediaExportFolderName)/_vanilla_download.")
                     || name == ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL) {
+                    let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
+                    let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
+                    let href = "\(escaped)\(tFrag)"
                     let vanillaNote = name.contains("_vanilla_faststart")
                         ? " — faststart MP4 copy (original download unchanged)"
                         : " — full vanilla WebDAV download (original extension)"
-                    items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(vanillaNote)</li>")
+                    let seekNote = startSec > 0
+                        ? " — export seek #t=\(startSec) (sequential download from 0:00)"
+                        : ""
+                    items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(vanillaNote)\(seekNote)</li>")
                     continue
                 }
                 if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
@@ -1170,7 +1184,14 @@ enum ExportLANServer {
             "port": Int(defaultPort),
             "files": entries,
         ]
-        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
+        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
+            var playback = ExportPlaybackState.shared.frozenStatusPayload
+            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+            playback["resumeTimelineReadable"] = startSec <= 0
+                || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
+            payload["vanillaDownloadPlayback"] = playback
+        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
+                  !ExportPaths.shouldHideSparseWorkingFromLAN() {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
             var playback = ExportPlaybackState.shared.frozenStatusPayload
             let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0

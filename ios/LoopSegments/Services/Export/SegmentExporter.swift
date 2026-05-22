@@ -113,12 +113,25 @@ final class SegmentExporter {
         )
         try Self.ensureExportDiskSpace(fileBytes: fileSize)
 
-            if fileSize > Self.streamOnlyThresholdBytes {
-                logHandler(
-                    "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
-                )
-            }
-            let downloader = try WebDAVTempFileDownload(
+        if fileSize > Self.streamOnlyThresholdBytes {
+            logHandler(
+                "Large file (\(Self.formatBytes(fileSize))) — sparse temp copy (only bytes needed per minute, not full \(Self.formatBytes(fileSize)))"
+            )
+        }
+
+        let durationSeconds: Double
+        let videoFormat: CMFormatDescription
+        let audioFormat: CMFormatDescription?
+        let reuseSparseWorking = Self.canReuseSparseWorkingForResume(
+            item: item,
+            fileSize: fileSize,
+            continueLANExport: continueLANExport
+        )
+        let downloader: WebDAVTempFileDownload
+
+        if reuseSparseWorking {
+            logHandler("Resuming sparse _working.mp4 from paused export…")
+            downloader = try WebDAVTempFileDownload(
                 fileKey: item.fileKey,
                 sourceHref: item.href,
                 remoteURL: inputURL,
@@ -131,36 +144,76 @@ final class SegmentExporter {
             tempDownload = downloader
             downloader.logDownloadStarted()
             try await downloader.ensureIndexTailOnDisk()
-        let durationSeconds: Double
-        let videoFormat: CMFormatDescription
-        let audioFormat: CMFormatDescription?
-        do {
-            (durationSeconds, videoFormat, audioFormat) = try await probeExportMetadata(
-                containerFormat: containerFormat,
-                fileURL: downloader.fileURL,
-                inputURL: inputURL,
-                authorizationProvider: authorizationProvider,
-                rangeCache: rangeCache,
-                log: logHandler
+            do {
+                (durationSeconds, videoFormat, audioFormat) = try await probeExportMetadata(
+                    containerFormat: containerFormat,
+                    fileURL: downloader.fileURL,
+                    inputURL: inputURL,
+                    authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
+                    log: logHandler
+                )
+            } catch {
+                abandonSparseWorkingForRecovery(logHandler: logHandler)
+                return try await attemptRecoveryExport(
+                    probeError: error,
+                    item: item,
+                    inputURL: inputURL,
+                    credentials: credentials,
+                    containerFormat: containerFormat,
+                    fileBytes: fileSize,
+                    seekMs: seekMs,
+                    continueLANExport: continueLANExport,
+                    resumeCursorMs: resumeCursorMs,
+                    authorizationProvider: authorizationProvider,
+                    isCancelled: cancelCheck,
+                    logHandler: logHandler,
+                    onMediaProgress: onMediaProgress
+                )
+            }
+        } else {
+            logHandler(
+                "Probing \(containerFormat.displayName) via pCloud before sparse temp — " +
+                    "skips _working.mp4 shell when vanilla/HLS recovery will run"
             )
-        } catch {
-            tempDownload?.cancel()
-            tempDownload = nil
-            return try await attemptRecoveryExport(
-                probeError: error,
-                item: item,
-                inputURL: inputURL,
-                credentials: credentials,
+            do {
+                (durationSeconds, videoFormat, audioFormat) = try await probeStreamMetadataOnly(
+                    inputURL: inputURL,
+                    authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
+                    containerFormat: containerFormat,
+                    log: logHandler
+                )
+            } catch {
+                return try await attemptRecoveryExport(
+                    probeError: error,
+                    item: item,
+                    inputURL: inputURL,
+                    credentials: credentials,
+                    containerFormat: containerFormat,
+                    fileBytes: fileSize,
+                    seekMs: seekMs,
+                    continueLANExport: continueLANExport,
+                    resumeCursorMs: resumeCursorMs,
+                    authorizationProvider: authorizationProvider,
+                    isCancelled: cancelCheck,
+                    logHandler: logHandler,
+                    onMediaProgress: onMediaProgress
+                )
+            }
+            downloader = try WebDAVTempFileDownload(
+                fileKey: item.fileKey,
+                sourceHref: item.href,
+                remoteURL: inputURL,
+                rangeCache: rangeCache,
                 containerFormat: containerFormat,
-                fileBytes: fileSize,
-                seekMs: seekMs,
-                continueLANExport: continueLANExport,
-                resumeCursorMs: resumeCursorMs,
                 authorizationProvider: authorizationProvider,
                 isCancelled: cancelCheck,
-                logHandler: logHandler,
-                onMediaProgress: onMediaProgress
+                log: logHandler
             )
+            tempDownload = downloader
+            downloader.logDownloadStarted()
+            try await downloader.ensureIndexTailOnDisk()
         }
 
         let durationMs = Int64(durationSeconds * 1000)
@@ -765,6 +818,32 @@ final class SegmentExporter {
         )
     }
 
+    /// Probe failed or vanilla/HLS recovery — sparse `_working.mp4` is not the LAN source anymore.
+    private func abandonSparseWorkingForRecovery(logHandler: @escaping (String) -> Void) {
+        tempDownload?.prepareForAbandon()
+        tempDownload = nil
+        WorkingSourceSparseCatalog.remove()
+        if ExportPaths.removeWorkingSourceCopy(log: logHandler) {
+            logHandler(
+                "Removed sparse _working.mp4 — recovery uses vanilla download or pCloud transcode, not sparse WebDAV"
+            )
+        }
+        ExportPlaybackState.shared.clearSparseWorkingPlaybackHints()
+    }
+
+    private static func canReuseSparseWorkingForResume(
+        item: WebDAVItem,
+        fileSize: Int64,
+        continueLANExport: Bool
+    ) -> Bool {
+        guard continueLANExport, fileSize > 0 else { return false }
+        return WorkingSourceSparseCatalog.tryAdopt(
+            fileKey: item.fileKey,
+            totalLength: fileSize,
+            fileURL: ExportPaths.workingSourceURL
+        ) != nil
+    }
+
     private func attemptRecoveryExport(
         probeError: Error,
         item: WebDAVItem,
@@ -780,6 +859,7 @@ final class SegmentExporter {
         logHandler: @escaping (String) -> Void,
         onMediaProgress: (@Sendable (Int64) -> Void)?
     ) async throws -> SegmentExportResult {
+        abandonSparseWorkingForRecovery(logHandler: logHandler)
         if VanillaWebDAVDownload.isBackupEnabled {
             logHandler(
                 "WebDAV probe failed for \(containerFormat.displayName) — vanilla WebDAV download first " +
@@ -840,6 +920,7 @@ final class SegmentExporter {
         logHandler: @escaping (String) -> Void,
         onMediaProgress: (@Sendable (Int64) -> Void)?
     ) async throws -> SegmentExportResult {
+        abandonSparseWorkingForRecovery(logHandler: logHandler)
         ExportPaths.removeVanillaDownloadCopies(log: logHandler)
         ExportPlaybackState.shared.setPCloudTranscodedWorkingActive(false)
 
@@ -853,13 +934,20 @@ final class SegmentExporter {
         let fastStartURL = usesFastStartDuringDownload ? ExportPaths.vanillaFastStartURL : nil
         let fastStartRelative = fastStartURL.map { ExportPaths.pathRelativeToExports($0) }
 
+        let seekSeconds = Double(seekMs) / 1000.0
         ExportPlaybackState.shared.beginVanillaExport(
             downloadRelativePath: downloadRel,
             fastStartRelativePath: fastStartRelative,
-            seekSeconds: Double(seekMs) / 1000.0,
+            seekSeconds: seekSeconds,
             durationSeconds: 0,
             totalBytes: effectiveBytes
         )
+        if seekMs > 0 {
+            logHandler(
+                "Vanilla export seek — \(ExportTimelineLog.wallClock(seconds: seekSeconds)) for segments / LAN #t=; " +
+                    "WebDAV download still fills the file from 0:00 (backup copy)"
+            )
+        }
 
         try await VanillaWebDAVDownload.downloadFullFile(
             remoteURL: inputURL,
@@ -868,7 +956,10 @@ final class SegmentExporter {
             fastStartDestinationURL: fastStartURL,
             authorizationProvider: authorizationProvider,
             isCancelled: isCancelled,
-            log: logHandler
+            log: logHandler,
+            onDownloadedBytes: { bytes in
+                ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: bytes)
+            }
         )
 
         let containerFormat = MediaContainerFormat.from(filename: item.name)
@@ -913,7 +1004,6 @@ final class SegmentExporter {
         }
 
         let durationMs = Int64(durationSeconds * 1000)
-        let seekSeconds = Double(seekMs) / 1000.0
         if durationMs > 0, seekMs >= durationMs - 250 {
             throw SegmentExporterError.seekPastEnd
         }
@@ -925,6 +1015,7 @@ final class SegmentExporter {
             durationSeconds: durationSeconds,
             totalBytes: effectiveBytes
         )
+        ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: effectiveBytes)
         if let notice = ExportPlaybackState.shared.vanillaDownloadUserNotice() {
             logHandler(notice)
         }

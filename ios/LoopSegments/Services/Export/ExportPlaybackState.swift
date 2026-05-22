@@ -30,6 +30,10 @@ final class ExportPlaybackState: @unchecked Sendable {
         var vanillaDownloadActive = false
         var vanillaLANRelativePath = ""
         var vanillaUsesFastStartForExport = false
+        /// Bytes written to `_vanilla_download.*` (sequential from file start).
+        var vanillaDownloadedBytes: Int64 = 0
+        var vanillaLastProgressBytes: Int64 = 0
+        var vanillaLastProgressAt: Date?
     }
 
     private let lock = NSLock()
@@ -85,12 +89,68 @@ final class ExportPlaybackState: @unchecked Sendable {
             if !active {
                 snapshot.vanillaLANRelativePath = ""
                 snapshot.vanillaUsesFastStartForExport = false
+                snapshot.vanillaDownloadedBytes = 0
+            }
+        }
+    }
+
+    func updateVanillaDownloadProgress(downloadedBytes: Int64) {
+        lock.withLock {
+            guard snapshot.vanillaDownloadActive else { return }
+            let total = snapshot.totalFileBytes
+            let downloaded = max(0, downloadedBytes)
+            snapshot.vanillaDownloadedBytes = downloaded
+            let duration = snapshot.durationSeconds
+            if total > 0 {
+                let pct = Int(min(100, downloaded * 100 / max(1, total)))
+                snapshot.denseBytesOnDiskPercent = pct
+                snapshot.backgroundFillPercent = pct
+                snapshot.backgroundDownloadActive = downloaded < total
+                if duration > 0 {
+                    let linearSec = duration * Double(downloaded) / Double(total)
+                    snapshot.backgroundTimelineSeconds = linearSec
+                    snapshot.exportCursorSeconds = max(
+                        snapshot.playbackStartSeconds,
+                        min(duration, linearSec)
+                    )
+                }
+            }
+            let now = Date()
+            if let lastAt = snapshot.vanillaLastProgressAt,
+               downloaded > snapshot.vanillaLastProgressBytes {
+                let deltaBytes = downloaded - snapshot.vanillaLastProgressBytes
+                let elapsed = now.timeIntervalSince(lastAt)
+                if elapsed >= 0.25, deltaBytes > 0 {
+                    let burst = Double(deltaBytes) * 8.0 / elapsed / 1_000_000.0
+                    snapshot.lastWanBurstMbps = max(snapshot.lastWanBurstMbps, burst)
+                }
+            }
+            snapshot.vanillaLastProgressBytes = downloaded
+            snapshot.vanillaLastProgressAt = now
+            if let started = snapshot.exportStartedAt, downloaded > 0 {
+                let elapsed = now.timeIntervalSince(started)
+                if elapsed >= 0.5 {
+                    snapshot.averageWanDownloadMbps = Double(downloaded) * 8.0 / elapsed / 1_000_000.0
+                }
             }
         }
     }
 
     func usesVanillaDownloadForLAN() -> Bool {
         lock.withLock { snapshot.vanillaDownloadActive }
+    }
+
+    func clearSparseWorkingPlaybackHints() {
+        lock.withLock {
+            snapshot.filledSpans = []
+            snapshot.headOnDisk = false
+            snapshot.tailOnDisk = false
+            snapshot.backgroundDownloadActive = false
+            snapshot.backgroundFillPercent = 0
+            snapshot.denseBytesOnDiskPercent = 0
+            snapshot.backgroundPrefetchEnabled = false
+            snapshot.backgroundTimelineSeconds = 0
+        }
     }
 
     func beginVanillaExport(
@@ -105,6 +165,12 @@ final class ExportPlaybackState: @unchecked Sendable {
             snapshot.vanillaLANRelativePath = downloadRelativePath
             snapshot.vanillaUsesFastStartForExport = fastStartRelativePath != nil
             snapshot.pcloudTranscodedWorkingActive = false
+            snapshot.vanillaDownloadedBytes = 0
+            snapshot.vanillaLastProgressBytes = 0
+            snapshot.vanillaLastProgressAt = nil
+            snapshot.averageWanDownloadMbps = 0
+            snapshot.lastWanBurstMbps = 0
+            snapshot.filledSpans = []
             snapshot.playbackStartSeconds = max(0, seekSeconds)
             snapshot.exportCursorSeconds = snapshot.playbackStartSeconds
             snapshot.durationSeconds = max(0, durationSeconds)
@@ -220,6 +286,31 @@ final class ExportPlaybackState: @unchecked Sendable {
     func lanDashboardLines() -> [String] {
         let snap = lock.withLock { snapshot }
         var lines: [String] = []
+        if snap.vanillaDownloadActive, snap.totalFileBytes > 0 {
+            let downloaded = max(0, snap.vanillaDownloadedBytes)
+            let total = snap.totalFileBytes
+            let pct = Int(min(100, downloaded * 100 / max(1, total)))
+            if total > 0 {
+                lines.append(
+                    String(
+                        format: "Vanilla download: %d%% (%.1f / %.1f MB)",
+                        pct,
+                        Self.fileSizeMB(downloaded),
+                        Self.fileSizeMB(total)
+                    )
+                )
+            }
+            if snap.durationSeconds > 0, snap.backgroundTimelineSeconds > 0 {
+                lines.append(
+                    "Downloaded timeline: ~\(Self.formatClock(snap.backgroundTimelineSeconds)) of \(Self.formatClock(snap.durationSeconds))"
+                )
+            }
+            if snap.backgroundDownloadActive {
+                lines.append("Vanilla WebDAV download — active now")
+            } else if downloaded >= total, total > 0 {
+                lines.append("Vanilla WebDAV download — complete")
+            }
+        }
         if snap.totalFileBytes > 0 {
             lines.append(String(format: "Media file size: %.1f MB", Self.fileSizeMB(snap.totalFileBytes)))
         }
@@ -280,6 +371,18 @@ final class ExportPlaybackState: @unchecked Sendable {
     private static func liveFillStats(snap: Snapshot) -> LiveFillStats {
         guard snap.totalFileBytes > 0 else {
             return LiveFillStats(backgroundFillPercent: 0, backgroundTimelineSeconds: 0, denseBytesOnDiskPercent: 0)
+        }
+        if snap.vanillaDownloadActive {
+            let total = snap.totalFileBytes
+            let downloaded = max(0, snap.vanillaDownloadedBytes)
+            let duration = snap.durationSeconds
+            let pct = Int(min(100, downloaded * 100 / max(1, total)))
+            let timeline = duration > 0 ? duration * Double(downloaded) / Double(total) : 0
+            return LiveFillStats(
+                backgroundFillPercent: pct,
+                backgroundTimelineSeconds: timeline,
+                denseBytesOnDiskPercent: pct
+            )
         }
         let total = snap.totalFileBytes
         let duration = snap.durationSeconds
@@ -543,6 +646,11 @@ final class ExportPlaybackState: @unchecked Sendable {
             "backgroundFillPercent": live.backgroundFillPercent,
             "denseBytesOnDiskPercent": live.denseBytesOnDiskPercent,
             "backgroundTimelineSeconds": live.backgroundTimelineSeconds,
+            "vanillaDownloadActive": snap.vanillaDownloadActive,
+            "vanillaDownloadedBytes": snap.vanillaDownloadedBytes,
+            "vanillaDownloadPercent": snap.totalFileBytes > 0
+                ? Int(min(100, snap.vanillaDownloadedBytes * 100 / max(1, snap.totalFileBytes)))
+                : 0,
         ]
         if let started = snap.exportStartedAt {
             payload["exportStartedAt"] = ISO8601DateFormatter().string(from: started)
@@ -556,8 +664,15 @@ final class ExportPlaybackState: @unchecked Sendable {
         playbackStartSeconds: Double? = nil,
         durationSeconds: Double? = nil
     ) -> Double {
-        let start = max(0, playbackStartSeconds ?? snap.playbackStartSeconds)
         let duration = durationSeconds ?? snap.durationSeconds
+        if snap.vanillaDownloadActive, snap.totalFileBytes > 0 {
+            let downloaded = max(0, snap.vanillaDownloadedBytes)
+            if duration > 0 {
+                return min(duration, duration * Double(downloaded) / Double(snap.totalFileBytes))
+            }
+            return 0
+        }
+        let start = max(0, playbackStartSeconds ?? snap.playbackStartSeconds)
         guard duration > 0, snap.totalFileBytes > 0 else { return start }
         let startByte = WebDAVTempFileDownload.lanPlaybackDenseAnchorByte(
             playbackStartSeconds: start,
@@ -589,7 +704,9 @@ final class ExportPlaybackState: @unchecked Sendable {
             playbackStartSeconds: from,
             durationSeconds: duration
         )
-        let tillNote = "contiguous dense from playback start"
+        let tillNote = snap.vanillaDownloadActive
+            ? "sequential download from file start (use index #t= for export seek)"
+            : "contiguous dense from playback start"
         let exportLabel: String
         if export + 1 < from {
             exportLabel =
