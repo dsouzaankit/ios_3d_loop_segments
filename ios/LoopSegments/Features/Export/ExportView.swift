@@ -117,14 +117,14 @@ struct ExportView: View {
                 Text(inProgressLANFootnote)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Toggle("Vanilla download backup", isOn: $vanillaDownloadBackup)
+                Toggle("Vanilla download first (before HLS)", isOn: $vanillaDownloadBackup)
                     .disabled(session.isExportRunning)
                     .onChange(of: vanillaDownloadBackup) { _, enabled in
                         VanillaWebDAVDownload.isBackupEnabled = enabled
                     }
                     .onAppear { vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled }
                 Text(
-                    "After sparse probe and optional HLS fail: full WebDAV download to pcld_ios_media/_vanilla_download.<ext> (original extension). MP4/MOV also get _vanilla_faststart.mp4 for export/LAN without overwriting the download."
+                    "After sparse probe fails: full WebDAV download first (no API token). pCloud HLS runs only if vanilla is off or fails. Files: _vanilla_download.<ext>; MP4/MOV also get _vanilla_faststart.mp4."
                 )
                     .font(.footnote)
                     .foregroundStyle(.secondary)

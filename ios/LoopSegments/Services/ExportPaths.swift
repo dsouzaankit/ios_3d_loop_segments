@@ -146,11 +146,20 @@ enum ExportPaths {
         WebDAVItem.videoExtensions.union(["m2ts", "mts"])
     }
 
-    /// Staging, sparse manifest, and temp remux files must not be served (partial / internal).
+    /// Suffix while a full vanilla WebDAV download is in progress (hidden from LAN until rename).
+    static let vanillaDownloadInProgressSuffix = ".downloading"
+
+    static func vanillaDownloadInProgressURL(preservingExtensionFrom filename: String) -> URL {
+        vanillaDownloadURL(preservingExtensionFrom: filename)
+            .appendingPathExtension("downloading")
+    }
+
+    /// Staging, sparse manifest, in-progress downloads, and temp remux files must not be served.
     static func isExcludedFromLANMediaServe(fileName: String) -> Bool {
         let lower = fileName.lowercased()
         if lower.hasPrefix(".") { return true }
         if lower.contains(".staging.") { return true }
+        if lower.hasSuffix(vanillaDownloadInProgressSuffix) { return true }
         if lower.hasSuffix(".sparse.json") { return true }
         if lower.hasPrefix(".faststart-") { return true }
         if lower.hasPrefix("_working_pcloud_transcode.staging") { return true }
@@ -208,7 +217,11 @@ enum ExportPaths {
         var removed = false
         var urls: [URL] = [vanillaFastStartURL]
         if let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) {
-            urls.append(contentsOf: listed.filter { $0.lastPathComponent.hasPrefix("_vanilla_download.") })
+            for url in listed {
+                let name = url.lastPathComponent.lowercased()
+                guard name.hasPrefix("_vanilla_download.") else { continue }
+                urls.append(url)
+            }
         }
         for url in urls {
             guard fm.fileExists(atPath: url.path) else { continue }

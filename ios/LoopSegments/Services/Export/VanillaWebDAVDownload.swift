@@ -17,6 +17,7 @@ enum VanillaWebDAVDownload {
     static func downloadFullFile(
         remoteURL: URL,
         destinationURL: URL,
+        sourceFilename: String,
         totalLength: Int64,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         isCancelled: @escaping () -> Bool,
@@ -28,18 +29,22 @@ enum VanillaWebDAVDownload {
         try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: totalLength)
 
         let fm = FileManager.default
-        if fm.fileExists(atPath: destinationURL.path) {
-            try fm.removeItem(at: destinationURL)
+        let inProgressURL = ExportPaths.vanillaDownloadInProgressURL(
+            preservingExtensionFrom: sourceFilename
+        )
+        for url in [destinationURL, inProgressURL] {
+            if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
         }
-        guard fm.createFile(atPath: destinationURL.path, contents: nil) else {
+        guard fm.createFile(atPath: inProgressURL.path, contents: nil) else {
             throw SegmentExporterError.writerSetupFailed
         }
-        let handle = try FileHandle(forWritingTo: destinationURL)
+        let handle = try FileHandle(forWritingTo: inProgressURL)
         defer { try? handle.close() }
 
         log(
-            "Vanilla download — \(ExportPaths.pathRelativeToExports(destinationURL)) " +
-                "(\(formatBytes(totalLength)), extension preserved)"
+            "Vanilla download — \(ExportPaths.pathRelativeToExports(inProgressURL)) " +
+                "(hidden on LAN until complete → \(destinationURL.lastPathComponent), " +
+                "\(formatBytes(totalLength)))"
         )
 
         var offset: Int64 = 0
@@ -73,11 +78,16 @@ enum VanillaWebDAVDownload {
             }
         }
         try handle.synchronize()
-        let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        let onDisk = (try? fm.attributesOfItem(atPath: inProgressURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         guard onDisk == totalLength else {
+            try? fm.removeItem(at: inProgressURL)
             throw WebDAVResourceLoaderError.invalidResponse
         }
-        log("Vanilla download complete — \(formatBytes(onDisk)) on disk")
+        if fm.fileExists(atPath: destinationURL.path) {
+            try fm.removeItem(at: destinationURL)
+        }
+        try fm.moveItem(at: inProgressURL, to: destinationURL)
+        log("Vanilla download complete — \(formatBytes(onDisk)) at \(ExportPaths.pathRelativeToExports(destinationURL))")
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {

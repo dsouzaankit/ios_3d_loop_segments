@@ -780,48 +780,51 @@ final class SegmentExporter {
         logHandler: @escaping (String) -> Void,
         onMediaProgress: (@Sendable (Int64) -> Void)?
     ) async throws -> SegmentExportResult {
+        if VanillaWebDAVDownload.isBackupEnabled {
+            logHandler(
+                "WebDAV probe failed for \(containerFormat.displayName) — vanilla WebDAV download first " +
+                    "(full file, original extension; uses WebDAV only, no pCloud API / gethlslink)"
+            )
+            do {
+                return try await runVanillaDownloadExport(
+                    item: item,
+                    inputURL: inputURL,
+                    fileBytes: fileBytes,
+                    seekMs: seekMs,
+                    continueLANExport: continueLANExport,
+                    resumeCursorMs: resumeCursorMs,
+                    authorizationProvider: authorizationProvider,
+                    isCancelled: isCancelled,
+                    logHandler: logHandler,
+                    onMediaProgress: onMediaProgress
+                )
+            } catch {
+                logHandler("Vanilla download failed — \(error.localizedDescription)")
+            }
+        }
         if Self.shouldAttemptPCloudHLSFallback(
             error: probeError,
             containerFormat: containerFormat,
             fileBytes: fileBytes
         ) {
             logHandler(
-                "WebDAV probe failed for \(containerFormat.displayName) — trying pCloud HLS transcode " +
-                    "(>\(PCloudHLSLink.transcodeMinSourceMbps) Mbps est., max \(PCloudHLSLink.maxTranscodeResolution)) → " +
+                "Trying pCloud HLS transcode fallback " +
+                    "(>\(PCloudHLSLink.transcodeMinSourceMbps) Mbps est., max \(PCloudHLSLink.maxTranscodeResolution); needs API token) → " +
                     "\(ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL))"
             )
-            do {
-                return try await runPCloudHLSExport(
-                    item: item,
-                    credentials: credentials,
-                    fileBytes: fileBytes,
-                    seekMs: seekMs,
-                    continueLANExport: continueLANExport,
-                    resumeCursorMs: resumeCursorMs,
-                    isCancelled: isCancelled,
-                    logHandler: logHandler,
-                    onMediaProgress: onMediaProgress
-                )
-            } catch {
-                logHandler("pCloud HLS failed — \(error.localizedDescription)")
-            }
+            return try await runPCloudHLSExport(
+                item: item,
+                credentials: credentials,
+                fileBytes: fileBytes,
+                seekMs: seekMs,
+                continueLANExport: continueLANExport,
+                resumeCursorMs: resumeCursorMs,
+                isCancelled: isCancelled,
+                logHandler: logHandler,
+                onMediaProgress: onMediaProgress
+            )
         }
-        guard VanillaWebDAVDownload.isBackupEnabled else { throw probeError }
-        logHandler(
-            "Trying vanilla WebDAV download backup — full file, original extension, optional faststart MP4 copy"
-        )
-        return try await runVanillaDownloadExport(
-            item: item,
-            inputURL: inputURL,
-            fileBytes: fileBytes,
-            seekMs: seekMs,
-            continueLANExport: continueLANExport,
-            resumeCursorMs: resumeCursorMs,
-            authorizationProvider: authorizationProvider,
-            isCancelled: isCancelled,
-            logHandler: logHandler,
-            onMediaProgress: onMediaProgress
-        )
+        throw probeError
     }
 
     /// Dense full-file download + segment export from local copy (not sparse `_working.mp4`).
@@ -847,6 +850,7 @@ final class SegmentExporter {
         try await VanillaWebDAVDownload.downloadFullFile(
             remoteURL: inputURL,
             destinationURL: downloadURL,
+            sourceFilename: item.name,
             totalLength: effectiveBytes,
             authorizationProvider: authorizationProvider,
             isCancelled: isCancelled,
