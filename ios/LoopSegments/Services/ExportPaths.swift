@@ -142,7 +142,7 @@ enum ExportPaths {
     /// LAN / index path while export uses pCloud transcode instead of sparse WebDAV mirror.
     static var lanInProgressWorkingRelativePath: String {
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
-            return pathRelativeToExports(ExportPlaybackState.shared.vanillaLANRelativePath())
+            return ExportPlaybackState.shared.vanillaLANRelativePath()
         }
         if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
             return pathRelativeToExports(workingTranscodedURL)
@@ -154,10 +154,11 @@ enum ExportPaths {
     static func removeVanillaDownloadCopies(log: ((String) -> Void)? = nil) -> Bool {
         let fm = FileManager.default
         var removed = false
-        for url in [vanillaFastStartURL] + (try? fm.contentsOfDirectory(
-            at: mediaExportDirectory,
-            includingPropertiesForKeys: nil
-        ))?.filter({ $0.lastPathComponent.hasPrefix("_vanilla_download.") }) ?? [] {
+        var urls: [URL] = [vanillaFastStartURL]
+        if let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) {
+            urls.append(contentsOf: listed.filter { $0.lastPathComponent.hasPrefix("_vanilla_download.") })
+        }
+        for url in urls {
             guard fm.fileExists(atPath: url.path) else { continue }
             do {
                 try fm.removeItem(at: url)
