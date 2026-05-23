@@ -113,17 +113,16 @@ final class AppSession: ObservableObject {
         discoverFilesRoot: Bool = true
     ) async throws -> WebDAVCredentials {
         var updated = credentials
-        let session = try await PCloudAuth.fetchAuthSession(
+        let auth = try await PCloudAuth.fetchAuthSession(
             email: credentials.email,
             password: credentials.password,
-            preferredRegion: credentials.region,
-            session: .shared
+            preferredRegion: credentials.region
         )
-        updated.region = session.region
-        updated.apiAuthToken = session.token
-        updated.apiAuthHost = session.apiHost
+        updated.region = auth.region
+        updated.apiAuthToken = auth.token
+        updated.apiAuthHost = auth.apiHost
         SearchDebugLog.log(
-            "sign-in: API token saved len=\(session.token.count) host=\(session.apiHost) region=\(session.region.rawValue)"
+            "sign-in: API token saved len=\(auth.token.count) host=\(auth.apiHost) region=\(auth.region.rawValue)"
         )
         if discoverFilesRoot {
             if let root = try? await PCloudWebDAVRootResolver.filesRoot(credentials: updated),

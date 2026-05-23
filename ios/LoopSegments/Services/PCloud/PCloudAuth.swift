@@ -49,7 +49,7 @@ enum PCloudAuth {
         email: String,
         password: String,
         preferredRegion: PCloudRegion,
-        session: URLSession
+        session: URLSession = authSession
     ) async throws -> (token: String, region: PCloudRegion, apiHost: String) {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)

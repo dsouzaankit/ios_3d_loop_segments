@@ -302,8 +302,7 @@ final class PCloudAPIClient {
         let (token, region, apiHost) = try await PCloudAuth.fetchAuthSession(
             email: credentials.email,
             password: credentials.password,
-            preferredRegion: credentials.region,
-            session: session
+            preferredRegion: credentials.region
         )
         authToken = token
         authRegion = region
