@@ -125,7 +125,7 @@ Expect **GET** **`status.json`** and index **`/`** OK. **`rclone`** drive mappin
 | **Large HEVC mid-file** | **≥ ~1.5 GB**, HEVC, minute not at byte 0 (e.g. seek **30:00**) | **Dense-fill ~1 GB window** → **local export session** (remote passthrough skipped; matches seek‑0 minute‑1 success). |
 | **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
 | **Hybrid (capped)** | Mid-file on **smaller** large sources where custom URL + sparse temp still opens | Head + dense window + MP4 index at EOF; falls back to HTTPS if reader fails |
-| **Vanilla download** | Sparse probe fails; toggle on (default) | WebDAV **full file from 0:00** → **`_vanilla_download.<ext>`**; **60s segments** when est. bitrate is **at/above** Mbps cutoff and codec allows |
+| **Vanilla download** | Sparse probe fails; toggle on (default) | WebDAV **full file** → **`_vanilla_download.<ext>`** (2 MB chunks, sequential; **resumes partial** via `_vanilla_download.meta.json` + WebDAV Range; retries in `export_latest.txt`); **60s segments** when est. bitrate is **at/above** Mbps cutoff and codec allows |
 | **pCloud HLS transcode** | Vanilla off/failed; above **HLS cutoff** | `gethlslink` (API token) → **`_working_pcloud_transcode.mp4`** + segments |
 
 Export needs enough free space for the sparse shell plus one minute’s dense window (or HTTPS range reads). **Vanilla backup** needs space for the **entire** source file (plus **`_vanilla_faststart.mp4`** for MP4). Check `export_latest.txt` for which path ran.
@@ -142,6 +142,8 @@ Default export is still **one ~60s segment at a time** with passthrough on devic
 | **`_vanilla_faststart.mp4`** | Only if **`_vanilla_download.mp4`** has moov-at-end; skipped when download already faststart |
 
 **Pre-faststarting files on pCloud** (ffmpeg before upload) is optional for “play full movie from pCloud WebDAV”; it does **not** fix WMV probe failures, doubles handling if you remux after upload, and invalidates in-progress sparse resume if you replace the cloud object. The app keeps cloud originals untouched.
+
+**Windows batch faststart (separate from this app):** `P:\all_scripts\faststart` — `Apply-Faststart.ps1` / `run_faststart.cmd` remuxes MP4/MOV/M4V on disk (paths in `faststart-paths.txt`; files **> 2 GB** use local temp then upload). Log cleanup: `Truncate-FaststartLogs.ps1` / `truncate_logs.cmd` (archive logs **> 5 MB**, prune old `ffmpeg-*.err`). Not part of the iOS export pipeline.
 
 ### Export screen settings (LAN section)
 

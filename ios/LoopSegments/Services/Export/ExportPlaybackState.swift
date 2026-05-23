@@ -166,15 +166,16 @@ final class ExportPlaybackState: @unchecked Sendable {
         fastStartRelativePath: String?,
         seekSeconds: Double,
         durationSeconds: Double,
-        totalBytes: Int64
+        totalBytes: Int64,
+        initialDownloadedBytes: Int64 = 0
     ) {
         lock.withLock {
             snapshot.vanillaDownloadActive = true
             snapshot.vanillaLANRelativePath = downloadRelativePath
             snapshot.vanillaUsesFastStartForExport = fastStartRelativePath != nil
             snapshot.pcloudTranscodedWorkingActive = false
-            snapshot.vanillaDownloadedBytes = 0
-            snapshot.vanillaLastProgressBytes = 0
+            snapshot.vanillaDownloadedBytes = max(0, initialDownloadedBytes)
+            snapshot.vanillaLastProgressBytes = max(0, initialDownloadedBytes)
             snapshot.vanillaLastProgressAt = nil
             snapshot.averageWanDownloadMbps = 0
             snapshot.lastWanBurstMbps = 0

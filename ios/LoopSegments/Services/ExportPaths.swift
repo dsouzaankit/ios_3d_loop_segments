@@ -217,10 +217,46 @@ enum ExportPaths {
         return pathRelativeToExports(workingSourceURL)
     }
 
+    /// Drop stale vanilla files when the export item changed; keep partial/complete copy for the same `fileKey` + size.
+    static func syncVanillaDownloadWithExportItem(
+        fileKey: String,
+        totalLength: Int64,
+        filename: String,
+        log: ((String) -> Void)? = nil
+    ) {
+        let destination = vanillaDownloadURL(preservingExtensionFrom: filename)
+        if totalLength > 0,
+           VanillaDownloadResumeCatalog.matches(fileKey: fileKey, totalLength: totalLength),
+           FileManager.default.fileExists(atPath: destination.path) {
+            pruneVanillaDownloadCopies(keepingDestination: destination, log: log)
+            return
+        }
+        removeVanillaDownloadCopies(log: log)
+    }
+
+    /// Remove other `_vanilla_download.<ext>` files; keep the destination for the current export.
+    static func pruneVanillaDownloadCopies(keepingDestination keep: URL, log: ((String) -> Void)? = nil) {
+        let fm = FileManager.default
+        guard let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) else {
+            return
+        }
+        for url in listed {
+            let name = url.lastPathComponent.lowercased()
+            guard name.hasPrefix("_vanilla_download."), url != keep else { continue }
+            do {
+                try fm.removeItem(at: url)
+                log?("Removed stale \(pathRelativeToExports(url))")
+            } catch {
+                log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+    }
+
     @discardableResult
     static func removeVanillaDownloadCopies(log: ((String) -> Void)? = nil) -> Bool {
         let fm = FileManager.default
         var removed = false
+        VanillaDownloadResumeCatalog.remove()
         var urls: [URL] = [vanillaFastStartURL]
         if let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) {
             for url in listed {

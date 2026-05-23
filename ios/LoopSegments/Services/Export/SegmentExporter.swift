@@ -83,8 +83,6 @@ final class SegmentExporter {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
 
-        ExportPaths.removeVanillaDownloadCopies(log: logHandler)
-
         let rangeCache = WebDAVRangeCache()
         let containerFormat = MediaContainerFormat.from(filename: item.name)
         logHandler(
@@ -110,6 +108,12 @@ final class SegmentExporter {
         }
 
         let fileSize = rangeCache.contentLengthValue() ?? 0
+        ExportPaths.syncVanillaDownloadWithExportItem(
+            fileKey: item.fileKey,
+            totalLength: fileSize > 0 ? fileSize : (item.contentLength ?? 0),
+            filename: item.name,
+            log: logHandler
+        )
         logHandler(
             "Dense fill — each minute downloads to temp before passthrough (mid-file uses capped hybrid reader; seek 0 uses on-disk file when dense)."
         )
@@ -971,7 +975,6 @@ final class SegmentExporter {
         onMediaProgress: (@Sendable (Int64) -> Void)?
     ) async throws -> SegmentExportResult {
         abandonSparseWorkingForRecovery(logHandler: logHandler)
-        ExportPaths.removeVanillaDownloadCopies(log: logHandler)
         ExportPlaybackState.shared.setPCloudTranscodedWorkingActive(false)
 
         let downloadURL = ExportPaths.vanillaDownloadURL(preservingExtensionFrom: item.name)
@@ -983,6 +986,11 @@ final class SegmentExporter {
         let usesFastStartDuringDownload = ["mp4", "mov", "m4v"].contains(ext)
         let fastStartURL = usesFastStartDuringDownload ? ExportPaths.vanillaFastStartURL : nil
         let fastStartRelative = fastStartURL.map { ExportPaths.pathRelativeToExports($0) }
+        let initialDownloadedBytes = VanillaDownloadResumeCatalog.initialDownloadedBytes(
+            fileKey: item.fileKey,
+            totalLength: effectiveBytes,
+            destinationURL: downloadURL
+        )
 
         let seekSeconds = Double(seekMs) / 1000.0
         ExportPlaybackState.shared.beginVanillaExport(
@@ -990,18 +998,21 @@ final class SegmentExporter {
             fastStartRelativePath: fastStartRelative,
             seekSeconds: seekSeconds,
             durationSeconds: 0,
-            totalBytes: effectiveBytes
+            totalBytes: effectiveBytes,
+            initialDownloadedBytes: initialDownloadedBytes
         )
         if seekMs > 0 {
             logHandler(
                 "Vanilla export seek — \(ExportTimelineLog.wallClock(seconds: seekSeconds)) for segments / LAN #t=; " +
-                    "WebDAV download still fills the file from 0:00 (backup copy)"
+                    "WebDAV download fills the file from 0:00 (or resumes partial _vanilla_download.*)"
             )
         }
 
         try await VanillaWebDAVDownload.downloadFullFile(
             remoteURL: inputURL,
             destinationURL: downloadURL,
+            fileKey: item.fileKey,
+            sourceHref: item.href,
             totalLength: effectiveBytes,
             fastStartDestinationURL: fastStartURL,
             authorizationProvider: authorizationProvider,

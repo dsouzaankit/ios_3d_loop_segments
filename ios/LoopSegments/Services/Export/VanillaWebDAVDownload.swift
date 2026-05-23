@@ -18,6 +18,8 @@ enum VanillaWebDAVDownload {
     static func downloadFullFile(
         remoteURL: URL,
         destinationURL: URL,
+        fileKey: String,
+        sourceHref: String?,
         totalLength: Int64,
         fastStartDestinationURL: URL? = nil,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
@@ -28,26 +30,60 @@ enum VanillaWebDAVDownload {
         guard totalLength > 0 else {
             throw WebDAVResourceLoaderError.missingContentLength
         }
-        try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: totalLength)
 
         let fm = FileManager.default
-        if fm.fileExists(atPath: destinationURL.path) {
-            try fm.removeItem(at: destinationURL)
+        let plan = VanillaDownloadResumeCatalog.resumePlan(
+            fileKey: fileKey,
+            totalLength: totalLength,
+            destinationURL: destinationURL
+        )
+        var offset: Int64 = 0
+        switch plan {
+        case .startFresh:
+            try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: totalLength)
+            if fm.fileExists(atPath: destinationURL.path) {
+                try fm.removeItem(at: destinationURL)
+            }
+            if let fastStartDestinationURL, fm.fileExists(atPath: fastStartDestinationURL.path) {
+                try? fm.removeItem(at: fastStartDestinationURL)
+            }
+            guard fm.createFile(atPath: destinationURL.path, contents: nil) else {
+                throw SegmentExporterError.writerSetupFailed
+            }
+            VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: totalLength, href: sourceHref)
+        case .resume(let partial):
+            let remaining = totalLength - partial
+            try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: remaining)
+            offset = partial
+            log(
+                "Vanilla download resume — \(formatBytes(offset)) / \(formatBytes(totalLength)) on disk " +
+                    "(same pCloud file; WebDAV continues from next byte; retries logged below)"
+            )
+            onDownloadedBytes?(offset)
+        case .alreadyComplete:
+            offset = totalLength
+            log(
+                "Vanilla download already on disk — \(formatBytes(totalLength)) " +
+                    "(skipping WebDAV fill; segments / faststart use local copy)"
+            )
+            onDownloadedBytes?(offset)
         }
-        if let fastStartDestinationURL, fm.fileExists(atPath: fastStartDestinationURL.path) {
-            try? fm.removeItem(at: fastStartDestinationURL)
+
+        let handle: FileHandle?
+        if offset < totalLength {
+            handle = try FileHandle(forWritingTo: destinationURL)
+        } else {
+            handle = nil
         }
-        guard fm.createFile(atPath: destinationURL.path, contents: nil) else {
-            throw SegmentExporterError.writerSetupFailed
-        }
-        let handle = try FileHandle(forWritingTo: destinationURL)
-        defer { try? handle.close() }
+        defer { try? handle?.close() }
 
         let rel = ExportPaths.pathRelativeToExports(destinationURL)
-        log(
-            "Vanilla download — \(rel) (\(formatBytes(totalLength)), extension preserved; " +
-                "LAN serves \(destinationURL.lastPathComponent) while bytes arrive)"
-        )
+        if plan == .startFresh {
+            log(
+                "Vanilla download — \(rel) (\(formatBytes(totalLength)), extension preserved; " +
+                    "LAN serves \(destinationURL.lastPathComponent) while bytes arrive)"
+            )
+        }
         if let fastStartDestinationURL {
             log(
                 "MP4 faststart sidecar → \(ExportPaths.pathRelativeToExports(fastStartDestinationURL)) " +
@@ -55,9 +91,10 @@ enum VanillaWebDAVDownload {
             )
         }
 
-        var offset: Int64 = 0
-        var lastLoggedPercent = -1
-        var lastFaststartPercent = 0
+        var lastLoggedPercent = offset > 0 ? Int(offset * 100 / totalLength) - progressStepPercent : -1
+        var lastFaststartPercent = lastLoggedPercent >= 0
+            ? (lastLoggedPercent / faststartRefreshStepPercent) * faststartRefreshStepPercent
+            : 0
         var skipFaststartSidecar = false
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         let auth = authorizationProvider()
@@ -76,8 +113,8 @@ enum VanillaWebDAVDownload {
             guard data.count == chunkLen else {
                 throw WebDAVResourceLoaderError.invalidResponse
             }
-            try handle.seek(toOffset: UInt64(offset))
-            try handle.write(contentsOf: data)
+            try handle?.seek(toOffset: UInt64(offset))
+            try handle?.write(contentsOf: data)
             offset = end + 1
             onDownloadedBytes?(offset)
 
@@ -103,7 +140,8 @@ enum VanillaWebDAVDownload {
                 }
             }
         }
-        try handle.synchronize()
+        try handle?.synchronize()
+        VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: totalLength, href: sourceHref)
         let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         guard onDisk == totalLength else {
             throw WebDAVResourceLoaderError.invalidResponse
