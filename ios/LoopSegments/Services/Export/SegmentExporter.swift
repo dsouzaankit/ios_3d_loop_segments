@@ -981,9 +981,13 @@ final class SegmentExporter {
                     onMediaProgress: onMediaProgress
                 )
             } catch {
+                if isCancelled() || error is CancellationError {
+                    throw SegmentExporterError.cancelled
+                }
                 logHandler("Vanilla download failed — \(error.localizedDescription)")
             }
         }
+        if isCancelled() { throw SegmentExporterError.cancelled }
         if Self.shouldAttemptPCloudHLSFallback(
             error: probeError,
             containerFormat: containerFormat,

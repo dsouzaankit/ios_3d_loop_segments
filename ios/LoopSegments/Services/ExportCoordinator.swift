@@ -136,7 +136,7 @@ final class ExportCoordinator {
                 logWriter.finish(status: result.reachedEnd ? "completed (end of file)" : "stopped")
             }
             return result
-        } catch SegmentExporterError.cancelled {
+        } catch SegmentExporterError.cancelled, is CancellationError {
             if userRequestedPause {
                 logHandler("Export paused — checkpoint saved; pcld_ios_media/loop/op_*.mp4 and _working.mp4 kept on device")
                 logWriter.finish(status: "paused")
