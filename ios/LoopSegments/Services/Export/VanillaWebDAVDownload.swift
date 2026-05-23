@@ -27,20 +27,21 @@ enum VanillaWebDAVDownload {
         log: @escaping (String) -> Void,
         onDownloadedBytes: ((Int64) -> Void)? = nil
     ) async throws {
-        guard totalLength > 0 else {
+        var expectedLength = totalLength
+        guard expectedLength > 0 else {
             throw WebDAVResourceLoaderError.missingContentLength
         }
 
         let fm = FileManager.default
         let plan = VanillaDownloadResumeCatalog.resumePlan(
             fileKey: fileKey,
-            totalLength: totalLength,
+            totalLength: expectedLength,
             destinationURL: destinationURL
         )
         var offset: Int64 = 0
         switch plan {
         case .startFresh:
-            try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: totalLength)
+            try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: expectedLength)
             if fm.fileExists(atPath: destinationURL.path) {
                 try fm.removeItem(at: destinationURL)
             }
@@ -50,27 +51,27 @@ enum VanillaWebDAVDownload {
             guard fm.createFile(atPath: destinationURL.path, contents: nil) else {
                 throw SegmentExporterError.writerSetupFailed
             }
-            VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: totalLength, href: sourceHref)
+            VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: expectedLength, href: sourceHref)
         case .resume(let partial):
-            let remaining = totalLength - partial
+            let remaining = expectedLength - partial
             try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: remaining)
             offset = partial
             log(
-                "Vanilla download resume — \(formatBytes(offset)) / \(formatBytes(totalLength)) on disk " +
+                "Vanilla download resume — \(formatBytes(offset)) / \(formatBytes(expectedLength)) on disk " +
                     "(same pCloud file; WebDAV continues from next byte; retries logged below)"
             )
             onDownloadedBytes?(offset)
         case .alreadyComplete:
-            offset = totalLength
+            offset = expectedLength
             log(
-                "Vanilla download already on disk — \(formatBytes(totalLength)) " +
+                "Vanilla download already on disk — \(formatBytes(expectedLength)) " +
                     "(skipping WebDAV fill; segments / faststart use local copy)"
             )
             onDownloadedBytes?(offset)
         }
 
         let handle: FileHandle?
-        if offset < totalLength {
+        if offset < expectedLength {
             handle = try FileHandle(forWritingTo: destinationURL)
         } else {
             handle = nil
@@ -80,7 +81,7 @@ enum VanillaWebDAVDownload {
         let rel = ExportPaths.pathRelativeToExports(destinationURL)
         if case .startFresh = plan {
             log(
-                "Vanilla download — \(rel) (\(formatBytes(totalLength)), extension preserved; " +
+                "Vanilla download — \(rel) (\(formatBytes(expectedLength)), extension preserved; " +
                     "LAN serves \(destinationURL.lastPathComponent) while bytes arrive)"
             )
         }
@@ -91,7 +92,7 @@ enum VanillaWebDAVDownload {
             )
         }
 
-        var lastLoggedPercent = offset > 0 ? Int(offset * 100 / totalLength) - progressStepPercent : -1
+        var lastLoggedPercent = offset > 0 ? Int(offset * 100 / expectedLength) - progressStepPercent : -1
         var lastFaststartPercent = lastLoggedPercent >= 0
             ? (lastLoggedPercent / faststartRefreshStepPercent) * faststartRefreshStepPercent
             : 0
@@ -99,17 +100,45 @@ enum VanillaWebDAVDownload {
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         let auth = authorizationProvider()
 
-        while offset < totalLength {
+        while offset < expectedLength {
             if isCancelled() || Task.isCancelled { throw CancellationError() }
-            let end = min(offset + chunkBytes - 1, totalLength - 1)
+            let end = min(offset + chunkBytes - 1, expectedLength - 1)
             let chunkLen = Int(end - offset + 1)
-            let data = try await WebDAVTempFileDownload.fetchRemoteRange(
-                remoteURL: remoteURL,
-                authorization: auth,
-                offset: offset,
-                endInclusive: end,
-                log: log
-            )
+            let data: Data
+            do {
+                data = try await WebDAVTempFileDownload.fetchRemoteRange(
+                    remoteURL: remoteURL,
+                    authorization: auth,
+                    offset: offset,
+                    endInclusive: end,
+                    log: log
+                )
+            } catch let error as WebDAVResourceLoaderError {
+                if case .httpStatus(let code) = error, code == 404 || code == 416 {
+                    let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?
+                        .int64Value ?? offset
+                    if let reconciled = try await reconcileLengthAfterRangeFailure(
+                        remoteURL: remoteURL,
+                        authorization: auth,
+                        onDiskBytes: onDisk,
+                        expectedLength: expectedLength,
+                        handle: handle,
+                        fileKey: fileKey,
+                        sourceHref: sourceHref,
+                        log: log
+                    ) {
+                        expectedLength = reconciled
+                        offset = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?
+                            .int64Value ?? reconciled
+                        onDownloadedBytes?(offset)
+                        if offset >= expectedLength {
+                            break
+                        }
+                        continue
+                    }
+                }
+                throw error
+            }
             guard data.count == chunkLen else {
                 throw WebDAVResourceLoaderError.invalidResponse
             }
@@ -118,12 +147,12 @@ enum VanillaWebDAVDownload {
             offset = end + 1
             onDownloadedBytes?(offset)
 
-            let pct = Int(offset * 100 / totalLength)
+            let pct = Int(offset * 100 / expectedLength)
             let now = CFAbsoluteTimeGetCurrent()
             if pct >= lastLoggedPercent + progressStepPercent || now - lastProgressLog >= 20 {
                 lastProgressLog = now
                 lastLoggedPercent = (pct / progressStepPercent) * progressStepPercent
-                log("Vanilla download \(pct)% — \(formatBytes(offset)) / \(formatBytes(totalLength))")
+                log("Vanilla download \(pct)% — \(formatBytes(offset)) / \(formatBytes(expectedLength))")
             }
             if let fastStartDestinationURL,
                !skipFaststartSidecar,
@@ -141,9 +170,9 @@ enum VanillaWebDAVDownload {
             }
         }
         try handle?.synchronize()
-        VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: totalLength, href: sourceHref)
+        VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: expectedLength, href: sourceHref)
         let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?.int64Value ?? 0
-        guard onDisk == totalLength else {
+        guard onDisk == expectedLength else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
         if let readHandle = try? FileHandle(forReadingFrom: destinationURL) {
@@ -169,6 +198,55 @@ enum VanillaWebDAVDownload {
             )
         }
         log("Vanilla download complete — \(formatBytes(onDisk)) at \(rel)")
+    }
+
+    /// Returns reconciled total length when the partial on disk matches pCloud; `nil` to rethrow.
+    private static func reconcileLengthAfterRangeFailure(
+        remoteURL: URL,
+        authorization: String,
+        onDiskBytes: Int64,
+        expectedLength: Int64,
+        handle: FileHandle?,
+        fileKey: String,
+        sourceHref: String?,
+        log: @escaping (String) -> Void
+    ) async throws -> Int64? {
+        guard onDiskBytes > 0 else { return nil }
+        let remoteLength = try await WebDAVPrefetch.fetchRemoteContentLength(
+            remoteURL: remoteURL,
+            authorization: authorization,
+            log: log
+        )
+        guard remoteLength > 0 else { return nil }
+
+        if remoteLength == onDiskBytes {
+            log(
+                "Vanilla download — pCloud file is \(formatBytes(remoteLength)) " +
+                    "(matches partial on disk; expected \(formatBytes(expectedLength)) was wrong — treating as complete)"
+            )
+            return remoteLength
+        }
+
+        if remoteLength < onDiskBytes {
+            try handle?.truncate(atOffset: UInt64(remoteLength))
+            log(
+                "Vanilla download — pCloud file shrank to \(formatBytes(remoteLength)); " +
+                    "truncated local copy from \(formatBytes(onDiskBytes))"
+            )
+            VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: remoteLength, href: sourceHref)
+            return remoteLength
+        }
+
+        if remoteLength > onDiskBytes, remoteLength != expectedLength {
+            log(
+                "Vanilla download — pCloud length is \(formatBytes(remoteLength)) " +
+                    "(was \(formatBytes(expectedLength)); resuming from \(formatBytes(onDiskBytes))"
+            )
+            VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: remoteLength, href: sourceHref)
+            return remoteLength
+        }
+
+        return nil
     }
 
     /// `true` when a sidecar was written/updated; `false` when source is already faststart.

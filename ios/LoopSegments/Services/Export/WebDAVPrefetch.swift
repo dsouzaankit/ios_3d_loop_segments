@@ -12,7 +12,7 @@ enum WebDAVPrefetch {
         log: ((String) -> Void)? = nil
     ) async throws {
         log?("Prefetch: HEAD (file size) — \(container.displayName)")
-        let headLength = try await fetchContentLength(
+        let headLength = try await fetchRemoteContentLength(
             remoteURL: remoteURL,
             authorization: authorization,
             log: log
@@ -114,10 +114,11 @@ enum WebDAVPrefetch {
         return "\(bytes) B"
     }
 
-    private static func fetchContentLength(
+    /// HEAD (or 1-byte GET) content length for resume reconciliation after range 404/416.
+    static func fetchRemoteContentLength(
         remoteURL: URL,
         authorization: String,
-        log: ((String) -> Void)?
+        log: ((String) -> Void)? = nil
     ) async throws -> Int64 {
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "HEAD"

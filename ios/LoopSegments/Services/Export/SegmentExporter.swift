@@ -1162,6 +1162,7 @@ final class SegmentExporter {
         onMediaProgress: (@Sendable (Int64) -> Void)?
     ) async throws -> SegmentExportResult {
         abandonSparseWorkingForRecovery(logHandler: logHandler)
+        var vanillaFailure: Error?
         if VanillaWebDAVDownload.isBackupEnabled {
             logHandler(
                 "WebDAV probe failed for \(containerFormat.displayName) — vanilla WebDAV download first " +
@@ -1185,7 +1186,17 @@ final class SegmentExporter {
                 if isCancelled() || error is CancellationError {
                     throw SegmentExporterError.cancelled
                 }
+                vanillaFailure = error
                 logHandler("Vanilla download failed — \(error.localizedDescription)")
+                if let partial = await finishRecoveryWithPartialVanillaIfPossible(
+                    item: item,
+                    seekMs: seekMs,
+                    probeError: probeError,
+                    vanillaError: error,
+                    logHandler: logHandler
+                ) {
+                    return partial
+                }
             }
         }
         if isCancelled() { throw SegmentExporterError.cancelled }
@@ -1211,7 +1222,75 @@ final class SegmentExporter {
                 onMediaProgress: onMediaProgress
             )
         }
+        if let vanillaFailure {
+            throw vanillaFailure
+        }
         throw probeError
+    }
+
+    /// After vanilla WebDAV fails, keep a large partial `_vanilla_download.*` on LAN instead of rethrowing the sparse probe error (e.g. AV1).
+    private func finishRecoveryWithPartialVanillaIfPossible(
+        item: WebDAVItem,
+        seekMs: Int64,
+        probeError: Error,
+        vanillaError: Error,
+        logHandler: @escaping (String) -> Void
+    ) async -> SegmentExportResult? {
+        let downloadURL = ExportPaths.vanillaDownloadURL(preservingExtensionFrom: item.name)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: downloadURL.path) else { return nil }
+        let onDisk = (try? fm.attributesOfItem(atPath: downloadURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard onDisk >= 4 * 1024 * 1024 else { return nil }
+
+        let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
+        let ext = (item.name as NSString).pathExtension.lowercased()
+        let fastStartRelative = ["mp4", "mov", "m4v"].contains(ext)
+            ? ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL)
+            : nil
+        let (estimatedDuration, _) = Self.estimatedVanillaDurationFromFileBytes(onDisk)
+        let seekSeconds = Double(seekMs) / 1000.0
+
+        ExportPlaybackState.shared.beginVanillaExport(
+            downloadRelativePath: downloadRel,
+            fastStartRelativePath: fastStartRelative,
+            seekSeconds: seekSeconds,
+            durationSeconds: estimatedDuration,
+            totalBytes: onDisk,
+            initialDownloadedBytes: onDisk,
+            durationIsEstimated: estimatedDuration > 0
+        )
+
+        let segmentNote: String
+        if case SegmentExporterError.unsupportedCodec(let fourCC) = probeError {
+            segmentNote =
+                "\(fourCC) cannot be cut into 60s MP4 segments on iOS — play the vanilla file on LAN or re-encode to HEVC (hvc1/hev1) or H.264 with AAC."
+        } else if case SegmentExporterError.containerProbeFailed(let format) = probeError {
+            segmentNote =
+                "\(format.displayName) has no 60s segment export on iOS — play \(downloadRel) on LAN :8765 or on PC."
+        } else {
+            segmentNote = "60s segment export unavailable — play the partial download on LAN :8765."
+        }
+
+        logHandler(
+            "Partial vanilla kept — \(Self.formatExportBytes(onDisk)) at \(downloadRel) " +
+                "(download stopped: \(vanillaError.localizedDescription)). \(segmentNote)"
+        )
+        return SegmentExportResult(
+            lastMediaTimeMs: seekMs,
+            reachedEnd: false,
+            skippedSegmentCount: 0,
+            lanPreloadOnly: false
+        )
+    }
+
+    private static func formatExportBytes(_ bytes: Int64) -> String {
+        if bytes >= 1024 * 1024 * 1024 {
+            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824.0)
+        }
+        if bytes >= 1024 * 1024 {
+            return String(format: "%.1f MB", Double(bytes) / 1_048_576.0)
+        }
+        return "\(bytes) B"
     }
 
     /// Dense full-file download + segment export from local copy (not sparse `_working.mp4`).

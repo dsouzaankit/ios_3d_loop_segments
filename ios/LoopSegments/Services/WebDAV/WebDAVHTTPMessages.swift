@@ -12,6 +12,16 @@ enum WebDAVHTTPMessages {
             """
         case 403:
             return "pCloud denied access (HTTP 403). Check folder permissions or sign in again."
+        case 404:
+            return """
+            pCloud request failed (HTTP 404). The file may have moved, or the download offset is past the \
+            file end (stale resume). Clear _vanilla_download.* in Exports or retry export to start fresh.
+            """
+        case 416:
+            return """
+            pCloud range not satisfiable (HTTP 416). The on-disk partial may already be the full file — \
+            retry export; the app will reconcile length from pCloud.
+            """
         default:
             return "pCloud request failed (HTTP \(statusCode))."
         }
