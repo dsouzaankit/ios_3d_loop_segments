@@ -1669,6 +1669,24 @@ final class SegmentExporter {
             )
         }
         downloader.closeWriteHandleForPassthroughRead(log: log)
+        if useOnDiskFileURL,
+           Self.shouldPreferExportSessionForDenseHEVCWindow(
+               byteRange: byteRange,
+               videoFormat: videoFormat
+           ) {
+            log(
+                "Dense HEVC window ~\(Self.formatBytes(byteRange.length)) on disk — " +
+                    "AVAssetExportSession passthrough (manual writer often stalls on high-bitrate minutes)"
+            )
+            return try await exportDenseOnDiskViaExportSession(
+                tempURL: tempURL,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "\(tempSourceLabel) (export session, dense HEVC window)",
+                log: log
+            )
+        }
         do {
             return try await runPassthrough(
                 sourceLabel: tempSourceLabel,
@@ -1862,6 +1880,28 @@ final class SegmentExporter {
                 log(
                     "Temp not readable (\(error.localizedDescription)) — downloading this minute to temp, then retrying reader"
                 )
+            }
+            if writerBackpressure, windowDense, useOnDiskFileURL {
+                log(
+                    "Manual writer backpressure on dense on-disk window — trying AVAssetExportSession before re-download"
+                )
+                try? FileManager.default.removeItem(at: outputURL)
+                downloader.closeWriteHandleForPassthroughRead(log: log)
+                do {
+                    return try await exportDenseOnDiskViaExportSession(
+                        tempURL: tempURL,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        outputURL: outputURL,
+                        sourceLabel: "\(tempSourceLabel) (export session after writer stall)",
+                        log: log
+                    )
+                } catch {
+                    log(
+                        "AVAssetExportSession after writer stall failed (\(error.localizedDescription)) — " +
+                            "retrying manual passthrough"
+                    )
+                }
             }
             downloader.pauseBackgroundDownloadForForegroundFill()
             defer { downloader.resumeBackgroundDownloadAfterForegroundFill() }
@@ -2096,6 +2136,24 @@ final class SegmentExporter {
         downloader.closeWriteHandleForPassthroughRead(log: log)
         let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
         var lastError: Error? = priorError
+
+        if Self.shouldPreferExportSessionForDenseHEVCWindow(
+            byteRange: byteRange,
+            videoFormat: videoFormat
+        ) {
+            log(
+                "Dense HEVC mid-file window ~\(Self.formatBytes(byteRange.length)) — " +
+                    "AVAssetExportSession passthrough (skip manual writer on high-bitrate minutes)"
+            )
+            return try await exportDenseOnDiskViaExportSession(
+                tempURL: tempURL,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "dense local temp (export session, mid-file HEVC window)",
+                log: log
+            )
+        }
 
         log("Trying on-disk passthrough — dense minute on _working.mp4 (file://, no capped hybrid)")
         do {
@@ -2620,6 +2678,37 @@ final class SegmentExporter {
     }
 
     private static let midFilePrefetchThresholdBytes: Int64 = 32 * 1024 * 1024
+    /// High-bitrate HEVC minute windows (e.g. ~700 MB/min) stall manual `AVAssetWriter`; use export session on disk.
+    private static let denseHEVCExportSessionWindowBytes: Int64 = 256 * 1024 * 1024
+
+    private static func shouldPreferExportSessionForDenseHEVCWindow(
+        byteRange: TimelineByteRange,
+        videoFormat: CMFormatDescription
+    ) -> Bool {
+        isHEVCFormat(videoFormat) && byteRange.length >= denseHEVCExportSessionWindowBytes
+    }
+
+    private func exportDenseOnDiskViaExportSession(
+        tempURL: URL,
+        rangeStart: CMTime,
+        rangeDuration: CMTime,
+        outputURL: URL,
+        sourceLabel: String,
+        log: @escaping (String) -> Void
+    ) async throws -> SegmentPassThroughResult {
+        let fileAsset = AVURLAsset(
+            url: tempURL,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        return try await SegmentPassThroughExporter.exportWindowViaExportSession(
+            asset: fileAsset,
+            rangeStart: rangeStart,
+            rangeDuration: rangeDuration,
+            outputURL: outputURL,
+            sourceLabel: sourceLabel,
+            log: log
+        )
+    }
 
     private static func isHEVCFormat(_ format: CMFormatDescription) -> Bool {
         CodecSupport.isHEVCVideo(CMFormatDescriptionGetMediaSubType(format))

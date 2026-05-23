@@ -115,22 +115,120 @@ cd windows
 
 Expect **GET** **`status.json`** and index **`/`** OK. **`rclone`** drive mapping is optional and may be **slow**; see [`../windows/archive/`](../windows/archive/).
 
-### Export transport
+### Download modes by scenario
 
-| Mode | When | Behavior |
-|------|------|----------|
-| **Dense fill** (default) | Source **&lt; ~1.5 GB**, or large file **first minute at seek 0** | Sparse temp once; **one dense pCloud download per minute window**; `file://` passthrough → `op_00.mp4` |
-| **Remote passthrough** | Sparse temp, minute **not** at file byte 0, window **not** dense on `_working.mp4` yet | **Capped pCloud reads** → HTTPS → export session; then dense + local if needed. |
-| **Local passthrough (mid-file)** | Minute window already **dense** on `_working.mp4` (head + index tail on disk) | Segment cut from **disk** — no second pCloud read for that minute |
-| **Large HEVC mid-file** | **≥ ~1.5 GB**, HEVC, minute not at byte 0 (e.g. seek **30:00**) | **Dense-fill ~1 GB window** → **local export session** (remote passthrough skipped; matches seek‑0 minute‑1 success). |
-| **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
-| **Hybrid (capped)** | Mid-file on **smaller** large sources where custom URL + sparse temp still opens | Head + dense window + MP4 index at EOF; falls back to HTTPS if reader fails |
-| **Vanilla download** | Sparse probe fails; toggle on (default) | WebDAV **full file** → **`_vanilla_download.<ext>`** (2 MB chunks, sequential; **resumes partial** via `_vanilla_download.meta.json` + WebDAV Range; retries in `export_latest.txt`); **60s segments** when est. bitrate is **at/above** Mbps cutoff and codec allows |
-| **pCloud HLS transcode** | Vanilla off/failed; above **HLS cutoff** | `gethlslink` (API token) → **`_working_pcloud_transcode.mp4`** + segments |
+Every export starts with **WebDAV HEAD + prefetch** (size + container header/index). The app then picks **one primary pipeline** and, within sparse/vanilla/HLS, **one transport per ~60s window**. Check `export_latest.txt` for the path that ran.
 
-Export needs enough free space for the sparse shell plus one minute’s dense window (or HTTPS range reads). **Vanilla backup** needs space for the **entire** source file (plus **`_vanilla_faststart.mp4`** for MP4). Check `export_latest.txt` for which path ran.
+#### Settings that gate behavior
 
-Default export is still **one ~60s segment at a time** with passthrough on device (not ffmpeg on phone). Vanilla is an **optional full-file** fallback, not the normal path.
+| Setting | Default | Effect |
+|---------|---------|--------|
+| **LAN server on Wi‑Fi** | On | `:8765` HTTP/WebDAV; enables `_working.mp4` sequential preload when export runs. Off → no background prefetch (on-demand dense fill per minute only). |
+| **60s segments when at/above** | 29 Mbps | Below → **no** `op_*.mp4` (LAN preload and/or full vanilla only). At/above → try `op_00`/`op_01` when codec allows. |
+| **Vanilla download first** | On | After sparse probe fails: full WebDAV copy before HLS. |
+| **pCloud HLS if WebDAV fails above** | 2.5 Mbps (1×) | Minimum est. source bitrate for HLS fallback (`gethlslink`; needs API token). |
+
+#### Primary pipeline (first branch)
+
+```mermaid
+flowchart TD
+  start[Export start] --> head[HEAD + prefetch size/header]
+  head --> resume{Paused sparse resume?}
+  resume -->|yes| adopt[Reuse _working.mp4 + manifest]
+  resume -->|no| probe[Probe stream via pCloud]
+  adopt --> probeOk{Probe OK?}
+  probe --> probeOk
+  probeOk -->|yes| sparse[Sparse _working.mp4 path]
+  probeOk -->|no| recovery[Recovery path]
+  recovery --> vanilla{Vanilla on?}
+  vanilla -->|yes| van[Full WebDAV → _vanilla_download.*]
+  vanilla -->|no / failed| hls{Est. Mbps ≥ HLS cutoff?}
+  hls -->|yes + token| trans[pCloud HLS → _working_pcloud_transcode.mp4]
+  hls -->|no| fail[Export fails with probe error]
+  van --> vanDone[Vanilla complete → segments? see below]
+  trans --> hlsSeg[Segments from transcode MP4 if allowed]
+  sparse --> mbps{Est. Mbps vs segment cutoff?}
+  mbps -->|below| preload[LAN preload only on _working]
+  mbps -->|at/above| seg[60s segments + sparse _working]
+```
+
+| Scenario | When chosen | On-disk output | WAN download pattern |
+|----------|-------------|----------------|----------------------|
+| **Sparse `_working.mp4` (normal)** | pCloud probe succeeds (typical MP4/MOV/M4V/MKV with readable track) | Sparse shell + dense spans | Per-minute windows + optional LAN preload (see below) |
+| **LAN preload only** | Sparse path + est. bitrate **below** segment Mbps cutoff | `_working.mp4` filled toward EOF | **8 parallel** WebDAV chunks, sequential from playback start (or 0→seek prefix when seek > 0) |
+| **Sparse + 60s segments** | Sparse path + est. bitrate **at/above** cutoff + H.264/HEVC + AAC | `_working.mp4` + `loop/op_*.mp4` | One dense window per minute (+ minimal prefetch at export cursor when LAN on) |
+| **Vanilla full download** | Sparse probe fails **or** resume probe fails; toggle **on** (default) | `_vanilla_download.<ext>` (+ `_vanilla_faststart.mp4` for MP4/MOV/M4V) | **2 MB** sequential WebDAV from byte 0; **resumes** partial via `_vanilla_download.meta.json` |
+| **pCloud HLS transcode** | Vanilla off/failed; probe error is container/no-track; est. Mbps ≥ HLS cutoff; API token | `_working_pcloud_transcode.mp4` (growing MP4) | HTTPS HLS playlist + progressive transcode (not WebDAV range mirror) |
+| **Probe failure (terminal)** | Recovery exhausted (vanilla off, HLS ineligible or failed) | None new | — |
+
+**Recovery notes:** Fresh export probes pCloud **before** creating `_working.mp4` (avoids a useless sparse shell). Starting vanilla/HLS **removes** stale sparse `_working.mp4`. LAN hides `_working.mp4` while `_vanilla_download.*` is active.
+
+#### Per-minute transport (sparse path, segments enabled)
+
+After the primary pipeline is sparse + segments, each ~60s window uses **one** of these (in order tried):
+
+| Mode | Scenario | Behavior |
+|------|----------|----------|
+| **Dense fill + local passthrough** | Minute at **seek 0**, or window already **dense** on `_working.mp4` | WebDAV fills that byte range → **`file://`** passthrough on temp → `op_*.mp4` |
+| **Mid-file dense + `file://`** | Window dense after fill, byte offset **> 0** (incl. large HEVC after ~1 GB window fill) | Passthrough from disk on `_working.mp4` (no second pCloud read for that window) |
+| **Dense fill + export session** | Full source dense on disk, **dense HEVC window ≥ ~256 MB**, or manual writer stall | `AVAssetExportSession` passthrough on temp (avoids manual writer backpressure on high-bitrate minutes) |
+| **Remote capped hybrid** | Mid-file, window **not** dense, **above** segment cutoff, file **< ~1.5 GB** or non‑large‑HEVC | Capped pCloud reads (head + minute window + index) → hybrid reader → passthrough; falls back to HTTPS / export session |
+| **Large HEVC mid-file** | **≥ ~1.5 GB** file, HEVC, minute **not** at byte 0 | Dense-fill window → **`AVAssetExportSession`** when window **≥ ~256 MB** (proactive; skips manual writer stall) |
+| **Below cutoff mid-file** | Same as hybrid but **LAN preload to EOF** is active | Prefer **dense fill on `_working.mp4`** first (no remote passthrough) so LAN contiguous playback grows |
+| **Minute failsafe** | Passthrough error on one minute | Log, **skip** minute, continue dense-filling `_working.mp4` |
+
+**Timeline mapping:** Byte ranges use reported duration; if index duration differs, logs show both. Keyframe-aligned boundaries when enabled (~60s target, not strict wall-clock grid).
+
+#### After vanilla download completes
+
+| Scenario | Then |
+|----------|------|
+| **WMV/ASF, MKV, AVI, …** (`supportsIOSegmentExport` false) | Stops after full file on disk — play **`_vanilla_download.*`** on PC/LAN; **no** `op_*.mp4` on phone |
+| **MP4/MOV/M4V, est. Mbps below cutoff** | Full file kept; **no** segments (`finishVanillaWithout60sSegments`) |
+| **MP4/MOV/M4V, at/above cutoff, H.264/HEVC + AAC** | ~60s segments from **local** copy (`_vanilla_download.*` or `_vanilla_faststart.mp4` if built) |
+| **AV1 or unsupported codec** | Vanilla file kept; segment export fails with codec message |
+| **Probe fails on completed vanilla** | File kept for LAN/USB; no segments |
+
+#### After pCloud HLS transcode
+
+| Scenario | Then |
+|----------|------|
+| **Est. Mbps below segment cutoff** | Transcode MP4 grows on disk for LAN; **no** `op_*.mp4` |
+| **At/above cutoff** | Segments cut from **`_working_pcloud_transcode.mp4`** as it grows (same minute loop as sparse) |
+
+#### LAN serving vs download (not a download mode)
+
+| File | Served while… | Range / seek |
+|------|---------------|--------------|
+| `_working.mp4` | Sparse export or preload | Contiguous dense bytes only; **32 MB cap** on sparse in-progress responses (Quest OOM) |
+| `_vanilla_download.*` | Vanilla download or complete | Full file Range/seek when dense/complete (**no** 32 MB cap) |
+| `_working_pcloud_transcode.mp4` | HLS transcode export | Growing MP4 |
+| `loop/op_*.mp4` | After publish | Full segment files |
+
+#### Codec / container gates (segment export)
+
+| Source | Sparse probe | 60s `op_*.mp4` |
+|--------|--------------|----------------|
+| **MP4/MOV/M4V** H.264/HEVC + AAC | Usually yes | Yes (if Mbps cutoff met) |
+| **AV1** | May probe | **No** — re-encode source |
+| **WMV/ASF** | Usually fails → vanilla | **No** on device |
+| **MKV/WebM/AVI/TS** | Often fails or no sparse MP4 shell | **No** unless vanilla MP4 + codec OK |
+
+#### Disk / size thresholds (code constants)
+
+| Threshold | Value | Effect |
+|-----------|-------|--------|
+| **Large file** | ~**1.5 GB** | Sparse temp only (not full copy); large HEVC mid-file uses dense-window export session |
+| **Mid-file byte offset** | **> 32 MB** | Treated as mid-file for prefetch / remote passthrough decisions |
+| **LAN preload disk budget** | ~**700 MB** working set (+ margin) when segments run | Below-cutoff preload may require space for **full file** |
+| **Vanilla** | **Entire** source file (+ faststart sidecar for MP4) | Must fit on device |
+
+#### How to read logs
+
+- **`@ X Mbps`** on a line → pCloud WebDAV range read (dense fill or capped hybrid).
+- **`Vanilla download`** → sequential 2 MB chunks; retries in log when cellular drops.
+- **`LAN preload only`** → below Mbps cutoff; no `op_*.mp4`.
+- **`LAN playable till`** on `:8765` → furthest contiguous playable timeline; vanilla uses download % × duration (estimated/probed during download).
 
 ### Faststart remux (on phone)
 
@@ -147,12 +245,7 @@ Default export is still **one ~60s segment at a time** with passthrough on devic
 
 ### Export screen settings (LAN section)
 
-| Setting | Default | Effect |
-|---------|---------|--------|
-| **LAN server on Wi‑Fi** | On | HTTP/WebDAV on **:8765** for `pcld_ios_media/` (PC sync, Skybox WebDAV). Independent of segment export. |
-| **60s segments when at/above** | 29 Mbps | Below cutoff → LAN preload / vanilla only (no `op_*.mp4`). At/above → 60s segments when codec allows; LAN server can stay on. |
-| **pCloud HLS if WebDAV fails above** | 2.5 Mbps (1×) | Minimum estimated source bitrate for HLS fallback (0.25× / 0.5× / 2× / 4×) |
-| **Vanilla download first (before HLS)** | On | Full WebDAV download before `gethlslink`; HLS only if vanilla fails |
+Same toggles as **Settings that gate behavior** (above). The HLS control is **0.25× / 0.5× / 1× / 2× / 4×** of the **2.5 Mbps** base (`PCloudHLSLink.transcodeMinSourceMbps`).
 
 ## Photos library (deactivated in app)
 
