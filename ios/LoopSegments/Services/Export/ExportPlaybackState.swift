@@ -115,6 +115,22 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
     }
 
+    func setVanillaDurationSeconds(_ seconds: Double) {
+        lock.withLock {
+            guard snapshot.vanillaDownloadActive, seconds.isFinite, seconds > 0 else { return }
+            snapshot.durationSeconds = seconds
+            snapshot.impliedMediaBitrateMbps = Self.impliedMediaBitrateMbps(
+                totalBytes: snapshot.totalFileBytes,
+                durationSeconds: seconds
+            )
+            let total = snapshot.totalFileBytes
+            let downloaded = snapshot.vanillaDownloadedBytes
+            guard total > 0 else { return }
+            let linearSec = seconds * Double(downloaded) / Double(total)
+            snapshot.backgroundTimelineSeconds = linearSec
+        }
+    }
+
     func updateVanillaDownloadProgress(downloadedBytes: Int64) {
         lock.withLock {
             guard snapshot.vanillaDownloadActive else { return }
@@ -782,6 +798,14 @@ final class ExportPlaybackState: @unchecked Sendable {
         let tillNote = snap.vanillaDownloadActive
             ? "sequential download from file start (use index #t= for export seek)"
             : "contiguous dense from playback start"
+        let tillLabel: String
+        if snap.vanillaDownloadActive, duration <= 0, snap.totalFileBytes > 0 {
+            let downloaded = max(0, snap.vanillaDownloadedBytes)
+            let pct = Int(min(100, downloaded * 100 / max(1, snap.totalFileBytes)))
+            tillLabel = "~\(pct)% of file by size (duration not probed yet)"
+        } else {
+            tillLabel = ExportTimelineLog.wallClock(seconds: till)
+        }
         let exportLabel: String
         if export + 1 < from {
             exportLabel =
@@ -791,7 +815,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
         let progressLabel = snap.lanPreloadOnly ? "filled" : "exported"
         return
-            "LAN playable till \(ExportTimelineLog.wallClock(seconds: till)) (\(tillNote)), " +
+            "LAN playable till \(tillLabel) (\(tillNote)), " +
             "\(progressLabel) \(exportLabel), " +
             "started \(ExportTimelineLog.wallClock(seconds: from))"
     }

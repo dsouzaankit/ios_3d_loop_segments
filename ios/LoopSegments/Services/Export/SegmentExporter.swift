@@ -856,6 +856,53 @@ final class SegmentExporter {
         )
     }
 
+    private static func estimatedVanillaDurationFromFileBytes(_ fileBytes: Int64) -> Double {
+        guard fileBytes > 0 else { return 0 }
+        let assumedMbps = 10.0
+        return Double(fileBytes) * 8.0 / (assumedMbps * 1_000_000.0)
+    }
+
+    private func resolveVanillaDurationSeconds(
+        item: WebDAVItem,
+        fileBytes: Int64,
+        partialFileURL: URL,
+        log: @escaping (String) -> Void
+    ) async -> Double {
+        let resumeMs = await MainActor.run {
+            ResumeStore.shared.snapshotEntries()
+                .first { $0.fileKey == item.fileKey }?
+                .sourceDurationMs
+        }
+        if let resumeMs, resumeMs > 500 {
+            let seconds = Double(resumeMs) / 1000.0
+            log(
+                "Vanilla LAN timeline — resume store duration \(ExportTimelineLog.wallClock(seconds: seconds))"
+            )
+            return seconds
+        }
+        let fm = FileManager.default
+        if fm.fileExists(atPath: partialFileURL.path) {
+            let onDisk = (try? fm.attributesOfItem(atPath: partialFileURL.path)[.size] as? NSNumber)?
+                .int64Value ?? 0
+            if onDisk > 8 * 1024 * 1024,
+               let probed = try? await probeLocalDurationSeconds(fileURL: partialFileURL, log: log),
+               probed > 0 {
+                log(
+                    "Vanilla LAN timeline — probed partial file \(ExportTimelineLog.wallClock(seconds: probed))"
+                )
+                return probed
+            }
+        }
+        let estimated = Self.estimatedVanillaDurationFromFileBytes(fileBytes)
+        if estimated > 0 {
+            log(
+                "Vanilla LAN timeline — estimated \(ExportTimelineLog.wallClock(seconds: estimated)) " +
+                    "from file size (~10 Mbps; LAN till line updates if probe succeeds later)"
+            )
+        }
+        return estimated
+    }
+
     private func probeLocalDurationSeconds(
         fileURL: URL,
         log: @escaping (String) -> Void
@@ -994,11 +1041,17 @@ final class SegmentExporter {
         )
 
         let seekSeconds = Double(seekMs) / 1000.0
+        let durationForLAN = await resolveVanillaDurationSeconds(
+            item: item,
+            fileBytes: effectiveBytes,
+            partialFileURL: downloadURL,
+            log: logHandler
+        )
         ExportPlaybackState.shared.beginVanillaExport(
             downloadRelativePath: downloadRel,
             fastStartRelativePath: fastStartRelative,
             seekSeconds: seekSeconds,
-            durationSeconds: 0,
+            durationSeconds: durationForLAN,
             totalBytes: effectiveBytes,
             initialDownloadedBytes: initialDownloadedBytes
         )
@@ -1008,6 +1061,11 @@ final class SegmentExporter {
                     "WebDAV download fills the file from 0:00 (or resumes partial _vanilla_download.*)"
             )
         }
+
+        final class VanillaDurationProbeState: @unchecked Sendable {
+            var didTryMidDownloadProbe = false
+        }
+        let durationProbe = VanillaDurationProbeState()
 
         try await VanillaWebDAVDownload.downloadFullFile(
             remoteURL: inputURL,
@@ -1019,8 +1077,26 @@ final class SegmentExporter {
             authorizationProvider: authorizationProvider,
             isCancelled: isCancelled,
             log: logHandler,
-            onDownloadedBytes: { bytes in
+            onDownloadedBytes: { [weak self] bytes in
                 ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: bytes)
+                guard let self else { return }
+                guard !durationProbe.didTryMidDownloadProbe,
+                      bytes >= 16 * 1024 * 1024,
+                      ExportPlaybackState.shared.exportDurationSeconds <= 0 else { return }
+                durationProbe.didTryMidDownloadProbe = true
+                Task {
+                    if let probed = try? await self.probeLocalDurationSeconds(
+                        fileURL: downloadURL,
+                        log: logHandler
+                    ),
+                        probed > 0 {
+                        ExportPlaybackState.shared.setVanillaDurationSeconds(probed)
+                        logHandler(
+                            "Vanilla LAN timeline — probed during download " +
+                                "\(ExportTimelineLog.wallClock(seconds: probed))"
+                        )
+                    }
+                }
             }
         )
 
