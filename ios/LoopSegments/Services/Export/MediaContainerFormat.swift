@@ -81,6 +81,11 @@ enum MediaContainerFormat: Equatable {
         self == .mp4
     }
 
+    /// WMV/MKV/WebM/TS/etc. — skip sparse probe and remote duration loops; vanilla download + size-based LAN timeline.
+    var usesVanillaOnlyOnDevice: Bool {
+        !supportsIOSegmentExport
+    }
+
     var needsMP4IndexAtEOF: Bool {
         switch self {
         case .mp4, .matroska:

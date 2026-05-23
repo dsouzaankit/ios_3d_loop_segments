@@ -85,10 +85,13 @@ final class SegmentExporter {
 
         let rangeCache = WebDAVRangeCache()
         let containerFormat = MediaContainerFormat.from(filename: item.name)
+        let vanillaOnlyContainer = containerFormat.usesVanillaOnlyOnDevice
         logHandler(
-            containerFormat.needsMP4IndexAtEOF
-                ? "Prefetching from pCloud (size + MP4 index)…"
-                : "Prefetching from pCloud (size + \(containerFormat.displayName) header)…"
+            vanillaOnlyContainer
+                ? "Prefetching from pCloud (file size only — \(containerFormat.displayName) is vanilla-only on device)…"
+                : containerFormat.needsMP4IndexAtEOF
+                    ? "Prefetching from pCloud (size + MP4 index)…"
+                    : "Prefetching from pCloud (size + \(containerFormat.displayName) header)…"
         )
         try await WebDAVPrefetch.warmUp(
             remoteURL: inputURL,
@@ -96,6 +99,7 @@ final class SegmentExporter {
             cache: rangeCache,
             container: containerFormat,
             catalogContentLength: catalogContentLength,
+            headOnly: vanillaOnlyContainer,
             log: logHandler
         )
 
@@ -114,6 +118,30 @@ final class SegmentExporter {
             filename: item.name,
             log: logHandler
         )
+
+        if vanillaOnlyContainer {
+            logHandler(
+                "\(containerFormat.displayName) — 60s segment export not supported on device; " +
+                    "vanilla WebDAV download (skipping sparse probe and remote duration wait)"
+            )
+            return try await attemptRecoveryExport(
+                probeError: SegmentExporterError.containerProbeFailed(containerFormat),
+                item: item,
+                inputURL: inputURL,
+                credentials: credentials,
+                containerFormat: containerFormat,
+                fileBytes: fileSize,
+                seekMs: seekMs,
+                continueLANExport: continueLANExport,
+                resumeCursorMs: resumeCursorMs,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                isCancelled: cancelCheck,
+                logHandler: logHandler,
+                onMediaProgress: onMediaProgress
+            )
+        }
+
         logHandler(
             "Dense fill — each minute downloads to temp before passthrough (mid-file uses capped hybrid reader; seek 0 uses on-disk file when dense)."
         )
@@ -898,6 +926,26 @@ final class SegmentExporter {
         return (seconds, assumedMbps)
     }
 
+    private static func logVanillaDurationSizeEstimate(
+        estimated: Double,
+        assumedMbps: Double,
+        containerFormat: MediaContainerFormat,
+        fastPath: Bool,
+        log: @escaping (String) -> Void
+    ) {
+        guard estimated > 0 else { return }
+        let updatesNote = containerFormat.supportsIOSegmentExport
+            ? "updates when moov is readable"
+            : "updates during download if index becomes readable"
+        let prefix = fastPath
+            ? "Vanilla LAN timeline — estimated (fast path, skipped remote \(containerFormat.displayName) probe) "
+            : "Vanilla LAN timeline — estimated "
+        log(
+            prefix + ExportTimelineLog.wallClock(seconds: estimated) + " " +
+                String(format: "from file size (~%.0f Mbps guess; \(updatesNote))", assumedMbps)
+        )
+    }
+
     private func probeRemoteDurationSeconds(
         inputURL: URL,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
@@ -988,6 +1036,7 @@ final class SegmentExporter {
             return VanillaDurationResolve(seconds: seconds, isEstimated: false)
         }
         let fm = FileManager.default
+        let fastPath = containerFormat.usesVanillaOnlyOnDevice
         if fm.fileExists(atPath: partialFileURL.path) {
             let onDisk = (try? fm.attributesOfItem(atPath: partialFileURL.path)[.size] as? NSNumber)?
                 .int64Value ?? 0
@@ -995,6 +1044,7 @@ final class SegmentExporter {
                let probed = try? await probeLocalDurationSeconds(
                    fileURL: partialFileURL,
                    containerFormat: containerFormat,
+                   maxAttempts: fastPath ? 4 : nil,
                    log: log
                ),
                probed > 0 {
@@ -1005,29 +1055,32 @@ final class SegmentExporter {
                 return VanillaDurationResolve(seconds: probed, isEstimated: false)
             }
         }
-        if let remote = await probeRemoteDurationSeconds(
-            inputURL: inputURL,
-            authorizationProvider: authorizationProvider,
-            rangeCache: rangeCache,
-            containerFormat: containerFormat,
-            log: log
-        ) {
+        if !fastPath,
+           let remote = await probeRemoteDurationSeconds(
+               inputURL: inputURL,
+               authorizationProvider: authorizationProvider,
+               rangeCache: rangeCache,
+               containerFormat: containerFormat,
+               log: log
+           ) {
             persistVanillaSourceDuration(seconds: remote, item: item)
             return VanillaDurationResolve(seconds: remote, isEstimated: false)
         }
         let (estimated, assumedMbps) = Self.estimatedVanillaDurationFromFileBytes(fileBytes)
-        if estimated > 0 {
-            log(
-                "Vanilla LAN timeline — estimated \(ExportTimelineLog.wallClock(seconds: estimated)) " +
-                    String(format: "from file size (~%.0f Mbps guess; updates when moov is readable)", assumedMbps)
-            )
-        }
+        Self.logVanillaDurationSizeEstimate(
+            estimated: estimated,
+            assumedMbps: assumedMbps,
+            containerFormat: containerFormat,
+            fastPath: fastPath,
+            log: log
+        )
         return VanillaDurationResolve(seconds: estimated, isEstimated: estimated > 0)
     }
 
     private func probeLocalDurationSeconds(
         fileURL: URL,
         containerFormat: MediaContainerFormat? = nil,
+        maxAttempts: Int? = nil,
         log: @escaping (String) -> Void
     ) async throws -> Double {
         let asset = AVURLAsset(
@@ -1035,15 +1088,19 @@ final class SegmentExporter {
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
         let format = containerFormat ?? MediaContainerFormat.from(filename: fileURL.lastPathComponent)
-        let maxAttempts: Int
-        switch format {
-        case .asf, .avi, .matroska, .webm:
-            maxAttempts = 24
-        default:
-            maxAttempts = 8
+        let attempts: Int
+        if let maxAttempts {
+            attempts = max(1, maxAttempts)
+        } else {
+            switch format {
+            case .asf, .avi, .matroska, .webm:
+                attempts = 24
+            default:
+                attempts = 8
+            }
         }
         var lastLog = CFAbsoluteTimeGetCurrent()
-        for attempt in 1 ... maxAttempts {
+        for attempt in 1 ... attempts {
             if let _ = try? await firstVideoTrack(in: asset) {
                 let duration = try await asset.load(.duration)
                 let seconds = CMTimeGetSeconds(duration)

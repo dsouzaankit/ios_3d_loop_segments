@@ -8,6 +8,7 @@ enum WebDAVPrefetch {
         cache: WebDAVRangeCache,
         container: MediaContainerFormat,
         catalogContentLength: Int64? = nil,
+        headOnly: Bool = false,
         log: ((String) -> Void)? = nil
     ) async throws {
         log?("Prefetch: HEAD (file size) — \(container.displayName)")
@@ -29,6 +30,11 @@ enum WebDAVPrefetch {
 
         if length <= 0 {
             log?("Prefetch: skipped — unknown file size")
+            return
+        }
+
+        if headOnly {
+            log?("Prefetch: HEAD only — skipped byte ranges (vanilla-only \(container.displayName))")
             return
         }
 

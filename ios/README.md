@@ -44,7 +44,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
 - 60s segments when source is **at/above** the Mbps cutoff (and codec allows); phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. Below cutoff: LAN preload to EOF only (no segments). **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute when segments run.
-- **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`**. Browser shows **WMV** and **TS** in the file list.
+- **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 
@@ -126,7 +126,7 @@ Every export starts with **WebDAV HEAD + prefetch** (size + container header/ind
 | **LAN server on Wi‑Fi** | On | `:8765` HTTP/WebDAV; enables `_working.mp4` sequential preload when export runs. Off → no background prefetch (on-demand dense fill per minute only). |
 | **60s segments when at/above** | 35 Mbps (default) | Below → **no** `op_*.mp4` (LAN preload and/or full vanilla only). At/above → try `op_00`/`op_01` when codec allows. |
 | **Vanilla download first** | On | After sparse probe fails: full WebDAV copy before HLS. |
-| **pCloud HLS if WebDAV fails above** | 2.5 Mbps (1×) | Minimum est. source bitrate for HLS fallback (`gethlslink`; needs API token). |
+| **pCloud HLS if WebDAV fails above** | 2.5 Mbps (1×) | Minimum est. source bitrate for HLS fallback (`gethlslink`; **requires REST API token** — see [pCloud REST API token limitation](#pcloud-rest-api-token-limitation-search-hls-media-metadata)). |
 
 #### Primary pipeline (first branch)
 
@@ -286,8 +286,8 @@ Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN serv
 |-------|----------|-----------|
 | **H.264** | `_working.mp4` preload, near-instant | `op_00`/`op_01` ~1–3 min to first, then ~60 s cadence |
 | **HEVC** | Same | Same (+ export session on large dense windows) |
-| **AV1** | Vanilla LAN grow; no segments | Vanilla: **~33 Mbps est.** from pCloud index (not 10 Mbps size guess); still **no** `op_*` |
-| **WMV** | Vanilla `.wmv`; no segments | Vanilla `.wmv`; optional HLS transcode if vanilla blocked |
+| **AV1** | Vanilla LAN grow; no segments | Vanilla grow; still **no** `op_*` (duration from index or guess; see REST limitation) |
+| **WMV** | Vanilla `.wmv` **fast path** (HEAD + size guess); no segments | Same; **HLS only if REST token** |
 
 Use **`export_latest.txt`** to confirm which row ran (sparse vs vanilla vs HLS; preload-only vs segments).
 
@@ -312,20 +312,74 @@ Same toggles as **Settings that gate behavior** (above). The HLS control is **0.
 
 The Photos import sub-workflow is **off** (`PhotosSegmentPublisher.workflowEnabled = false` in source). Re-enable there to restore the export UI and library sync.
 
-## Search: `tokenSaved=false` / no API token
+## pCloud REST API token limitation (Search, HLS, media metadata)
 
-WebDAV browse and export work without the REST token. **Search** needs `userinfo?getauth=1` to return an `auth` field.
+The app uses **two different pCloud interfaces**:
 
-If `search_debug.txt` shows `result=0 but no auth` with your `userid`, pCloud recognized the account but **did not issue a search token**. Common causes:
+| Interface | Auth | Used for |
+|-----------|------|----------|
+| **WebDAV** | Email + password (Basic) | Folder browse, export, vanilla full-file download, sparse `_working.mp4`, LAN `:8765` |
+| **REST JSON API** | `auth` token from `userinfo?getauth=1` (`api.pcloud.com` / `eapi.pcloud.com`) | Features below — **not** used for ordinary export |
+
+**WebDAV does not expose video duration or bitrate** in PROPFIND/HEAD — only **file size** (`getcontentlength`). Duration and Mbps on the LAN dashboard come from **AVFoundation** (MP4 index over WebDAV) or **file-size estimates**, unless REST metadata is available.
+
+### Works without REST token
+
+- Browse folders (WebDAV PROPFIND)
+- Start export from a picked file (WebDAV)
+- Vanilla recovery download (`_vanilla_download.*`)
+- Sparse export + LAN preload/segments (when codec/Mbps rules allow)
+- LAN HTTP/WebDAV on `:8765`
+
+You can run the full export → LAN → PC workflow **without ever getting an API token**.
+
+### Requires REST token (often missing)
+
+If sign-in does not save `apiAuthToken` (logs: `tokenSaved=false`, `result=0 but no auth` in `search_debug.txt`), these are **limited or unavailable**:
+
+| Feature | REST methods | Impact when no token |
+|---------|--------------|----------------------|
+| **Search** | `search`, `listfolder`, `getpath` | **No API search** — use WebDAV folder browse only; search UI may show a login/token message |
+| **HLS transcode fallback** | `gethlslink` | **Unavailable** — WMV/ASF (and failed sparse probe) cannot fall back to `_working_pcloud_transcode.mp4`; rely on **vanilla WebDAV download** or re-encode source to MP4 on PC |
+| **Media metadata (duration / bitrate)** | `stat` (not wired yet) / search hit fields `duration`, `videobitrate` | **Not available via REST** — LAN **Media duration** and **Media bitrate (est.)** for vanilla WMV/ASF use **AVFoundation on partial file** (often fails) then **Mbps guess from file size**; timeline can be wrong until probe succeeds |
+
+**HLS** is gated in Export settings (“pCloud HLS if WebDAV fails above …”) but still needs the same token as search. Vanilla download explicitly does **not** need it.
+
+**WMV example (no token):** a ~300 MB / ~10 min / ~4 Mbps file may show **~4:09** and **~10 Mbps** on LAN if the app uses a **10–15 Mbps size guess**; timeline may stay approximate until a mid-download probe succeeds. ffprobe on a PC copy is the ground truth.
+
+### Vanilla-only containers — playback start (WMV, MKV, WebM, TS, …)
+
+Containers that **cannot** produce `op_00`/`op_01` on device (`usesVanillaOnlyOnDevice`) use a **fast path**:
+
+| Step (old) | Step (fast path) |
+|------------|------------------|
+| 8 MB+ header prefetch + up to ~60s sparse probe over pCloud | **HEAD only** for file size, then straight to vanilla download |
+| Up to ~45s remote duration probe before download | **Skipped** — size-based Mbps guess immediately; optional **4×0.5s** partial-file probe when resuming `_vanilla_download.*` |
+| LAN bytes after long waits | **`_vanilla_download.*`** grows within seconds of export start |
+
+**MP4 with unsupported codecs (e.g. AV1)** still runs the normal sparse probe first (duration from moov often works); only **container** vanilla-only types skip the waits above.
+
+Wrong **LAN playable till** / Mbps on the fast path does **not** block Range playback — only the dashboard timeline until download probes refine duration.
+
+### MP4 vs WMV without REST
+
+| Container | Typical LAN duration source without REST |
+|-----------|------------------------------------------|
+| **MP4 / MOV / M4V** | Often correct early via **pCloud byte-range index** (moov) over WebDAV |
+| **WMV / ASF** | Frequently **wrong or late** — AVFoundation rarely reads ASF duration from growing/partial files; size guess dominates |
+
+### Troubleshooting token (`tokenSaved=false`)
+
+**Search** and **HLS** need `userinfo?getauth=1` to return an `auth` field. If pCloud returns `result=0` but no `auth`, the account was recognized but **no third-party token was issued**:
 
 | Check | Action |
 |-------|--------|
-| Wrong datacenter | Sign out → match **US** vs **Europe** to [my.pCloud](https://my.pcloud.com) (Settings → Data regions) |
-| **2FA enabled** | pCloud often blocks third-party API tokens while WebDAV still works — try signing in after disabling 2FA, or an app-specific password if your account has one under Security |
-| Stale API session | Build **88+** uses a cookieless login session; sign out and sign in again |
+| Wrong datacenter | Sign out → match **US** vs **Europe** to [my.pcloud](https://my.pcloud.com) (Settings → Data regions) |
+| **2FA enabled** | pCloud often blocks API tokens while **WebDAV still works** — try app-specific password under Security, or test without 2FA |
+| Stale API session | Sign out and sign in again (build **88+** uses a cookieless login session) |
 | Timeout | Search prepare allows **45s** for token fetch across regional API hosts |
 
-Export and folder browse use **WebDAV only** — you do not need search for those.
+Until a token is saved, treat **Search**, **HLS transcode**, and **REST-backed metadata** as optional; **export over WebDAV remains the supported path**.
 
 ## No Mac on your desk
 
