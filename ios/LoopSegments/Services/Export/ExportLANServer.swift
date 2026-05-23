@@ -885,7 +885,7 @@ enum ExportLANServer {
         receiveMore()
     }
 
-    private enum LANWebDAVWriteError {
+    private enum LANWebDAVWriteError: Error {
         case missingContentLength
         case payloadTooLarge
         case readFailed
