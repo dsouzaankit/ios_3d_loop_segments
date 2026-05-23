@@ -172,6 +172,7 @@ final class SegmentExporter {
                     continueLANExport: continueLANExport,
                     resumeCursorMs: resumeCursorMs,
                     authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
                     isCancelled: cancelCheck,
                     logHandler: logHandler,
                     onMediaProgress: onMediaProgress
@@ -202,6 +203,7 @@ final class SegmentExporter {
                     continueLANExport: continueLANExport,
                     resumeCursorMs: resumeCursorMs,
                     authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
                     isCancelled: cancelCheck,
                     logHandler: logHandler,
                     onMediaProgress: onMediaProgress
@@ -856,18 +858,81 @@ final class SegmentExporter {
         )
     }
 
-    private static func estimatedVanillaDurationFromFileBytes(_ fileBytes: Int64) -> Double {
-        guard fileBytes > 0 else { return 0 }
-        let assumedMbps = 10.0
-        return Double(fileBytes) * 8.0 / (assumedMbps * 1_000_000.0)
+    private static let vanillaDurationProbeByteThresholds: [Int64] = [
+        4 * 1024 * 1024,
+        16 * 1024 * 1024,
+        64 * 1024 * 1024,
+        256 * 1024 * 1024,
+    ]
+
+    private struct VanillaDurationResolve {
+        let seconds: Double
+        let isEstimated: Bool
+    }
+
+    /// Size-only guess before moov is readable — scales assumed Mbps with file size (not fixed 10 Mbps).
+    private static func vanillaDurationFallbackAssumedMbps(fileBytes: Int64) -> Double {
+        let gb = Double(fileBytes) / (1024 * 1024 * 1024)
+        let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
+        if gb >= 10 { return max(cutoff, 30) }
+        if gb >= 3 { return max(cutoff, 25) }
+        if gb >= 1 { return 15 }
+        return 10
+    }
+
+    private static func estimatedVanillaDurationFromFileBytes(_ fileBytes: Int64) -> (seconds: Double, assumedMbps: Double) {
+        guard fileBytes > 0 else { return (0, 10) }
+        let assumedMbps = vanillaDurationFallbackAssumedMbps(fileBytes: fileBytes)
+        let seconds = Double(fileBytes) * 8.0 / (assumedMbps * 1_000_000.0)
+        return (seconds, assumedMbps)
+    }
+
+    private func probeRemoteDurationSeconds(
+        inputURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
+        log: @escaping (String) -> Void
+    ) async -> Double? {
+        let streamingAsset: AVURLAsset
+        do {
+            streamingAsset = try await openStreamingAsset(
+                inputURL: inputURL,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                logHandler: log
+            )
+        } catch {
+            return nil
+        }
+        defer {
+            retainedWebDAVLoader?.cancelOutstandingWork()
+            retainedAsset?.resourceLoader.setDelegate(nil, queue: nil)
+            retainedWebDAVLoader = nil
+            retainedAsset = nil
+        }
+        do {
+            let duration = try await streamingAsset.load(.duration)
+            let seconds = CMTimeGetSeconds(duration)
+            guard seconds.isFinite, seconds > 0 else { return nil }
+            log(
+                "Vanilla LAN timeline — duration from pCloud index " +
+                    ExportTimelineLog.wallClock(seconds: seconds)
+            )
+            return seconds
+        } catch {
+            return nil
+        }
     }
 
     private func resolveVanillaDurationSeconds(
         item: WebDAVItem,
         fileBytes: Int64,
         partialFileURL: URL,
+        inputURL: URL,
+        authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
         log: @escaping (String) -> Void
-    ) async -> Double {
+    ) async -> VanillaDurationResolve {
         let resumeMs = await MainActor.run {
             ResumeStore.shared.snapshotEntries()
                 .first { $0.fileKey == item.fileKey }?
@@ -878,29 +943,37 @@ final class SegmentExporter {
             log(
                 "Vanilla LAN timeline — resume store duration \(ExportTimelineLog.wallClock(seconds: seconds))"
             )
-            return seconds
+            return VanillaDurationResolve(seconds: seconds, isEstimated: false)
         }
         let fm = FileManager.default
         if fm.fileExists(atPath: partialFileURL.path) {
             let onDisk = (try? fm.attributesOfItem(atPath: partialFileURL.path)[.size] as? NSNumber)?
                 .int64Value ?? 0
-            if onDisk > 8 * 1024 * 1024,
+            if onDisk > 4 * 1024 * 1024,
                let probed = try? await probeLocalDurationSeconds(fileURL: partialFileURL, log: log),
                probed > 0 {
                 log(
                     "Vanilla LAN timeline — probed partial file \(ExportTimelineLog.wallClock(seconds: probed))"
                 )
-                return probed
+                return VanillaDurationResolve(seconds: probed, isEstimated: false)
             }
         }
-        let estimated = Self.estimatedVanillaDurationFromFileBytes(fileBytes)
+        if let remote = await probeRemoteDurationSeconds(
+            inputURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
+            log: log
+        ) {
+            return VanillaDurationResolve(seconds: remote, isEstimated: false)
+        }
+        let (estimated, assumedMbps) = Self.estimatedVanillaDurationFromFileBytes(fileBytes)
         if estimated > 0 {
             log(
                 "Vanilla LAN timeline — estimated \(ExportTimelineLog.wallClock(seconds: estimated)) " +
-                    "from file size (~10 Mbps; LAN till line updates if probe succeeds later)"
+                    String(format: "from file size (~%.0f Mbps guess; updates when moov is readable)", assumedMbps)
             )
         }
-        return estimated
+        return VanillaDurationResolve(seconds: estimated, isEstimated: estimated > 0)
     }
 
     private func probeLocalDurationSeconds(
@@ -957,6 +1030,7 @@ final class SegmentExporter {
         continueLANExport: Bool,
         resumeCursorMs: Int64?,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
         isCancelled: @escaping () -> Bool,
         logHandler: @escaping (String) -> Void,
         onMediaProgress: (@Sendable (Int64) -> Void)?
@@ -976,6 +1050,7 @@ final class SegmentExporter {
                     continueLANExport: continueLANExport,
                     resumeCursorMs: resumeCursorMs,
                     authorizationProvider: authorizationProvider,
+                    rangeCache: rangeCache,
                     isCancelled: isCancelled,
                     logHandler: logHandler,
                     onMediaProgress: onMediaProgress
@@ -1022,6 +1097,7 @@ final class SegmentExporter {
         continueLANExport: Bool,
         resumeCursorMs: Int64?,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
+        rangeCache: WebDAVRangeCache,
         isCancelled: @escaping () -> Bool,
         logHandler: @escaping (String) -> Void,
         onMediaProgress: (@Sendable (Int64) -> Void)?
@@ -1045,19 +1121,23 @@ final class SegmentExporter {
         )
 
         let seekSeconds = Double(seekMs) / 1000.0
-        let durationForLAN = await resolveVanillaDurationSeconds(
+        let durationResolve = await resolveVanillaDurationSeconds(
             item: item,
             fileBytes: effectiveBytes,
             partialFileURL: downloadURL,
+            inputURL: inputURL,
+            authorizationProvider: authorizationProvider,
+            rangeCache: rangeCache,
             log: logHandler
         )
         ExportPlaybackState.shared.beginVanillaExport(
             downloadRelativePath: downloadRel,
             fastStartRelativePath: fastStartRelative,
             seekSeconds: seekSeconds,
-            durationSeconds: durationForLAN,
+            durationSeconds: durationResolve.seconds,
             totalBytes: effectiveBytes,
-            initialDownloadedBytes: initialDownloadedBytes
+            initialDownloadedBytes: initialDownloadedBytes,
+            durationIsEstimated: durationResolve.isEstimated
         )
         if seekMs > 0 {
             logHandler(
@@ -1067,7 +1147,7 @@ final class SegmentExporter {
         }
 
         final class VanillaDurationProbeState: @unchecked Sendable {
-            var didTryMidDownloadProbe = false
+            var nextThresholdIndex = 0
         }
         let durationProbe = VanillaDurationProbeState()
 
@@ -1084,10 +1164,13 @@ final class SegmentExporter {
             onDownloadedBytes: { [weak self] bytes in
                 ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: bytes)
                 guard let self else { return }
-                guard !durationProbe.didTryMidDownloadProbe,
-                      bytes >= 16 * 1024 * 1024,
-                      ExportPlaybackState.shared.exportDurationSeconds <= 0 else { return }
-                durationProbe.didTryMidDownloadProbe = true
+                guard ExportPlaybackState.shared.vanillaDurationNeedsProbe else { return }
+                guard durationProbe.nextThresholdIndex < Self.vanillaDurationProbeByteThresholds.count else {
+                    return
+                }
+                let threshold = Self.vanillaDurationProbeByteThresholds[durationProbe.nextThresholdIndex]
+                guard bytes >= threshold else { return }
+                durationProbe.nextThresholdIndex += 1
                 Task {
                     if let probed = try? await self.probeLocalDurationSeconds(
                         fileURL: downloadURL,

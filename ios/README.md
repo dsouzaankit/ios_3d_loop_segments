@@ -228,7 +228,68 @@ After the primary pipeline is sparse + segments, each ~60s window uses **one** o
 - **`@ X Mbps`** on a line → pCloud WebDAV range read (dense fill or capped hybrid).
 - **`Vanilla download`** → sequential 2 MB chunks; retries in log when cellular drops.
 - **`LAN preload only`** → below Mbps cutoff; no `op_*.mp4`.
-- **`LAN playable till`** on `:8765` → furthest contiguous playable timeline; vanilla uses download % × duration (estimated/probed during download).
+- **`LAN playable till`** on `:8765` → furthest contiguous playable timeline; vanilla uses download % × duration (from pCloud index, partial moov probe, or size-based guess until moov is readable).
+
+#### Core test scenarios
+
+Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN server on**, **60s segments at/above 29 Mbps**, **vanilla download first on**, seek **0:00**, phone **unlocked / foreground / screen on**.
+
+**How to verify LAN:** open **`http://<phone-ip>:8765/`** (or Skybox WebDAV **`admin` / `iosadmin`**). Watch **`LAN playable till`**, **`status.json`**, and **`export_latest.txt`**. “Near-instant” = playback starts within **~10–30 s** of export start (after HEAD + prefetch + first dense bytes), not after the full file is on disk.
+
+##### A. Regular bitrate (~10–25 Mbps est.), seek **0:00**
+
+| # | Source | Primary path | What to play on LAN | Expected timing | Expected outcome |
+|---|--------|--------------|---------------------|-----------------|------------------|
+| **A1** | **H.264** MP4/MOV/M4V + AAC | Sparse **`_working.mp4`**, LAN preload only (below cutoff) | **`pcld_ios_media/_working.mp4`** (index or direct URL) | **Near-instant** — head + index + sequential preload from 0:00 | **`LAN playable till`** advances steadily; **no** `loop/op_*.mp4`; log: *60s segments skipped — source ~X Mbps is below 29 Mbps cutoff* |
+| **A2** | **HEVC** (hvc1/hev1) + AAC, same bitrate band | Same as A1 | **`_working.mp4`** | Same as A1 | Same as A1 |
+| **A3** | **AV1** (av01) MP4 | Sparse probe fails → **vanilla** **`_vanilla_download.mp4`** | **`_vanilla_download.mp4`** while downloading (growing file) | **Near-instant** for LAN — playable as bytes arrive; duration line may update after ~16 MB probe | **No** `op_*.mp4`; below cutoff → export finishes after full file (LAN-only); **Stop** during download → **`--- cancelled ---`**, not AV1 ERROR |
+| **A4** | **WMV/ASF** | Probe fails → **vanilla** **`_vanilla_download.wmv`** | **`_vanilla_download.wmv`** | **Near-instant** relative to download start (2 MB chunks from 0) | Full file on disk for PC/VLC; **no** iOS segments; no sparse `_working.mp4` shell |
+
+**A1–A2 pass signals:** index shows `_working.mp4`; no `op_00` yet; WAN Mbps lines during preload; playable till > 0:00 within ~30 s on good Wi‑Fi.
+
+**A3–A4 pass signals:** log *WebDAV probe failed* or *unsupportedCodec* → *vanilla WebDAV download*; stale `_working.mp4` removed; LAN lists `_vanilla_download.*` only.
+
+##### B. High bitrate (≥ **29 Mbps** est., typically **50–150+ Mbps**), seek **0:00**
+
+| # | Source | Primary path | What to play on LAN | Expected timing | Expected outcome |
+|---|--------|--------------|---------------------|-----------------|------------------|
+| **B1** | **HEVC** (hvc1/hev1) + AAC | Sparse + **60s segments** | **`loop/op_00.mp4`** first, then **`op_01.mp4`** (alternating) | **First segment: ~1–3 min** (dense-fill minute 0 + passthrough/export session, WAN-limited); **next segment ~every 60 s** media time (+ export wall time) | Log: *Publishing ~60s segments*; **`op_00`** appears on LAN; **`_working.mp4`** sparse with **`LAN playable till`**; dense HEVC windows ≥ ~256 MB use **export session** (no long manual-writer stall) |
+| **B2** | **H.264** + AAC, high bitrate | Same as B1 | **`op_00` / `op_01`** | Same as B1 (often faster passthrough than HEVC) | Same as B1 |
+| **B3** | **AV1** MP4, high bitrate | Vanilla download → segment attempt on local copy | **`_vanilla_download.mp4`** during download; then failure if segments run | Download + LAN play while copying; segment phase **fails** after full file | Log ends with **AV1 not supported** only if export **completes** vanilla; **Stop** mid-download → **cancelled**, not AV1 |
+| **B4** | **WMV/ASF**, high bitrate | Vanilla (no segments on device) | **`_vanilla_download.wmv`** | Full-file download time to LAN-complete | Optional **pCloud HLS** if vanilla off/failed, est. ≥ **2.5 Mbps** HLS cutoff, API token → **`_working_pcloud_transcode.mp4`** |
+
+**B1 pass signals:** `op_00.mp4` published within ~3 min at ~100 Mbps WAN; second segment within ~60–120 s after first; index **`exported`** line advances.
+
+##### C. Seek **> 0:00** (same files, different timeline anchor)
+
+| # | Scenario | Seek | Expected path | Expected LAN behavior |
+|---|----------|------|---------------|------------------------|
+| **C1** | Regular H.264/HEVC | e.g. **10:00** | Sparse preload from **byte offset** of seek (plus preroll) | **`LAN playable till`** anchored near seek; segments (if above cutoff) start at seek media time |
+| **C2** | High HEVC, large file (≥ ~1.5 GB) | e.g. **30:00** | Mid-file **dense window** + **`AVAssetExportSession`** when window ≥ ~256 MB | First **`op_*`** at seek; log: *Dense HEVC mid-file window* or *export session*; no ~30 s manual-writer stall per minute |
+| **C3** | AV1 / WMV | any | Vanilla from 0 (download always byte 0); **segments** from seek only after local file + probe | Index **`#t=`** / seek note in log; LAN timeline uses seek for display |
+
+**Note:** sparse **`_working.mp4`** is only reliable for “play from beginning” at **seek 0:00**. **Vanilla** always downloads from byte 0; **segment export** starts at the seek position once the local file is ready.
+
+##### D. Control / recovery (any bitrate)
+
+| # | Action | Setup | Expected |
+|---|--------|-------|----------|
+| **D1** | **Stop** during vanilla download | AV1 or WMV recovery | **`--- cancelled ---`**; partial **`_vanilla_download.*`** kept; **no** stale probe ERROR (AV1) |
+| **D2** | **Pause** during sparse segment export | HEVC high, minute 2+ | Checkpoint saved; **`op_*.mp4`** + **`_working.mp4`** kept; resume continues from cursor |
+| **D3** | **Resume** partial vanilla | Kill app mid-vanilla | **`_vanilla_download.meta.json`** → download continues from last byte |
+| **D4** | **Stop** during sparse segments | B1 in progress | **`op_*.mp4`** removed; **`_working.mp4`** kept |
+| **D5** | Per-minute failsafe | Simulated passthrough error one minute | Log *skip*; export **continues**; later minutes still publish |
+
+##### E. Quick matrix (seek 0:00 only)
+
+| Codec | ~15 Mbps | ~100 Mbps |
+|-------|----------|-----------|
+| **H.264** | `_working.mp4` preload, near-instant | `op_00`/`op_01` ~1–3 min to first, then ~60 s cadence |
+| **HEVC** | Same | Same (+ export session on large dense windows) |
+| **AV1** | Vanilla LAN grow; no segments | Vanilla: **~33 Mbps est.** from pCloud index (not 10 Mbps size guess); still **no** `op_*` |
+| **WMV** | Vanilla `.wmv`; no segments | Vanilla `.wmv`; optional HLS transcode if vanilla blocked |
+
+Use **`export_latest.txt`** to confirm which row ran (sparse vs vanilla vs HLS; preload-only vs segments).
 
 ### Faststart remux (on phone)
 

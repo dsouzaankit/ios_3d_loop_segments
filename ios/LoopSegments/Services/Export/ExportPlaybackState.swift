@@ -36,6 +36,8 @@ final class ExportPlaybackState: @unchecked Sendable {
         var vanillaLastProgressAt: Date?
         /// Bytes already on disk at export start/resume (WAN avg/burst exclude this baseline).
         var wanSessionBaselineBytes: Int64 = 0
+        /// True when `durationSeconds` came from file-size guess — mid-download probe should replace it.
+        var vanillaDurationIsEstimated = false
     }
 
     private let lock = NSLock()
@@ -115,9 +117,16 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
     }
 
+    var vanillaDurationNeedsProbe: Bool {
+        lock.withLock {
+            snapshot.vanillaDurationIsEstimated || snapshot.durationSeconds <= 0
+        }
+    }
+
     func setVanillaDurationSeconds(_ seconds: Double) {
         lock.withLock {
             guard snapshot.vanillaDownloadActive, seconds.isFinite, seconds > 0 else { return }
+            snapshot.vanillaDurationIsEstimated = false
             snapshot.durationSeconds = seconds
             snapshot.impliedMediaBitrateMbps = Self.impliedMediaBitrateMbps(
                 totalBytes: snapshot.totalFileBytes,
@@ -205,7 +214,8 @@ final class ExportPlaybackState: @unchecked Sendable {
         seekSeconds: Double,
         durationSeconds: Double,
         totalBytes: Int64,
-        initialDownloadedBytes: Int64 = 0
+        initialDownloadedBytes: Int64 = 0,
+        durationIsEstimated: Bool = false
     ) {
         lock.withLock {
             snapshot.vanillaDownloadActive = true
@@ -217,6 +227,7 @@ final class ExportPlaybackState: @unchecked Sendable {
             snapshot.playbackStartSeconds = max(0, seekSeconds)
             snapshot.exportCursorSeconds = snapshot.playbackStartSeconds
             snapshot.durationSeconds = max(0, durationSeconds)
+            snapshot.vanillaDurationIsEstimated = durationIsEstimated && durationSeconds > 0
             snapshot.totalFileBytes = totalBytes
             snapshot.lanExportActive = true
             snapshot.impliedMediaBitrateMbps = Self.impliedMediaBitrateMbps(
