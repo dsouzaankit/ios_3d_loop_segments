@@ -870,14 +870,25 @@ final class SegmentExporter {
         let isEstimated: Bool
     }
 
-    /// Size-only guess before moov is readable — scales assumed Mbps with file size (not fixed 10 Mbps).
+    /// Size-only guess before index is readable — scales assumed Mbps with file size (avoids 10 Mbps on ~300 MB WMV).
     private static func vanillaDurationFallbackAssumedMbps(fileBytes: Int64) -> Double {
         let gb = Double(fileBytes) / (1024 * 1024 * 1024)
+        let mb = Double(fileBytes) / (1024 * 1024)
         let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
         if gb >= 10 { return max(cutoff, 30) }
         if gb >= 3 { return max(cutoff, 25) }
         if gb >= 1 { return 15 }
+        if mb >= 200 { return 25 }
+        if mb >= 80 { return 20 }
         return 10
+    }
+
+    private func persistVanillaSourceDuration(seconds: Double, item: WebDAVItem) {
+        guard seconds.isFinite, seconds > 0 else { return }
+        let ms = Int64(seconds * 1000)
+        Task { @MainActor in
+            ResumeStore.shared.setSourceDurationMs(ms, for: item)
+        }
     }
 
     private static func estimatedVanillaDurationFromFileBytes(_ fileBytes: Int64) -> (seconds: Double, assumedMbps: Double) {
@@ -891,6 +902,7 @@ final class SegmentExporter {
         inputURL: URL,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         rangeCache: WebDAVRangeCache,
+        containerFormat: MediaContainerFormat,
         log: @escaping (String) -> Void
     ) async -> Double? {
         let streamingAsset: AVURLAsset
@@ -910,18 +922,46 @@ final class SegmentExporter {
             retainedWebDAVLoader = nil
             retainedAsset = nil
         }
-        do {
-            let duration = try await streamingAsset.load(.duration)
-            let seconds = CMTimeGetSeconds(duration)
-            guard seconds.isFinite, seconds > 0 else { return nil }
-            log(
-                "Vanilla LAN timeline — duration from pCloud index " +
-                    ExportTimelineLog.wallClock(seconds: seconds)
-            )
-            return seconds
-        } catch {
-            return nil
+        return await probeAssetDurationSeconds(
+            asset: streamingAsset,
+            containerFormat: containerFormat,
+            sourceLabel: "pCloud index",
+            log: log
+        )
+    }
+
+    private func probeAssetDurationSeconds(
+        asset: AVURLAsset,
+        containerFormat: MediaContainerFormat,
+        sourceLabel: String,
+        log: @escaping (String) -> Void
+    ) async -> Double? {
+        let maxAttempts = containerFormat == .asf ? 90 : 60
+        var lastLog = CFAbsoluteTimeGetCurrent()
+        for attempt in 1 ... maxAttempts {
+            if let videoTrack = try? await firstVideoTrack(in: asset) {
+                _ = videoTrack
+                if let duration = try? await asset.load(.duration) {
+                    let seconds = CMTimeGetSeconds(duration)
+                    if seconds.isFinite, seconds > 0 {
+                        log(
+                            "Vanilla LAN timeline — duration from \(sourceLabel) " +
+                                "(\(containerFormat.displayName) \(ExportTimelineLog.wallClock(seconds: seconds)))"
+                        )
+                        return seconds
+                    }
+                }
+            }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastLog >= 10 {
+                lastLog = now
+                log(
+                    "Waiting for \(containerFormat.displayName) duration via \(sourceLabel) (attempt \(attempt))…"
+                )
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
         }
+        return nil
     }
 
     private func resolveVanillaDurationSeconds(
@@ -933,6 +973,7 @@ final class SegmentExporter {
         rangeCache: WebDAVRangeCache,
         log: @escaping (String) -> Void
     ) async -> VanillaDurationResolve {
+        let containerFormat = MediaContainerFormat.from(filename: item.name)
         let resumeMs = await MainActor.run {
             ResumeStore.shared.snapshotEntries()
                 .first { $0.fileKey == item.fileKey }?
@@ -943,6 +984,7 @@ final class SegmentExporter {
             log(
                 "Vanilla LAN timeline — resume store duration \(ExportTimelineLog.wallClock(seconds: seconds))"
             )
+            persistVanillaSourceDuration(seconds: seconds, item: item)
             return VanillaDurationResolve(seconds: seconds, isEstimated: false)
         }
         let fm = FileManager.default
@@ -950,11 +992,16 @@ final class SegmentExporter {
             let onDisk = (try? fm.attributesOfItem(atPath: partialFileURL.path)[.size] as? NSNumber)?
                 .int64Value ?? 0
             if onDisk > 4 * 1024 * 1024,
-               let probed = try? await probeLocalDurationSeconds(fileURL: partialFileURL, log: log),
+               let probed = try? await probeLocalDurationSeconds(
+                   fileURL: partialFileURL,
+                   containerFormat: containerFormat,
+                   log: log
+               ),
                probed > 0 {
                 log(
                     "Vanilla LAN timeline — probed partial file \(ExportTimelineLog.wallClock(seconds: probed))"
                 )
+                persistVanillaSourceDuration(seconds: probed, item: item)
                 return VanillaDurationResolve(seconds: probed, isEstimated: false)
             }
         }
@@ -962,8 +1009,10 @@ final class SegmentExporter {
             inputURL: inputURL,
             authorizationProvider: authorizationProvider,
             rangeCache: rangeCache,
+            containerFormat: containerFormat,
             log: log
         ) {
+            persistVanillaSourceDuration(seconds: remote, item: item)
             return VanillaDurationResolve(seconds: remote, isEstimated: false)
         }
         let (estimated, assumedMbps) = Self.estimatedVanillaDurationFromFileBytes(fileBytes)
@@ -978,19 +1027,39 @@ final class SegmentExporter {
 
     private func probeLocalDurationSeconds(
         fileURL: URL,
+        containerFormat: MediaContainerFormat? = nil,
         log: @escaping (String) -> Void
     ) async throws -> Double {
         let asset = AVURLAsset(
             url: fileURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
-        let duration = try await asset.load(.duration)
-        var seconds = CMTimeGetSeconds(duration)
-        if !seconds.isFinite || seconds <= 0 {
-            log("Duration not available from vanilla file index")
-            return 0
+        let format = containerFormat ?? MediaContainerFormat.from(filename: fileURL.lastPathComponent)
+        let maxAttempts: Int
+        switch format {
+        case .asf, .avi, .matroska, .webm:
+            maxAttempts = 24
+        default:
+            maxAttempts = 8
         }
-        return seconds
+        var lastLog = CFAbsoluteTimeGetCurrent()
+        for attempt in 1 ... maxAttempts {
+            if let _ = try? await firstVideoTrack(in: asset) {
+                let duration = try await asset.load(.duration)
+                let seconds = CMTimeGetSeconds(duration)
+                if seconds.isFinite, seconds > 0 {
+                    return seconds
+                }
+            }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastLog >= 8 {
+                lastLog = now
+                log("Waiting for video track/duration in vanilla file (attempt \(attempt))…")
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        log("Duration not available from vanilla file index")
+        return 0
     }
 
     /// Probe failed or vanilla/HLS recovery — sparse `_working.mp4` is not the LAN source anymore.
@@ -1121,6 +1190,7 @@ final class SegmentExporter {
         )
 
         let seekSeconds = Double(seekMs) / 1000.0
+        let containerFormat = MediaContainerFormat.from(filename: item.name)
         let durationResolve = await resolveVanillaDurationSeconds(
             item: item,
             fileBytes: effectiveBytes,
@@ -1174,10 +1244,12 @@ final class SegmentExporter {
                 Task {
                     if let probed = try? await self.probeLocalDurationSeconds(
                         fileURL: downloadURL,
+                        containerFormat: containerFormat,
                         log: logHandler
                     ),
                         probed > 0 {
                         ExportPlaybackState.shared.setVanillaDurationSeconds(probed)
+                        self.persistVanillaSourceDuration(seconds: probed, item: item)
                         logHandler(
                             "Vanilla LAN timeline — probed during download " +
                                 "\(ExportTimelineLog.wallClock(seconds: probed))"
@@ -1187,7 +1259,6 @@ final class SegmentExporter {
             }
         )
 
-        let containerFormat = MediaContainerFormat.from(filename: item.name)
         var exportAssetURL = downloadURL
         var vanillaSourceAlreadyFaststart = false
         if usesFastStartDuringDownload {
