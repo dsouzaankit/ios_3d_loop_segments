@@ -18,6 +18,10 @@ struct ExportView: View {
     @State private var exportTask: Task<Void, Never>?
     @State private var showAutoLockHelp = false
     @State private var copiedLANURL = false
+    @State private var clearMediaAcknowledged = false
+    @State private var clearMediaAckTrigger = 0
+    @State private var clearLogsAcknowledged = false
+    @State private var clearLogsAckTrigger = 0
     @State private var prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
     @State private var hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
     @State private var vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled
@@ -425,14 +429,30 @@ struct ExportView: View {
 
     private var exportsFolderSection: some View {
         Section("Exports folder") {
-            Button("Clear media", role: .destructive) {
+            Button {
                 clearExportMedia()
+                acknowledgeClearMediaTap()
+            } label: {
+                Label(
+                    clearMediaAcknowledged ? "Cleared" : "Clear media",
+                    systemImage: clearMediaAcknowledged ? "checkmark.circle.fill" : "film"
+                )
             }
             .disabled(session.isExportRunning)
-            Button("Clear logs", role: .destructive) {
+            .foregroundStyle(clearMediaAcknowledged ? .green : Color.red)
+            .sensoryFeedback(.success, trigger: clearMediaAckTrigger)
+            Button {
                 clearExportLogs()
+                acknowledgeClearLogsTap()
+            } label: {
+                Label(
+                    clearLogsAcknowledged ? "Cleared" : "Clear logs",
+                    systemImage: clearLogsAcknowledged ? "checkmark.circle.fill" : "doc.text"
+                )
             }
             .disabled(session.isExportRunning)
+            .foregroundStyle(clearLogsAcknowledged ? .green : Color.red)
+            .sensoryFeedback(.success, trigger: clearLogsAckTrigger)
             Text("Media: pcld_ios_media/loop/op_00|01.mp4, pcld_ios_media/_working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -487,6 +507,25 @@ struct ExportView: View {
         liveLogTail = ""
         status = count > 0 ? "Cleared \(count) log file(s) from Exports" : "No log files in Exports"
         refreshLogHint()
+    }
+
+    private func acknowledgeClearMediaTap() {
+        clearMediaAcknowledged = true
+        clearMediaAckTrigger += 1
+        scheduleClearAcknowledgementReset { clearMediaAcknowledged = false }
+    }
+
+    private func acknowledgeClearLogsTap() {
+        clearLogsAcknowledged = true
+        clearLogsAckTrigger += 1
+        scheduleClearAcknowledgementReset { clearLogsAcknowledged = false }
+    }
+
+    private func scheduleClearAcknowledgementReset(_ reset: @escaping () -> Void) {
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            await MainActor.run { reset() }
+        }
     }
 
     private func requestPhotosAccess() async {
