@@ -707,7 +707,8 @@ final class SegmentExporter {
 
         ExportPlaybackState.shared.beginTranscodedExport(
             seekSeconds: seekSeconds,
-            durationSeconds: durationSeconds
+            durationSeconds: durationSeconds,
+            sourceFileBytes: effectiveBytes
         )
         ExportPlaybackState.shared.setBackgroundPrefetchEnabled(false)
         await MainActor.run {

@@ -34,12 +34,31 @@ final class ExportPlaybackState: @unchecked Sendable {
         var vanillaDownloadedBytes: Int64 = 0
         var vanillaLastProgressBytes: Int64 = 0
         var vanillaLastProgressAt: Date?
+        /// Bytes already on disk at export start/resume (WAN avg/burst exclude this baseline).
+        var wanSessionBaselineBytes: Int64 = 0
     }
 
     private let lock = NSLock()
     private var snapshot = Snapshot()
 
     private init() {}
+
+    /// WAN peak/avg and export elapsed — reset on every export start and resume (disk progress unchanged).
+    func resetSessionMetricsForExportStart(vanillaWanBaselineBytes: Int64 = 0) {
+        lock.withLock {
+            resetSessionMetricsLocked(vanillaWanBaselineBytes: vanillaWanBaselineBytes)
+        }
+    }
+
+    private func resetSessionMetricsLocked(vanillaWanBaselineBytes: Int64) {
+        snapshot.exportStartedAt = Date()
+        snapshot.averageWanDownloadMbps = 0
+        snapshot.lastWanBurstMbps = 0
+        snapshot.vanillaLastProgressAt = nil
+        snapshot.vanillaLastProgressBytes = max(0, vanillaWanBaselineBytes)
+        snapshot.wanSessionBaselineBytes = max(0, vanillaWanBaselineBytes)
+        snapshot.backgroundDownloadActive = false
+    }
 
     func beginExport(seekSeconds: Double, durationSeconds: Double, totalBytes: Int64) {
         lock.withLock {
@@ -52,15 +71,17 @@ final class ExportPlaybackState: @unchecked Sendable {
                 totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
             )
             snapshot.lanExportActive = true
-            snapshot.exportStartedAt = Date()
             snapshot.impliedMediaBitrateMbps = Self.impliedMediaBitrateMbps(
                 totalBytes: totalBytes,
                 durationSeconds: durationSeconds
             )
-            snapshot.averageWanDownloadMbps = 0
-            snapshot.lastWanBurstMbps = 0
-            snapshot.backgroundDownloadActive = false
             snapshot.lanPreloadOnly = false
+            snapshot.vanillaDownloadActive = false
+            snapshot.pcloudTranscodedWorkingActive = false
+            resetSessionMetricsLocked(vanillaWanBaselineBytes: 0)
+            snapshot.backgroundFillPercent = 0
+            snapshot.denseBytesOnDiskPercent = 0
+            snapshot.backgroundTimelineSeconds = 0
         }
     }
 
@@ -127,10 +148,11 @@ final class ExportPlaybackState: @unchecked Sendable {
             }
             snapshot.vanillaLastProgressBytes = downloaded
             snapshot.vanillaLastProgressAt = now
-            if let started = snapshot.exportStartedAt, downloaded > 0 {
+            if let started = snapshot.exportStartedAt {
                 let elapsed = now.timeIntervalSince(started)
-                if elapsed >= 0.5 {
-                    snapshot.averageWanDownloadMbps = Double(downloaded) * 8.0 / elapsed / 1_000_000.0
+                let sessionBytes = max(0, downloaded - snapshot.wanSessionBaselineBytes)
+                if elapsed >= 0.5, sessionBytes > 0 {
+                    snapshot.averageWanDownloadMbps = Double(sessionBytes) * 8.0 / elapsed / 1_000_000.0
                 }
             }
         }
@@ -175,17 +197,17 @@ final class ExportPlaybackState: @unchecked Sendable {
             snapshot.vanillaUsesFastStartForExport = fastStartRelativePath != nil
             snapshot.pcloudTranscodedWorkingActive = false
             snapshot.vanillaDownloadedBytes = max(0, initialDownloadedBytes)
-            snapshot.vanillaLastProgressBytes = max(0, initialDownloadedBytes)
-            snapshot.vanillaLastProgressAt = nil
-            snapshot.averageWanDownloadMbps = 0
-            snapshot.lastWanBurstMbps = 0
             snapshot.filledSpans = []
             snapshot.playbackStartSeconds = max(0, seekSeconds)
             snapshot.exportCursorSeconds = snapshot.playbackStartSeconds
             snapshot.durationSeconds = max(0, durationSeconds)
             snapshot.totalFileBytes = totalBytes
             snapshot.lanExportActive = true
-            snapshot.exportStartedAt = Date()
+            snapshot.impliedMediaBitrateMbps = Self.impliedMediaBitrateMbps(
+                totalBytes: totalBytes,
+                durationSeconds: durationSeconds
+            )
+            resetSessionMetricsLocked(vanillaWanBaselineBytes: max(0, initialDownloadedBytes))
             snapshot.backgroundPrefetchEnabled = false
             snapshot.lanPreloadOnly = false
             snapshot.headOnDisk = true
@@ -218,14 +240,23 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
     }
 
-    func beginTranscodedExport(seekSeconds: Double, durationSeconds: Double) {
+    func beginTranscodedExport(
+        seekSeconds: Double,
+        durationSeconds: Double,
+        sourceFileBytes: Int64 = 0
+    ) {
         lock.withLock {
             snapshot.pcloudTranscodedWorkingActive = true
+            snapshot.vanillaDownloadActive = false
             snapshot.playbackStartSeconds = max(0, seekSeconds)
             snapshot.exportCursorSeconds = snapshot.playbackStartSeconds
             snapshot.durationSeconds = max(0, durationSeconds)
             snapshot.lanExportActive = true
-            snapshot.exportStartedAt = Date()
+            snapshot.impliedMediaBitrateMbps = Self.impliedMediaBitrateMbps(
+                totalBytes: sourceFileBytes,
+                durationSeconds: durationSeconds
+            )
+            resetSessionMetricsLocked(vanillaWanBaselineBytes: 0)
             snapshot.backgroundPrefetchEnabled = false
             snapshot.lanPreloadOnly = false
             snapshot.transcodedWorkingFileBytes = 0
@@ -233,7 +264,28 @@ final class ExportPlaybackState: @unchecked Sendable {
             snapshot.headOnDisk = false
             snapshot.tailOnDisk = false
             snapshot.filledSpans = []
+            snapshot.backgroundFillPercent = 0
+            snapshot.denseBytesOnDiskPercent = 0
+            snapshot.backgroundTimelineSeconds = 0
         }
+    }
+
+    /// JSON fragment for LAN index auto-refresh (`status.json` → `lanLive`).
+    func lanLiveStatusPayload() -> [String: Any] {
+        let snap = lock.withLock { snapshot }
+        let mode: String
+        if snap.vanillaDownloadActive {
+            mode = "vanilla"
+        } else if snap.pcloudTranscodedWorkingActive {
+            mode = "transcoded"
+        } else {
+            mode = "sparse"
+        }
+        return [
+            "exportMode": mode,
+            "dashboardLines": lanDashboardLines(),
+            "playableStatusLine": Self.lanPlayableStatusLine(snap: snap),
+        ]
     }
 
     /// User-facing note for Export screen / logs.
@@ -295,6 +347,20 @@ final class ExportPlaybackState: @unchecked Sendable {
     func lanDashboardLines() -> [String] {
         let snap = lock.withLock { snapshot }
         var lines: [String] = []
+        if snap.pcloudTranscodedWorkingActive {
+            let onDisk = max(0, snap.transcodedWorkingFileBytes)
+            if onDisk > 0 {
+                lines.append(
+                    String(format: "pCloud transcode on disk: %.1f MB", Self.fileSizeMB(onDisk))
+                )
+            }
+            if snap.durationSeconds > 0, snap.exportCursorSeconds > 0 {
+                lines.append(
+                    "Transcode export cursor: ~\(Self.formatClock(snap.exportCursorSeconds)) of \(Self.formatClock(snap.durationSeconds))"
+                )
+            }
+            lines.append("pCloud HLS transcode — active on phone")
+        }
         if snap.vanillaDownloadActive, snap.totalFileBytes > 0 {
             let downloaded = max(0, snap.vanillaDownloadedBytes)
             let total = snap.totalFileBytes
