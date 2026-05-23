@@ -1233,6 +1233,9 @@ enum ExportLANServer {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: fileURL)
         }
         let isWorkingSource = isSparseWorkingSource || isTranscodedWorking
+        let isVanillaDownload = fileURL.lastPathComponent.lowercased().hasPrefix("_vanilla_download.")
+        let capResponseBody = isWorkingSource
+            || (isVanillaDownload && !ExportPlaybackState.shared.vanillaDownloadIsComplete())
 
         let byteStart: Int64
         var byteEnd: Int64
@@ -1253,7 +1256,9 @@ enum ExportLANServer {
                 }
                 byteEnd = min(byteEnd, readableEnd)
             }
-            byteEnd = clampResponseEnd(byteStart: byteStart, byteEnd: byteEnd, fileSize: fileSize)
+            if capResponseBody {
+                byteEnd = clampResponseEnd(byteStart: byteStart, byteEnd: byteEnd, fileSize: fileSize)
+            }
             status = 206
             phrase = "Partial Content"
         } else if hasRangeHeader {
@@ -1309,7 +1314,10 @@ enum ExportLANServer {
             }
         } else {
             byteStart = 0
-            byteEnd = clampResponseEnd(byteStart: 0, byteEnd: fileSize - 1, fileSize: fileSize)
+            byteEnd = fileSize - 1
+            if capResponseBody {
+                byteEnd = clampResponseEnd(byteStart: 0, byteEnd: byteEnd, fileSize: fileSize)
+            }
             status = byteEnd >= fileSize - 1 ? 200 : 206
             phrase = status == 206 ? "Partial Content" : "OK"
         }

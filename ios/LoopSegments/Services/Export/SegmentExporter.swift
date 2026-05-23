@@ -1024,6 +1024,20 @@ final class SegmentExporter {
             }
         }
 
+        if !containerFormat.supportsIOSegmentExport {
+            return try await finishVanillaWithout60sSegments(
+                downloadURL: downloadURL,
+                downloadRel: downloadRel,
+                fastStartRelative: fastStartRelative,
+                seekMs: seekMs,
+                effectiveBytes: effectiveBytes,
+                reason:
+                    "60s segments not supported for \(containerFormat.displayName) on iOS — " +
+                    "use \(downloadRel) on PC (PotPlayer/VLC) or LAN :8765",
+                logHandler: logHandler
+            )
+        }
+
         let durationForPolicy = (try? await probeLocalDurationSeconds(fileURL: downloadURL, log: logHandler)) ?? 0
         let impliedMbpsForPolicy = Self.impliedAverageMbps(
             fileBytes: effectiveBytes,

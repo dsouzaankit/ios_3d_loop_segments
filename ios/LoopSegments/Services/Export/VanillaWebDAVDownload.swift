@@ -107,6 +107,21 @@ enum VanillaWebDAVDownload {
         guard onDisk == totalLength else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
+        if let readHandle = try? FileHandle(forReadingFrom: destinationURL) {
+            defer { try? readHandle.close() }
+            let head = readHandle.readData(ofLength: 12)
+            if head.count >= 8 {
+                let detected = MediaContainerFormat.from(filename: destinationURL.lastPathComponent, headBytes: head)
+                if case .asf = detected {
+                    log(
+                        "Vanilla WMV/ASF header verified — copy to PC (USB or ranged LAN GET); " +
+                            "PotPlayer/VLC; iOS cannot build op_00/op_01 from WMV"
+                    )
+                } else if case .mp4 = detected {
+                    log("Vanilla MP4 header verified")
+                }
+            }
+        }
         if let fastStartDestinationURL {
             _ = try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
                 from: destinationURL,

@@ -140,6 +140,14 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock { snapshot.vanillaDownloadActive }
     }
 
+    /// Dense vanilla copy finished (WebDAV bytes match expected total).
+    func vanillaDownloadIsComplete() -> Bool {
+        lock.withLock {
+            guard snapshot.vanillaDownloadActive, snapshot.totalFileBytes > 0 else { return false }
+            return snapshot.vanillaDownloadedBytes >= snapshot.totalFileBytes
+        }
+    }
+
     func clearSparseWorkingPlaybackHints() {
         lock.withLock {
             snapshot.filledSpans = []

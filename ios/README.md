@@ -77,7 +77,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | `pcld_ios_media/loop/op_00.mp4`, `pcld_ios_media/loop/op_01.mp4` | Yes | Usually OK |
 | `pcld_ios_media/_working.mp4` | Yes | May work (like VLC); sparse holes can break some servers |
 | `pcld_ios_media/_working_pcloud_transcode.mp4` | Yes | HLS transcode in progress (not original WMV/MKV) |
-| `pcld_ios_media/_vanilla_download.*` | Yes | Full dense copy (e.g. `.wmv`); Pigasus / Skybox HTTP |
+| `pcld_ios_media/_vanilla_download.*` | Yes | Full dense copy (e.g. `.wmv`); **USB copy to PC** or full LAN GET when download complete (PotPlayer/VLC). iOS does not segment WMV. |
 | `pcld_ios_media/_vanilla_faststart.mp4` | Yes | Faststart MP4 sidecar when vanilla backup ran on MP4 |
 
 ### Quest LAN playback (Skybox vs Pigasus)

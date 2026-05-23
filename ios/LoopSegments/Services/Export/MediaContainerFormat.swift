@@ -76,6 +76,11 @@ enum MediaContainerFormat: Equatable {
         self == .mp4
     }
 
+    /// AVFoundation segment export (`op_00`/`op_01`) — WMV/MKV/etc. stay vanilla-only on device.
+    var supportsIOSegmentExport: Bool {
+        self == .mp4
+    }
+
     var needsMP4IndexAtEOF: Bool {
         switch self {
         case .mp4, .matroska:
