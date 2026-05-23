@@ -1508,15 +1508,17 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         }
     }
 
-    /// Use reported duration from the MP4 index when bitrate is plausible; only inflate when metadata duration is impossibly short for file size.
+    /// Trust index duration when implied bitrate is plausible (incl. high-bitrate 8K/VR). Inflate only when duration is impossibly short (implied ≫ real-world encodes).
+    private static let maxTrustedIndexImpliedMbps = 400.0
+    private static let durationInflationFloorMbps = 2.0
+
     static func effectiveDurationSeconds(reported: Double, totalBytes: Int64) -> Double {
         guard reported > 0, totalBytes > 0 else { return reported }
         let impliedMbps = (Double(totalBytes) * 8.0) / (reported * 1_000_000.0)
-        if impliedMbps <= 80 {
+        if impliedMbps <= maxTrustedIndexImpliedMbps {
             return reported
         }
-        let floorMbps = 2.0
-        let minFromSize = Double(totalBytes) * 8.0 / (floorMbps * 1_000_000.0)
+        let minFromSize = Double(totalBytes) * 8.0 / (durationInflationFloorMbps * 1_000_000.0)
         return max(reported, minFromSize)
     }
 
