@@ -64,7 +64,7 @@ LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk �
 
 ### `_working.mp4`: browser scrubber vs export logs
 
-`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Mbps cutoff** (Export UI, default ~29): at or below → **no** `op_*.mp4` (LAN preload on `_working.mp4` or vanilla download only). **At or above** → 60s segments to `loop/op_*.mp4` when codec allows — **LAN server can stay on** (`http://&lt;phone-ip&gt;:8765/`). High-bitrate segment mode uses minimal `_working` prefetch (export cursor only). Each dense fill pauses prefetch briefly. **Seek &gt; 0:** prefetch from the seek byte offset. Export logs and **`http://&lt;phone-ip&gt;:8765/`** show **`LAN playable till 12:34, exported 11:00, started 10:00`** (also in `status.json`).
+`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Mbps cutoff** (Export UI, default ~35): at or below → **no** `op_*.mp4` (LAN preload on `_working.mp4` or vanilla download only). **At or above** → 60s segments to `loop/op_*.mp4` when codec allows — **LAN server can stay on** (`http://&lt;phone-ip&gt;:8765/`). High-bitrate segment mode uses minimal `_working` prefetch (export cursor only). Each dense fill pauses prefetch briefly. **Seek &gt; 0:** prefetch from the seek byte offset. Export logs and **`http://&lt;phone-ip&gt;:8765/`** show **`LAN playable till 12:34, exported 11:00, started 10:00`** (also in `status.json`).
 
 Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + files; **Stop** clears paused state and removes published `op_*.mp4`.
 
@@ -124,7 +124,7 @@ Every export starts with **WebDAV HEAD + prefetch** (size + container header/ind
 | Setting | Default | Effect |
 |---------|---------|--------|
 | **LAN server on Wi‑Fi** | On | `:8765` HTTP/WebDAV; enables `_working.mp4` sequential preload when export runs. Off → no background prefetch (on-demand dense fill per minute only). |
-| **60s segments when at/above** | 29 Mbps | Below → **no** `op_*.mp4` (LAN preload and/or full vanilla only). At/above → try `op_00`/`op_01` when codec allows. |
+| **60s segments when at/above** | 35 Mbps (default) | Below → **no** `op_*.mp4` (LAN preload and/or full vanilla only). At/above → try `op_00`/`op_01` when codec allows. |
 | **Vanilla download first** | On | After sparse probe fails: full WebDAV copy before HLS. |
 | **pCloud HLS if WebDAV fails above** | 2.5 Mbps (1×) | Minimum est. source bitrate for HLS fallback (`gethlslink`; needs API token). |
 
@@ -232,7 +232,7 @@ After the primary pipeline is sparse + segments, each ~60s window uses **one** o
 
 #### Core test scenarios
 
-Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN server on**, **60s segments at/above 29 Mbps**, **vanilla download first on**, seek **0:00**, phone **unlocked / foreground / screen on**.
+Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN server on**, **60s segments at/above 35 Mbps**, **vanilla download first on**, seek **0:00**, phone **unlocked / foreground / screen on**.
 
 **How to verify LAN:** open **`http://<phone-ip>:8765/`** (or Skybox WebDAV **`admin` / `iosadmin`**). Watch **`LAN playable till`**, **`status.json`**, and **`export_latest.txt`**. “Near-instant” = playback starts within **~10–30 s** of export start (after HEAD + prefetch + first dense bytes), not after the full file is on disk.
 
@@ -240,7 +240,7 @@ Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN serv
 
 | # | Source | Primary path | What to play on LAN | Expected timing | Expected outcome |
 |---|--------|--------------|---------------------|-----------------|------------------|
-| **A1** | **H.264** MP4/MOV/M4V + AAC | Sparse **`_working.mp4`**, LAN preload only (below cutoff) | **`pcld_ios_media/_working.mp4`** (index or direct URL) | **Near-instant** — head + index + sequential preload from 0:00 | **`LAN playable till`** advances steadily; **no** `loop/op_*.mp4`; log: *60s segments skipped — source ~X Mbps is below 29 Mbps cutoff* |
+| **A1** | **H.264** MP4/MOV/M4V + AAC | Sparse **`_working.mp4`**, LAN preload only (below cutoff) | **`pcld_ios_media/_working.mp4`** (index or direct URL) | **Near-instant** — head + index + sequential preload from 0:00 | **`LAN playable till`** advances steadily; **no** `loop/op_*.mp4`; log: *60s segments skipped — source ~X Mbps is below 35 Mbps cutoff* |
 | **A2** | **HEVC** (hvc1/hev1) + AAC, same bitrate band | Same as A1 | **`_working.mp4`** | Same as A1 | Same as A1 |
 | **A3** | **AV1** (av01) MP4 | Sparse probe fails → **vanilla** **`_vanilla_download.mp4`** | **`_vanilla_download.mp4`** while downloading (growing file) | **Near-instant** for LAN — playable as bytes arrive; duration line may update after ~16 MB probe | **No** `op_*.mp4`; below cutoff → export finishes after full file (LAN-only); **Stop** during download → **`--- cancelled ---`**, not AV1 ERROR |
 | **A4** | **WMV/ASF** | Probe fails → **vanilla** **`_vanilla_download.wmv`** | **`_vanilla_download.wmv`** | **Near-instant** relative to download start (2 MB chunks from 0) | Full file on disk for PC/VLC; **no** iOS segments; no sparse `_working.mp4` shell |
@@ -249,7 +249,7 @@ Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN serv
 
 **A3–A4 pass signals:** log *WebDAV probe failed* or *unsupportedCodec* → *vanilla WebDAV download*; stale `_working.mp4` removed; LAN lists `_vanilla_download.*` only.
 
-##### B. High bitrate (≥ **29 Mbps** est., typically **50–150+ Mbps**), seek **0:00**
+##### B. High bitrate (≥ **35 Mbps** est., typically **50–150+ Mbps**), seek **0:00**
 
 | # | Source | Primary path | What to play on LAN | Expected timing | Expected outcome |
 |---|--------|--------------|---------------------|-----------------|------------------|

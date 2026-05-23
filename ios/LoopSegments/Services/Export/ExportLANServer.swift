@@ -18,7 +18,7 @@ enum ExportLANServer {
 
     /// Mbps UX cutoff: below → LAN preload / vanilla only; at/above → op_00/op_01 when codecs allow (LAN optional).
     static let backgroundPrefetchCutoffOptions: [Double] = [21, 25, 27, 29, 32, 35, 42, 150]
-    static let defaultBackgroundPrefetchCutoffMbps = 29.0
+    static let defaultBackgroundPrefetchCutoffMbps = 35.0
 
     static func prefetchCutoffOptionLabel(mbps: Double) -> String {
         let value = Int(mbps.rounded())

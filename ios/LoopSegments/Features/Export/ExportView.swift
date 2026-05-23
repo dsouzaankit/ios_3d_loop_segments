@@ -80,7 +80,7 @@ struct ExportView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     Text(
-                        "Turn on LAN server to share pcld_ios_media on :8765 and set the Mbps segment cutoff (default 29 Mbps)."
+                        "Turn on LAN server to share pcld_ios_media on :8765 and set the Mbps segment cutoff (default 35 Mbps)."
                     )
                         .font(.footnote)
                         .foregroundStyle(.secondary)
