@@ -32,7 +32,7 @@ struct ExportView: View {
                 }
             }
             Section("LAN export (PC sync)") {
-                Toggle("Serve Exports on Wi‑Fi", isOn: Binding(
+                Toggle(ExportLANServer.lanServerToggleTitle, isOn: Binding(
                     get: { ExportLANServer.isEnabled },
                     set: { enabled in
                         ExportLANServer.isEnabled = enabled
@@ -48,7 +48,7 @@ struct ExportView: View {
                 ))
                 if ExportLANServer.isEnabled {
                     Picker(
-                        "Prefetch to EOF when below",
+                        "60s segments when at/above",
                         selection: $prefetchCutoffMbps
                     ) {
                         ForEach(ExportLANServer.backgroundPrefetchCutoffOptions, id: \.self) { mbps in
@@ -70,13 +70,13 @@ struct ExportView: View {
                             .foregroundStyle(.secondary)
                     }
                     Text(
-                        "Serve Exports on: LAN only — no op_00/op_01 segments (full/sparse/vanilla on :8765). Turn off Serve Exports to build 60s segments. Prefetch cutoff still applies when segments are enabled (Serve Exports off)."
+                        "Below Mbps cutoff: LAN preload or vanilla only (no op_00/op_01). At or above: 60s segments when codec allows — LAN server can stay on. High-bitrate mode uses minimal _working prefetch ahead of export."
                     )
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
                     Text(
-                        "Turn on Serve Exports to set the prefetch cutoff (default 29 Mbps)."
+                        "Turn on LAN server to share pcld_ios_media on :8765 and set the Mbps segment cutoff (default 29 Mbps)."
                     )
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -510,7 +510,7 @@ struct ExportView: View {
             try await session.startExport(item: item, seekMs: seekMs)
             status = PhotosSegmentPublisher.workflowEnabled && PhotosSegmentPublisher.isEnabled
                 ? "Done — segment in Files → Loop Segments → Exports (and Photos). Stays until Clear media or next export."
-                : "Done — segment in Files → Exports. LAN sync while app is open and Serve Exports is on."
+                : "Done — segment in Files → Exports. LAN :8765 shares media while the LAN server toggle is on."
         } catch SegmentExporterError.paused {
             let resume = resumeStore.resumeStatus(for: item)
             let at = ResumeTimeFormat.formatMs(resume.effectiveMs)

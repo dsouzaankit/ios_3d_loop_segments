@@ -37,7 +37,7 @@ While export runs, the app serves `Exports/` on the **LAN** (`http://<phone-ip>:
 
 - Same phone cellular export you wanted; **Wi‑Fi/LAN** only for phone ↔ PC
 - No USB, no Apple Devices, no Photos required
-- Toggle **Serve Exports on Wi‑Fi** in Export; allow **Local Network** when iOS prompts
+- Toggle **LAN server on Wi‑Fi** in Export; allow **Local Network** when iOS prompts
 
 ### C. **iPhone export + one manual copy per session** (marginal)
 

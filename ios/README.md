@@ -7,7 +7,7 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once
 # Skybox (Quest): Add WebDAV → http://<phone-ip>:8765/ (IP from Export screen) · admin / iosadmin — see “Quest LAN playback” below
 
 Notes:
-LAN sequential prefetch from playback start (toward EOF if &lt;29 Mbps est., else exported+2 min horizon).
+LAN: below Mbps cutoff → preload/full file only; at/above → op_*.mp4 when codec allows (LAN server optional).
 _working.mp4 is streamable only when seek=0:00!
 Av1 is not supported, prefer h.265!
 phone must be unlocked, app in foreground, screen on:
@@ -43,7 +43,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
-- 60s segments; phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute is the default.
+- 60s segments when source is **at/above** the Mbps cutoff (and codec allows); phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. Below cutoff: LAN preload to EOF only (no segments). **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute when segments run.
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`**. Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
@@ -52,7 +52,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 ## PC sync (LAN — HTTP + WebDAV)
 
-1. On the phone: **Serve Exports on Wi‑Fi** (export screen; app open on LAN).
+1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN).
 2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, LOCK, etc.).
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md).
 
@@ -64,7 +64,7 @@ LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk �
 
 ### `_working.mp4`: browser scrubber vs export logs
 
-`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Serve Exports on:** no `op_*.mp4` segments — LAN serves `_working.mp4`, `_vanilla_download.*`, or transcode copy only. **Serve Exports off:** 60s segments export to `loop/op_*.mp4`. **Sequential LAN prefetch** fills `_working.mp4` toward EOF. Prefetch cutoff (default ~29 Mbps) applies only when Serve Exports is **off** (below cutoff → LAN preload only on sparse path). Each dense fill pauses prefetch briefly. **Seek &gt; 0:** prefetch from the seek byte offset; dense **first ~2 min at seek** on preload. Export logs and **`http://&lt;phone-ip&gt;:8765/`** show **`LAN playable till 12:34, exported 11:00, started 10:00`** (max contiguous dense playback from the seek in file timeline; also in `status.json`). LAN only serves dense bytes — not the scrubber alone.
+`_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Mbps cutoff** (Export UI, default ~29): at or below → **no** `op_*.mp4` (LAN preload on `_working.mp4` or vanilla download only). **At or above** → 60s segments to `loop/op_*.mp4` when codec allows — **LAN server can stay on** (`http://&lt;phone-ip&gt;:8765/`). High-bitrate segment mode uses minimal `_working` prefetch (export cursor only). Each dense fill pauses prefetch briefly. **Seek &gt; 0:** prefetch from the seek byte offset. Export logs and **`http://&lt;phone-ip&gt;:8765/`** show **`LAN playable till 12:34, exported 11:00, started 10:00`** (also in `status.json`).
 
 Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + files; **Stop** clears paused state and removes published `op_*.mp4`.
 
@@ -125,7 +125,7 @@ Expect **GET** **`status.json`** and index **`/`** OK. **`rclone`** drive mappin
 | **Large HEVC mid-file** | **≥ ~1.5 GB**, HEVC, minute not at byte 0 (e.g. seek **30:00**) | **Dense-fill ~1 GB window** → **local export session** (remote passthrough skipped; matches seek‑0 minute‑1 success). |
 | **Local export session** | Entire source dense on disk (small file or seek‑0 tail fill) | Passthrough via `AVAssetExportSession` on the temp file for every minute |
 | **Hybrid (capped)** | Mid-file on **smaller** large sources where custom URL + sparse temp still opens | Head + dense window + MP4 index at EOF; falls back to HTTPS if reader fails |
-| **Vanilla download** | Sparse probe fails; toggle on (default) | WebDAV **full file from 0:00** → **`_vanilla_download.<ext>`**; **60s segments** only when Serve Exports is **off** and source is not already faststart; LAN **`#t=`** on index for export seek |
+| **Vanilla download** | Sparse probe fails; toggle on (default) | WebDAV **full file from 0:00** → **`_vanilla_download.<ext>`**; **60s segments** when est. bitrate is **at/above** Mbps cutoff and codec allows |
 | **pCloud HLS transcode** | Vanilla off/failed; above **HLS cutoff** | `gethlslink` (API token) → **`_working_pcloud_transcode.mp4`** + segments |
 
 Export needs enough free space for the sparse shell plus one minute’s dense window (or HTTPS range reads). **Vanilla backup** needs space for the **entire** source file (plus **`_vanilla_faststart.mp4`** for MP4). Check `export_latest.txt` for which path ran.
@@ -147,7 +147,8 @@ Default export is still **one ~60s segment at a time** with passthrough on devic
 
 | Setting | Default | Effect |
 |---------|---------|--------|
-| **Prefetch to EOF when below** | 29 Mbps | LAN sparse preload horizon vs segment export |
+| **LAN server on Wi‑Fi** | On | HTTP/WebDAV on **:8765** for `pcld_ios_media/` (PC sync, Skybox WebDAV). Independent of segment export. |
+| **60s segments when at/above** | 29 Mbps | Below cutoff → LAN preload / vanilla only (no `op_*.mp4`). At/above → 60s segments when codec allows; LAN server can stay on. |
 | **pCloud HLS if WebDAV fails above** | 2.5 Mbps (1×) | Minimum estimated source bitrate for HLS fallback (0.25× / 0.5× / 2× / 4×) |
 | **Vanilla download first (before HLS)** | On | Full WebDAV download before `gethlslink`; HLS only if vanilla fails |
 

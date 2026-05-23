@@ -23,7 +23,7 @@ Full guide: **[WORKFLOW.md](WORKFLOW.md)**
 
 ## Windows (after iPhone export)
 
-**Live PC sync:** **Serve Exports on Wi‑Fi** on the phone, then:
+**Live PC sync:** **LAN server on Wi‑Fi** on the phone, then:
 
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows

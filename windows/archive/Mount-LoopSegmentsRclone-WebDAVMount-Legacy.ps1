@@ -149,7 +149,7 @@ function Test-PhoneLANExport {
         $r = Invoke-WebRequest -Uri ($base + 'status.json') -TimeoutSec 15 -UseBasicParsing
         Write-Host "  GET status.json -> $($r.StatusCode)"
     } catch {
-        throw "Phone not reachable at $base (same Wi-Fi? Serve Exports on?). $($_.Exception.Message)"
+        throw "Phone not reachable at $base (same Wi-Fi? LAN server on?). $($_.Exception.Message)"
     }
 
     try {

@@ -16,7 +16,7 @@ enum ExportLANServer {
     private static let enabledKey = "serveExportsOnLAN"
     private static let backgroundCutoffKey = "lanBackgroundPrefetchCutoffMbps"
 
-    /// Implied file bitrates at or above this cap sequential prefetch at exported+2 min (below = horizon EOF).
+    /// Mbps UX cutoff: below → LAN preload / vanilla only; at/above → op_00/op_01 when codecs allow (LAN optional).
     static let backgroundPrefetchCutoffOptions: [Double] = [21, 25, 27, 29, 32, 35, 42, 150]
     static let defaultBackgroundPrefetchCutoffMbps = 29.0
 
@@ -31,9 +31,9 @@ enum ExportLANServer {
     static var prefetchCutoffSummary: String {
         let mbps = Int(backgroundPrefetchCutoffMbps.rounded())
         if backgroundPrefetchCutoffMbps == defaultBackgroundPrefetchCutoffMbps {
-            return "\(mbps) Mbps (default) — prefetch to EOF below this"
+            return "\(mbps) Mbps (default) — 60s segments when source is at/above"
         }
-        return "\(mbps) Mbps — prefetch to EOF below this"
+        return "\(mbps) Mbps — 60s segments when source is at/above"
     }
 
     static var backgroundPrefetchCutoffMbps: Double {
@@ -56,6 +56,8 @@ enum ExportLANServer {
         backgroundPrefetchCutoffOptions.min(by: { abs($0 - value) < abs($1 - value) })
             ?? defaultBackgroundPrefetchCutoffMbps
     }
+
+    static let lanServerToggleTitle = "LAN server on Wi‑Fi"
 
     static var isEnabled: Bool {
         get {
@@ -1072,7 +1074,7 @@ enum ExportLANServer {
             playbackStatusBlock = """
             <p><strong>\(escaped)</strong></p>
             \(htmlDashboardStatsBlock())
-            <p><code>LAN playable till</code> = furthest contiguous dense bytes from playback start. Sequential prefetch fills toward EOF (low bitrate) or exported+2 min (high bitrate). Prefer <code>loop/op_00.mp4</code> while export runs.</p>
+            <p><code>LAN playable till</code> = furthest contiguous dense bytes from playback start. Below Mbps cutoff: prefetch to EOF, no <code>op_*.mp4</code>. At/above cutoff: <code>op_*.mp4</code> plus minimal <code>_working</code> prefetch when LAN server is on.</p>
             \(startedNote)
             """
         }

@@ -20,19 +20,25 @@ enum ExportDeliveryPolicy {
         true
     }
 
-    /// `op_00` / `op_01` passthrough segments — off when LAN serve is on or vanilla file is already network-ready.
-    static func shouldRun60sSegments(vanillaSourceAlreadyFaststart: Bool = false) -> Bool {
-        if ExportLANServer.isEnabled { return false }
-        if vanillaSourceAlreadyFaststart { return false }
+    /// High-bitrate segment export: minimal LAN prefetch ahead of export cursor (was 2×60s).
+    static let lanSegmentPrefetchLeadSeconds: Double = 0
+
+    /// `op_00` / `op_01` when estimated bitrate is at/above the Mbps cutoff and codecs allow.
+    static func shouldRun60sSegments(impliedMbps: Double = 0) -> Bool {
+        if impliedMbps > 0, impliedMbps < ExportLANServer.backgroundPrefetchCutoffMbps {
+            return false
+        }
         return true
     }
 
-    static func skip60sSegmentsLogReason(vanillaSourceAlreadyFaststart: Bool = false) -> String {
-        if ExportLANServer.isEnabled {
-            return "60s segments skipped — Serve Exports on Wi‑Fi serves the source on LAN (turn off Serve Exports to build op_00/op_01)"
-        }
-        if vanillaSourceAlreadyFaststart {
-            return "60s segments skipped — vanilla download is already faststart (moov at head); use _vanilla_download on LAN"
+    static func skip60sSegmentsLogReason(impliedMbps: Double = 0) -> String {
+        if impliedMbps > 0, impliedMbps < ExportLANServer.backgroundPrefetchCutoffMbps {
+            let cutoff = Int(ExportLANServer.backgroundPrefetchCutoffMbps.rounded())
+            return String(
+                format: "60s segments skipped — source ~%.1f Mbps is below %d Mbps cutoff (LAN preload / full file only; lower cutoff to allow op_00/op_01)",
+                impliedMbps,
+                cutoff
+            )
         }
         return "60s segments skipped"
     }

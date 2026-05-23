@@ -335,9 +335,9 @@ final class SegmentExporter {
             }
 
         if lanPrefetch.lanPreloadOnly {
-            if !ExportDeliveryPolicy.shouldRun60sSegments() {
-                logHandler(ExportDeliveryPolicy.skip60sSegmentsLogReason())
-            }
+            logHandler(
+                ExportDeliveryPolicy.skip60sSegmentsLogReason(impliedMbps: impliedMbps)
+            )
             return try await runLANPreloadOnly(
                 downloader: downloader,
                 seekSeconds: seekSeconds,
@@ -352,7 +352,7 @@ final class SegmentExporter {
 
         logHandler(
             "Publishing ~\(Int(Self.segmentDurationSeconds))s segments — dense fill each window, then passthrough " +
-                "(Serve Exports off; per-minute failsafe: skip on error and continue)"
+                "(per-minute failsafe: skip on error and continue; op_*.mp4 + LAN _working when server on)"
         )
 
         var skippedSegmentCount = 0
@@ -1024,8 +1024,13 @@ final class SegmentExporter {
             }
         }
 
+        let durationForPolicy = (try? await probeLocalDurationSeconds(fileURL: downloadURL, log: logHandler)) ?? 0
+        let impliedMbpsForPolicy = Self.impliedAverageMbps(
+            fileBytes: effectiveBytes,
+            durationSeconds: durationForPolicy
+        )
         if !ExportDeliveryPolicy.shouldRun60sSegments(
-            vanillaSourceAlreadyFaststart: vanillaSourceAlreadyFaststart
+            impliedMbps: impliedMbpsForPolicy
         ) {
             return try await finishVanillaWithout60sSegments(
                 downloadURL: downloadURL,
@@ -1034,7 +1039,7 @@ final class SegmentExporter {
                 seekMs: seekMs,
                 effectiveBytes: effectiveBytes,
                 reason: ExportDeliveryPolicy.skip60sSegmentsLogReason(
-                    vanillaSourceAlreadyFaststart: vanillaSourceAlreadyFaststart
+                    impliedMbps: impliedMbpsForPolicy
                 ),
                 logHandler: logHandler
             )
@@ -1217,18 +1222,14 @@ final class SegmentExporter {
         reportProgress: @escaping @Sendable (Int64) -> Void,
         logHandler: @escaping (String) -> Void
     ) async throws -> SegmentExportResult {
-        if !ExportDeliveryPolicy.shouldRun60sSegments() {
-            logHandler(ExportDeliveryPolicy.skip60sSegmentsLogReason())
-        } else {
-            let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
-            logHandler(
-                String(
-                    format: "LAN preload only — file ~%.1f Mbps (below %.0f Mbps cutoff); op_00/op_01 export disabled",
-                    impliedMbps,
-                    cutoff
-                )
+        let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
+        logHandler(
+            String(
+                format: "LAN preload only — file ~%.1f Mbps (below %.0f Mbps cutoff); op_00/op_01 export disabled",
+                impliedMbps,
+                cutoff
             )
-        }
+        )
         logHandler(
             "Sequential fill to EOF on _working.mp4 (8 parallel chunks) — target wall time ~½× media duration at your link speed"
         )
@@ -2144,7 +2145,7 @@ final class SegmentExporter {
         return true
     }
 
-    /// LAN: head+index + one sequential dense prefetch loop; horizon is EOF or exported+2 min by bitrate cutoff.
+    /// LAN: head+index + sequential prefetch; horizon EOF when below Mbps cutoff, else minimal lead on segment export.
     private struct LANWorkingPrefetchPolicy {
         let prepareHeadAndIndex: Bool
         let prefetchHorizonToEOF: Bool
@@ -2174,13 +2175,11 @@ final class SegmentExporter {
                 lanPreloadOnly: false
             )
         }
-        let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
-        let belowCutoff = impliedMbps < cutoff
-        let lanPreloadOnly = !ExportDeliveryPolicy.shouldRun60sSegments()
+        let lanPreloadOnly = !ExportDeliveryPolicy.shouldRun60sSegments(impliedMbps: impliedMbps)
         return LANWorkingPrefetchPolicy(
             prepareHeadAndIndex: true,
-            prefetchHorizonToEOF: lanPreloadOnly || belowCutoff,
-            waitForBackgroundAtEnd: seekSeconds <= 0.5 && (lanPreloadOnly || belowCutoff),
+            prefetchHorizonToEOF: lanPreloadOnly,
+            waitForBackgroundAtEnd: seekSeconds <= 0.5 && lanPreloadOnly,
             lanPreloadOnly: lanPreloadOnly
         )
     }
@@ -2196,7 +2195,7 @@ final class SegmentExporter {
         }
         return min(
             durationSeconds,
-            exportCursorSeconds + segmentDurationSeconds * 2
+            exportCursorSeconds + ExportDeliveryPolicy.lanSegmentPrefetchLeadSeconds
         )
     }
 
@@ -2232,7 +2231,7 @@ final class SegmentExporter {
         )
         let horizonLabel = lanPrefetch.prefetchHorizonToEOF
             ? "EOF (\(Self.formatBytes(fileSize)))"
-            : "exported+2 min (below \(Int(ExportLANServer.backgroundPrefetchCutoffMbps)) Mbps est.; file ~\(String(format: "%.1f", impliedMbps)) Mbps)"
+            : "export cursor (high bitrate ~\(String(format: "%.1f", impliedMbps)) Mbps; dense fill per minute)"
         log(
             "LAN preload — sequential dense fill from \(ExportTimelineLog.wallClock(seconds: seekSeconds)) toward \(horizonLabel); " +
                 "LAN :8765 serves contiguous bytes only"
@@ -2249,7 +2248,7 @@ final class SegmentExporter {
             }
             let firstWindowEnd = min(
                 durationSeconds,
-                seekSeconds + Self.segmentDurationSeconds * 2
+                seekSeconds + Self.segmentDurationSeconds
             )
             let firstRange = downloader.byteRangeForTimeline(
                 timelineStartSeconds: seekSeconds,

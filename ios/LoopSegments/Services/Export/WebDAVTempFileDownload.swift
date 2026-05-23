@@ -541,7 +541,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Advance the sequential prefetch horizon as export progresses (EOF or exported+2 min).
+    /// Advance the sequential prefetch horizon as export progresses (EOF preload, or export cursor when segments run).
     func updateLANSequentialPrefetchHorizon(
         playbackStartSeconds: Double,
         horizonTimelineSeconds: Double,

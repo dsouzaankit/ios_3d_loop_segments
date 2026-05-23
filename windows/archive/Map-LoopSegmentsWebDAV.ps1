@@ -267,7 +267,7 @@ function Test-LoopSegmentsWebDAV {
         $get = Invoke-WebRequest -Uri $RootUrl -UseBasicParsing -TimeoutSec 8
         Write-Host "  GET (browser) $($get.StatusCode) OK"
     } catch {
-        throw "HTTP GET failed — phone unreachable or Serve Exports off. $($_.Exception.Message)"
+        throw "HTTP GET failed — phone unreachable or LAN server off. $($_.Exception.Message)"
     }
 
     try {
@@ -597,7 +597,7 @@ if (-not (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $rootUrl)) {
     exit 1
 }
 
-Write-Host "Mapping $drive -> $rootUrl (phone app open, Serve Exports on)."
+Write-Host "Mapping $drive -> $rootUrl (phone app open, LAN server on)."
 if ($ViaPort80Proxy) {
     Test-LoopSegmentsWebDAV -RootUrl $rootUrl -HostIp $mapHostIp | Out-Null
 } else {

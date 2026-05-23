@@ -41,7 +41,7 @@ Install via **TestFlight** or sideload (AltStore, etc.) with an Apple Developer 
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
 5. Keep the app in the foreground. On phone: **Files → Loop Segments → Exports** should show `op_00.mp4` updating each ~60s of **media** time (first segment can take several minutes on large moov-at-end HEVC while the minute **dense-downloads**).
-6. On the phone: enable **Serve Exports on Wi‑Fi** so the PC can reach **`http://<ip>:8765/`**. Photos library export is **off** by default — see [ios/README.md](ios/README.md).
+6. On the phone: enable **LAN server on Wi‑Fi** so the PC can reach **`http://<ip>:8765/`**. Photos library export is **off** by default — see [ios/README.md](ios/README.md).
 
 Large files on cellular: first segment waits for index + dense window (`Downloading window … (dense fill)` → `Window on disk` in `export_latest.txt`). Later minutes reuse the same sparse temp shell; export does not keep up with live TV wall clock on slow LTE — OK if the DLNA player **loops** the PC pair.
 
@@ -51,7 +51,7 @@ Large files on cellular: first segment waits for index + dense window (`Download
 
 ### Automated (Wi‑Fi)
 
-1. iPhone and PC on the **same Wi‑Fi**; **Serve Exports on Wi‑Fi** on in the app.
+1. iPhone and PC on the **same Wi‑Fi**; **LAN server on Wi‑Fi** on in the app.
 2. Note the phone IP from the export log (`LAN export: http://192.168.x.x:8765/`).
 3. On the PC:
 

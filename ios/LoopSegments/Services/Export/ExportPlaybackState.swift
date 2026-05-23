@@ -349,8 +349,8 @@ final class ExportPlaybackState: @unchecked Sendable {
         if snap.lanExportActive, snap.backgroundPrefetchEnabled {
             let cutoff = Int(ExportLANServer.backgroundPrefetchCutoffMbps.rounded())
             let horizon = snap.lanPrefetchHorizonToEOF
-                ? "toward EOF (below \(cutoff) Mbps est.)"
-                : "toward exported+2 min (≥\(cutoff) Mbps est.)"
+                ? "toward EOF (below \(cutoff) Mbps est.; no op_*.mp4)"
+                : "tracks export cursor (≥\(cutoff) Mbps est.; op_*.mp4 + LAN)"
             var prefetch = "on — \(horizon)"
             if snap.lanPreloadOnly {
                 prefetch += " — LAN preload only (no op_*.mp4)"
