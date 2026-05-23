@@ -78,7 +78,7 @@ enum VanillaWebDAVDownload {
         defer { try? handle?.close() }
 
         let rel = ExportPaths.pathRelativeToExports(destinationURL)
-        if plan == .startFresh {
+        if case .startFresh = plan {
             log(
                 "Vanilla download — \(rel) (\(formatBytes(totalLength)), extension preserved; " +
                     "LAN serves \(destinationURL.lastPathComponent) while bytes arrive)"
