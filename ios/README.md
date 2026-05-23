@@ -365,6 +365,8 @@ Wrong **LAN playable till** / Mbps on the fast path does **not** block Range pla
 
 **pCloud rename / move:** `fileKey` is derived from WebDAV `href`, so renaming on pCloud changes the key. Folder **refresh** reconciles resume rows and `_vanilla_download.meta.json` / `_working.sparse.json` (match by folder + file size + name). Export **HEAD** on 404 re-lists the parent folder and picks the renamed file — no sign-out required unless auth failed (401).
 
+**Seek after full export:** completing a file resets **Start at** to **0:00** (store + UI). **Current position** during export tracks the checkpoint only — it no longer overwrites **Start at** or the LAN “started” anchor with EOF.
+
 ### MP4 vs WMV without REST
 
 | Container | Typical LAN duration source without REST |

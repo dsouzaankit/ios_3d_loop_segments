@@ -83,6 +83,7 @@ final class ResumeStore: ObservableObject {
         clearPinnedCompletedExports()
         upsert(item: item) { entry in
             entry.exportInProgress = true
+            entry.lastSeekMs = max(0, seekMs)
             entry.checkpointMediaMs = max(0, seekMs)
             if let sourceDurationMs, sourceDurationMs > 0 {
                 entry.sourceDurationMs = sourceDurationMs

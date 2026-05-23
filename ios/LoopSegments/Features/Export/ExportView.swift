@@ -264,14 +264,6 @@ struct ExportView: View {
                 break
             }
         }
-        .onChange(of: resumeStore.revision) { _, _ in
-            guard session.isExportRunning,
-                  session.activeExportItem?.fileKey == item.fileKey else { return }
-            let live = resumeStore.resumeStatus(for: item).effectiveMs
-            if live > seekMs {
-                seekMs = live
-            }
-        }
         .task(id: ExportLANServer.isEnabled) {
             guard ExportLANServer.isEnabled else {
                 lanHostURL = nil
@@ -464,21 +456,26 @@ struct ExportView: View {
         WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
     }
 
+    /// `Start at` uses this field; live export position is shown separately via `resume.effectiveMs`.
+    private func syncSeekFromStore() {
+        let resume = resumeStore.resumeStatus(for: item)
+        seekMs = resume.isPaused ? resume.effectiveMs : resume.savedSeekMs
+    }
+
     private func applyForegroundResume() {
         let resume = resumeStore.resumeStatus(for: item)
-        seekMs = resume.effectiveMs
         syncLANResumeHintFromStore()
         if session.isExportRunning, session.activeExportItem?.fileKey == item.fileKey {
-            if let checkpoint = resumeStore.checkpointMediaMs(for: item), checkpoint > seekMs {
-                seekMs = checkpoint
-            }
             if status.isEmpty || status.hasPrefix("Export paused") {
                 status = "Export running — logs refresh while app is open"
             }
-        } else if resume.isPaused {
-            status = "Export paused — continue from \(ResumeTimeFormat.formatMs(seekMs)) (tap Start export)"
-        } else if resume.effectiveMs > 0, status.isEmpty {
-            status = "Will start from \(ResumeTimeFormat.formatMs(seekMs))"
+        } else {
+            syncSeekFromStore()
+            if resume.isPaused {
+                status = "Export paused — continue from \(ResumeTimeFormat.formatMs(seekMs)) (tap Start export)"
+            } else if resume.savedSeekMs > 0, status.isEmpty {
+                status = "Will start from \(ResumeTimeFormat.formatMs(seekMs))"
+            }
         }
         refreshLogFromDisk()
         refreshLogHint()
@@ -547,10 +544,12 @@ struct ExportView: View {
         status = "Downloading to temp; publishing 60s chunks for DLNA as each minute is on disk…"
         do {
             try await session.startExport(item: item, seekMs: seekMs)
+            syncSeekFromStore()
             status = PhotosSegmentPublisher.workflowEnabled && PhotosSegmentPublisher.isEnabled
                 ? "Done — segment in Files → Loop Segments → Exports (and Photos). Stays until Clear media or next export."
                 : "Done — segment in Files → Exports. LAN :8765 shares media while the LAN server toggle is on."
         } catch SegmentExporterError.paused {
+            syncSeekFromStore()
             let resume = resumeStore.resumeStatus(for: item)
             let at = ResumeTimeFormat.formatMs(resume.effectiveMs)
             status = "Paused — tap Start export to continue from \(at)"
@@ -572,6 +571,7 @@ struct ExportView: View {
         } catch {
             errorMessage = error.localizedDescription
             status = "Failed — partial segments kept in Exports for USB sync"
+            syncSeekFromStore()
         }
         refreshLogFromDisk()
         if fileByteCount(ExportPaths.latestLogTextURL) == 0 {

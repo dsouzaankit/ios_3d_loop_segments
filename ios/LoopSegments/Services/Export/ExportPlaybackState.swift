@@ -559,6 +559,13 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
     }
 
+    /// After a full export, LAN `#t=` and status lines should anchor at 0:00, not the last checkpoint.
+    func resetPlaybackAnchorAfterFinishedExport() {
+        lock.withLock {
+            snapshot.playbackStartSeconds = 0
+        }
+    }
+
     func syncSparseLayout(
         totalBytes: Int64,
         filledSpans: [ClosedRange<Int64>],

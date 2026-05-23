@@ -247,10 +247,11 @@ enum WorkingSourceSparseCatalog {
             filledRanges: lay.filledRanges,
             headOnDisk: lay.headOnDisk,
             tailOnDisk: lay.tailOnDisk,
-            playbackStartSeconds: nil,
+            playbackStartSeconds: 0,
             durationSeconds: manifest.durationSeconds,
             exportCursorSeconds: manifest.exportCursorSeconds
         )
+        ExportPlaybackState.shared.resetPlaybackAnchorAfterFinishedExport()
         refreshPlaybackState(for: fileURL)
     }
 
