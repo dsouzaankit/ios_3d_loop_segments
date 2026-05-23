@@ -20,8 +20,33 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         winfspDllPath      = ''
         skipWinFspCheck    = $false
         dlnaFolder         = ''
+        webdavUser         = 'admin'
+        webdavPassword     = 'iosadmin'
         notes              = ''
     }
+}
+
+function Get-LoopSegmentsWebDAVCredentials {
+    param(
+        [string] $UserOverride = '',
+        [string] $PasswordOverride = ''
+    )
+    $settings = Get-LoopSegmentsWindowsSettings
+    $user = if (-not [string]::IsNullOrWhiteSpace($UserOverride)) {
+        $UserOverride.Trim()
+    } elseif (-not [string]::IsNullOrWhiteSpace([string]$settings.webdavUser)) {
+        [string]$settings.webdavUser
+    } else {
+        'admin'
+    }
+    $password = if (-not [string]::IsNullOrWhiteSpace($PasswordOverride)) {
+        $PasswordOverride
+    } elseif ($null -ne $settings.webdavPassword -and [string]$settings.webdavPassword.Length -gt 0) {
+        [string]$settings.webdavPassword
+    } else {
+        'iosadmin'
+    }
+    return @{ User = $user; Password = $password }
 }
 
 function Read-LoopSegmentsWindowsConfigFile {
@@ -244,6 +269,8 @@ function Show-LoopSegmentsWindowsDiagnostics {
     Write-Host "  Phone LAN:       $($settings.phoneLanHost) : $(Get-LoopSegmentsLanPort)"
     Write-Host "  Mount drive:     $(Get-LoopSegmentsMountDriveLetter):"
     Write-Host "  rclone remote:   $(Get-LoopSegmentsRcloneRemoteName)"
+    $creds = Get-LoopSegmentsWebDAVCredentials
+    Write-Host "  WebDAV auth:     $($creds.User) / (password in json or default iosadmin)"
     try {
         $inv = Get-RcloneInvocation
         Write-Host "  rclone.exe:      $($inv.Exe)"

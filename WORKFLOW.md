@@ -64,7 +64,7 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # firs
 
 Open **`http://192.168.x.x:8765/`** in a browser and save files, use **`Invoke-WebRequest`**, or **[windows/archive/Sync-FromPhoneLAN.ps1](windows/archive/Sync-FromPhoneLAN.ps1)**. Per-PC json: [windows/README.md](windows/README.md).
 
-Copy segment MP4s into your DLNA folder (or use **`Run-SegmentCopy.ps1`** from the sibling **`3d_loop_segments`** repo for pCloud → PC). **rclone mount** of the phone is **archived**: [windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md](windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md).
+Copy segment MP4s into your DLNA folder (or use **`Run-SegmentCopy.ps1`** from the sibling **`3d_loop_segments`** repo for pCloud → PC). Optional **rclone mount**: [windows/RCLONE-PHONE-MOUNT.md](windows/RCLONE-PHONE-MOUNT.md).
 
 ### Manual (USB / Apple Devices)
 

@@ -6,6 +6,8 @@ struct ExportView: View {
     @StateObject private var network = NetworkPathMonitor()
     @ObservedObject private var resumeStore = ResumeStore.shared
     let item: WebDAVItem
+    var autoStartExport: Bool = false
+    var autoStartSeekMs: Int64 = 0
 
     @State private var seekMs: Int64 = 0
     @State private var status = ""
@@ -25,6 +27,17 @@ struct ExportView: View {
     @State private var prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
     @State private var hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
     @State private var vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled
+    @State private var alternateExportSource = AlternateExportFileSource.stored
+    @State private var alternateExportBusy = false
+    @State private var showAlternateFilePicker = false
+    @State private var switchExportTarget: ExportSwitchTarget?
+    @State private var didAutoStartExport = false
+    @State private var lanExportTriggerEnabled = LANExportTriggerControl.isEnabled
+    @State private var lanTreeLines: [LANMediaTreeLine] = []
+    @State private var lanTreeEcho = ""
+    @State private var lanTriggerNote = ""
+    @State private var copiedLANTree = false
+    @State private var showFullLANTree = false
 
     var body: some View {
         Form {
@@ -159,6 +172,8 @@ struct ExportView: View {
                 )
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                alternateExportSection
+                lanWebDAVBrowserSection
             }
             Section("Network (pCloud)") {
                 Text(network.interfaceLabel)
@@ -243,11 +258,39 @@ struct ExportView: View {
             }
         }
         .navigationTitle("Export")
+        .navigationDestination(item: $switchExportTarget) { target in
+            ExportView(
+                item: target.item,
+                autoStartExport: target.autoStart,
+                autoStartSeekMs: target.seekMs
+            )
+        }
+        .sheet(isPresented: $showAlternateFilePicker) {
+            AlternateExportFileSheet(
+                currentItem: item,
+                source: alternateExportSource
+            ) { picked in
+                beginExportOnDifferentFile(picked, autoStart: true, seekMs: 0)
+            }
+        }
         .onAppear {
             ExportAutoLockCoordinator.setExportPageVisible(true)
             applyForegroundResume()
             if PhotosSegmentPublisher.workflowEnabled, PhotosSegmentPublisher.isEnabled {
                 Task { await requestPhotosAccess() }
+            }
+            triggerAutoStartExportIfNeeded()
+        }
+        .task {
+            refreshLANTreeSnapshot()
+            while !Task.isCancelled {
+                if lanExportTriggerEnabled, ExportLANServer.isEnabled {
+                    await pollLANExportTrigger()
+                }
+                if session.isExportRunning {
+                    refreshLANTreeSnapshot()
+                }
+                try? await Task.sleep(for: .seconds(2))
             }
         }
         .onDisappear {
@@ -309,6 +352,118 @@ struct ExportView: View {
             return "In-progress: pCloud transcode → pcld_ios_media/_working_pcloud_transcode.mp4 (not the original file). Segments: loop/op_*.mp4"
         }
         return "In-progress: index → pcld_ios_media/_working.mp4 (#t= resume while paused). Segments: pcld_ios_media/loop/op_*.mp4"
+    }
+
+    @ViewBuilder
+    private var alternateExportSection: some View {
+        Picker("Random pool", selection: $alternateExportSource) {
+            ForEach(AlternateExportFileSource.allCases) { source in
+                Text(source.label).tag(source)
+            }
+        }
+        .pickerStyle(.menu)
+        .disabled(alternateExportBusy)
+        .onChange(of: alternateExportSource) { _, newValue in
+            AlternateExportFileSource.stored = newValue
+        }
+
+        if session.isExportRunning {
+            Text("Stop or pause the current export before switching to another file.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+
+        Button {
+            Task { await exportRandomFile() }
+        } label: {
+            if alternateExportBusy {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Choosing…")
+                }
+            } else {
+                Label("Export random file", systemImage: "shuffle")
+            }
+        }
+        .disabled(session.isExportRunning || alternateExportBusy)
+
+        Button {
+            showAlternateFilePicker = true
+        } label: {
+            Label("Choose file…", systemImage: "film.stack")
+        }
+        .disabled(session.isExportRunning || alternateExportBusy)
+
+        Text(
+            "Opens export for another video at 0:00 — random from the pool above, or pick from the list. " +
+                "Same folder = parent of this file on pCloud. Bookmarks = folders saved in Browse."
+        )
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var lanWebDAVBrowserSection: some View {
+        if ExportLANServer.isEnabled {
+            Toggle("Accept export triggers from PC (WebDAV)", isOn: $lanExportTriggerEnabled)
+                .onChange(of: lanExportTriggerEnabled) { _, enabled in
+                    LANExportTriggerControl.isEnabled = enabled
+                }
+
+            if let ack = LANExportTriggerControl.readAckSummary() {
+                Text("Last trigger ack: \(ack)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !lanTriggerNote.isEmpty {
+                Text(lanTriggerNote)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            Text("PC: PUT `\(LANExportTriggerControl.triggerRelativePath)` · GET `lan_tree.json` · read `export_trigger.ack.json`")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            HStack {
+                Button("Refresh listing") { refreshLANTreeSnapshot() }
+                Button(copiedLANTree ? "Copied" : "Copy listing") {
+                    UIPasteboard.general.string = lanTreeEcho
+                    copiedLANTree = true
+                }
+            }
+
+            Toggle("Show full tree", isOn: $showFullLANTree)
+
+            if showFullLANTree {
+                ScrollView {
+                    Text(lanTreeEcho)
+                        .font(.system(.caption2, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 220)
+            } else {
+                let preview = Array(lanTreeLines.prefix(24))
+                if preview.isEmpty {
+                    Text("No files on disk yet — start export or create pcld_ios_media/scripts/ via PC WebDAV.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(preview) { line in
+                        Text(line.indentLabel)
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(1)
+                    }
+                    if lanTreeLines.count > preview.count {
+                        Text("… \(lanTreeLines.count - preview.count) more — Show full tree")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -606,6 +761,82 @@ struct ExportView: View {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let n = attrs[.size] as? NSNumber else { return 0 }
         return n.int64Value
+    }
+
+    private func triggerAutoStartExportIfNeeded() {
+        guard autoStartExport, !didAutoStartExport else { return }
+        didAutoStartExport = true
+        seekMs = max(0, autoStartSeekMs)
+        resumeStore.saveSeekMs(seekMs, for: item)
+        guard !session.isExportRunning else { return }
+        exportTask?.cancel()
+        exportTask = Task { await startExport() }
+    }
+
+    private func beginExportOnDifferentFile(_ picked: WebDAVItem, autoStart: Bool, seekMs startSeekMs: Int64 = 0) {
+        let seek = max(0, startSeekMs)
+        resumeStore.saveSeekMs(seek, for: picked)
+        if picked.fileKey == item.fileKey {
+            seekMs = seek
+            guard autoStart, !session.isExportRunning else { return }
+            exportTask?.cancel()
+            exportTask = Task { await startExport() }
+            return
+        }
+        switchExportTarget = ExportSwitchTarget(item: picked, autoStart: autoStart, seekMs: seek)
+    }
+
+    private func refreshLANTreeSnapshot() {
+        lanTreeLines = LANMediaTree.snapshotLines()
+        lanTreeEcho = LANMediaTree.echoText()
+    }
+
+    private func pollLANExportTrigger() async {
+        let note = await LANExportTriggerControl.pollAndConsume(
+            credentials: session.credentials,
+            currentItem: item,
+            isExportRunning: session.isExportRunning,
+            onStartExport: { picked, seek in
+                beginExportOnDifferentFile(picked, autoStart: true, seekMs: seek)
+            },
+            onPause: {
+                session.pauseExport()
+                exportTask?.cancel()
+                exportTask = nil
+                status = "Paused via LAN trigger"
+            },
+            onStop: {
+                session.cancelExport()
+                exportTask?.cancel()
+                exportTask = nil
+                status = "Stopped via LAN trigger"
+            }
+        )
+        if let note {
+            lanTriggerNote = note
+            status = note
+        }
+    }
+
+    private func exportRandomFile() async {
+        guard !session.isExportRunning else { return }
+        guard let credentials = session.credentials else {
+            errorMessage = ExportError.notSignedIn.errorDescription
+            return
+        }
+        alternateExportBusy = true
+        defer { alternateExportBusy = false }
+        do {
+            let picked = try await AlternateExportFilePicker.pickRandom(
+                excluding: item.fileKey,
+                source: alternateExportSource,
+                currentItem: item,
+                credentials: credentials
+            )
+            beginExportOnDifferentFile(picked, autoStart: true, seekMs: 0)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
 }

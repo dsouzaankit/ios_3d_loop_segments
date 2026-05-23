@@ -3,12 +3,14 @@ import Foundation
 import Network
 import UIKit
 
-/// Serves `Documents/Exports/` on the LAN when enabled (HTTP + read-only WebDAV).
-/// True SMB is not available on iOS; WebDAV lets Windows map a drive letter to the same folder.
+/// Serves `Documents/Exports/` on the LAN when enabled (HTTP + WebDAV).
+/// `pcld_ios_media/` accepts authenticated PUT/MKCOL for PC scripts and nested folders; export pipeline paths stay read-only.
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
     /// Per-response cap — open-ended `Range: bytes=0-` must not ship multi-GB (Quest browser / Safari OOM).
     private static let maxResponseBodyBytes: Int64 = 32 * 1024 * 1024
+    /// PC script uploads via WebDAV PUT (Basic auth required).
+    private static let maxWebDAVPutBytes: Int = 2 * 1024 * 1024
     /// LAN WebDAV Basic auth (Skybox, mapped drives). GET without auth still works for PC sync.
     static let lanWebDAVUsername = "admin"
     static let lanWebDAVPassword = "iosadmin"
@@ -154,7 +156,7 @@ enum ExportLANServer {
                         log(
                             "LAN: Windows often cannot resolve .local — use IP above; ping may fail even when HTTP works"
                         )
-                        log("LAN: HTTP + WebDAV — pcld_ios_media/loop/op_00|01, pcld_ios_media/_working.mp4, logs (not SMB)")
+                        log("LAN: HTTP + WebDAV — pcld_ios_media/ (read + auth PUT/MKCOL for scripts), loop/op_*, logs (not SMB)")
                     case .failed(let error):
                         log("LAN export server failed: \(error.localizedDescription)")
                         Self.stopOnQueue(log: nil)
@@ -279,6 +281,7 @@ enum ExportLANServer {
                 method: method,
                 path: webDAVResourcePath(path),
                 requestHeaders: text,
+                bodyPrefix: Data(buffer[headerEnd.upperBound...]),
                 connection: connection,
                 done: done
             )
@@ -289,6 +292,7 @@ enum ExportLANServer {
         method: String,
         path: String,
         requestHeaders: String,
+        bodyPrefix: Data,
         connection: NWConnection,
         done: @escaping () -> Void
     ) {
@@ -298,6 +302,18 @@ enum ExportLANServer {
         switch method {
         case "GET", "HEAD":
             handleGET(path: path, method: method, requestHeaders: requestHeaders, connection: connection, done: done)
+        case "PUT":
+            handlePUT(
+                path: path,
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+        case "MKCOL":
+            handleMKCOL(path: path, connection: connection, done: done)
+        case "DELETE":
+            handleDELETE(path: path, connection: connection, done: done)
         case "OPTIONS":
             sendOptions(connection: connection, done: done)
         case "PROPFIND":
@@ -307,7 +323,7 @@ enum ExportLANServer {
         case "UNLOCK":
             sendNoContent(connection: connection, done: done)
         default:
-            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Read-only: GET, HEAD, OPTIONS, PROPFIND, LOCK, UNLOCK".utf8), done: done)
+            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Allowed: GET, HEAD, PUT, MKCOL, DELETE, OPTIONS, PROPFIND, LOCK, UNLOCK".utf8), done: done)
         }
     }
 
@@ -393,10 +409,10 @@ enum ExportLANServer {
         path.hasPrefix("/") ? String(path.dropFirst()) : path
     }
 
-    /// Auth on OPTIONS/PROPFIND/LOCK and WebDAV `GET /`. Media GET stays open (Skybox often omits Authorization on play).
+    /// Auth on OPTIONS/PROPFIND/LOCK, WebDAV writes, and WebDAV `GET /`. Media GET stays open (Skybox often omits Authorization on play).
     private static func requiresLANWebDAVAuth(method: String, path: String, requestHeaders: String) -> Bool {
         switch method {
-        case "OPTIONS", "PROPFIND", "LOCK":
+        case "OPTIONS", "PROPFIND", "LOCK", "PUT", "MKCOL", "DELETE":
             return true
         case "GET", "HEAD":
             return normalizedGETPath(path).isEmpty && !isBrowserLikeRequest(requestHeaders: requestHeaders)
@@ -504,6 +520,10 @@ enum ExportLANServer {
         }
         if normalized == "status.json" {
             sendStatusJSON(connection, done: done)
+            return
+        }
+        if normalized == "lan_tree.json" {
+            sendLANTreeJSON(connection, done: done)
             return
         }
         guard let fileURL = resolveExportFile(relativePath: normalized) else {
@@ -682,20 +702,54 @@ enum ExportLANServer {
         return names
     }
 
-    /// Non-loop files directly under `pcld_ios_media/` (working, transcode, vanilla, …).
-    private static func mediaFolderServableRelativePaths() -> [String] {
-        let media = ExportPaths.mediaExportFolderName
-        let loop = ExportPaths.segmentLoopFolderName
-        let loopPrefix = "\(media)/\(loop)/"
-        return ExportPaths.lanBrowsableMediaRelativePaths()
-            .filter { $0.hasPrefix("\(media)/") && !$0.hasPrefix(loopPrefix) }
+    private static func mediaPropfindChildDepthLimit(from depth: Int) -> Int {
+        depth == 2 ? 999 : depth
     }
 
-    private static func loopFolderServableRelativePaths() -> [String] {
-        let loopPrefix =
-            "\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/"
-        return ExportPaths.lanBrowsableMediaRelativePaths()
-            .filter { $0.hasPrefix(loopPrefix) }
+    private static func appendMediaDirectoryPropfind(
+        relativeDir: String,
+        depthRemaining: Int,
+        into responses: inout [String]
+    ) {
+        guard depthRemaining > 0 else { return }
+        let fm = FileManager.default
+        for entry in ExportPaths.listLANMediaDirectory(relativeDir: relativeDir) {
+            let hrefPath = "/\(entry.relativePath)" + (entry.isDirectory ? "/" : "")
+            let childURL = ExportPaths.urlUnderExports(relativePath: entry.relativePath)
+            let attrs = try? fm.attributesOfItem(atPath: childURL.path)
+            let size = entry.isDirectory ? nil : (attrs?[.size] as? NSNumber)?.int64Value
+            let modified = attrs?[.modificationDate] as? Date
+            responses.append(
+                propfindEntryXML(
+                    href: davListingHref(path: hrefPath, isCollection: entry.isDirectory),
+                    isCollection: entry.isDirectory,
+                    displayName: (entry.relativePath as NSString).lastPathComponent,
+                    size: size,
+                    modified: modified,
+                    contentType: entry.isDirectory ? nil : mimeType(for: childURL)
+                )
+            )
+            if entry.isDirectory, depthRemaining > 1 {
+                appendMediaDirectoryPropfind(
+                    relativeDir: entry.relativePath,
+                    depthRemaining: depthRemaining - 1,
+                    into: &responses
+                )
+            }
+        }
+    }
+
+    private static func mediaDirectoryRelativePath(from rel: String) -> String? {
+        let media = ExportPaths.mediaExportFolderName
+        if rel == media || rel == "\(media)/" { return media }
+        guard rel.hasPrefix("\(media)/") else { return nil }
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: ExportPaths.urlUnderExports(relativePath: rel).path, isDirectory: &isDir),
+              isDir.boolValue else {
+            return nil
+        }
+        return rel
     }
 
     private static func xmlEscape(_ text: String) -> String {
@@ -783,13 +837,213 @@ enum ExportLANServer {
         })
     }
 
+    private static func parseContentLength(requestHeaders: String) -> Int? {
+        guard let value = headerValue(named: "Content-Length", in: requestHeaders) else { return nil }
+        return Int(value.trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func receiveRequestBody(
+        on connection: NWConnection,
+        requestHeaders: String,
+        bodyPrefix: Data,
+        maxBytes: Int,
+        done: @escaping (Result<Data, LANWebDAVWriteError>) -> Void
+    ) {
+        guard let contentLength = parseContentLength(requestHeaders: requestHeaders), contentLength >= 0 else {
+            done(.failure(.missingContentLength))
+            return
+        }
+        if contentLength > maxBytes {
+            done(.failure(.payloadTooLarge))
+            return
+        }
+        if bodyPrefix.count >= contentLength {
+            done(.success(Data(bodyPrefix.prefix(contentLength))))
+            return
+        }
+        var accumulated = bodyPrefix
+        func receiveMore() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { data, _, _, error in
+                if error != nil {
+                    done(.failure(.readFailed))
+                    return
+                }
+                guard let data, !data.isEmpty else {
+                    done(.failure(.readFailed))
+                    return
+                }
+                accumulated.append(data)
+                if accumulated.count >= contentLength {
+                    done(.success(Data(accumulated.prefix(contentLength))))
+                } else if accumulated.count > maxBytes {
+                    done(.failure(.payloadTooLarge))
+                } else {
+                    receiveMore()
+                }
+            }
+        }
+        receiveMore()
+    }
+
+    private enum LANWebDAVWriteError {
+        case missingContentLength
+        case payloadTooLarge
+        case readFailed
+    }
+
+    private static func handlePUT(
+        path: String,
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        guard let rel = relativeExportPath(fromDAVPath: path) else {
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+            return
+        }
+        guard ExportPaths.isLANWritableMediaRelativePath(rel) else {
+            sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Read-only export path".utf8), done: done)
+            return
+        }
+        _ = ExportPaths.mediaExportDirectory
+        guard let fileURL = ExportPaths.urlForLANWritableMedia(relativePath: rel) else {
+            sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Forbidden".utf8), done: done)
+            return
+        }
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        if fm.fileExists(atPath: fileURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Cannot PUT to a collection".utf8), done: done)
+            return
+        }
+        let parentURL = fileURL.deletingLastPathComponent()
+        var parentIsDir: ObjCBool = false
+        guard fm.fileExists(atPath: parentURL.path, isDirectory: &parentIsDir), parentIsDir.boolValue else {
+            sendResponse(connection: connection, status: 409, contentType: "text/plain", body: Data("Parent collection missing — MKCOL first".utf8), done: done)
+            return
+        }
+        let existed = fm.fileExists(atPath: fileURL.path)
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: maxWebDAVPutBytes
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("PUT body exceeds \(maxWebDAVPutBytes) bytes".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                do {
+                    try body.write(to: fileURL, options: .atomic)
+                    if existed {
+                        sendNoContent(connection: connection, done: done)
+                    } else {
+                        sendCreated(connection: connection, done: done)
+                    }
+                } catch {
+                    sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("Write failed".utf8), done: done)
+                }
+            }
+        }
+    }
+
+    private static func handleMKCOL(
+        path: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        guard let rel = relativeExportPath(fromDAVPath: path) else {
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+            return
+        }
+        guard ExportPaths.isLANWritableMediaRelativePath(rel) else {
+            sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Read-only export path".utf8), done: done)
+            return
+        }
+        _ = ExportPaths.mediaExportDirectory
+        guard let dirURL = ExportPaths.urlForLANWritableMedia(relativePath: rel) else {
+            sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Forbidden".utf8), done: done)
+            return
+        }
+        let fm = FileManager.default
+        if fm.fileExists(atPath: dirURL.path) {
+            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Collection already exists".utf8), done: done)
+            return
+        }
+        let parentURL = dirURL.deletingLastPathComponent()
+        var parentIsDir: ObjCBool = false
+        guard fm.fileExists(atPath: parentURL.path, isDirectory: &parentIsDir), parentIsDir.boolValue else {
+            sendResponse(connection: connection, status: 409, contentType: "text/plain", body: Data("Parent collection missing".utf8), done: done)
+            return
+        }
+        do {
+            try fm.createDirectory(at: dirURL, withIntermediateDirectories: false)
+            sendCreated(connection: connection, done: done)
+        } catch {
+            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("MKCOL failed".utf8), done: done)
+        }
+    }
+
+    private static func handleDELETE(
+        path: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        guard let rel = relativeExportPath(fromDAVPath: path) else {
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+            return
+        }
+        guard ExportPaths.isLANWritableMediaRelativePath(rel) else {
+            sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Read-only export path".utf8), done: done)
+            return
+        }
+        guard let itemURL = ExportPaths.urlForLANWritableMedia(relativePath: rel) else {
+            sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Forbidden".utf8), done: done)
+            return
+        }
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: itemURL.path, isDirectory: &isDirectory) else {
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+            return
+        }
+        do {
+            if isDirectory.boolValue {
+                let children = try fm.contentsOfDirectory(atPath: itemURL.path)
+                guard children.isEmpty else {
+                    sendResponse(connection: connection, status: 409, contentType: "text/plain", body: Data("Collection not empty".utf8), done: done)
+                    return
+                }
+            }
+            try fm.removeItem(at: itemURL)
+            sendNoContent(connection: connection, done: done)
+        } catch {
+            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("DELETE failed".utf8), done: done)
+        }
+    }
+
+    private static func sendCreated(connection: NWConnection, done: @escaping () -> Void) {
+        let header = "HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in
+            connection.cancel()
+            done()
+        })
+    }
+
     private static func sendOptions(connection: NWConnection, done: @escaping () -> Void) {
+        let allow = "GET, HEAD, PUT, MKCOL, DELETE, OPTIONS, PROPFIND, LOCK, UNLOCK"
         var lines = [
             "HTTP/1.1 200 OK",
             "DAV: 1, 2",
             "MS-Author-Via: DAV",
-            "Allow: GET, HEAD, OPTIONS, PROPFIND, LOCK, UNLOCK",
-            "Public: GET, HEAD, OPTIONS, PROPFIND, LOCK, UNLOCK",
+            "Allow: \(allow)",
+            "Public: \(allow)",
             "Content-Length: 0",
         ]
         lines.append("Connection: close")
@@ -853,76 +1107,24 @@ enum ExportLANServer {
         var responses: [String] = []
 
         if let rel = relativeExportPath(fromDAVPath: davPath) {
-            let media = ExportPaths.mediaExportFolderName
-            let loopFolder = ExportPaths.segmentLoopFolderName
-            let loopUnderMedia = "\(media)/\(loopFolder)"
+            let childDepth = mediaPropfindChildDepthLimit(from: depth)
 
-            if rel == media || rel == "\(media)/" {
+            if let mediaDir = mediaDirectoryRelativePath(from: rel) {
                 responses.append(
                     propfindEntryXML(
-                        href: davListingHref(path: "/\(media)/", isCollection: true),
+                        href: davListingHref(path: "/\(mediaDir)/", isCollection: true),
                         isCollection: true,
-                        displayName: media,
+                        displayName: (mediaDir as NSString).lastPathComponent,
                         size: nil,
                         modified: nil
                     )
                 )
                 if depth != 0 {
-                    responses.append(
-                        propfindEntryXML(
-                            href: davListingHref(path: "/\(loopUnderMedia)/", isCollection: true),
-                            isCollection: true,
-                            displayName: loopFolder,
-                            size: nil,
-                            modified: nil
-                        )
+                    appendMediaDirectoryPropfind(
+                        relativeDir: mediaDir,
+                        depthRemaining: childDepth,
+                        into: &responses
                     )
-                    let fm = FileManager.default
-                    for fileRel in mediaFolderServableRelativePaths() {
-                        guard let fileURL = resolveExportFile(relativePath: fileRel) else { continue }
-                        let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
-                        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-                        let modified = attrs?[.modificationDate] as? Date
-                        responses.append(
-                            propfindEntryXML(
-                                href: davListingHref(path: "/\(fileRel)", isCollection: false),
-                                isCollection: false,
-                                displayName: fileURL.lastPathComponent,
-                                size: size,
-                                modified: modified,
-                                contentType: mimeType(for: fileURL)
-                            )
-                        )
-                    }
-                }
-            } else if rel == loopUnderMedia || rel == "\(loopUnderMedia)/" {
-                responses.append(
-                    propfindEntryXML(
-                        href: davListingHref(path: "/\(loopUnderMedia)/", isCollection: true),
-                        isCollection: true,
-                        displayName: loopFolder,
-                        size: nil,
-                        modified: nil
-                    )
-                )
-                if depth != 0 {
-                    let fm = FileManager.default
-                    for segmentRel in loopFolderServableRelativePaths() {
-                        guard let fileURL = resolveExportFile(relativePath: segmentRel) else { continue }
-                        let attrs = try? fm.attributesOfItem(atPath: fileURL.path)
-                        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-                        let modified = attrs?[.modificationDate] as? Date
-                        responses.append(
-                            propfindEntryXML(
-                                href: davListingHref(path: "/\(segmentRel)", isCollection: false),
-                                isCollection: false,
-                                displayName: fileURL.lastPathComponent,
-                                size: size,
-                                modified: modified,
-                                contentType: mimeType(for: fileURL)
-                            )
-                        )
-                    }
                 }
             } else {
                 guard let fileURL = resolveExportFile(relativePath: rel) else {
@@ -1006,6 +1208,7 @@ enum ExportLANServer {
         guard !relativePath.contains("..") else { return nil }
         if relativePath == "status.json" { return nil }
         let allowed = ExportPaths.isLANBrowsableMediaRelativePath(relativePath)
+            || ExportPaths.isLANMediaTreeServableRelativePath(relativePath)
             || rootServableRelativePaths().contains(relativePath)
         guard allowed else { return nil }
         let url = ExportPaths.urlUnderExports(relativePath: relativePath)
@@ -1267,6 +1470,15 @@ enum ExportLANServer {
         if ExportPlaybackState.shared.isLANExportActive {
             payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayload()
         }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
+            return
+        }
+        sendResponse(connection: connection, status: 200, contentType: "application/json", body: data, done: done)
+    }
+
+    private static func sendLANTreeJSON(_ connection: NWConnection, done: @escaping () -> Void) {
+        let payload = LANMediaTree.jsonPayload()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return
@@ -1544,10 +1756,14 @@ enum ExportLANServer {
         let phrase: String
         switch status {
         case 200: phrase = "OK"
+        case 201: phrase = "Created"
         case 206: phrase = "Partial Content"
         case 403: phrase = "Forbidden"
         case 404: phrase = "Not Found"
         case 405: phrase = "Method Not Allowed"
+        case 409: phrase = "Conflict"
+        case 411: phrase = "Length Required"
+        case 413: phrase = "Payload Too Large"
         case 416: phrase = "Range Not Satisfiable"
         case 503: phrase = "Service Unavailable"
         default: phrase = "Error"
@@ -1582,6 +1798,10 @@ enum ExportLANServer {
         case "ts", "m2ts", "mts": return "video/mp2t"
         case "txt", "log": return "text/plain; charset=utf-8"
         case "json": return "application/json"
+        case "ps1": return "text/plain; charset=utf-8"
+        case "sh", "bash": return "text/x-shellscript; charset=utf-8"
+        case "bat", "cmd": return "text/plain; charset=utf-8"
+        case "py": return "text/x-python; charset=utf-8"
         default: return "application/octet-stream"
         }
     }

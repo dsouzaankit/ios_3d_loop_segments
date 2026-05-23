@@ -3,7 +3,7 @@ https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.
 cd P:\all_scripts\ios_3d_loop_segments\windows
 Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # once per PC
 .\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
-.\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional LAN probe; PC rclone drive mount is optional/sluggish — see ../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional LAN probe; rclone mount: see ../windows/RCLONE-PHONE-MOUNT.md
 # Skybox (Quest): Add WebDAV → http://<phone-ip>:8765/ (IP from Export screen) · admin / iosadmin — see “Quest LAN playback” below
 
 Notes:
@@ -43,7 +43,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
-- 60s segments when source is **at/above** the Mbps cutoff (and codec allows); phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. Below cutoff: LAN preload to EOF only (no segments). **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute when segments run.
+- 60s segments when source is **at/above** the Mbps cutoff (and codec allows); phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. Below cutoff: LAN preload to EOF only (no segments). **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/RCLONE-PHONE-MOUNT.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute when segments run.
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
@@ -52,13 +52,46 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 ## PC sync (LAN — HTTP + WebDAV)
 
-1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN).
-2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, LOCK, etc.). While export runs, the index **polls `status.json` every 60s** to refresh WAN Mbps / fill stats (session metrics reset on each export start or resume).
-3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md).
+1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (LAN section) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
+2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). While export runs, the index **polls `status.json` every 60s** to refresh WAN Mbps / fill stats (session metrics reset on each export start or resume).
+3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
 LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Root **logs** (`export_latest.txt`, …) stay allowlisted; **`search_debug.txt`** and **`export_session_*`** are not served. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree; **`#t=`** on the index handles resume for `_working` (clears after a finished export).
+
+**PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** (Basic auth **`admin` / `iosadmin`**) can create nested folders and small files (e.g. `pcld_ios_media/scripts/run.ps1`, ≤ 2 MB per PUT). **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
+
+```powershell
+$base = "http://10.0.0.42:8765/pcld_ios_media"
+$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
+Invoke-WebRequest -Method MKCOL -Uri "$base/scripts" -Headers @{ Authorization = "Basic $cred" }
+Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authorization = "Basic $cred" } `
+  -Body 'Write-Host "from PC"' -ContentType "text/plain"
+```
+
+**LAN export control (phone Export screen open):** enable **Accept export triggers from PC** on the Export page. PC **PUT** `pcld_ios_media/scripts/export_trigger.json` (auth required). Phone polls every ~2s, runs the command, writes **`export_trigger.ack.json`**, deletes the trigger. **`GET /lan_tree.json`** mirrors the WebDAV file tree (same as the in-app listing). Commands:
+
+| `command` | Fields | Effect |
+|-----------|--------|--------|
+| `start_export` | `href`, `displayName`, optional `seekMs`, optional `id` | Start pCloud export (Export page must be open) |
+| `start_export_random` | optional `pool`: `same_folder` / `bookmarks`, optional `seekMs` | Random video from pool |
+| `pause_export` | — | Pause current export |
+| `stop_export` | — | Stop current export |
+
+```powershell
+$trigger = @{
+  version = 1
+  command = "start_export"
+  href = "/remote.php/dav/files/1234567890/0/movie.mp4"
+  displayName = "movie.mp4"
+  seekMs = 0
+  id = [guid]::NewGuid().ToString()
+} | ConvertTo-Json -Compress
+Invoke-WebRequest -Method PUT -Uri "http://10.0.0.42:8765/pcld_ios_media/scripts/export_trigger.json" `
+  -Headers @{ Authorization = "Basic $cred" } -Body $trigger -ContentType "application/json"
+Invoke-WebRequest -Uri "http://10.0.0.42:8765/pcld_ios_media/scripts/export_trigger.ack.json" -Headers @{ Authorization = "Basic $cred" }
+```
 
 **Windows / `.local`:** **`http://iphone.local:8765/` usually fails** — that hostname only exists if About → Name is literally “iPhone” (otherwise it is e.g. `http://johns-iphone.local:8765/`). Windows often does not resolve any `.local` name without [Apple Bonjour](https://support.apple.com/kb/DL999). Use the **LAN IP** from Export (`http://10.x.x.x:8765/`). Test: `cd windows` → `.\Set-LoopSegmentsLANHost.ps1 <ip>` → `.\Mount-LoopSegmentsRclone.ps1 -TestOnly`.
 
@@ -399,7 +432,7 @@ Until a token is saved, treat **Search**, **HLS transcode**, and **REST-backed m
 |------|------------------------|
 | Phone **Exports** → PC | **`http://<ip>:8765/`** in a browser, **`Invoke-WebRequest`**, USB, or **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **`../windows/Mount-LoopSegmentsRclone.ps1 -TestOnly`** |
 | Manual USB | **Apple Devices** → Loop Segments → Exports → Save to PC |
-| rclone+WinFsp mount on PC (optional; can be sluggish) | **[`../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md`](../windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** — Skybox WebDAV to the phone does not need this |
+| rclone+WinFsp mount on PC (optional; can be sluggish) | **[`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md)** — Skybox WebDAV to the phone does not need this |
 
 ```powershell
 cd ..\windows

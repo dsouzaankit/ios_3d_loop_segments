@@ -16,6 +16,8 @@ enum ExportAutoLockCoordinator {
         applyIdleTimer()
     }
 
+    static var isExportPageVisible: Bool { exportPageVisible }
+
     static func exportDidStart() {
         exportRunning = true
         applyIdleTimer()

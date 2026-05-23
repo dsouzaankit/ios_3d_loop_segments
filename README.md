@@ -53,9 +53,9 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [DESIGN.md](DESIGN.md) | Architecture |
 | [ios/](ios/) | Loop Segments iPhone app |
 | [windows/README.md](windows/README.md) | **Portable PC setup** (`loop-segments-windows.json`) |
-| [windows/Mount-LoopSegmentsRclone.ps1](windows/Mount-LoopSegmentsRclone.ps1) | HTTP `-TestOnly` / `-RemovePort80Proxy`; legacy rclone mount → [archive/RCLONE-PHONE-MOUNT-LEGACY.md](windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md) |
+| [windows/Mount-LoopSegmentsRclone.ps1](windows/Mount-LoopSegmentsRclone.ps1) | WebDAV **`-TestOnly`** / **mount** / `-Remove` / `-RemovePort80Proxy` — see [RCLONE-PHONE-MOUNT.md](windows/RCLONE-PHONE-MOUNT.md) |
 | [windows/Set-LoopSegmentsWindows.ps1](windows/Set-LoopSegmentsWindows.ps1) | Per-PC paths (rclone, WinFsp, drive letter) |
-| [windows/archive/](windows/archive/) | Legacy WebDAV / rclone-to-phone, `Sync-FromPhoneLAN.ps1`, **[RCLONE-PHONE-MOUNT-LEGACY.md](windows/archive/RCLONE-PHONE-MOUNT-LEGACY.md)** |
+| [windows/archive/](windows/archive/) | Legacy `net use` / port-80 proxy, `Sync-FromPhoneLAN.ps1` |
 | [codemagic.yaml](codemagic.yaml) | Cloud iOS build |
 
 PotPlayer registry resume and **PC-side** `Run-SegmentCopy.ps1` are **not** part of this repo.

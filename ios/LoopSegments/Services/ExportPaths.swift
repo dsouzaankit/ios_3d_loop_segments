@@ -206,6 +206,98 @@ enum ExportPaths {
         return isLANBrowsableMediaFile(fileName: fileName)
     }
 
+    /// Any regular file under `pcld_ios_media/` (scripts, nested folders) except staging/hidden artifacts.
+    static func isLANMediaTreeServableRelativePath(_ relativePath: String) -> Bool {
+        guard isUnderMediaExportLANPath(relativePath) else { return false }
+        let name = (relativePath as NSString).lastPathComponent
+        if isExcludedFromLANMediaServe(fileName: name) { return false }
+        if name == "_working.mp4", shouldHideSparseWorkingFromLAN() { return false }
+        let url = urlUnderExports(relativePath: relativePath)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return false
+        }
+        return true
+    }
+
+    static func isUnderMediaExportLANPath(_ relativePath: String) -> Bool {
+        guard !relativePath.contains("..") else { return false }
+        let normalized = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if normalized.isEmpty { return false }
+        return normalized == mediaExportFolderName || normalized.hasPrefix("\(mediaExportFolderName)/")
+    }
+
+    /// Export pipeline files — read-only over LAN WebDAV (PC scripts go elsewhere under `pcld_ios_media/`).
+    static func isLANProtectedFromWebDAVWrite(relativePath: String) -> Bool {
+        guard isUnderMediaExportLANPath(relativePath) else { return true }
+        let normalized = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if normalized == mediaExportFolderName { return true }
+        if normalized == "\(mediaExportFolderName)/\(segmentLoopFolderName)" { return true }
+        let lower = relativePath.lowercased()
+        let name = (relativePath as NSString).lastPathComponent.lowercased()
+        if isExcludedFromLANMediaServe(fileName: name) { return true }
+        if name == "_working.mp4" { return true }
+        if name == "_working.sparse.json" { return true }
+        if name.hasPrefix("_vanilla_download.") { return true }
+        if name == "_vanilla_faststart.mp4" { return true }
+        if name.hasPrefix("_working_pcloud_transcode") { return true }
+        let loopPrefix = "\(mediaExportFolderName)/\(segmentLoopFolderName)/".lowercased()
+        if lower.hasPrefix(loopPrefix) { return true }
+        return false
+    }
+
+    static func isLANWritableMediaRelativePath(_ relativePath: String) -> Bool {
+        guard isUnderMediaExportLANPath(relativePath), !relativePath.contains("..") else { return false }
+        let name = (relativePath as NSString).lastPathComponent
+        guard !name.isEmpty else { return false }
+        return !isLANProtectedFromWebDAVWrite(relativePath: relativePath)
+    }
+
+    static func urlForLANWritableMedia(relativePath: String) -> URL? {
+        guard isLANWritableMediaRelativePath(relativePath) else { return nil }
+        return urlUnderExports(relativePath: relativePath)
+    }
+
+    struct LANMediaTreeEntry {
+        let relativePath: String
+        let isDirectory: Bool
+    }
+
+    /// Immediate children of a directory under `pcld_ios_media/` (`relativeDir` = `pcld_ios_media` or `pcld_ios_media/scripts`, …).
+    static func listLANMediaDirectory(relativeDir: String) -> [LANMediaTreeEntry] {
+        let fm = FileManager.default
+        var normalized = relativeDir.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if normalized.isEmpty { normalized = mediaExportFolderName }
+        guard normalized == mediaExportFolderName || normalized.hasPrefix("\(mediaExportFolderName)/") else {
+            return []
+        }
+        var dirURL = mediaExportDirectory
+        if normalized != mediaExportFolderName {
+            let suffix = String(normalized.dropFirst(mediaExportFolderName.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if !suffix.isEmpty {
+                dirURL = mediaExportDirectory.appendingPathComponent(suffix, isDirectory: true)
+            }
+        }
+        guard fm.fileExists(atPath: dirURL.path) else { return [] }
+        guard let names = try? fm.contentsOfDirectory(atPath: dirURL.path) else { return [] }
+        var result: [LANMediaTreeEntry] = []
+        for name in names.sorted() {
+            if isExcludedFromLANMediaServe(fileName: name) { continue }
+            if name == "_working.mp4", shouldHideSparseWorkingFromLAN() { continue }
+            let childURL = dirURL.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: childURL.path, isDirectory: &isDir) else { continue }
+            result.append(
+                LANMediaTreeEntry(
+                    relativePath: pathRelativeToExports(childURL),
+                    isDirectory: isDir.boolValue
+                )
+            )
+        }
+        return result
+    }
+
     /// LAN / index path while export uses pCloud transcode instead of sparse WebDAV mirror.
     static var lanInProgressWorkingRelativePath: String {
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {

@@ -99,4 +99,4 @@ Save-LoopSegmentsWindowsSettings -Settings $settings
 Write-Host ''
 Show-LoopSegmentsWindowsDiagnostics
 Write-Host ''
-Write-Host 'Next: .\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional HTTP check to phone'
+Write-Host 'Next: .\Mount-LoopSegmentsRclone.ps1 -TestOnly   # then .\Mount-LoopSegmentsRclone.ps1 to mount'

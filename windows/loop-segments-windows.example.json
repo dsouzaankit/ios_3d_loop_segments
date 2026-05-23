@@ -8,5 +8,7 @@
   "winfspDllPath": "",
   "skipWinFspCheck": false,
   "dlnaFolder": "",
-  "notes": "Per-PC file. Phone LAN is HTTP-only — Mount-LoopSegmentsRclone.ps1 -TestOnly checks reachability; rclone does not mount the phone anymore. Koofr/rclone fields still apply to other remotes. See archive/RCLONE-PHONE-MOUNT-LEGACY.md."
+  "webdavUser": "admin",
+  "webdavPassword": "iosadmin",
+  "notes": "Per-PC file (gitignored). Copy to loop-segments-windows.json on each Windows PC. Empty rcloneConfigPath = auto-detect. Koofr and loopsegments remotes can share the same rclone.conf — use different mountDriveLetter if both mount at once."
 }

@@ -19,4 +19,4 @@ $settings = Get-LoopSegmentsWindowsSettings
 $settings.phoneLanHost = $PhoneHost.Trim()
 Save-LoopSegmentsWindowsSettings -Settings $settings
 Write-Host "Run: .\Set-LoopSegmentsWindows.ps1 -Show"
-Write-Host "     .\Mount-LoopSegmentsRclone.ps1 -TestOnly"
+Write-Host "     .\Mount-LoopSegmentsRclone.ps1 -TestOnly   # then mount without -TestOnly"

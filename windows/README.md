@@ -1,6 +1,6 @@
 # Loop Segments — Windows (portable)
 
-Scripts work on **any Windows PC** after you copy or clone this repo. Machine-specific paths live in **`loop-segments-windows.json`** (gitignored), not in the scripts.
+Scripts work on **any Windows PC** after you copy or clone this repo. Machine-specific paths live in **`loop-segments-windows.json`** (gitignored), not in the scripts. All scripts resolve paths from **`$PSScriptRoot`** in this folder.
 
 ## First time on a PC
 
@@ -12,10 +12,11 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json
 # Or interactive: .\Set-LoopSegmentsWindows.ps1
 
 .\Set-LoopSegmentsWindows.ps1 -Show
-.\Mount-LoopSegmentsRclone.ps1 -TestOnly   # HTTP check to phone :8765 (not a drive mount)
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly
+.\Mount-LoopSegmentsRclone.ps1          # rclone mount -> drive letter (WinFsp)
 ```
 
-**Phone → Windows drive letter via rclone** was removed when the app’s LAN server became **HTTP-only**. Historical script and notes: **[archive/RCLONE-PHONE-MOUNT-LEGACY.md](archive/RCLONE-PHONE-MOUNT-LEGACY.md)**.
+Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[RCLONE-PHONE-MOUNT.md](RCLONE-PHONE-MOUNT.md)**.
 
 ## What goes in `loop-segments-windows.json`
 
@@ -23,19 +24,20 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json
 |-------|---------|
 | `phoneLanHost` | iPhone IP (changes per Wi‑Fi) |
 | `lanPort` | Usually `8765` |
-| `mountDriveLetter` | Drive letter for **legacy** `-Remove` (stopping old `rclone mount`) or Koofr; default `L` |
-| `rcloneRemoteName` | Reserved name in `rclone.conf` (Koofr / other remotes); **not** used to mount the phone in current builds |
+| `mountDriveLetter` | Drive letter for phone mount (default `L`; pick another if Koofr uses `L`) |
+| `rcloneRemoteName` | Block name in `rclone.conf` for the phone (default `loopsegments`) |
 | `rcloneConfigPath` | **Empty** = auto (`rclone config file`, usually `%APPDATA%\rclone\rclone.conf`) |
 | `rcloneExe` | **Empty** = `rclone` on PATH |
 | `winfspDllPath` | **Empty** = search Program Files; set full path if detection fails |
 | `skipWinFspCheck` | `true` if Koofr mount already proves WinFsp works |
+| `webdavUser` / `webdavPassword` | Phone LAN WebDAV (defaults match app) |
 | `dlnaFolder` | Optional note for Skybox / junction target |
-| `notes` | Free text (e.g. "Koofr remote = koofr") |
+| `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
 
 ## Koofr + Loop Segments on one PC
 
-- **Koofr** (or other cloud) may still use **rclone** + WinFsp on a drive letter — that is **separate** from the phone.
-- The **phone** is reached over **`http://<ip>:8765/`** (browser, `Invoke-WebRequest`, or **[archive/Sync-FromPhoneLAN.ps1](archive/Sync-FromPhoneLAN.ps1)**) — not `rclone mount` to the phone.
+- **Koofr** and **loopsegments** can share one **`rclone.conf`** — different remote names and drive letters.
+- Example: Koofr on **`M:`**, phone on **`L:`** via `mountDriveLetter`.
 
 ## Moving to another PC
 
@@ -53,15 +55,16 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
 | `Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |
-| `Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** = HTTP probe to phone; **`-Remove`** = stop legacy `rclone` mount on `mountDriveLetter`; **`-RemovePort80Proxy`** = undo legacy `netsh` port 80→8765 proxy (admin) |
-| `archive/` | **[RCLONE-PHONE-MOUNT-LEGACY.md](archive/RCLONE-PHONE-MOUNT-LEGACY.md)**, legacy WebDAV mount script, `Map-LoopSegmentsWebDAV.ps1`, `Sync-FromPhoneLAN.ps1` |
+| `Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** = HTTP + PROPFIND + `rclone ls`; default = **mount**; **`-Remove`** = stop mount; **`-RemovePort80Proxy`** = undo legacy `netsh` proxy (admin) |
+| `Send-LoopSegmentsExportTrigger.ps1` | **PUT** `export_trigger.json` on phone (Export page + toggle required) |
+| `RCLONE-PHONE-MOUNT.md` | Optional rclone mount notes (sluggish vs Skybox) |
+| `archive/` | Legacy `net use` / port-80 proxy (`Map-LoopSegmentsWebDAV.ps1`), `Sync-FromPhoneLAN.ps1` |
 
 ### Legacy WebDAV mapped to `http://localhost/`
 
-`-ViaPort80Proxy` added a **local** `:80` (or `:8080`) redirect to the phone. Windows then attempted drive mapping via **localhost**. After cleanup:
+`-ViaPort80Proxy` (archive script) added a **local** `:80` redirect to the phone. Prefer **`http://<phone-ip>:8765/`** + rclone today. Cleanup:
 
 1. Run **elevated**: `.\Mount-LoopSegmentsRclone.ps1 -RemovePort80Proxy`
-2. If rules still listed, **`git pull`** — deletes now match rows from `netsh interface portproxy show v4tov4` including listen address **`*`** (older script only tried `0.0.0.0`, which does not remove `*`).
-3. Run **`net use`** and **`net use L: /delete /y`** (or whatever letter Explorer shows).
+2. **`net use L: /delete /y`** if Explorer still shows an old mapping.
 
 See [../ios/README.md](../ios/README.md) and [../WORKFLOW.md](../WORKFLOW.md).
