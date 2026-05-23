@@ -253,10 +253,11 @@ final class ResumeStore: ObservableObject {
         return WebDAVItem(href: href, name: entry.displayName, isDirectory: false, contentLength: nil)
     }
 
-    /// Prefer stored href; otherwise match the current browser listing by `fileKey`.
+    /// Prefer current folder listing (handles rename); then sparse manifest; avoid stale `href` alone.
     func resolveItem(for entry: ResumeEntry, browsing: [WebDAVItem]) -> WebDAVItem? {
-        if let item = webDAVItem(for: entry) { return item }
-        if let item = browsing.first(where: { $0.fileKey == entry.fileKey && $0.isVideo }) {
+        let videos = browsing.filter(\.isVideo)
+        if let item = WebDAVRenameReconcile.matchResumeEntry(entry, in: videos) {
+            backfillHrefIfNeeded(entry: entry, item: item)
             return item
         }
         let paused = load().filter(\.exportInProgress)
@@ -317,20 +318,37 @@ final class ResumeStore: ObservableObject {
         persist(entries)
     }
 
-    /// Attach `href` when the paused file is visible in the folder being browsed.
-    func backfillHrefs(from browsing: [WebDAVItem]) {
+    /// Update resume rows and export manifests when pCloud renamed/moved a file (`fileKey` changes with `href`).
+    func reconcileWithBrowseListing(_ browsing: [WebDAVItem]) {
+        let videos = browsing.filter(\.isVideo)
+        guard !videos.isEmpty else { return }
+
         var entries = load()
         var changed = false
-        for item in browsing where item.isVideo {
-            guard let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) else { continue }
-            guard entries[index].exportInProgress else { continue }
-            if entries[index].href != item.href {
-                entries[index].href = item.href
-                entries[index].displayName = item.name
-                changed = true
+        for index in entries.indices {
+            guard let match = WebDAVRenameReconcile.matchResumeEntry(entries[index], in: videos) else {
+                continue
             }
+            if entries[index].fileKey == match.fileKey,
+               entries[index].href == match.href,
+               entries[index].displayName == match.name {
+                continue
+            }
+            entries[index].fileKey = match.fileKey
+            entries[index].href = match.href
+            entries[index].displayName = match.name
+            entries[index].updatedAt = Date()
+            changed = true
         }
         if changed { persist(entries) }
+
+        VanillaDownloadResumeCatalog.reconcileManifestIfNeeded(with: videos)
+        WorkingSourceSparseCatalog.reconcileManifestIfNeeded(with: videos)
+    }
+
+    /// Attach `href` when the paused file is visible in the folder being browsed.
+    func backfillHrefs(from browsing: [WebDAVItem]) {
+        reconcileWithBrowseListing(browsing)
     }
 
     private func persist(_ entries: [ResumeEntry]) {

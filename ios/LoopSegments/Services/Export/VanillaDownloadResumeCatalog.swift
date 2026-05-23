@@ -42,6 +42,34 @@ enum VanillaDownloadResumeCatalog {
         return manifest.fileKey == fileKey && manifest.totalLength == totalLength
     }
 
+    /// Keep partial `_vanilla_download.*` when the same pCloud file was renamed (`fileKey` changed).
+    static func matchesAfterRename(item: WebDAVItem, totalLength: Int64) -> Bool {
+        guard totalLength > 0, let manifest = readManifest(), manifest.totalLength == totalLength else {
+            return false
+        }
+        if manifest.fileKey == item.fileKey { return true }
+        return WebDAVRenameReconcile.matchManifest(
+            fileKey: manifest.fileKey,
+            totalLength: manifest.totalLength,
+            href: manifest.href,
+            in: [item]
+        ) != nil
+    }
+
+    static func reconcileManifestIfNeeded(with videos: [WebDAVItem]) {
+        guard let manifest = readManifest(),
+              let match = WebDAVRenameReconcile.matchManifest(
+                  fileKey: manifest.fileKey,
+                  totalLength: manifest.totalLength,
+                  href: manifest.href,
+                  in: videos
+              ),
+              match.fileKey != manifest.fileKey || match.href != manifest.href else {
+            return
+        }
+        save(fileKey: match.fileKey, totalLength: manifest.totalLength, href: match.href)
+    }
+
     static func resumePlan(
         fileKey: String,
         totalLength: Int64,

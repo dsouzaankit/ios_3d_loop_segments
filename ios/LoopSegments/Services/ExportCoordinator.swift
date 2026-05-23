@@ -38,7 +38,6 @@ final class ExportCoordinator {
             lock.unlock()
         }
 
-        let inputURL = item.mediaURL(credentials: credentials)
         ExportPaths.clearLogsForNewExport()
         let logWriter = try ExportLogWriter(
             itemName: item.name,
@@ -58,11 +57,18 @@ final class ExportCoordinator {
         logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
         logHandler("Logs: export_latest.txt, \(logWriter.sessionLogFileName), export_progress.txt (in Exports)")
         logHandler("pCloud region: \(credentials.region.displayName) (\(credentials.region.webDAVHost))")
-        logHandler("Media URL: \(inputURL.absoluteString)")
-
         let authProvider = WebDAVAuth.provider(fallback: credentials)
         logHandler("Verifying file access (HEAD)…")
-        try await WebDAVAccessProbe.verifyMediaURL(inputURL, authorization: authProvider, log: logHandler)
+        let (resolvedURL, resolvedItem) = try await WebDAVAccessProbe.resolveMediaURL(
+            for: item,
+            credentials: credentials,
+            authorization: authProvider,
+            log: logHandler
+        )
+        logHandler("Media URL: \(resolvedURL.absoluteString)")
+        if resolvedItem.fileKey != item.fileKey || resolvedItem.href != item.href {
+            logHandler("pCloud path updated after rename — exporting \(resolvedItem.name)")
+        }
 
         if PhotosSegmentPublisher.isEnabled {
             logHandler("Requesting Photos access…")
@@ -78,10 +84,10 @@ final class ExportCoordinator {
             let result = try await withTaskCancellationHandler {
                 try await Task.detached(priority: .userInitiated) {
                     try await self.exporter.run(
-                        item: item,
-                        inputURL: inputURL,
+                        item: resolvedItem,
+                        inputURL: resolvedURL,
                         credentials: credentials,
-                        catalogContentLength: item.contentLength,
+                        catalogContentLength: resolvedItem.contentLength,
                         seekMs: seekMs,
                         continueLANExport: continueLANExport,
                         resumeCursorMs: resumeCursorMs,

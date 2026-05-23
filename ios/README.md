@@ -363,6 +363,8 @@ Wrong **LAN playable till** / Mbps on the fast path does **not** block Range pla
 
 **Vanilla resume / HTTP 404:** if an old `_vanilla_download.*` resume used a **larger** expected size than pCloud now has, the next range can return **404**. The app re-HEADs pCloud and treats a matching partial as complete. If download still fails but **≥ 4 MB** is on disk (e.g. AV1), export **stops cleanly** with LAN playback of the partial — not a misleading sparse-probe error.
 
+**pCloud rename / move:** `fileKey` is derived from WebDAV `href`, so renaming on pCloud changes the key. Folder **refresh** reconciles resume rows and `_vanilla_download.meta.json` / `_working.sparse.json` (match by folder + file size + name). Export **HEAD** on 404 re-lists the parent folder and picks the renamed file — no sign-out required unless auth failed (401).
+
 ### MP4 vs WMV without REST
 
 | Container | Typical LAN duration source without REST |

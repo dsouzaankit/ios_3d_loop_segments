@@ -436,6 +436,30 @@ enum WorkingSourceSparseCatalog {
         return manifest
     }
 
+    static func reconcileManifestIfNeeded(with videos: [WebDAVItem]) {
+        guard let manifest = readManifest(),
+              let match = WebDAVRenameReconcile.matchManifest(
+                  fileKey: manifest.fileKey,
+                  totalLength: manifest.totalLength,
+                  href: manifest.href,
+                  in: videos
+              ),
+              match.fileKey != manifest.fileKey || match.href != manifest.href else {
+            return
+        }
+        save(
+            fileKey: match.fileKey,
+            totalLength: manifest.totalLength,
+            href: match.href,
+            filledRanges: manifest.spans.map { $0.lower ... $0.upper },
+            headOnDisk: manifest.headOnDisk,
+            tailOnDisk: manifest.tailOnDisk,
+            playbackStartSeconds: manifest.playbackStartSeconds,
+            durationSeconds: manifest.durationSeconds,
+            exportCursorSeconds: manifest.exportCursorSeconds
+        )
+    }
+
     /// pCloud WebDAV path for a paused export when ResumeStore lost `href`.
     static func hrefForResumeEntry(_ entry: ResumeEntry, singlePausedExport: Bool) -> String? {
         guard let manifest = readManifest() else { return nil }

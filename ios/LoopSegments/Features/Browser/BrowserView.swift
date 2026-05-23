@@ -468,9 +468,7 @@ struct BrowserView: View {
             let resumeEntries = resumeStore.snapshotEntries()
             items = loaded
             refreshResumeBadges(for: loaded, entries: resumeEntries)
-            if resumeEntries.contains(where: \.exportInProgress) {
-                resumeStore.backfillHrefs(from: loaded)
-            }
+            resumeStore.reconcileWithBrowseListing(loaded)
         } catch is CancellationError {
             return
         } catch {
@@ -638,24 +636,7 @@ private struct PausedExportDestinationView: View {
     }
 
     private func pickSearchMatch(in items: [WebDAVItem], for entry: ResumeEntry) -> WebDAVItem? {
-        if let keyMatch = items.first(where: { $0.fileKey == entry.fileKey && $0.isVideo }) {
-            return keyMatch
-        }
-        let target = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !target.isEmpty else { return nil }
-        let videos = items.filter(\.isVideo)
-        if let exact = videos.first(where: {
-            $0.name.compare(target, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-        }) {
-            return exact
-        }
-        let targetBase = (target as NSString).deletingPathExtension
-        return videos.first(where: {
-            ($0.name as NSString).deletingPathExtension.compare(
-                targetBase,
-                options: [.caseInsensitive, .diacriticInsensitive]
-            ) == .orderedSame
-        })
+        WebDAVRenameReconcile.matchResumeEntry(entry, in: items.filter(\.isVideo))
     }
 }
 

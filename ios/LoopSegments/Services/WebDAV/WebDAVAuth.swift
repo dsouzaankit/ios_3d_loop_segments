@@ -18,6 +18,46 @@ enum WebDAVAuth {
 }
 
 enum WebDAVAccessProbe {
+    /// HEAD probe; on 404 re-lists the parent folder and reconciles rename so export can use the new `href`.
+    static func resolveMediaURL(
+        for item: WebDAVItem,
+        credentials: WebDAVCredentials,
+        authorization: WebDAVAuthorizationProvider,
+        log: ((String) -> Void)? = nil
+    ) async throws -> (URL, WebDAVItem) {
+        let url = item.mediaURL(credentials: credentials)
+        do {
+            try await verifyMediaURL(url, authorization: authorization, log: log)
+            return (url, item)
+        } catch let error as WebDAVResourceLoaderError {
+            guard case .httpStatus(404) = error,
+                  let parentPath = WebDAVRenameReconcile.parentBrowsePath(forFileHref: item.href) else {
+                throw error
+            }
+            log?("File not found at stored path — re-listing \(parentPath) after pCloud rename…")
+            let client = WebDAVClient(credentials: credentials)
+            let listing = try await client.list(path: parentPath)
+            await MainActor.run {
+                ResumeStore.shared.reconcileWithBrowseListing(listing)
+            }
+            let entry = ResumeEntry(
+                fileKey: item.fileKey,
+                displayName: item.name,
+                href: item.href,
+                lastSeekMs: 0,
+                updatedAt: Date()
+            )
+            let videos = listing.filter(\.isVideo)
+            guard let match = WebDAVRenameReconcile.matchResumeEntry(entry, in: videos) else {
+                throw error
+            }
+            let repairedURL = match.mediaURL(credentials: credentials)
+            try await verifyMediaURL(repairedURL, authorization: authorization, log: log)
+            log?("Using renamed file on pCloud — \(match.name)")
+            return (repairedURL, match)
+        }
+    }
+
     static func verifyMediaURL(
         _ url: URL,
         authorization: WebDAVAuthorizationProvider,

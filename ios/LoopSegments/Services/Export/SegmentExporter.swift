@@ -113,9 +113,8 @@ final class SegmentExporter {
 
         let fileSize = rangeCache.contentLengthValue() ?? 0
         ExportPaths.syncVanillaDownloadWithExportItem(
-            fileKey: item.fileKey,
+            item: item,
             totalLength: fileSize > 0 ? fileSize : (item.contentLength ?? 0),
-            filename: item.name,
             log: logHandler
         )
 

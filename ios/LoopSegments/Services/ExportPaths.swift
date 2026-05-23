@@ -219,15 +219,26 @@ enum ExportPaths {
 
     /// Drop stale vanilla files when the export item changed; keep partial/complete copy for the same `fileKey` + size.
     static func syncVanillaDownloadWithExportItem(
-        fileKey: String,
+        item: WebDAVItem,
         totalLength: Int64,
-        filename: String,
         log: ((String) -> Void)? = nil
     ) {
-        let destination = vanillaDownloadURL(preservingExtensionFrom: filename)
+        let destination = vanillaDownloadURL(preservingExtensionFrom: item.name)
         if totalLength > 0,
-           VanillaDownloadResumeCatalog.matches(fileKey: fileKey, totalLength: totalLength),
-           FileManager.default.fileExists(atPath: destination.path) {
+           FileManager.default.fileExists(atPath: destination.path),
+           VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength)
+               || VanillaDownloadResumeCatalog.matchesAfterRename(item: item, totalLength: totalLength) {
+            if !VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength) {
+                VanillaDownloadResumeCatalog.save(
+                    fileKey: item.fileKey,
+                    totalLength: totalLength,
+                    href: item.href
+                )
+                log?(
+                    "Vanilla resume — same file after pCloud rename " +
+                        "(updated manifest for \(item.name))"
+                )
+            }
             pruneVanillaDownloadCopies(keepingDestination: destination, log: log)
             return
         }
