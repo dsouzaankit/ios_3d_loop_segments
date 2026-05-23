@@ -1563,12 +1563,13 @@ final class SegmentExporter {
             windowDense: windowDense
         )
         if windowDense, !useOnDiskFileURL, byteRange.start > 0 {
-            let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
-            if fileLength < Self.streamOnlyThresholdBytes {
-                log(
-                    "Dense window at \(Self.formatBytes(byteRange.start)) — capped hybrid reader (file:// reads zero-filled gaps)"
-                )
-            }
+            log(
+                "Dense window at \(Self.formatBytes(byteRange.start)) but not fully on disk — capped hybrid reader"
+            )
+        } else if windowDense, useOnDiskFileURL, byteRange.start > 0 {
+            log(
+                "Mid-file dense window — passthrough via file:// on _working.mp4 (\(Self.formatBytes(byteRange.length)) local)"
+            )
         }
         if windowDense,
            CMTimeGetSeconds(rangeStart) < 0.5,
@@ -2008,6 +2009,51 @@ final class SegmentExporter {
         let fileLength = trustedLength > 0 ? trustedLength : downloader.totalLength
         var lastError: Error? = priorError
 
+        log("Trying on-disk passthrough — dense minute on _working.mp4 (file://, no capped hybrid)")
+        do {
+            let fileAsset = AVURLAsset(
+                url: tempURL,
+                options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+            )
+            return try await SegmentPassThroughExporter.exportWindow(
+                asset: fileAsset,
+                videoFormat: videoFormat,
+                audioFormat: audioFormat,
+                rangeStart: rangeStart,
+                rangeDuration: rangeDuration,
+                outputURL: outputURL,
+                sourceLabel: "dense local temp (on-disk after fill)",
+                isCancelled: isCancelled,
+                log: log
+            )
+        } catch {
+            lastError = error
+            if Self.shouldTryExportSessionAfterHTTPSManualFailure(error) {
+                log(
+                    "On-disk passthrough failed (\(error.localizedDescription)) — AVAssetExportSession on dense temp"
+                )
+                do {
+                    let fileAsset = AVURLAsset(
+                        url: tempURL,
+                        options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+                    )
+                    return try await SegmentPassThroughExporter.exportWindowViaExportSession(
+                        asset: fileAsset,
+                        rangeStart: rangeStart,
+                        rangeDuration: rangeDuration,
+                        outputURL: outputURL,
+                        sourceLabel: "dense local temp (export session after fill)",
+                        log: log
+                    )
+                } catch {
+                    lastError = error
+                }
+            }
+            log(
+                "On-disk passthrough failed (\(lastError?.localizedDescription ?? "unknown")) — trying capped hybrid + pCloud for head/index"
+            )
+        }
+
         log("Trying capped hybrid — dense window on disk + pCloud for head/index")
         if let boundary = try await tryExportViaCappedAsset(
             remoteURL: remoteURL,
@@ -2322,7 +2368,7 @@ final class SegmentExporter {
         try await downloader.ensureContiguousRange(tail)
     }
 
-    /// `file://` when the minute window is dense; prefer full-file check so later minutes use the complete temp.
+    /// `file://` when the minute window is dense on `_working.mp4` (seek 0 or mid-file after dense fill).
     private func shouldUseOnDiskFileURLForPassthrough(
         downloader: WebDAVTempFileDownload,
         byteRange: TimelineByteRange,
@@ -2332,7 +2378,6 @@ final class SegmentExporter {
         if isFullSourceOnDisk(downloader: downloader) {
             return true
         }
-        guard byteRange.start == 0 else { return false }
         return downloader.isByteRangeFullyOnDisk(byteRange)
     }
 

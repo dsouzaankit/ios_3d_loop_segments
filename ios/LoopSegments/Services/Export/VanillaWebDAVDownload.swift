@@ -70,7 +70,8 @@ enum VanillaWebDAVDownload {
                 remoteURL: remoteURL,
                 authorization: auth,
                 offset: offset,
-                endInclusive: end
+                endInclusive: end,
+                log: log
             )
             guard data.count == chunkLen else {
                 throw WebDAVResourceLoaderError.invalidResponse

@@ -1546,14 +1546,15 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         remoteURL: URL,
         authorization: String,
         offset: Int64,
-        endInclusive: Int64
+        endInclusive: Int64,
+        log: ((String) -> Void)? = nil
     ) async throws -> Data {
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "GET"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
         request.setValue("bytes=\(offset)-\(endInclusive)", forHTTPHeaderField: "Range")
 
-        let (data, response) = try await WebDAVMediaSession.data(for: request, log: nil)
+        let (data, response) = try await WebDAVMediaSession.data(for: request, log: log)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVResourceLoaderError.invalidResponse
         }
