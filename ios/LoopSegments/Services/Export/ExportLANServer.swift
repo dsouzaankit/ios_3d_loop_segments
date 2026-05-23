@@ -1233,9 +1233,8 @@ enum ExportLANServer {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: fileURL)
         }
         let isWorkingSource = isSparseWorkingSource || isTranscodedWorking
-        let isVanillaDownload = fileURL.lastPathComponent.lowercased().hasPrefix("_vanilla_download.")
+        /// Only sparse/in-progress working copies are capped (Quest OOM). Dense `_vanilla_download.*` is always full-file Range/seek.
         let capResponseBody = isWorkingSource
-            || (isVanillaDownload && !ExportPlaybackState.shared.vanillaDownloadIsComplete())
 
         let byteStart: Int64
         var byteEnd: Int64
@@ -1336,12 +1335,21 @@ enum ExportLANServer {
         let contentRange = status == 206
             ? "bytes \(byteStart)-\(byteEnd)/\(fileSize)"
             : nil
+        let reportedContentLength: Int = {
+            if method == "HEAD", !hasRangeHeader, !isWorkingSource {
+                return Int(fileSize)
+            }
+            return Int(bodyLength)
+        }()
+        let headStatus = method == "HEAD" && !hasRangeHeader && !isWorkingSource ? 200 : status
+        let headPhrase = headStatus == 200 ? "OK" : phrase
+        let headContentRange = method == "HEAD" && !hasRangeHeader && !isWorkingSource ? nil : contentRange
         let header = httpResponseHeader(
-            status: status,
-            phrase: phrase,
+            status: headStatus,
+            phrase: headPhrase,
             contentType: contentType,
-            contentLength: Int(bodyLength),
-            contentRange: contentRange,
+            contentLength: reportedContentLength,
+            contentRange: headContentRange,
             includeAcceptRanges: true,
             lastModified: modified,
             etag: etag

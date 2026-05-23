@@ -77,7 +77,9 @@ final class SegmentExporter {
             retainedWebDAVLoader = nil
             retainedAsset = nil
             ExportPlaybackState.shared.setPCloudTranscodedWorkingActive(false)
-            ExportPlaybackState.shared.setVanillaDownloadActive(false)
+            if !ExportPaths.vanillaDownloadCopyExistsOnDisk() {
+                ExportPlaybackState.shared.setVanillaDownloadActive(false)
+            }
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
 

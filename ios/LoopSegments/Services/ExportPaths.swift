@@ -239,6 +239,9 @@ enum ExportPaths {
                 log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
+        if !vanillaDownloadCopyExistsOnDisk() {
+            ExportPlaybackState.shared.setVanillaDownloadActive(false)
+        }
         return removed
     }
 
