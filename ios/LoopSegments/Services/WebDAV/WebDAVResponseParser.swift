@@ -13,6 +13,18 @@ enum WebDAVResponseParser {
         }
     }
 
+    private static let httpDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter
+    }()
+
+    static func parseHTTPDate(_ value: String) -> Date? {
+        httpDateFormatter.date(from: value)
+    }
+
     private final class ParserDelegate: NSObject, XMLParserDelegate {
         let baseHost: String
         var items: [WebDAVItem] = []
@@ -24,6 +36,7 @@ enum WebDAVResponseParser {
         private var currentHref = ""
         private var isCollection = false
         private var contentLength: Int64?
+        private var lastModified: Date?
 
         init(baseHost: String) {
             self.baseHost = baseHost
@@ -42,13 +55,14 @@ enum WebDAVResponseParser {
                 currentHref = ""
                 isCollection = false
                 contentLength = nil
+                lastModified = nil
                 textBuffer = ""
                 captureElement = nil
             }
             if inResponse, name == "collection" {
                 isCollection = true
             }
-            if inResponse, name == "href" || name == "getcontentlength" {
+            if inResponse, name == "href" || name == "getcontentlength" || name == "getlastmodified" {
                 captureElement = name
                 textBuffer = ""
             }
@@ -73,6 +87,8 @@ enum WebDAVResponseParser {
                     currentHref = value
                 case "getcontentlength":
                     contentLength = Int64(value)
+                case "getlastmodified":
+                    lastModified = WebDAVResponseParser.parseHTTPDate(value)
                 default:
                     break
                 }
@@ -93,7 +109,8 @@ enum WebDAVResponseParser {
                 href: currentHref.trimmingCharacters(in: .whitespacesAndNewlines),
                 name: displayName,
                 isDirectory: isCollection,
-                contentLength: contentLength
+                contentLength: contentLength,
+                lastModified: lastModified
             ))
         }
 

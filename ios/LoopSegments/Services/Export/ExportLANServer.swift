@@ -919,6 +919,7 @@ enum ExportLANServer {
             return
         }
         _ = ExportPaths.mediaExportDirectory
+        _ = ExportPaths.lanExportScriptsDirectory
         guard let fileURL = ExportPaths.urlForLANWritableMedia(relativePath: rel) else {
             sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Forbidden".utf8), done: done)
             return
@@ -930,9 +931,10 @@ enum ExportLANServer {
             return
         }
         let parentURL = fileURL.deletingLastPathComponent()
-        var parentIsDir: ObjCBool = false
-        guard fm.fileExists(atPath: parentURL.path, isDirectory: &parentIsDir), parentIsDir.boolValue else {
-            sendResponse(connection: connection, status: 409, contentType: "text/plain", body: Data("Parent collection missing — MKCOL first".utf8), done: done)
+        do {
+            try fm.createDirectory(at: parentURL, withIntermediateDirectories: true)
+        } catch {
+            sendResponse(connection: connection, status: 500, contentType: "text/plain; charset=utf-8", body: Data("Could not create parent directory".utf8), done: done)
             return
         }
         let existed = fm.fileExists(atPath: fileURL.path)
@@ -1420,8 +1422,11 @@ enum ExportLANServer {
             .panel { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
             .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
             button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; }
-            #pcloud-list { list-style: none; padding-left: 0; }
-            #pcloud-list li { margin: 0.25rem 0; }
+            .pcloud-folders { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
+            .pcloud-folders .pcloud-dir { flex: 1 1 9rem; max-width: 14rem; text-align: left; }
+            #pcloud-files { list-style: none; padding-left: 0; margin: 0.5rem 0; }
+            #pcloud-files li { margin: 0.35rem 0; display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
+            .file-meta { color: #666; font-size: 0.85em; }
             .muted { color: #666; font-size: 0.9em; }
             #trigger-status { min-height: 1.2em; }
             </style>
@@ -1431,11 +1436,11 @@ enum ExportLANServer {
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             \(playbackStatusBlock)
-            \(htmlExportControlPanel())
             <h2>On phone (playback)</h2>
             <ul>
             \(fileList)
             </ul>
+            \(htmlExportControlPanel())
             \(htmlLANLiveRefreshScript())
             </body></html>
             """
@@ -1498,7 +1503,17 @@ enum ExportLANServer {
           <code id="pcloud-path">/</code>
           <button type="button" id="pcloud-refresh">Refresh</button>
         </div>
-        <ul id="pcloud-list"><li class="muted">Loading pCloud…</li></ul>
+        <div class="row">
+          <label>Sort
+            <select id="pcloud-sort">
+              <option value="name">Name</option>
+              <option value="size">Size</option>
+              <option value="date">Date</option>
+            </select>
+          </label>
+        </div>
+        <div id="pcloud-folders" class="pcloud-folders"><span class="muted">Loading…</span></div>
+        <ul id="pcloud-files"><li class="muted">Loading…</li></ul>
         <div class="row">
           <button type="button" id="export-random">Export random in folder</button>
           <button type="button" id="export-pause">Pause export</button>
@@ -1512,8 +1527,52 @@ enum ExportLANServer {
           var triggerUrl = "/\(LANExportTriggerControl.triggerRelativePath)";
           var ackUrl = "/\(LANExportTriggerControl.ackRelativePath)";
           var pcloudPath = "/";
+          var pcloudEntries = [];
+          var sortKey = "name";
           function esc(s) {
             return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+          }
+          function formatBytes(n) {
+            if (n == null || isNaN(n)) return "";
+            var u = ["B","KB","MB","GB","TB"];
+            var i = 0, v = Number(n);
+            while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+            return v.toFixed(i ? 1 : 0) + " " + u[i];
+          }
+          function formatDate(iso) {
+            if (!iso) return "";
+            try { return new Date(iso).toLocaleString(); } catch (e) { return iso; }
+          }
+          function compareEntries(a, b) {
+            if (sortKey === "size") {
+              var as = a.bytes || 0, bs = b.bytes || 0;
+              if (as !== bs) return bs - as;
+            } else if (sortKey === "date") {
+              var ad = a.modified || "", bd = b.modified || "";
+              if (ad !== bd) return bd.localeCompare(ad);
+            }
+            return String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
+          }
+          function renderPCloud() {
+            var foldersEl = document.getElementById("pcloud-folders");
+            var filesEl = document.getElementById("pcloud-files");
+            var dirs = pcloudEntries.filter(function (e) { return e.isDirectory; }).slice().sort(compareEntries);
+            var files = pcloudEntries.filter(function (e) { return e.isVideo; }).slice().sort(compareEntries);
+            foldersEl.innerHTML = dirs.length
+              ? dirs.map(function (e) {
+                  return "<button type=\\"button\\" class=\\"pcloud-dir\\" data-path=\\"" + esc(e.path) + "\\">📁 " + esc(e.name) + "</button>";
+                }).join("")
+              : "<span class=\\"muted\\">(no folders)</span>";
+            filesEl.innerHTML = files.length
+              ? files.map(function (e) {
+                  var meta = [];
+                  if (e.bytes != null) meta.push(formatBytes(e.bytes));
+                  if (e.modified) meta.push(formatDate(e.modified));
+                  var metaHtml = meta.length ? " <span class=\\"file-meta\\">(" + esc(meta.join(" · ")) + ")</span>" : "";
+                  return "<li><span>🎬 " + esc(e.name) + metaHtml + "</span>" +
+                    " <button type=\\"button\\" class=\\"export-file\\" data-href=\\"" + esc(e.href) + "\\" data-name=\\"" + esc(e.name) + "\\">Export 0:00</button></li>";
+                }).join("")
+              : "<li class=\\"muted\\">(no videos)</li>";
           }
           function uuid() {
             return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -1533,7 +1592,11 @@ enum ExportLANServer {
               headers: { "Authorization": AUTH, "Content-Type": "application/json" },
               body: JSON.stringify(body)
             });
-            if (!r.ok) throw new Error("PUT " + r.status);
+            if (!r.ok) {
+              var errText = "";
+              try { errText = await r.text(); } catch (e) {}
+              throw new Error("PUT " + r.status + (errText ? ": " + errText.trim() : ""));
+            }
             for (var i = 0; i < 8; i++) {
               await new Promise(function (res) { setTimeout(res, 500); });
               try {
@@ -1550,28 +1613,30 @@ enum ExportLANServer {
           async function loadPCloud() {
             document.getElementById("pcloud-path").textContent = pcloudPath;
             document.getElementById("pcloud-up").disabled = pcloudPath === "/";
-            var list = document.getElementById("pcloud-list");
-            list.innerHTML = "<li class=\\"muted\\">Loading…</li>";
+            var foldersEl = document.getElementById("pcloud-folders");
+            var filesEl = document.getElementById("pcloud-files");
+            foldersEl.innerHTML = "<span class=\\"muted\\">Loading…</span>";
+            filesEl.innerHTML = "<li class=\\"muted\\">Loading…</li>";
             try {
               var r = await fetch("/pcloud_list.json?path=" + encodeURIComponent(pcloudPath));
               var j = await r.json();
-              if (j.error) { list.innerHTML = "<li class=\\"muted\\">" + esc(j.error) + "</li>"; return; }
-              if (!j.entries || !j.entries.length) {
-                list.innerHTML = "<li class=\\"muted\\">(empty folder)</li>";
+              if (j.error) {
+                foldersEl.innerHTML = "<span class=\\"muted\\">" + esc(j.error) + "</span>";
+                filesEl.innerHTML = "";
+                pcloudEntries = [];
                 return;
               }
-              list.innerHTML = j.entries.map(function (e) {
-                if (e.isDirectory) {
-                  return "<li><button type=\\"button\\" class=\\"pcloud-dir\\" data-path=\\"" + esc(e.path) + "\\">📁 " + esc(e.name) + "</button></li>";
-                }
-                if (e.isVideo) {
-                  return "<li>🎬 " + esc(e.name) +
-                    " <button type=\\"button\\" class=\\"export-file\\" data-href=\\"" + esc(e.href) + "\\" data-name=\\"" + esc(e.name) + "\\">Export 0:00</button></li>";
-                }
-                return "";
-              }).join("");
+              pcloudEntries = j.entries || [];
+              if (!pcloudEntries.length) {
+                foldersEl.innerHTML = "<span class=\\"muted\\">(empty folder)</span>";
+                filesEl.innerHTML = "";
+                return;
+              }
+              renderPCloud();
             } catch (err) {
-              list.innerHTML = "<li class=\\"muted\\">" + esc(err.message || err) + "</li>";
+              foldersEl.innerHTML = "<span class=\\"muted\\">" + esc(err.message || err) + "</span>";
+              filesEl.innerHTML = "";
+              pcloudEntries = [];
             }
           }
           document.getElementById("pcloud-up").onclick = function () {
@@ -1595,7 +1660,11 @@ enum ExportLANServer {
             putTrigger({ version: 1, command: "stop_export", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
-          document.getElementById("pcloud-list").onclick = function (ev) {
+          document.getElementById("pcloud-sort").onchange = function (ev) {
+            sortKey = ev.target.value || "name";
+            renderPCloud();
+          };
+          document.getElementById("pcloud-folders").onclick = function (ev) {
             var dirBtn = ev.target.closest ? ev.target.closest(".pcloud-dir") : null;
             if (!dirBtn && ev.target.classList && ev.target.classList.contains("pcloud-dir")) {
               dirBtn = ev.target;
@@ -1603,8 +1672,9 @@ enum ExportLANServer {
             if (dirBtn) {
               pcloudPath = dirBtn.getAttribute("data-path") || "/";
               loadPCloud();
-              return;
             }
+          };
+          document.getElementById("pcloud-files").onclick = function (ev) {
             var exportBtn = ev.target.closest ? ev.target.closest(".export-file") : null;
             if (!exportBtn && ev.target.classList && ev.target.classList.contains("export-file")) {
               exportBtn = ev.target;

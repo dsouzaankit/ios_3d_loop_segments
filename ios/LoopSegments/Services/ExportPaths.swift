@@ -24,6 +24,13 @@ enum ExportPaths {
         return dir
     }
 
+    /// LAN export triggers and PC scripts — `Exports/pcld_ios_media/scripts/`.
+    static var lanExportScriptsDirectory: URL {
+        let dir = mediaExportDirectory.appendingPathComponent("scripts", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     /// Path under `Exports/` for WebDAV and LAN ( POSIX, no leading slash).
     static func pathRelativeToExports(_ url: URL) -> String {
         let base = exportsDirectory.standardizedFileURL.path
@@ -608,6 +615,7 @@ enum ExportPaths {
         _ = exportsDirectory
         _ = mediaExportDirectory
         _ = segmentLoopDirectory
+        _ = lanExportScriptsDirectory
         _ = logsDirectory
         migrateLegacyExportFilenames()
         SearchDebugLog.ensureReady()

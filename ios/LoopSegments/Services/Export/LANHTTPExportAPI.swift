@@ -28,6 +28,9 @@ enum LANHTTPExportAPI {
                 if let length = item.contentLength {
                     dict["bytes"] = length
                 }
+                if let modified = item.lastModified {
+                    dict["modified"] = ISO8601DateFormatter().string(from: modified)
+                }
                 return dict
             }
             return [

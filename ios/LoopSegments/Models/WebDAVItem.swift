@@ -5,6 +5,21 @@ struct WebDAVItem: Identifiable, Hashable {
     let name: String
     let isDirectory: Bool
     let contentLength: Int64?
+    let lastModified: Date?
+
+    init(
+        href: String,
+        name: String,
+        isDirectory: Bool,
+        contentLength: Int64?,
+        lastModified: Date? = nil
+    ) {
+        self.href = href
+        self.name = name
+        self.isDirectory = isDirectory
+        self.contentLength = contentLength
+        self.lastModified = lastModified
+    }
 
     var id: String { href }
 
