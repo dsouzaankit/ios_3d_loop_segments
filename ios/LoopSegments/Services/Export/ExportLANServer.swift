@@ -538,6 +538,10 @@ enum ExportLANServer {
             sendPCloudListJSON(folderPath: query["path"] ?? "/", connection: connection, done: done)
             return
         }
+        if resourcePath == "pcloud_bookmarks.json" {
+            sendPCloudBookmarksJSON(connection: connection, done: done)
+            return
+        }
         guard let fileURL = resolveExportFile(relativePath: resourcePath) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -910,6 +914,16 @@ enum ExportLANServer {
         connection: NWConnection,
         done: @escaping () -> Void
     ) {
+        let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        if normalized == "pcloud_bookmarks.json" {
+            handlePCloudBookmarksPUT(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         guard let rel = relativeExportPath(fromDAVPath: path) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -1245,25 +1259,77 @@ enum ExportLANServer {
         """
     }
 
+    private static func htmlExportSourceLineBlock() -> String {
+        let resolved = LANExportSourceDisplay.resolve()
+        let hidden = resolved == nil ? " style=\"display:none\"" : ""
+        let label = htmlEscape(resolved.map { LANExportSourceDisplay.label(for: $0.phase) } ?? "Export source")
+        let name = htmlEscape(resolved?.displayName ?? "")
+        let phase = resolved?.phase ?? ""
+        let showActions = phase == "running" || phase == "paused"
+        let actionsHidden = showActions ? "" : " style=\"display:none\""
+        let phaseClass = phase == "running" ? " is-active" : (phase == "paused" ? " is-paused" : "")
+        let pauseHidden = phase == "running" ? "" : " style=\"display:none\""
+        let resumeHidden = phase == "paused" ? "" : " style=\"display:none\""
+        return """
+        <div id="lan-export-source-wrap" class="export-source-line\(phaseClass)"\(hidden)>
+          <div class="export-source-main">
+            <strong id="lan-export-source-label">\(label):</strong>
+            <span id="lan-export-source-name">\(name)</span>
+          </div>
+          <div class="export-source-actions" id="lan-export-source-actions"\(actionsHidden)>
+            <button type="button" id="export-resume"\(resumeHidden)>Start export</button>
+            <button type="button" id="export-pause"\(pauseHidden)>Pause export</button>
+            <button type="button" id="export-stop">Stop export</button>
+          </div>
+        </div>
+        """
+    }
+
     private static func htmlPlaybackStatusLine(_ line: String) -> String {
         """
         <p><strong id="lan-playback-line">\(htmlEscape(line))</strong></p>
         """
     }
 
-    /// Poll `status.json` while export is active (metrics reset each export start/resume on phone).
+    /// Poll `status.json` for export source + LAN playback stats.
     private static func htmlLANLiveRefreshScript() -> String {
-        guard ExportPlaybackState.shared.isLANExportActive else { return "" }
+        let pollMs = ExportPlaybackState.shared.isLANExportActive ? 3000 : 5000
         return """
         <script>
         (function () {
-          var pollMs = 60000;
+          var pollMs = \(pollMs);
           function esc(s) {
             return String(s)
               .replace(/&/g, "&amp;")
               .replace(/</g, "&lt;")
               .replace(/"/g, "&quot;");
           }
+          function applyExportSource(src) {
+            var wrap = document.getElementById("lan-export-source-wrap");
+            if (!wrap) return;
+            if (!src || !src.displayName) {
+              wrap.style.display = "none";
+              return;
+            }
+            wrap.style.display = "";
+            wrap.className = "export-source-line"
+              + (src.phase === "running" ? " is-active" : src.phase === "paused" ? " is-paused" : "");
+            var label = document.getElementById("lan-export-source-label");
+            var name = document.getElementById("lan-export-source-name");
+            if (label) label.textContent = (src.label || "Export source") + ":";
+            if (name) name.textContent = src.displayName;
+            var actions = document.getElementById("lan-export-source-actions");
+            var pauseBtn = document.getElementById("export-pause");
+            var resumeBtn = document.getElementById("export-resume");
+            var active = src.phase === "running" || src.phase === "paused";
+            if (actions) actions.style.display = active ? "" : "none";
+            if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
+            if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
+          }
+          window.updateExportSourceLine = function (phase, displayName) {
+            var labels = { running: "Exporting", paused: "Paused export", finished: "Last export" };
+            applyExportSource({ phase: phase, displayName: displayName, label: labels[phase] || "Export source" });
+          };
           function applyLive(live) {
             if (!live) return;
             var stats = document.getElementById("lan-dashboard-stats");
@@ -1277,16 +1343,37 @@ enum ExportLANServer {
               line.textContent = live.playableStatusLine;
             }
           }
+          function applyPlaybackSection(j) {
+            if (!j) return;
+            if (typeof j.playbackStatusHTML === "string") {
+              var status = document.getElementById("lan-playback-status");
+              if (status) status.innerHTML = j.playbackStatusHTML;
+            }
+            if (typeof j.playbackListHTML === "string") {
+              var list = document.getElementById("lan-playback-files");
+              if (list) list.innerHTML = j.playbackListHTML;
+            }
+          }
+          window.refreshLANPlayback = function () {
+            return fetch("status.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(function (j) { applyPlaybackSection(j); return j; });
+          };
           function poll() {
+            if (typeof window.refreshLANBookmarks === "function") {
+              window.refreshLANBookmarks().catch(function () {});
+            }
             fetch("status.json", { cache: "no-store" })
               .then(function (r) { return r.json(); })
-              .then(function (j) { applyLive(j.lanLive); })
+              .then(function (j) {
+                applyExportSource(j.exportSource);
+                applyLive(j.lanLive);
+                applyPlaybackSection(j);
+              })
               .catch(function () {});
           }
-          if (document.getElementById("lan-dashboard-stats") || document.getElementById("lan-playback-line")) {
-            poll();
-            setInterval(poll, pollMs);
-          }
+          poll();
+          setInterval(poll, pollMs);
         })();
         </script>
         """
@@ -1311,9 +1398,7 @@ enum ExportLANServer {
         }
     }
 
-    private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        refreshLANMetricsBeforeStatusResponse()
-        var playbackStatusBlock = ""
+    private static func playbackStatusHTMLBlock() -> String {
         let usesVanilla = ExportPlaybackState.shared.usesVanillaDownloadForLAN()
         if usesVanilla {
             let rel = ExportPlaybackState.shared.vanillaLANRelativePath()
@@ -1322,93 +1407,103 @@ enum ExportLANServer {
             let seekNote = startSec > 0
                 ? "<p><em>Export seek <code>\(formatLANClock(startSec))</code> — use the index link with <code>#t=\(startSec)</code> on the vanilla file (or faststart copy). Download grows from 0:00; playback at your seek works once that timeline is on disk.</em></p>"
                 : ""
-            playbackStatusBlock = """
+            return """
             \(htmlPlaybackStatusLine(line))
             \(htmlDashboardStatsBlock())
             <p><em>Vanilla download — <code>\(rel)</code> (full file, original extension; not sparse <code>_working.mp4</code>).</em></p>
             \(seekNote)
             <p>MP4 faststart copy (when built): <code>pcld_ios_media/_vanilla_faststart.mp4</code>. Prefer <code>loop/op_00.mp4</code> when segments exist.</p>
             """
-        } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
+        }
+        if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
             || FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
-            playbackStatusBlock = """
+            return """
             \(htmlPlaybackStatusLine(line))
             \(htmlDashboardStatsBlock())
             <p><em>pCloud HLS transcode — <code>pcld_ios_media/_working_pcloud_transcode.mp4</code> grows with export (real MP4, not the original WMV/MKV file).</em></p>
             <p>Prefer <code>loop/op_00.mp4</code> while export runs.</p>
             """
-        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-                  !ExportPaths.shouldHideSparseWorkingFromLAN() {
+        }
+        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
+           !ExportPaths.shouldHideSparseWorkingFromLAN() {
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
             let startSec = ExportPlaybackState.shared.playbackStartSeconds
             let startedReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
             let startedNote = startedReadable
                 ? ""
                 : "<p><em>Started position is not dense on disk yet (need ~45s preroll before <code>#t=\(startSec)</code> for decode) — run export again from that seek on a new build, use <code>loop/op_00.mp4</code>, or VLC on <code>_working.mp4</code>.</em></p>"
-            playbackStatusBlock = """
+            return """
             \(htmlPlaybackStatusLine(line))
             \(htmlDashboardStatsBlock())
             <p><code>LAN playable till</code> = furthest contiguous dense bytes from playback start. Below Mbps cutoff: prefetch to EOF, no <code>op_*.mp4</code>. At/above cutoff: <code>op_*.mp4</code> plus minimal <code>_working</code> prefetch when LAN server is on.</p>
             \(startedNote)
             """
         }
+        return ""
+    }
+
+    private static func playbackFileListHTML() -> String {
         var items: [String] = []
         for entry in listExportFiles() {
-                let name = entry.name
-                var sizeNote = ""
-                if entry.size > 0 {
-                    sizeNote = " (\(entry.size / 1024) KB)"
-                }
-                let escaped = name
-                    .replacingOccurrences(of: "&", with: "&amp;")
-                    .replacingOccurrences(of: "\"", with: "&quot;")
-                var note = ""
-                if name.hasPrefix("\(ExportPaths.mediaExportFolderName)/_vanilla_download.")
-                    || name == ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL) {
-                    let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
-                    let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
-                    let href = "\(escaped)\(tFrag)"
-                    let vanillaNote = name.contains("_vanilla_faststart")
-                        ? " — faststart MP4 copy (original download unchanged)"
-                        : " — full vanilla WebDAV download (original extension)"
-                    let seekNote = startSec > 0
-                        ? " — export seek #t=\(startSec) (sequential download from 0:00)"
-                        : ""
-                    items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(vanillaNote)\(seekNote)</li>")
-                    continue
-                }
-                if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
-                    let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
-                    items.append(
-                        "<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)" +
-                            " — pCloud transcode (grows through ~\(formatLANClock(cursorSec)); not original file)</li>"
-                    )
-                    continue
-                }
-                if name == ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL) {
-                    let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
-                    let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
-                    let href = "\(escaped)\(tFrag)"
-                    let tillSec = Int(
-                        ExportPlaybackState.shared.maxBrowserPlayableTimelineSeconds().rounded(.down)
-                    )
-                    let startNote = startSec > 0
-                        ? " — resume #t=\(startSec); LAN dense through ~\(formatLANClock(tillSec)) from \(formatLANClock(startSec))"
-                        : " — sparse partial copy; LAN dense through ~\(formatLANClock(tillSec))"
-                    items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(startNote)</li>")
-                    continue
-                } else if name.hasSuffix(".mp4"),
-                          name.contains("\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/") {
-                    note = " — ~60s segment in loop/ (Range supported)"
-                } else if name.hasSuffix(".mp4") {
-                    note = " — sparse in-progress source (#t= resume on link)"
-                }
-                items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
+            let name = entry.name
+            var sizeNote = ""
+            if entry.size > 0 {
+                sizeNote = " (\(entry.size / 1024) KB)"
+            }
+            let escaped = htmlEscape(name)
+            var note = ""
+            if name.hasPrefix("\(ExportPaths.mediaExportFolderName)/_vanilla_download.")
+                || name == ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL) {
+                let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
+                let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
+                let href = "\(escaped)\(tFrag)"
+                let vanillaNote = name.contains("_vanilla_faststart")
+                    ? " — faststart MP4 copy (original download unchanged)"
+                    : " — full vanilla WebDAV download (original extension)"
+                let seekNote = startSec > 0
+                    ? " — export seek #t=\(startSec) (sequential download from 0:00)"
+                    : ""
+                items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(vanillaNote)\(seekNote)</li>")
+                continue
+            }
+            if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
+                let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
+                items.append(
+                    "<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)" +
+                        " — pCloud transcode (grows through ~\(formatLANClock(cursorSec)); not original file)</li>"
+                )
+                continue
+            }
+            if name == ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL) {
+                let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
+                let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
+                let href = "\(escaped)\(tFrag)"
+                let tillSec = Int(
+                    ExportPlaybackState.shared.maxBrowserPlayableTimelineSeconds().rounded(.down)
+                )
+                let startNote = startSec > 0
+                    ? " — resume #t=\(startSec); LAN dense through ~\(formatLANClock(tillSec)) from \(formatLANClock(startSec))"
+                    : " — sparse partial copy; LAN dense through ~\(formatLANClock(tillSec))"
+                items.append("<li><a href=\"\(href)\">\(escaped)</a>\(sizeNote)\(startNote)</li>")
+                continue
+            } else if name.hasSuffix(".mp4"),
+                      name.contains("\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/") {
+                note = " — ~60s segment in loop/ (Range supported)"
+            } else if name.hasSuffix(".mp4") {
+                note = " — sparse in-progress source (#t= resume on link)"
+            }
+            items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
         }
-        let fileList = items.isEmpty
+        return items.isEmpty
             ? "<li><em>No export files yet — start export on the phone.</em></li>"
             : items.joined()
+    }
+
+    private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        refreshLANMetricsBeforeStatusResponse()
+        let playbackStatusBlock = playbackStatusHTMLBlock()
+        let fileList = playbackFileListHTML()
         let html = """
             <!DOCTYPE html>
             <html lang="en"><head>
@@ -1416,6 +1511,12 @@ enum ExportLANServer {
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Loop Segments — LAN export</title>
             <style>
+            .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
+            .export-source-line.is-active { background: #fffbea; border-color: #c8a415; }
+            .export-source-line.is-paused { background: #fff5f0; border-color: #d08050; }
+            .export-source-main { flex: 1 1 12rem; min-width: 0; }
+            .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-shrink: 0; }
+            .export-source-line #lan-export-source-name { word-break: break-all; }
             body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
             code { font-size: 0.9em; }
             ul { padding-left: 1.25rem; }
@@ -1424,6 +1525,13 @@ enum ExportLANServer {
             button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; }
             .pcloud-folders { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
             .pcloud-folders .pcloud-dir { flex: 1 1 9rem; max-width: 14rem; text-align: left; }
+            .pcloud-pinned-wrap { margin: 0.25rem 0 0.75rem; }
+            .pcloud-pinned-wrap .label { margin-bottom: 0.25rem; font-size: 0.9em; color: #666; }
+            .pcloud-pinned .pcloud-dir { border: 1px solid #c8a415; background: #fffbea; }
+            .folder-item { display: flex; flex: 1 1 9rem; max-width: 14rem; align-items: stretch; }
+            .folder-item .pcloud-dir { flex: 1; max-width: none; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+            .pin-toggle { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0.35rem 0.5rem; min-width: 2rem; }
+            .pin-toggle.pinned { color: #c8a415; }
             #pcloud-files { list-style: none; padding-left: 0; margin: 0.5rem 0; }
             #pcloud-files li { margin: 0.35rem 0; display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
             .file-meta { color: #666; font-size: 0.85em; }
@@ -1432,12 +1540,13 @@ enum ExportLANServer {
             </style>
             </head><body>
             <h1>Loop Segments — LAN export</h1>
+            \(htmlExportSourceLineBlock())
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
-            \(playbackStatusBlock)
+            <div id="lan-playback-status">\(playbackStatusBlock)</div>
             <h2>On phone (playback)</h2>
-            <ul>
+            <ul id="lan-playback-files">
             \(fileList)
             </ul>
             \(htmlExportControlPanel())
@@ -1491,6 +1600,57 @@ enum ExportLANServer {
         }
     }
 
+    private static func sendPCloudBookmarksJSON(
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        sendJSONPayload(FolderBookmarkStore.lanBookmarksPayload(), connection: connection, done: done)
+    }
+
+    private static func handlePCloudBookmarksPUT(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 16_384
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("PUT body too large".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                      let action = object["action"] as? String,
+                      action == "toggle" else {
+                    sendResponse(connection: connection, status: 400, contentType: "text/plain; charset=utf-8", body: Data("Expected JSON { \"action\": \"toggle\", \"listingPath\", \"displayName\" }".utf8), done: done)
+                    return
+                }
+                let listingPath = (object["listingPath"] as? String) ?? (object["path"] as? String) ?? ""
+                let displayName = (object["displayName"] as? String) ?? (object["name"] as? String) ?? ""
+                guard !listingPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    sendResponse(connection: connection, status: 400, contentType: "text/plain; charset=utf-8", body: Data("listingPath required".utf8), done: done)
+                    return
+                }
+                Task { @MainActor in
+                    let payload = LANHTTPExportAPI.applyBookmarkToggle(
+                        listingPath: listingPath,
+                        displayName: displayName
+                    )
+                    sendJSONPayload(payload, connection: connection, done: done)
+                }
+            }
+        }
+    }
+
     private static func htmlExportControlPanel() -> String {
         let user = htmlEscape(lanWebDAVUsername)
         let pass = htmlEscape(lanWebDAVPassword)
@@ -1498,10 +1658,16 @@ enum ExportLANServer {
         <div class="panel">
         <h2>Start export (pCloud → phone)</h2>
         <p class="muted">Phone app must be <strong>open and in foreground</strong> on Wi‑Fi. Uses pCloud sign-in on the phone — not your PC pCloud login.</p>
+        <div id="pcloud-pinned-wrap" class="pcloud-pinned-wrap" style="display:none">
+          <div class="label">Bookmarked folders</div>
+          <p class="muted" style="margin:0 0 0.35rem;font-size:0.85em">Synced with Browse bookmarks on the phone.</p>
+          <div id="pcloud-pinned" class="pcloud-folders pcloud-pinned"></div>
+        </div>
         <div class="row">
           <button type="button" id="pcloud-up" disabled>↑ Up</button>
           <code id="pcloud-path">/</code>
           <button type="button" id="pcloud-refresh">Refresh</button>
+          <button type="button" id="pcloud-pin-current" style="display:none" title="Bookmark this folder">Bookmark folder</button>
         </div>
         <div class="row">
           <label>Sort
@@ -1516,8 +1682,6 @@ enum ExportLANServer {
         <ul id="pcloud-files"><li class="muted">Loading…</li></ul>
         <div class="row">
           <button type="button" id="export-random">Export random in folder</button>
-          <button type="button" id="export-pause">Pause export</button>
-          <button type="button" id="export-stop">Stop export</button>
         </div>
         <p id="trigger-status" class="muted"></p>
         </div>
@@ -1529,6 +1693,100 @@ enum ExportLANServer {
           var pcloudPath = "/";
           var pcloudEntries = [];
           var sortKey = "name";
+          var LEGACY_PIN_KEY = "loopsegments.lan.pinnedFolders.v1";
+          var pinnedFolders = [];
+          function normalizePath(p) {
+            p = p || "/";
+            if (p === "/") return "/";
+            return p.replace(/\\/+$/, "") + "/";
+          }
+          function folderNameFromPath(p) {
+            var trimmed = normalizePath(p).replace(/\\/+$/, "");
+            if (!trimmed) return "/";
+            var parts = trimmed.split("/").filter(Boolean);
+            return parts.length ? parts[parts.length - 1] : "/";
+          }
+          function applyBookmarkPayload(j) {
+            pinnedFolders = (j.entries || j.bookmarks || []).map(function (b) {
+              var path = normalizePath(b.listingPath || b.path);
+              return { path: path, name: b.displayName || b.name || folderNameFromPath(path) };
+            });
+            renderPinned();
+            updatePinCurrentButton();
+            if (pcloudEntries.length) renderPCloud();
+          }
+          async function loadPins() {
+            try {
+              var r = await fetch("/pcloud_bookmarks.json");
+              var j = await r.json();
+              applyBookmarkPayload(j);
+              await migrateLegacyLocalPins();
+            } catch (e) {
+              pinnedFolders = [];
+              renderPinned();
+            }
+          }
+          async function migrateLegacyLocalPins() {
+            try {
+              var raw = localStorage.getItem(LEGACY_PIN_KEY);
+              if (!raw) return;
+              localStorage.removeItem(LEGACY_PIN_KEY);
+              var local = JSON.parse(raw);
+              if (!Array.isArray(local)) return;
+              for (var i = 0; i < local.length; i++) {
+                var item = local[i];
+                var path = normalizePath(item.path);
+                if (!isPinned(path)) {
+                  await togglePin(path, item.name);
+                }
+              }
+            } catch (e) {}
+          }
+          function isPinned(path) {
+            var norm = normalizePath(path);
+            return pinnedFolders.some(function (p) { return normalizePath(p.path) === norm; });
+          }
+          async function togglePin(path, name) {
+            var norm = normalizePath(path);
+            var r = await fetch("/pcloud_bookmarks.json", {
+              method: "PUT",
+              headers: { "Authorization": AUTH, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "toggle",
+                listingPath: norm,
+                displayName: name || folderNameFromPath(norm)
+              })
+            });
+            if (!r.ok) throw new Error("bookmark PUT " + r.status);
+            var j = await r.json();
+            applyBookmarkPayload(j);
+          }
+          function renderPinned() {
+            var wrap = document.getElementById("pcloud-pinned-wrap");
+            var el = document.getElementById("pcloud-pinned");
+            if (!pinnedFolders.length) {
+              wrap.style.display = "none";
+              el.innerHTML = "";
+              return;
+            }
+            wrap.style.display = "";
+            el.innerHTML = pinnedFolders.map(function (p) {
+              return "<div class=\\"folder-item\\">" +
+                "<button type=\\"button\\" class=\\"pcloud-dir pcloud-pinned-dir\\" data-path=\\"" + esc(p.path) + "\\">⭐ " + esc(p.name) + "</button>" +
+                "<button type=\\"button\\" class=\\"pin-toggle pinned\\" data-path=\\"" + esc(p.path) + "\\" data-name=\\"" + esc(p.name) + "\\" title=\\"Remove bookmark\\">★</button>" +
+                "</div>";
+            }).join("");
+          }
+          function updatePinCurrentButton() {
+            var btn = document.getElementById("pcloud-pin-current");
+            var norm = normalizePath(pcloudPath);
+            if (norm === "/") {
+              btn.style.display = "none";
+              return;
+            }
+            btn.style.display = "";
+            btn.textContent = isPinned(norm) ? "Remove bookmark" : "Bookmark folder";
+          }
           function esc(s) {
             return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
           }
@@ -1556,11 +1814,20 @@ enum ExportLANServer {
           function renderPCloud() {
             var foldersEl = document.getElementById("pcloud-folders");
             var filesEl = document.getElementById("pcloud-files");
-            var dirs = pcloudEntries.filter(function (e) { return e.isDirectory; }).slice().sort(compareEntries);
+            var pinnedPaths = pinnedFolders.map(function (p) { return normalizePath(p.path); });
+            var dirs = pcloudEntries.filter(function (e) { return e.isDirectory; }).filter(function (e) {
+              return pinnedPaths.indexOf(normalizePath(e.path)) === -1;
+            }).slice().sort(compareEntries);
             var files = pcloudEntries.filter(function (e) { return e.isVideo; }).slice().sort(compareEntries);
+            renderPinned();
+            updatePinCurrentButton();
             foldersEl.innerHTML = dirs.length
               ? dirs.map(function (e) {
-                  return "<button type=\\"button\\" class=\\"pcloud-dir\\" data-path=\\"" + esc(e.path) + "\\">📁 " + esc(e.name) + "</button>";
+                  var pinned = isPinned(e.path);
+                  return "<div class=\\"folder-item\\">" +
+                    "<button type=\\"button\\" class=\\"pcloud-dir\\" data-path=\\"" + esc(e.path) + "\\">📁 " + esc(e.name) + "</button>" +
+                    "<button type=\\"button\\" class=\\"pin-toggle" + (pinned ? " pinned" : "") + "\\" data-path=\\"" + esc(e.path) + "\\" data-name=\\"" + esc(e.name) + "\\" title=\\"" + (pinned ? "Remove bookmark" : "Bookmark") + "\\">" + (pinned ? "★" : "☆") + "</button>" +
+                    "</div>";
                 }).join("")
               : "<span class=\\"muted\\">(no folders)</span>";
             filesEl.innerHTML = files.length
@@ -1587,6 +1854,20 @@ enum ExportLANServer {
           }
           async function putTrigger(body) {
             setStatus("Sending trigger…");
+            if (body.command === "start_export" && body.displayName && window.updateExportSourceLine) {
+              window.updateExportSourceLine("running", body.displayName);
+            } else if (body.command === "start_export_random" && window.updateExportSourceLine) {
+              window.updateExportSourceLine("running", "Random in " + pcloudPath);
+            } else if (body.command === "pause_export" && window.updateExportSourceLine) {
+              var cur = document.getElementById("lan-export-source-name");
+              if (cur && cur.textContent) window.updateExportSourceLine("paused", cur.textContent);
+            } else if (body.command === "resume_export" && window.updateExportSourceLine) {
+              var curName = document.getElementById("lan-export-source-name");
+              if (curName && curName.textContent) window.updateExportSourceLine("running", curName.textContent);
+            } else if (body.command === "stop_export" && window.updateExportSourceLine) {
+              var last = document.getElementById("lan-export-source-name");
+              if (last && last.textContent) window.updateExportSourceLine("finished", last.textContent);
+            }
             var r = await fetch(triggerUrl, {
               method: "PUT",
               headers: { "Authorization": AUTH, "Content-Type": "application/json" },
@@ -1604,6 +1885,12 @@ enum ExportLANServer {
                 if (ack.ok) {
                   var j = await ack.json();
                   setStatus((j.status || "?") + ": " + (j.message || ""), j.status === "rejected");
+                  if (j.status === "accepted" && window.refreshLANPlayback) {
+                    for (var p = 0; p < 6; p++) {
+                      await new Promise(function (res) { setTimeout(res, 500); });
+                      try { await window.refreshLANPlayback(); } catch (e) {}
+                    }
+                  }
                   return;
                 }
               } catch (e) {}
@@ -1613,6 +1900,7 @@ enum ExportLANServer {
           async function loadPCloud() {
             document.getElementById("pcloud-path").textContent = pcloudPath;
             document.getElementById("pcloud-up").disabled = pcloudPath === "/";
+            updatePinCurrentButton();
             var foldersEl = document.getElementById("pcloud-folders");
             var filesEl = document.getElementById("pcloud-files");
             foldersEl.innerHTML = "<span class=\\"muted\\">Loading…</span>";
@@ -1624,12 +1912,15 @@ enum ExportLANServer {
                 foldersEl.innerHTML = "<span class=\\"muted\\">" + esc(j.error) + "</span>";
                 filesEl.innerHTML = "";
                 pcloudEntries = [];
+                renderPinned();
                 return;
               }
               pcloudEntries = j.entries || [];
               if (!pcloudEntries.length) {
                 foldersEl.innerHTML = "<span class=\\"muted\\">(empty folder)</span>";
                 filesEl.innerHTML = "";
+                renderPinned();
+                updatePinCurrentButton();
                 return;
               }
               renderPCloud();
@@ -1637,6 +1928,23 @@ enum ExportLANServer {
               foldersEl.innerHTML = "<span class=\\"muted\\">" + esc(err.message || err) + "</span>";
               filesEl.innerHTML = "";
               pcloudEntries = [];
+              renderPinned();
+            }
+          }
+          function handleFolderAreaClick(ev) {
+            var pinBtn = ev.target.closest ? ev.target.closest(".pin-toggle") : null;
+            if (pinBtn) {
+              togglePin(pinBtn.getAttribute("data-path"), pinBtn.getAttribute("data-name"))
+                .catch(function (e) { setStatus(e.message || e, true); });
+              return;
+            }
+            var dirBtn = ev.target.closest ? ev.target.closest(".pcloud-dir") : null;
+            if (!dirBtn && ev.target.classList && ev.target.classList.contains("pcloud-dir")) {
+              dirBtn = ev.target;
+            }
+            if (dirBtn) {
+              pcloudPath = dirBtn.getAttribute("data-path") || "/";
+              loadPCloud();
             }
           }
           document.getElementById("pcloud-up").onclick = function () {
@@ -1647,9 +1955,15 @@ enum ExportLANServer {
             pcloudPath = parts.length ? "/" + parts.join("/") + "/" : "/";
             loadPCloud();
           };
-          document.getElementById("pcloud-refresh").onclick = loadPCloud;
+          document.getElementById("pcloud-refresh").onclick = function () {
+            loadPins().then(function () { loadPCloud(); }).catch(function () { loadPCloud(); });
+          };
           document.getElementById("export-random").onclick = function () {
             putTrigger({ version: 1, command: "start_export_random", pool: "same_folder", folderPath: pcloudPath, id: uuid(), seekMs: 0 })
+              .catch(function (e) { setStatus(e.message || e, true); });
+          };
+          document.getElementById("export-resume").onclick = function () {
+            putTrigger({ version: 1, command: "resume_export", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("export-pause").onclick = function () {
@@ -1664,15 +1978,11 @@ enum ExportLANServer {
             sortKey = ev.target.value || "name";
             renderPCloud();
           };
-          document.getElementById("pcloud-folders").onclick = function (ev) {
-            var dirBtn = ev.target.closest ? ev.target.closest(".pcloud-dir") : null;
-            if (!dirBtn && ev.target.classList && ev.target.classList.contains("pcloud-dir")) {
-              dirBtn = ev.target;
-            }
-            if (dirBtn) {
-              pcloudPath = dirBtn.getAttribute("data-path") || "/";
-              loadPCloud();
-            }
+          document.getElementById("pcloud-folders").onclick = handleFolderAreaClick;
+          document.getElementById("pcloud-pinned").onclick = handleFolderAreaClick;
+          document.getElementById("pcloud-pin-current").onclick = function () {
+            togglePin(pcloudPath, folderNameFromPath(pcloudPath))
+              .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("pcloud-files").onclick = function (ev) {
             var exportBtn = ev.target.closest ? ev.target.closest(".export-file") : null;
@@ -1690,7 +2000,8 @@ enum ExportLANServer {
               }).catch(function (e) { setStatus(e.message || e, true); });
             }
           };
-          loadPCloud();
+          loadPins().then(function () { loadPCloud(); }).catch(function () { loadPCloud(); });
+          window.refreshLANBookmarks = loadPins;
         })();
         </script>
         """
@@ -1739,6 +2050,11 @@ enum ExportLANServer {
         if ExportPlaybackState.shared.isLANExportActive {
             payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayload()
         }
+        if let exportSource = LANExportSourceDisplay.statusPayload() {
+            payload["exportSource"] = exportSource
+        }
+        payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
+        payload["playbackListHTML"] = playbackFileListHTML()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return

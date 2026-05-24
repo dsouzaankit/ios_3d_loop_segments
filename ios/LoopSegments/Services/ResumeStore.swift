@@ -404,6 +404,14 @@ final class ResumeStore: ObservableObject {
 }
 
 extension ResumeStore {
+    nonisolated static func mostRecentPausedExport() -> ResumeEntry? {
+        guard let data = UserDefaults.standard.data(forKey: entriesKey),
+              let entries = try? JSONDecoder().decode([ResumeEntry].self, from: data) else {
+            return nil
+        }
+        return entries.filter(\.exportInProgress).max(by: { $0.updatedAt < $1.updatedAt })
+    }
+
     nonisolated static func isExportInProgress(forFileKey fileKey: String) -> Bool {
         guard let data = UserDefaults.standard.data(forKey: ResumeStore.entriesKey),
               let entries = try? JSONDecoder().decode([ResumeEntry].self, from: data) else {

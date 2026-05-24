@@ -148,6 +148,7 @@ final class AppSession: ObservableObject {
         exportCoordinator.userRequestedCancel = false
         exportCoordinator.userRequestedPause = false
         activeExportItem = item
+        LANExportSourceDisplay.setRunning(item.name)
         let priorResume = ResumeStore.shared.resumeStatus(for: item)
         let continueLANExport = priorResume.isPaused
             && priorResume.effectiveMs > 250
@@ -186,7 +187,13 @@ final class AppSession: ObservableObject {
                 )
             }
             ResumeStore.shared.pinCompletedExportIfMediaOnDisk(for: item)
+            LANExportSourceDisplay.setFinished(item.name)
         } catch let error {
+            if userRequestedExportPause {
+                LANExportSourceDisplay.setPaused(item.name)
+            } else if userRequestedExportCancel {
+                LANExportSourceDisplay.clearActive()
+            }
             if userRequestedExportCancel {
                 ResumeStore.shared.finishExport(for: item)
             }
@@ -205,7 +212,16 @@ final class AppSession: ObservableObject {
         isExportRunning = false
         if let item = activeExportItem {
             ResumeStore.shared.finishExport(for: item)
+        } else if let entry = ResumeStore.mostRecentPausedExport(),
+                  let href = entry.href?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !href.isEmpty {
+            let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty {
+                let item = WebDAVItem(href: href, name: name, isDirectory: false, contentLength: nil)
+                ResumeStore.shared.finishExport(for: item)
+            }
         }
+        LANExportSourceDisplay.clearActive()
     }
 
     /// Pause export: saves checkpoint, keeps export marked paused, keeps media on disk.
@@ -217,6 +233,26 @@ final class AppSession: ObservableObject {
         exportCoordinator.userRequestedCancel = false
         exportCoordinator.cancel()
         isExportRunning = false
+        if let item = activeExportItem {
+            LANExportSourceDisplay.setPaused(item.name)
+        }
+    }
+
+    /// Stop any in-flight export so a LAN-page fresh start can proceed.
+    func prepareForLANFreshExport() async {
+        if isExportRunning {
+            cancelExport()
+        } else if exportCoordinator.isBusy {
+            userRequestedExportCancel = true
+            userRequestedExportPause = false
+            exportCoordinator.userRequestedCancel = true
+            exportCoordinator.userRequestedPause = false
+            exportCoordinator.cancel()
+            isExportRunning = false
+        }
+        for _ in 0 ..< 300 where exportCoordinator.isBusy {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 }
 

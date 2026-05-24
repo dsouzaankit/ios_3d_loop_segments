@@ -78,3 +78,32 @@ final class FolderBookmarkStore: ObservableObject {
         revision += 1
     }
 }
+
+extension FolderBookmarkStore {
+    /// LAN HTTP index — read bookmarks without MainActor (same UserDefaults blob as the app).
+    nonisolated static func lanBookmarkEntries() -> [FolderBookmark] {
+        guard let data = UserDefaults.standard.data(forKey: "folder_bookmarks"),
+              let decoded = try? JSONDecoder().decode([FolderBookmark].self, from: data) else {
+            return []
+        }
+        return decoded.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
+    }
+
+    nonisolated static func lanBookmarksPayload() -> [String: Any] {
+        let entries: [[String: Any]] = lanBookmarkEntries().map { bookmark in
+            [
+                "listingPath": bookmark.listingPath,
+                "path": bookmark.listingPath,
+                "displayName": bookmark.displayName,
+                "name": bookmark.displayName,
+                "updatedAt": ISO8601DateFormatter().string(from: bookmark.updatedAt),
+            ]
+        }
+        return [
+            "bookmarks": entries,
+            "entries": entries,
+        ]
+    }
+}

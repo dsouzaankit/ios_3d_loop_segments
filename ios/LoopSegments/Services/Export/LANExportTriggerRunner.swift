@@ -25,6 +25,7 @@ enum LANExportTriggerRunner {
             credentials: session.credentials,
             currentItem: reference,
             isExportRunning: session.isExportRunning,
+            prepareForFreshStart: { await session.prepareForLANFreshExport() },
             onStartExport: { item, seek in
                 LANExportContext.saveReference(item)
                 Task {

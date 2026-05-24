@@ -47,4 +47,10 @@ enum LANHTTPExportAPI {
             ]
         }
     }
+
+    @MainActor
+    static func applyBookmarkToggle(listingPath: String, displayName: String) -> [String: Any] {
+        FolderBookmarkStore.shared.toggleBookmark(listingPath: listingPath, displayName: displayName)
+        return FolderBookmarkStore.lanBookmarksPayload()
+    }
 }

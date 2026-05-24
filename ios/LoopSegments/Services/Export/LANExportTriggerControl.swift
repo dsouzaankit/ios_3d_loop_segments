@@ -4,6 +4,7 @@ struct LANExportTrigger: Codable {
     enum Command: String, Codable {
         case startExport = "start_export"
         case startExportRandom = "start_export_random"
+        case resumeExport = "resume_export"
         case pauseExport = "pause_export"
         case stopExport = "stop_export"
     }
@@ -71,6 +72,7 @@ enum LANExportTriggerControl {
         credentials: WebDAVCredentials?,
         currentItem: WebDAVItem,
         isExportRunning: Bool,
+        prepareForFreshStart: @escaping () async -> Void,
         onStartExport: @escaping (WebDAVItem, Int64) -> Void,
         onPause: @escaping () -> Void,
         onStop: @escaping () -> Void
@@ -116,14 +118,9 @@ enum LANExportTriggerControl {
                 return "Trigger rejected — missing href/name"
             }
             if isExportRunning {
-                writeAck(
-                    command: trigger.command.rawValue,
-                    status: "rejected",
-                    message: "Export already running — stop first",
-                    triggerId: trigger.id
-                )
-                return "Export already running"
+                onStop()
             }
+            await prepareForFreshStart()
             let seek = max(0, trigger.seekMs ?? 0)
             writeAck(
                 command: trigger.command.rawValue,
@@ -145,14 +142,9 @@ enum LANExportTriggerControl {
                 return "Not signed in"
             }
             if isExportRunning {
-                writeAck(
-                    command: trigger.command.rawValue,
-                    status: "rejected",
-                    message: "Export already running",
-                    triggerId: trigger.id
-                )
-                return "Export already running"
+                onStop()
             }
+            await prepareForFreshStart()
             let pool = mapPool(trigger.pool)
             do {
                 let picked: WebDAVItem
@@ -197,6 +189,47 @@ enum LANExportTriggerControl {
                 return error.localizedDescription
             }
 
+        case .resumeExport:
+            if isExportRunning {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: "Export already running",
+                    triggerId: trigger.id
+                )
+                return "Export already running"
+            }
+            guard let entry = ResumeStore.mostRecentPausedExport() else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: "No paused export",
+                    triggerId: trigger.id
+                )
+                return "No paused export"
+            }
+            guard let item = webDAVItem(from: entry) else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: "Paused export missing href",
+                    triggerId: trigger.id
+                )
+                return "Paused export missing href"
+            }
+            var seekMs = max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
+            if let cap = entry.sourceDurationMs, cap > 500 {
+                seekMs = min(seekMs, max(0, cap - 250))
+            }
+            writeAck(
+                command: trigger.command.rawValue,
+                status: "accepted",
+                message: "Resuming \(item.name) at \(ResumeTimeFormat.formatMs(seekMs))",
+                triggerId: trigger.id
+            )
+            onStartExport(item, seekMs)
+            return "LAN trigger — resume \(item.name)"
+
         case .pauseExport:
             guard isExportRunning else {
                 writeAck(
@@ -217,7 +250,8 @@ enum LANExportTriggerControl {
             return "LAN trigger — paused"
 
         case .stopExport:
-            guard isExportRunning else {
+            let hasPausedExport = ResumeStore.mostRecentPausedExport() != nil
+            guard isExportRunning || hasPausedExport else {
                 writeAck(
                     command: trigger.command.rawValue,
                     status: "rejected",
@@ -257,6 +291,15 @@ enum LANExportTriggerControl {
         }
         guard !resolvedName.isEmpty else { return nil }
         return WebDAVItem(href: href, name: resolvedName, isDirectory: false, contentLength: nil)
+    }
+
+    private static func webDAVItem(from entry: ResumeEntry) -> WebDAVItem? {
+        guard let href = entry.href?.trimmingCharacters(in: .whitespacesAndNewlines), !href.isEmpty else {
+            return nil
+        }
+        let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        return WebDAVItem(href: href, name: name, isDirectory: false, contentLength: nil)
     }
 
     private static func writeAck(command: String, status: String, message: String, triggerId: String?) {

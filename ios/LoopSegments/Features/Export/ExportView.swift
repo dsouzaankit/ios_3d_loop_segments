@@ -220,7 +220,7 @@ struct ExportView: View {
                 }
             }
             Section("During export") {
-                Text("Keep Loop Segments open on this screen. The app keeps the display on while export runs; leaving the app or locking the phone can stop export.")
+                Text("Keep Loop Segments in the foreground during export; backgrounding or locking the phone can stop export.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Button("Open Display in Settings") {
@@ -229,7 +229,7 @@ struct ExportView: View {
                         showAutoLockHelp = true
                     }
                 }
-                Text("Screen stays on while this Export page is open. Optional: Auto-Lock → Never if you leave the app during a run. Path: \(ExportAutoLockCoordinator.manualPath).")
+                Text("Screen stays on while Loop Segments is open in the foreground. Path: \(ExportAutoLockCoordinator.manualPath).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
