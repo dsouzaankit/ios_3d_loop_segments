@@ -53,7 +53,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (LAN section) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
-2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). While export runs, the index **polls `status.json` every 60s** to refresh WAN Mbps / fill stats (session metrics reset on each export start or resume).
+2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). The index **polls `status.json` every 5 s** (**3 s** while export is active) for export source, playback list, and WAN Mbps / fill stats (session metrics reset on each export start or resume).
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
@@ -70,7 +70,81 @@ Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authoriz
   -Body 'Write-Host "from PC"' -ContentType "text/plain"
 ```
 
-**LAN export control:** open **`http://<phone-ip>:8765/`** in a PC browser — browse pCloud folders (via the phone’s sign-in), **Export 0:00** per file, and random/pause/stop buttons. Phone app must be **open and in foreground** on Wi‑Fi.
+### LAN HTTP page (browser control)
+
+Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Loop Segments must stay open in the foreground** — the app polls export triggers every ~2 s while active.
+
+#### Page layout
+
+| Area | Contents |
+|------|----------|
+| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
+| **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. |
+| **Middle** | Playback status + **On phone (playback)** file list (auto-refreshed from `status.json`). |
+| **Bottom** | pCloud browse — bookmarked folders, horizontal folder grid, vertical file list, sort by **name / size / date**. |
+
+#### JSON APIs (GET unless noted)
+
+| Path | Purpose |
+|------|---------|
+| **`/status.json`** | Live state: file index, `exportSource`, playback HTML fragments, optional `lanLive` dashboard. |
+| **`/pcloud_list.json?path=/Folder/`** | pCloud folder listing (directories + video files). |
+| **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
+| **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
+| **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
+| **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
+
+**`status.json` — notable fields:**
+
+- **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
+- **`playbackStatusHTML`**, **`playbackListHTML`** — server-rendered playback blocks (replace in-page without reload).
+- **`lanLive`** — WAN Mbps / fill dashboard lines while export is active.
+- **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.
+- **`files`** — servable export paths with `bytes` / `modified`.
+
+#### Export trigger protocol
+
+**PUT** `pcld_ios_media/scripts/export_trigger.json` with Basic auth **`admin` / `iosadmin`**. The phone deletes the file after reading it and writes an ack.
+
+```json
+{
+  "version": 1,
+  "command": "start_export",
+  "href": "/Videos/example.mp4",
+  "displayName": "example.mp4",
+  "seekMs": 0,
+  "id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+| `command` | Behavior |
+|-----------|----------|
+| **`start_export`** | Export `href` from `seekMs`. **Auto-stops** any running export first (no manual stop required). |
+| **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. |
+| **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). |
+| **`pause_export`** | Pause the running export (checkpoint kept on phone). |
+| **`stop_export`** | Stop running export or clear a paused export. |
+
+Optional fields: **`pool`**, **`folderPath`** (for random), **`id`** (UUID — duplicate ids are ignored).
+
+**Ack** (`export_trigger.ack.json`): `{ "receivedAt", "command", "status", "message", "triggerId" }` where **`status`** is `accepted` \| `rejected` \| `ignored`.
+
+Example (PowerShell):
+
+```powershell
+$base = "http://10.0.0.42:8765"
+$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
+$body = @{
+  version = 1
+  command = "start_export"
+  href = "/Videos/example.mp4"
+  displayName = "example.mp4"
+  seekMs = 0
+  id = [guid]::NewGuid().ToString()
+} | ConvertTo-Json
+Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.json" `
+  -Headers @{ Authorization = "Basic $cred"; "Content-Type" = "application/json" } -Body $body
+```
 
 **Windows / `.local`:** **`http://iphone.local:8765/` usually fails** — that hostname only exists if About → Name is literally “iPhone” (otherwise it is e.g. `http://johns-iphone.local:8765/`). Windows often does not resolve any `.local` name without [Apple Bonjour](https://support.apple.com/kb/DL999). Use the **LAN IP** from Export (`http://10.x.x.x:8765/`). Test: `cd windows` → `.\Set-LoopSegmentsLANHost.ps1 <ip>` → `.\Mount-LoopSegmentsRclone.ps1 -TestOnly`.
 
@@ -136,9 +210,9 @@ Every export starts with **WebDAV HEAD + prefetch** (size + container header/ind
 | Setting | Default | Effect |
 |---------|---------|--------|
 | **LAN server on Wi‑Fi** | On | `:8765` HTTP/WebDAV; enables `_working.mp4` sequential preload when export runs. Off → no background prefetch (on-demand dense fill per minute only). |
-| **60s segments when at/above** | 35 Mbps (default) | Below → **no** `op_*.mp4` (LAN preload and/or full vanilla only). At/above → try `op_00`/`op_01` when codec allows. |
-| **Vanilla download first** | On | After sparse probe fails: full WebDAV copy before HLS. |
-| **pCloud HLS if WebDAV fails above** | 2.5 Mbps (1×) | Minimum est. source bitrate for HLS fallback (`gethlslink`; **requires REST API token** — see [pCloud REST API token limitation](#pcloud-rest-api-token-limitation-search-hls-media-metadata)). |
+| **60s segments when at/above** | 35 Mbps (default) | Below → **no** `op_*.mp4` (LAN preload and/or full-file WebDAV download only). At/above → try `op_00`/`op_01` when codec allows. |
+| **Full WebDAV download** | On | When sparse export cannot start: full file copy to `_vanilla_download.<ext>` (reliable for WMV/MKV; visible on LAN while downloading). |
+| **Advanced → pCloud HLS threshold** | 2.5 Mbps (1×) | Optional last resort if WebDAV probe fails and full download is off; needs REST API token — often unavailable (see [pCloud REST API token limitation](#pcloud-rest-api-token-limitation-search-hls-media-metadata)). |
 
 #### Primary pipeline (first branch)
 
@@ -318,7 +392,7 @@ Use **`export_latest.txt`** to confirm which row ran (sparse vs vanilla vs HLS; 
 
 ### Export screen settings (LAN section)
 
-Same toggles as **Settings that gate behavior** (above). The HLS control is **0.25× / 0.5× / 1× / 2× / 4×** of the **2.5 Mbps** base (`PCloudHLSLink.transcodeMinSourceMbps`).
+Same toggles as **Settings that gate behavior** (above). **Full WebDAV download** is the primary recovery path when sparse export cannot start. **pCloud HLS threshold** lives under **Advanced fallback** (0.25× / 0.5× / 1× / 2× / 4× of the **2.5 Mbps** base — `PCloudHLSLink.transcodeMinSourceMbps`). LAN page URL and **`Mount-LoopSegmentsRclone.ps1`** are shown on the Export screen.
 
 ## Photos library (deactivated in app)
 
@@ -355,7 +429,7 @@ If sign-in does not save `apiAuthToken` (logs: `tokenSaved=false`, `result=0 but
 | **HLS transcode fallback** | `gethlslink` | **Unavailable** — WMV/ASF (and failed sparse probe) cannot fall back to `_working_pcloud_transcode.mp4`; rely on **vanilla WebDAV download** or re-encode source to MP4 on PC |
 | **Media metadata (duration / bitrate)** | `stat` (not wired yet) / search hit fields `duration`, `videobitrate` | **Not available via REST** — LAN **Media duration** and **Media bitrate (est.)** for vanilla WMV/ASF use **AVFoundation on partial file** (often fails) then **Mbps guess from file size**; timeline can be wrong until probe succeeds |
 
-**HLS** is gated in Export settings (“pCloud HLS if WebDAV fails above …”) but still needs the same token as search. Vanilla download explicitly does **not** need it.
+**HLS** is under **Advanced fallback** on the Export screen but still needs the same token as search. **Full WebDAV download** does **not** need it.
 
 **WMV example (no token):** a ~300 MB / ~10 min / ~4 Mbps file may show **~4:09** and **~10 Mbps** on LAN if the app uses a **10–15 Mbps size guess**; timeline may stay approximate until a mid-download probe succeeds. ffprobe on a PC copy is the ground truth.
 
