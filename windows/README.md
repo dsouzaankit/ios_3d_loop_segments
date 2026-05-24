@@ -18,6 +18,18 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json
 
 Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[RCLONE-PHONE-MOUNT.md](RCLONE-PHONE-MOUNT.md)**.
 
+## Day-to-day mount
+
+After setup, double-click **`Mount-PhoneL.cmd`** or run:
+
+```cmd
+Mount-PhoneL.cmd
+```
+
+Same as `.\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. If the IP changed: `.\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
+
+Optional args: **`Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestOnly`**.
+
 ## What goes in `loop-segments-windows.json`
 
 | Field | Purpose |
@@ -55,6 +67,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
 | `Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |
+| `Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** = HTTP + PROPFIND + `rclone ls`; default = **read/write** **L:** (copy bootstrap `.ps1` and folders under `pcld_ios_media\`; ≤ 2 MB per file on phone); **`-ReadOnly`** = DLNA-only; **`-Remove`** / **`-RemovePort80Proxy`** |
 | `RCLONE-PHONE-MOUNT.md` | Optional rclone mount notes (sluggish vs Skybox) |
 | `archive/` | Legacy `net use` / port-80 proxy, `Sync-FromPhoneLAN.ps1`, optional HTTP **`Copy-ToLoopSegmentsPhoneLAN.ps1`** (no **L:** mount) |
