@@ -70,28 +70,7 @@ Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authoriz
   -Body 'Write-Host "from PC"' -ContentType "text/plain"
 ```
 
-**LAN export control:** open **`http://<phone-ip>:8765/`** in a PC browser — the page lists pCloud folders (via the phone’s sign-in), **Export 0:00** per file, random/pause/stop buttons, and the on-phone WebDAV tree. Triggers use WebDAV **PUT** `pcld_ios_media/scripts/export_trigger.json` (Basic auth **`admin` / `iosadmin`**). Phone polls every ~2s while the **app is in foreground**. PowerShell: [`Send-LoopSegmentsExportTrigger.ps1`](../windows/Send-LoopSegmentsExportTrigger.ps1). Commands:
-
-| `command` | Fields | Effect |
-|-----------|--------|--------|
-| `start_export` | `href`, `displayName`, optional `seekMs`, optional `id` | Start pCloud export (app in foreground) |
-| `start_export_random` | optional `pool`: `same_folder` / `bookmarks`, optional `folderPath` (pCloud listing path), optional `seekMs` | Random video from pool |
-| `pause_export` | — | Pause current export |
-| `stop_export` | — | Stop current export |
-
-```powershell
-$trigger = @{
-  version = 1
-  command = "start_export"
-  href = "/remote.php/dav/files/1234567890/0/movie.mp4"
-  displayName = "movie.mp4"
-  seekMs = 0
-  id = [guid]::NewGuid().ToString()
-} | ConvertTo-Json -Compress
-Invoke-WebRequest -Method PUT -Uri "http://10.0.0.42:8765/pcld_ios_media/scripts/export_trigger.json" `
-  -Headers @{ Authorization = "Basic $cred" } -Body $trigger -ContentType "application/json"
-Invoke-WebRequest -Uri "http://10.0.0.42:8765/pcld_ios_media/scripts/export_trigger.ack.json" -Headers @{ Authorization = "Basic $cred" }
-```
+**LAN export control:** open **`http://<phone-ip>:8765/`** in a PC browser — browse pCloud folders (via the phone’s sign-in), **Export 0:00** per file, and random/pause/stop buttons. Phone app must be **open and in foreground** on Wi‑Fi.
 
 **Windows / `.local`:** **`http://iphone.local:8765/` usually fails** — that hostname only exists if About → Name is literally “iPhone” (otherwise it is e.g. `http://johns-iphone.local:8765/`). Windows often does not resolve any `.local` name without [Apple Bonjour](https://support.apple.com/kb/DL999). Use the **LAN IP** from Export (`http://10.x.x.x:8765/`). Test: `cd windows` → `.\Set-LoopSegmentsLANHost.ps1 <ip>` → `.\Mount-LoopSegmentsRclone.ps1 -TestOnly`.
 

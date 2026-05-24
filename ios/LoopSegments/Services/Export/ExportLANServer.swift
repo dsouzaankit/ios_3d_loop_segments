@@ -362,19 +362,30 @@ enum ExportLANServer {
     }
 
     /// Request-target may be `/op_00.mp4` (browser) or `http://host:8765/op_00.mp4` (Skybox, some WebDAV clients).
+    /// Preserves `?query=` for LAN JSON APIs (`pcloud_list.json?path=…`).
     private static func httpRequestPath(from raw: String) -> String {
         var path = raw.trimmingCharacters(in: .whitespaces)
-        if let query = path.firstIndex(of: "?") {
-            path = String(path[..<query])
-        }
         if path.isEmpty { return "/" }
 
         let lower = path.lowercased()
         if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
             if let url = URL(string: path) {
-                path = url.path.isEmpty ? "/" : url.path
+                var resolved = url.path.isEmpty ? "/" : url.path
+                if let query = url.percentEncodedQuery, !query.isEmpty {
+                    return normalizedDAVPath(resolved) + "?" + query
+                }
+                return normalizedDAVPath(resolved)
             }
-        } else if path.hasPrefix("//") {
+        }
+
+        var querySuffix = ""
+        if let queryStart = path.firstIndex(of: "?") {
+            querySuffix = String(path[queryStart...])
+            path = String(path[..<queryStart])
+        }
+        if path.isEmpty { path = "/" }
+
+        if path.hasPrefix("//") {
             let withoutScheme = String(path.dropFirst(2))
             if let slash = withoutScheme.firstIndex(of: "/") {
                 path = String(withoutScheme[slash...])
@@ -389,7 +400,7 @@ enum ExportLANServer {
         if !path.hasPrefix("/") {
             path = "/\(path)"
         }
-        return normalizedDAVPath(path)
+        return normalizedDAVPath(path) + querySuffix
     }
 
     private static func isWebDAVClient(requestHeaders: String) -> Bool {
@@ -525,10 +536,6 @@ enum ExportLANServer {
         let (resourcePath, query) = splitPathAndQuery(normalized)
         if resourcePath == "pcloud_list.json" {
             sendPCloudListJSON(folderPath: query["path"] ?? "/", connection: connection, done: done)
-            return
-        }
-        if resourcePath == "local_tree.json" {
-            sendLocalTreeJSON(relativeDir: query["dir"] ?? "", connection: connection, done: done)
             return
         }
         guard let fileURL = resolveExportFile(relativePath: resourcePath) else {
@@ -1413,8 +1420,8 @@ enum ExportLANServer {
             .panel { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
             .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
             button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; }
-            #pcloud-list, #local-list { list-style: none; padding-left: 0; }
-            #pcloud-list li, #local-list li { margin: 0.25rem 0; }
+            #pcloud-list { list-style: none; padding-left: 0; }
+            #pcloud-list li { margin: 0.25rem 0; }
             .muted { color: #666; font-size: 0.9em; }
             #trigger-status { min-height: 1.2em; }
             </style>
@@ -1479,15 +1486,6 @@ enum ExportLANServer {
         }
     }
 
-    private static func sendLocalTreeJSON(
-        relativeDir: String,
-        connection: NWConnection,
-        done: @escaping () -> Void
-    ) {
-        let payload = LANHTTPExportAPI.localTreePayload(relativeDir: relativeDir)
-        sendJSONPayload(payload, connection: connection, done: done)
-    }
-
     private static func htmlExportControlPanel() -> String {
         let user = htmlEscape(lanWebDAVUsername)
         let pass = htmlEscape(lanWebDAVPassword)
@@ -1507,13 +1505,6 @@ enum ExportLANServer {
           <button type="button" id="export-stop">Stop export</button>
         </div>
         <p id="trigger-status" class="muted"></p>
-        <h3>Phone disk (WebDAV tree)</h3>
-        <div class="row">
-          <button type="button" id="local-up" disabled>↑ Up</button>
-          <code id="local-path"></code>
-          <button type="button" id="local-refresh">Refresh</button>
-        </div>
-        <ul id="local-list"><li class="muted">Loading…</li></ul>
         </div>
         <script>
         (function () {
@@ -1521,7 +1512,6 @@ enum ExportLANServer {
           var triggerUrl = "/\(LANExportTriggerControl.triggerRelativePath)";
           var ackUrl = "/\(LANExportTriggerControl.ackRelativePath)";
           var pcloudPath = "/";
-          var localDir = "";
           function esc(s) {
             return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
           }
@@ -1584,29 +1574,6 @@ enum ExportLANServer {
               list.innerHTML = "<li class=\\"muted\\">" + esc(err.message || err) + "</li>";
             }
           }
-          async function loadLocal() {
-            document.getElementById("local-path").textContent = localDir || "(exports root)";
-            document.getElementById("local-up").disabled = !localDir;
-            var list = document.getElementById("local-list");
-            list.innerHTML = "<li class=\\"muted\\">Loading…</li>";
-            try {
-              var r = await fetch("/local_tree.json?dir=" + encodeURIComponent(localDir));
-              var j = await r.json();
-              if (!j.entries || !j.entries.length) {
-                list.innerHTML = "<li class=\\"muted\\">(empty)</li>";
-                return;
-              }
-              list.innerHTML = j.entries.map(function (e) {
-                var size = e.bytes ? " (" + Math.round(e.bytes / 1024) + " KB)" : "";
-                if (e.isDirectory) {
-                  return "<li><button type=\\"button\\" class=\\"local-dir\\" data-path=\\"" + esc(e.path) + "\\">📁 " + esc(e.name) + "</button></li>";
-                }
-                return "<li>📄 " + esc(e.name) + size + "</li>";
-              }).join("");
-            } catch (err) {
-              list.innerHTML = "<li class=\\"muted\\">" + esc(err.message || err) + "</li>";
-            }
-          }
           document.getElementById("pcloud-up").onclick = function () {
             var trimmed = pcloudPath.replace(/\\/$/, "");
             if (!trimmed || trimmed === "/") { pcloudPath = "/"; loadPCloud(); return; }
@@ -1616,14 +1583,6 @@ enum ExportLANServer {
             loadPCloud();
           };
           document.getElementById("pcloud-refresh").onclick = loadPCloud;
-          document.getElementById("local-up").onclick = function () {
-            if (!localDir) return;
-            var parts = localDir.split("/").filter(Boolean);
-            parts.pop();
-            localDir = parts.join("/");
-            loadLocal();
-          };
-          document.getElementById("local-refresh").onclick = loadLocal;
           document.getElementById("export-random").onclick = function () {
             putTrigger({ version: 1, command: "start_export_random", pool: "same_folder", folderPath: pcloudPath, id: uuid(), seekMs: 0 })
               .catch(function (e) { setStatus(e.message || e, true); });
@@ -1637,30 +1596,31 @@ enum ExportLANServer {
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("pcloud-list").onclick = function (ev) {
-            var t = ev.target;
-            if (t.classList.contains("pcloud-dir")) {
-              pcloudPath = t.getAttribute("data-path") || "/";
+            var dirBtn = ev.target.closest ? ev.target.closest(".pcloud-dir") : null;
+            if (!dirBtn && ev.target.classList && ev.target.classList.contains("pcloud-dir")) {
+              dirBtn = ev.target;
+            }
+            if (dirBtn) {
+              pcloudPath = dirBtn.getAttribute("data-path") || "/";
               loadPCloud();
-            } else if (t.classList.contains("export-file")) {
+              return;
+            }
+            var exportBtn = ev.target.closest ? ev.target.closest(".export-file") : null;
+            if (!exportBtn && ev.target.classList && ev.target.classList.contains("export-file")) {
+              exportBtn = ev.target;
+            }
+            if (exportBtn) {
               putTrigger({
                 version: 1,
                 command: "start_export",
-                href: t.getAttribute("data-href"),
-                displayName: t.getAttribute("data-name"),
+                href: exportBtn.getAttribute("data-href"),
+                displayName: exportBtn.getAttribute("data-name"),
                 seekMs: 0,
                 id: uuid()
               }).catch(function (e) { setStatus(e.message || e, true); });
             }
           };
-          document.getElementById("local-list").onclick = function (ev) {
-            var t = ev.target;
-            if (t.classList.contains("local-dir")) {
-              localDir = t.getAttribute("data-path") || "";
-              loadLocal();
-            }
-          };
           loadPCloud();
-          loadLocal();
         })();
         </script>
         """

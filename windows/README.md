@@ -56,7 +56,6 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |
 | `Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** = HTTP + PROPFIND + `rclone ls`; default = **read/write** **L:** (copy bootstrap `.ps1` and folders under `pcld_ios_media\`; ≤ 2 MB per file on phone); **`-ReadOnly`** = DLNA-only; **`-Remove`** / **`-RemovePort80Proxy`** |
-| `Send-LoopSegmentsExportTrigger.ps1` | **PUT** `export_trigger.json` on phone (Export page + toggle required) |
 | `RCLONE-PHONE-MOUNT.md` | Optional rclone mount notes (sluggish vs Skybox) |
 | `archive/` | Legacy `net use` / port-80 proxy, `Sync-FromPhoneLAN.ps1`, optional HTTP **`Copy-ToLoopSegmentsPhoneLAN.ps1`** (no **L:** mount) |
 

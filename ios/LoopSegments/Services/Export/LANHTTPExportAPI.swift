@@ -44,23 +44,4 @@ enum LANHTTPExportAPI {
             ]
         }
     }
-
-    static func localTreePayload(relativeDir: String) -> [String: Any] {
-        let lines = LANMediaTree.listBrowseEntries(relativeDir: relativeDir)
-        let entries: [[String: Any]] = lines.map { line in
-            var dict: [String: Any] = [
-                "path": line.relativePath,
-                "name": line.displayName,
-                "isDirectory": line.isDirectory,
-            ]
-            if let bytes = line.byteCount, bytes > 0 {
-                dict["bytes"] = bytes
-            }
-            return dict
-        }
-        return [
-            "dir": relativeDir.trimmingCharacters(in: CharacterSet(charactersIn: "/")),
-            "entries": entries,
-        ]
-    }
 }
