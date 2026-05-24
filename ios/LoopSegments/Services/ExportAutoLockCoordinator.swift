@@ -1,6 +1,6 @@
 import UIKit
 
-/// Keeps the screen on while the Export screen is visible or an export is running (`isIdleTimerDisabled`).
+/// Keeps the screen on while the app is in the foreground (`isIdleTimerDisabled`).
 /// System Auto-Lock cannot be read or set by the app; deep links to Auto-Lock often fail on iOS 18+.
 @MainActor
 enum ExportAutoLockCoordinator {
@@ -19,6 +19,7 @@ enum ExportAutoLockCoordinator {
 
     static func setAppActive(_ active: Bool) {
         appIsActiveState = active
+        applyIdleTimer()
     }
 
     static var isExportPageVisible: Bool { exportPageVisible }
@@ -35,7 +36,7 @@ enum ExportAutoLockCoordinator {
     }
 
     private static func applyIdleTimer() {
-        UIApplication.shared.isIdleTimerDisabled = exportPageVisible || exportRunning
+        UIApplication.shared.isIdleTimerDisabled = appIsActiveState
     }
 
     /// Best-effort open Settings near Display / Auto-Lock. Returns false if nothing accepted the URL.
