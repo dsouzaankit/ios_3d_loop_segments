@@ -1305,6 +1305,7 @@ enum ExportLANServer {
               .replace(/"/g, "&quot;");
           }
           function applyExportSource(src) {
+            if (window._exportSourcePending) return;
             var wrap = document.getElementById("lan-export-source-wrap");
             if (!wrap) return;
             if (!src || !src.displayName) {
@@ -1517,12 +1518,16 @@ enum ExportLANServer {
             .export-source-main { flex: 1 1 12rem; min-width: 0; }
             .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-shrink: 0; }
             .export-source-line #lan-export-source-name { word-break: break-all; }
+            .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; color: #0d3a5c; }
+            .export-pending-banner strong { display: block; margin-bottom: 0.25rem; font-size: 1.05em; }
+            .export-pending-banner span { font-size: 0.95em; line-height: 1.45; }
             body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
             code { font-size: 0.9em; }
             ul { padding-left: 1.25rem; }
             .panel { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
             .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
             button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; }
+            button:disabled, .btn:disabled { opacity: 0.55; cursor: wait; }
             .pcloud-folders { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
             .pcloud-folders .pcloud-dir { flex: 1 1 9rem; max-width: 14rem; text-align: left; }
             .pcloud-pinned-wrap { margin: 0.25rem 0 0.75rem; }
@@ -1540,6 +1545,10 @@ enum ExportLANServer {
             </style>
             </head><body>
             <h1>Loop Segments — LAN export</h1>
+            <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status" aria-live="polite">
+              <strong id="lan-export-pending-title">Processing export request</strong>
+              <span id="lan-export-pending-detail">Please wait — keep Loop Segments open in the foreground on the phone.</span>
+            </div>
             \(htmlExportSourceLineBlock())
             <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
@@ -1852,7 +1861,63 @@ enum ExportLANServer {
             el.textContent = msg || "";
             el.style.color = isErr ? "#b00020" : "#333";
           }
+          function exportPendingMessage(command, body) {
+            var foreground = " Keep Loop Segments open in the foreground on the phone.";
+            switch (command) {
+              case "start_export":
+                return {
+                  title: "Switching export source",
+                  detail: "Please wait while the phone switches to "
+                    + (body.displayName || "the selected file") + "." + foreground
+                };
+              case "start_export_random":
+                return {
+                  title: "Switching export source",
+                  detail: "Please wait while the phone picks and starts a new export in this folder." + foreground
+                };
+              case "pause_export":
+                return {
+                  title: "Pausing export",
+                  detail: "Please wait while the phone pauses the current export." + foreground
+                };
+              case "resume_export":
+                return {
+                  title: "Starting export",
+                  detail: "Please wait while the phone resumes the paused export." + foreground
+                };
+              case "stop_export":
+                return {
+                  title: "Stopping export",
+                  detail: "Please wait while the phone stops the current export." + foreground
+                };
+              default:
+                return {
+                  title: "Processing export request",
+                  detail: "Please wait while the phone applies your export change." + foreground
+                };
+            }
+          }
+          function setExportPending(active, title, detail) {
+            window._exportSourcePending = !!active;
+            var banner = document.getElementById("lan-export-pending");
+            if (banner) banner.style.display = active ? "" : "none";
+            var titleEl = document.getElementById("lan-export-pending-title");
+            var detailEl = document.getElementById("lan-export-pending-detail");
+            if (titleEl && title) titleEl.textContent = title;
+            if (detailEl && detail) detailEl.textContent = detail;
+            ["export-resume", "export-pause", "export-stop", "export-random"].forEach(function (id) {
+              var btn = document.getElementById(id);
+              if (btn) btn.disabled = !!active;
+            });
+            document.querySelectorAll(".export-file").forEach(function (btn) {
+              btn.disabled = !!active;
+            });
+          }
+          window.setExportPending = setExportPending;
           async function putTrigger(body) {
+            var pending = exportPendingMessage(body.command, body);
+            setExportPending(true, pending.title, pending.detail);
+            try {
             setStatus("Sending trigger…");
             if (body.command === "start_export" && body.displayName && window.updateExportSourceLine) {
               window.updateExportSourceLine("running", body.displayName);
@@ -1896,6 +1961,9 @@ enum ExportLANServer {
               } catch (e) {}
             }
             setStatus("Trigger sent — check phone app (foreground).", false);
+            } finally {
+              setExportPending(false);
+            }
           }
           async function loadPCloud() {
             document.getElementById("pcloud-path").textContent = pcloudPath;

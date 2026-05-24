@@ -13,6 +13,8 @@ final class AppSession: ObservableObject {
     /// Created on first export (lazy init for export stack).
     private lazy var exportCoordinator = ExportCoordinator()
     @Published private(set) var activeExportItem: WebDAVItem?
+    /// Bumped on each new export start / cancel so stale async unwinds cannot clobber state.
+    private var exportGeneration = 0
 
     init() {
         credentials = credentialStore.load()
@@ -143,6 +145,9 @@ final class AppSession: ObservableObject {
         }
         guard !exportCoordinator.isBusy else { throw ExportError.stillStopping }
 
+        exportGeneration += 1
+        let generation = exportGeneration
+
         userRequestedExportCancel = false
         userRequestedExportPause = false
         exportCoordinator.userRequestedCancel = false
@@ -158,6 +163,7 @@ final class AppSession: ObservableObject {
         isExportRunning = true
         ExportAutoLockCoordinator.exportDidStart()
         defer {
+            guard generation == exportGeneration else { return }
             ExportAutoLockCoordinator.exportDidEnd()
             isExportRunning = false
             activeExportItem = nil
@@ -187,11 +193,18 @@ final class AppSession: ObservableObject {
                 )
             }
             ResumeStore.shared.pinCompletedExportIfMediaOnDisk(for: item)
-            LANExportSourceDisplay.setFinished(item.name)
+            if generation == exportGeneration {
+                LANExportSourceDisplay.setFinished(item.name)
+            }
         } catch let error {
+            guard generation == exportGeneration else { throw error }
             if userRequestedExportPause {
                 LANExportSourceDisplay.setPaused(item.name)
             } else if userRequestedExportCancel {
+                LANExportSourceDisplay.clearActive()
+            } else if ResumeStore.shared.exportWasInterrupted(for: item) {
+                LANExportSourceDisplay.setPaused(item.name)
+            } else {
                 LANExportSourceDisplay.clearActive()
             }
             if userRequestedExportCancel {
@@ -204,6 +217,7 @@ final class AppSession: ObservableObject {
 
     /// Stop export and clear paused state (removes published segment files).
     func cancelExport() {
+        exportGeneration += 1
         userRequestedExportCancel = true
         userRequestedExportPause = false
         exportCoordinator.userRequestedCancel = true
@@ -243,6 +257,7 @@ final class AppSession: ObservableObject {
         if isExportRunning {
             cancelExport()
         } else if exportCoordinator.isBusy {
+            exportGeneration += 1
             userRequestedExportCancel = true
             userRequestedExportPause = false
             exportCoordinator.userRequestedCancel = true

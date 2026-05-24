@@ -87,6 +87,7 @@ enum LANExportSourceDisplay {
 
     static func resolve() -> (phase: String, displayName: String)? {
         let defaults = UserDefaults.standard
+        // Authoritative running flag — set by AppSession.startExport before coordinator work begins.
         if defaults.bool(forKey: runningKey),
            let name = defaults.string(forKey: activeNameKey),
            !name.isEmpty {
@@ -98,6 +99,7 @@ enum LANExportSourceDisplay {
            !name.isEmpty {
             return ("paused", name)
         }
+        // exportInProgress in ResumeStore means paused/checkpointed — not actively exporting.
         if let paused = ResumeStore.mostRecentPausedExport() {
             return ("paused", paused.displayName)
         }
