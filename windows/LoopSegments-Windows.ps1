@@ -120,36 +120,84 @@ function Resolve-LoopSegmentsPath {
     )
 }
 
+function Get-DefaultRcloneConfigPath {
+    Join-Path $env:APPDATA 'rclone\rclone.conf'
+}
+
+function Get-StandardRcloneConfigCandidatePaths {
+    @(
+        (Get-DefaultRcloneConfigPath)
+        (Join-Path $env:LOCALAPPDATA 'rclone\rclone.conf')
+        (Join-Path $env:USERPROFILE '.config\rclone\rclone.conf')
+    )
+}
+
+function Test-IsStandardRcloneConfigPath {
+    param([string] $Path)
+    $resolved = Resolve-LoopSegmentsPath $Path
+    if ([string]::IsNullOrWhiteSpace($resolved)) { return $false }
+    foreach ($candidate in Get-StandardRcloneConfigCandidatePaths) {
+        if ($resolved -eq (Resolve-LoopSegmentsPath $candidate)) { return $true }
+    }
+    return $false
+}
+
+function Ensure-RcloneConfigFile {
+    param([string] $ConfigPath)
+    $path = Resolve-LoopSegmentsPath $ConfigPath
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        throw 'Ensure-RcloneConfigFile: ConfigPath is required.'
+    }
+    if (Test-Path -LiteralPath $path) { return $path }
+    $configDir = Split-Path -Parent $path
+    if (-not [string]::IsNullOrWhiteSpace($configDir) -and -not (Test-Path -LiteralPath $configDir)) {
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    }
+    New-Item -ItemType File -Path $path -Force | Out-Null
+    Write-Verbose "Created blank rclone config: $path"
+    return $path
+}
+
 function Find-RcloneConfigPath {
     $settings = Get-LoopSegmentsWindowsSettings
     $override = Resolve-LoopSegmentsPath $settings.rcloneConfigPath
     if (-not [string]::IsNullOrWhiteSpace($override)) {
         if (Test-Path -LiteralPath $override) { return $override }
-        throw "rcloneConfigPath not found: $override (edit loop-segments-windows.json)"
+        if (Test-IsStandardRcloneConfigPath $override) {
+            return (Ensure-RcloneConfigFile -ConfigPath $override)
+        }
+        throw @"
+rcloneConfigPath not found: $override
+
+  Set rcloneConfigPath to "" in loop-segments-windows.json for auto (%APPDATA%\rclone\rclone.conf), or create that file, or fix the path if this json was copied from another PC.
+"@
     }
     if (-not [string]::IsNullOrWhiteSpace($env:RCLONE_CONFIG)) {
         $envPath = Resolve-LoopSegmentsPath $env:RCLONE_CONFIG
         if (Test-Path -LiteralPath $envPath) { return $envPath }
+        if (Test-IsStandardRcloneConfigPath $envPath) {
+            return (Ensure-RcloneConfigFile -ConfigPath $envPath)
+        }
     }
     $rcloneExe = Find-RcloneExecutable
     if ($rcloneExe) {
         try {
             $fromRclone = (& $rcloneExe config file 2>$null | Out-String).Trim()
-            if (-not [string]::IsNullOrWhiteSpace($fromRclone) -and (Test-Path -LiteralPath $fromRclone)) {
-                return $fromRclone
+            if (-not [string]::IsNullOrWhiteSpace($fromRclone)) {
+                $resolved = Resolve-LoopSegmentsPath $fromRclone
+                if (Test-Path -LiteralPath $resolved) { return $resolved }
+                if (Test-IsStandardRcloneConfigPath $resolved) {
+                    return (Ensure-RcloneConfigFile -ConfigPath $resolved)
+                }
             }
         } catch {
             # ignore
         }
     }
-    foreach ($candidate in @(
-            (Join-Path $env:APPDATA 'rclone\rclone.conf'),
-            (Join-Path $env:LOCALAPPDATA 'rclone\rclone.conf'),
-            (Join-Path $env:USERPROFILE '.config\rclone\rclone.conf')
-        )) {
+    foreach ($candidate in Get-StandardRcloneConfigCandidatePaths) {
         if (Test-Path -LiteralPath $candidate) { return $candidate }
     }
-    return (Join-Path $env:APPDATA 'rclone\rclone.conf')
+    return (Get-DefaultRcloneConfigPath)
 }
 
 function Find-RcloneExecutable {
@@ -169,12 +217,12 @@ function Get-RcloneInvocation {
     if (-not $exe) {
         throw 'rclone not found on PATH. Set rcloneExe in loop-segments-windows.json or install https://rclone.org/install/'
     }
-    $args = @()
-    $configPath = Find-RcloneConfigPath
-    if (Test-Path -LiteralPath $configPath) {
-        $args += '--config', $configPath
+    $configPath = Ensure-RcloneConfigFile -ConfigPath (Find-RcloneConfigPath)
+    return @{
+        Exe        = $exe
+        ConfigPath = $configPath
+        PrefixArgs = @('--config', $configPath)
     }
-    return @{ Exe = $exe; ConfigPath = $configPath; PrefixArgs = $args }
 }
 
 function Invoke-LoopSegmentsRclone {
@@ -234,6 +282,61 @@ function Get-LoopSegmentsLanPort {
     $port = (Get-LoopSegmentsWindowsSettings).lanPort
     if ($null -eq $port -or [int]$port -le 0) { return 8765 }
     return [int]$port
+}
+
+function Get-LoopSegmentsPhoneLanBaseUrl {
+    param(
+        [string] $PhoneHostOverride = '',
+        [int] $PortOverride = 0
+    )
+    $hostIp = Get-LoopSegmentsLANHost -Override $PhoneHostOverride
+    $portNum = Get-LoopSegmentsLanPort -Override $PortOverride
+    return "http://${hostIp}:${portNum}"
+}
+
+function Get-LoopSegmentsPhoneWebDavAuthHeader {
+    $creds = Get-LoopSegmentsWebDAVCredentials
+    $pair = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($creds.User):$($creds.Password)"))
+    return @{ Authorization = "Basic $pair" }
+}
+
+function Invoke-LoopSegmentsPhoneWebDavMkcol {
+    param(
+        [string] $Uri,
+        [hashtable] $Headers
+    )
+    try {
+        Invoke-WebRequest -Method MKCOL -Uri $Uri -Headers $Headers -UseBasicParsing | Out-Null
+    } catch {
+        $resp = $_.Exception.Response
+        if ($null -eq $resp) { throw }
+        $code = [int]$resp.StatusCode
+        if ($code -eq 405 -or $code -eq 409) { return }
+        throw
+    }
+}
+
+function Invoke-LoopSegmentsPhoneWebDavPutFile {
+    param(
+        [string] $Uri,
+        [string] $LocalPath,
+        [hashtable] $Headers,
+        [int] $MaxBytes = 2MB
+    )
+    $info = Get-Item -LiteralPath $LocalPath
+    if ($info.Length -gt $MaxBytes) {
+        throw "File exceeds phone LAN PUT limit ($MaxBytes bytes): $LocalPath ($($info.Length) bytes)"
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($LocalPath)
+    $contentType = switch ($info.Extension.ToLowerInvariant()) {
+        '.json' { 'application/json; charset=utf-8' }
+        '.ps1' { 'text/plain; charset=utf-8' }
+        '.sh' { 'text/x-shellscript; charset=utf-8' }
+        '.bat' { 'text/plain; charset=utf-8' }
+        '.cmd' { 'text/plain; charset=utf-8' }
+        default { 'application/octet-stream' }
+    }
+    Invoke-WebRequest -Method PUT -Uri $Uri -Headers $Headers -Body $bytes -ContentType $contentType -UseBasicParsing | Out-Null
 }
 
 function Test-LoopSegmentsWinFspInstalled {

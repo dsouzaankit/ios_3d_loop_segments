@@ -81,14 +81,21 @@ if ([string]::IsNullOrWhiteSpace($settings.phoneLanHost)) {
 
 if ([string]::IsNullOrWhiteSpace($settings.rcloneConfigPath)) {
     try {
-        $detected = Find-RcloneConfigPath
+        $detected = Ensure-RcloneConfigFile -ConfigPath (Find-RcloneConfigPath)
+        $defaultPath = Get-DefaultRcloneConfigPath
         Write-Host "Detected rclone.conf: $detected"
-        Write-Host 'Press Enter to use it, or type another full path:'
+        Write-Host 'Press Enter for auto (empty in json, portable across PCs), or type another full path:'
         $entered = (Read-Host).Trim()
         if (-not [string]::IsNullOrWhiteSpace($entered)) {
+            $custom = Resolve-LoopSegmentsPath $entered
+            if (-not (Test-Path -LiteralPath $custom) -and (Test-IsStandardRcloneConfigPath $custom)) {
+                $null = Ensure-RcloneConfigFile -ConfigPath $custom
+            }
             $settings.rcloneConfigPath = $entered
-        } else {
+        } elseif ((Resolve-LoopSegmentsPath $detected) -ne (Resolve-LoopSegmentsPath $defaultPath)) {
             $settings.rcloneConfigPath = $detected
+        } else {
+            $settings.rcloneConfigPath = ''
         }
     } catch {
         Write-Warning $_.Exception.Message

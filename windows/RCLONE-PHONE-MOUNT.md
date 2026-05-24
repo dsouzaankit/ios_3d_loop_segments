@@ -20,11 +20,14 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json
 
 The mount script writes/updates **`[loopsegments]`** in your **`rclone.conf`** (same file as Koofr if you use one). Settings: **`loop-segments-windows.json`** — see **[README.md](README.md)**.
 
-Mounted paths (read-only):
+**`L:` is read/write by default.** Copy a bootstrap **`.ps1`** to **`L:\pcld_ios_media\`**, then run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per file. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** = DLNA-only. Without a mount, see **`archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
 
-- **`L:\pcld_ios_media\loop\op_00.mp4`** / **`op_01.mp4`**
-- **`L:\pcld_ios_media\_working.mp4`** (sparse in-progress)
-- **`L:\pcld_ios_media\scripts\`** (PC-created via WebDAV PUT when enabled)
+Mounted paths:
+
+- **`L:\pcld_ios_media\*.ps1`** — bootstrap sync scripts (writable)
+- **`L:\pcld_ios_media\scripts\`** — nested scripts/tools (writable)
+- **`L:\pcld_ios_media\loop\`** — read-only on phone
+- **`L:\pcld_ios_media\_working.mp4`** — read-only on phone
 
 Use a different **`mountDriveLetter`** if **`L:`** is already Koofr.
 

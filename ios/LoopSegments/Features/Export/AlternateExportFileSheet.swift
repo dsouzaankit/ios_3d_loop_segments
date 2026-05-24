@@ -11,7 +11,8 @@ struct ExportSwitchTarget: Hashable, Identifiable {
 struct AlternateExportFileSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: AppSession
-    let currentItem: WebDAVItem
+    let currentItem: WebDAVItem?
+    let folderPath: String?
     let source: AlternateExportFileSource
     let onPick: (WebDAVItem) -> Void
 
@@ -47,14 +48,14 @@ struct AlternateExportFileSheet: View {
                                     .lineLimit(2)
                                     .multilineTextAlignment(.leading)
                                 Spacer(minLength: 8)
-                                if video.fileKey == currentItem.fileKey {
+                                if let currentItem, video.fileKey == currentItem.fileKey {
                                     Text("current")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                             }
                         }
-                        .disabled(video.fileKey == currentItem.fileKey)
+                        .disabled(currentItem?.fileKey == video.fileKey)
                     }
                 }
             }
@@ -65,7 +66,7 @@ struct AlternateExportFileSheet: View {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .task(id: source) {
+            .task(id: "\(source.rawValue)-\(folderPath ?? "")-\(currentItem?.fileKey ?? "")") {
                 await loadVideos()
             }
         }
@@ -80,11 +81,35 @@ struct AlternateExportFileSheet: View {
             return
         }
         do {
-            videos = try await AlternateExportFilePicker.collectCandidates(
-                source: source,
-                currentItem: currentItem,
-                credentials: credentials
-            )
+            switch source {
+            case .sameFolder:
+                if let folderPath {
+                    videos = try await AlternateExportFilePicker.listVideos(
+                        in: folderPath,
+                        credentials: credentials
+                    )
+                } else if let currentItem {
+                    videos = try await AlternateExportFilePicker.collectCandidates(
+                        source: source,
+                        currentItem: currentItem,
+                        credentials: credentials
+                    )
+                } else {
+                    errorMessage = AlternateExportFilePicker.PickerError.noParentFolder.errorDescription
+                    videos = []
+                }
+            case .bookmarks:
+                guard let currentItem else {
+                    errorMessage = "Browse to a folder or tap a video first."
+                    videos = []
+                    return
+                }
+                videos = try await AlternateExportFilePicker.collectCandidates(
+                    source: source,
+                    currentItem: currentItem,
+                    credentials: credentials
+                )
+            }
         } catch {
             errorMessage = error.localizedDescription
             videos = []

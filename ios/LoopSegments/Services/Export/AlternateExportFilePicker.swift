@@ -109,12 +109,20 @@ enum AlternateExportFilePicker {
             currentItem: currentItem,
             credentials: credentials
         )
-        guard !candidates.isEmpty else {
-            if source == .bookmarks {
-                throw PickerError.noVideos
-            }
-            throw PickerError.noVideos
-        }
+        return try pickRandom(excluding: fileKey, from: candidates)
+    }
+
+    static func pickRandom(
+        excluding fileKey: String?,
+        folderPath: String,
+        credentials: WebDAVCredentials
+    ) async throws -> WebDAVItem {
+        let candidates = try await listVideos(in: folderPath, credentials: credentials)
+        return try pickRandom(excluding: fileKey, from: candidates)
+    }
+
+    private static func pickRandom(excluding fileKey: String?, from candidates: [WebDAVItem]) throws -> WebDAVItem {
+        guard !candidates.isEmpty else { throw PickerError.noVideos }
         guard let picked = randomVideo(excluding: fileKey, from: candidates) else {
             throw PickerError.noOtherVideos
         }

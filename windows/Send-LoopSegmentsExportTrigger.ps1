@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  PUT export_trigger.json on the phone LAN server (Export screen must be open with triggers enabled).
+  PUT export_trigger.json on the phone LAN server (phone app in foreground; or use the HTTP LAN page).
 
 .PARAMETER PhoneHost
   iPhone LAN IP (or use loop-segments-windows.json).
@@ -19,7 +19,7 @@
   Start position in ms (default 0).
 
 .PARAMETER Pool
-  same_folder | bookmarks — for start_export_random.
+  same_folder | bookmarks - for start_export_random.
 
 .EXAMPLE
   .\Send-LoopSegmentsExportTrigger.ps1 -PhoneHost 10.0.0.42 -Command start_export `
@@ -44,11 +44,8 @@ param(
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\LoopSegments-Windows.ps1"
 
-$hostIp = Get-LoopSegmentsLANHost -Override $PhoneHost
-$portNum = Get-LoopSegmentsLanPort -Override $Port
-$creds = Get-LoopSegmentsWebDAVCredentials
-$pair = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($creds.User):$($creds.Password)"))
-$headers = @{ Authorization = "Basic $pair" }
+$baseUrl = Get-LoopSegmentsPhoneLanBaseUrl -PhoneHostOverride $PhoneHost -PortOverride $Port
+$headers = Get-LoopSegmentsPhoneWebDavAuthHeader
 
 $body = [ordered]@{
     version = 1
@@ -68,8 +65,8 @@ if ($Command -eq 'start_export_random' -and -not [string]::IsNullOrWhiteSpace($P
     $body.seekMs = $SeekMs
 }
 
-$triggerUrl = "http://${hostIp}:${portNum}/pcld_ios_media/scripts/export_trigger.json"
-$ackUrl = "http://${hostIp}:${portNum}/pcld_ios_media/scripts/export_trigger.ack.json"
+$triggerUrl = "$baseUrl/pcld_ios_media/scripts/export_trigger.json"
+$ackUrl = "$baseUrl/pcld_ios_media/scripts/export_trigger.ack.json"
 $json = $body | ConvertTo-Json -Compress
 
 Write-Host "PUT $triggerUrl"
@@ -81,8 +78,5 @@ try {
     $ack = Invoke-WebRequest -Uri $ackUrl -Headers $headers -UseBasicParsing
     Write-Host $ack.Content
 } catch {
-    Write-Warning "No ack yet — is Export open on the phone with triggers enabled?"
+    Write-Warning "No ack yet - is Export open on the phone with triggers enabled?"
 }
-
-Write-Host ''
-Write-Host "LAN tree: http://${hostIp}:${portNum}/lan_tree.json"

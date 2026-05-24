@@ -12,10 +12,14 @@ struct RootView: View {
                 AuthView()
             }
         }
+        .onAppear {
+            LANExportTriggerRunner.setAppActive(true, session: session)
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
             }
+            LANExportTriggerRunner.setAppActive(phase == .active, session: session)
         }
     }
 }

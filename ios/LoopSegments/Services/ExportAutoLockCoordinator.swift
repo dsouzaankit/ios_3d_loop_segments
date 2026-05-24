@@ -9,6 +9,7 @@ enum ExportAutoLockCoordinator {
     static let autoLockSettingsURLString = "prefs:root=DISPLAY&path=AUTOLOCK"
 
     private static var exportPageVisible = false
+    private static var appIsActiveState = false
     private static var exportRunning = false
 
     static func setExportPageVisible(_ visible: Bool) {
@@ -16,7 +17,12 @@ enum ExportAutoLockCoordinator {
         applyIdleTimer()
     }
 
+    static func setAppActive(_ active: Bool) {
+        appIsActiveState = active
+    }
+
     static var isExportPageVisible: Bool { exportPageVisible }
+    static var appIsActive: Bool { appIsActiveState }
 
     static func exportDidStart() {
         exportRunning = true

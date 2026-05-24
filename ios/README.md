@@ -70,12 +70,12 @@ Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authoriz
   -Body 'Write-Host "from PC"' -ContentType "text/plain"
 ```
 
-**LAN export control (phone Export screen open):** enable **Accept export triggers from PC** on the Export page. PC **PUT** `pcld_ios_media/scripts/export_trigger.json` (auth required). Phone polls every ~2s, runs the command, writes **`export_trigger.ack.json`**, deletes the trigger. **`GET /lan_tree.json`** mirrors the WebDAV file tree (same as the in-app listing). Commands:
+**LAN export control:** open **`http://<phone-ip>:8765/`** in a PC browser — the page lists pCloud folders (via the phone’s sign-in), **Export 0:00** per file, random/pause/stop buttons, and the on-phone WebDAV tree. Triggers use WebDAV **PUT** `pcld_ios_media/scripts/export_trigger.json` (Basic auth **`admin` / `iosadmin`**). Phone polls every ~2s while the **app is in foreground**. PowerShell: [`Send-LoopSegmentsExportTrigger.ps1`](../windows/Send-LoopSegmentsExportTrigger.ps1). Commands:
 
 | `command` | Fields | Effect |
 |-----------|--------|--------|
-| `start_export` | `href`, `displayName`, optional `seekMs`, optional `id` | Start pCloud export (Export page must be open) |
-| `start_export_random` | optional `pool`: `same_folder` / `bookmarks`, optional `seekMs` | Random video from pool |
+| `start_export` | `href`, `displayName`, optional `seekMs`, optional `id` | Start pCloud export (app in foreground) |
+| `start_export_random` | optional `pool`: `same_folder` / `bookmarks`, optional `folderPath` (pCloud listing path), optional `seekMs` | Random video from pool |
 | `pause_export` | — | Pause current export |
 | `stop_export` | — | Stop current export |
 

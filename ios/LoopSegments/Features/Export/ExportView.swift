@@ -32,12 +32,6 @@ struct ExportView: View {
     @State private var showAlternateFilePicker = false
     @State private var switchExportTarget: ExportSwitchTarget?
     @State private var didAutoStartExport = false
-    @State private var lanExportTriggerEnabled = LANExportTriggerControl.isEnabled
-    @State private var lanTreeLines: [LANMediaTreeLine] = []
-    @State private var lanTreeEcho = ""
-    @State private var lanTriggerNote = ""
-    @State private var copiedLANTree = false
-    @State private var showFullLANTree = false
 
     var body: some View {
         Form {
@@ -172,8 +166,10 @@ struct ExportView: View {
                 )
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Text("HTTP LAN page (`http://<phone-ip>:8765/`) can browse pCloud and trigger export — phone app must stay open in foreground.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 alternateExportSection
-                lanWebDAVBrowserSection
             }
             Section("Network (pCloud)") {
                 Text(network.interfaceLabel)
@@ -268,6 +264,7 @@ struct ExportView: View {
         .sheet(isPresented: $showAlternateFilePicker) {
             AlternateExportFileSheet(
                 currentItem: item,
+                folderPath: nil,
                 source: alternateExportSource
             ) { picked in
                 beginExportOnDifferentFile(picked, autoStart: true, seekMs: 0)
@@ -280,18 +277,6 @@ struct ExportView: View {
                 Task { await requestPhotosAccess() }
             }
             triggerAutoStartExportIfNeeded()
-        }
-        .task {
-            refreshLANTreeSnapshot()
-            while !Task.isCancelled {
-                if lanExportTriggerEnabled, ExportLANServer.isEnabled {
-                    await pollLANExportTrigger()
-                }
-                if session.isExportRunning {
-                    refreshLANTreeSnapshot()
-                }
-                try? await Task.sleep(for: .seconds(2))
-            }
         }
         .onDisappear {
             ExportAutoLockCoordinator.setExportPageVisible(false)
@@ -400,70 +385,6 @@ struct ExportView: View {
         )
         .font(.footnote)
         .foregroundStyle(.secondary)
-    }
-
-    @ViewBuilder
-    private var lanWebDAVBrowserSection: some View {
-        if ExportLANServer.isEnabled {
-            Toggle("Accept export triggers from PC (WebDAV)", isOn: $lanExportTriggerEnabled)
-                .onChange(of: lanExportTriggerEnabled) { _, enabled in
-                    LANExportTriggerControl.isEnabled = enabled
-                }
-
-            if let ack = LANExportTriggerControl.readAckSummary() {
-                Text("Last trigger ack: \(ack)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if !lanTriggerNote.isEmpty {
-                Text(lanTriggerNote)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            Text("PC: PUT `\(LANExportTriggerControl.triggerRelativePath)` · GET `lan_tree.json` · read `export_trigger.ack.json`")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-
-            HStack {
-                Button("Refresh listing") { refreshLANTreeSnapshot() }
-                Button(copiedLANTree ? "Copied" : "Copy listing") {
-                    UIPasteboard.general.string = lanTreeEcho
-                    copiedLANTree = true
-                }
-            }
-
-            Toggle("Show full tree", isOn: $showFullLANTree)
-
-            if showFullLANTree {
-                ScrollView {
-                    Text(lanTreeEcho)
-                        .font(.system(.caption2, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(maxHeight: 220)
-            } else {
-                let preview = Array(lanTreeLines.prefix(24))
-                if preview.isEmpty {
-                    Text("No files on disk yet — start export or create pcld_ios_media/scripts/ via PC WebDAV.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(preview) { line in
-                        Text(line.indentLabel)
-                            .font(.system(.caption, design: .monospaced))
-                            .lineLimit(1)
-                    }
-                    if lanTreeLines.count > preview.count {
-                        Text("… \(lanTreeLines.count - preview.count) more — Show full tree")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
     }
 
     @ViewBuilder
@@ -784,38 +705,6 @@ struct ExportView: View {
             return
         }
         switchExportTarget = ExportSwitchTarget(item: picked, autoStart: autoStart, seekMs: seek)
-    }
-
-    private func refreshLANTreeSnapshot() {
-        lanTreeLines = LANMediaTree.snapshotLines()
-        lanTreeEcho = LANMediaTree.echoText()
-    }
-
-    private func pollLANExportTrigger() async {
-        let note = await LANExportTriggerControl.pollAndConsume(
-            credentials: session.credentials,
-            currentItem: item,
-            isExportRunning: session.isExportRunning,
-            onStartExport: { picked, seek in
-                beginExportOnDifferentFile(picked, autoStart: true, seekMs: seek)
-            },
-            onPause: {
-                session.pauseExport()
-                exportTask?.cancel()
-                exportTask = nil
-                status = "Paused via LAN trigger"
-            },
-            onStop: {
-                session.cancelExport()
-                exportTask?.cancel()
-                exportTask = nil
-                status = "Stopped via LAN trigger"
-            }
-        )
-        if let note {
-            lanTriggerNote = note
-            status = note
-        }
     }
 
     private func exportRandomFile() async {

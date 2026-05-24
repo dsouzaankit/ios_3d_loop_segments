@@ -16,6 +16,11 @@
 .PARAMETER Remove
   Stop rclone processes that mount the configured drive letter.
 
+.PARAMETER ReadOnly
+  Mount with rclone --read-only (safer for DLNA-only; blocks Explorer copy to L:).
+  Default mount is read/write where the phone allows (pcld_ios_media/scripts/ and subfolders).
+  loop/, _working.mp4, and export segments stay read-only on the phone even when L: is writable.
+
 .EXAMPLE
   Copy-Item loop-segments-windows.example.json loop-segments-windows.json
   .\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.1.42
@@ -36,7 +41,8 @@ param(
     [string] $WebDAVPassword = '',
     [switch] $Remove,
     [switch] $RemovePort80Proxy,
-    [switch] $TestOnly
+    [switch] $TestOnly,
+    [switch] $ReadOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,10 +69,6 @@ function Ensure-RcloneRemote {
     }
 
     $configPath = (Get-RcloneInvocation).ConfigPath
-    $configDir = Split-Path -Parent $configPath
-    if (-not (Test-Path -LiteralPath $configDir)) {
-        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-    }
 
     $block = @"
 [$Name]
@@ -278,7 +280,11 @@ if (Test-Path -LiteralPath $driveRoot) {
 
 $settings = Get-LoopSegmentsWindowsSettings
 Write-Host ''
-Write-Host "Mounting ${mountLabel} on $driveRoot (read-only). Ctrl+C stops the mount."
+$mountMode = if ($ReadOnly) { 'read-only' } else { 'read/write (phone blocks loop/, _working*, etc.)' }
+Write-Host "Mounting ${mountLabel} on $driveRoot ($mountMode). Ctrl+C stops the mount."
+if (-not $ReadOnly) {
+    Write-Host "Bootstrap: copy your .ps1 to ${driveRoot}pcld_ios_media\ then run it (syncs scripts/ subfolders; ≤ 2 MB per file)."
+}
 Write-Host "DLNA / Explorer: ${driveRoot}pcld_ios_media\loop\ (op_00|op_01) or ${driveRoot}pcld_ios_media\ (_working.mp4)"
 if (-not [string]::IsNullOrWhiteSpace($settings.dlnaFolder)) {
     Write-Host "Configured DLNA folder: $($settings.dlnaFolder)"
@@ -286,11 +292,16 @@ if (-not [string]::IsNullOrWhiteSpace($settings.dlnaFolder)) {
 }
 Write-Host ''
 
-Invoke-LoopSegmentsRclone mount "${remote}:" $driveRoot `
-    --read-only `
-    --vfs-cache-mode full `
-    --dir-cache-time 5s `
-    --poll-interval 10s `
-    --attr-timeout 5s `
-    --volname 'LoopSegments'
+$mountArgs = @(
+    'mount', "${remote}:", $driveRoot,
+    '--vfs-cache-mode', 'full',
+    '--dir-cache-time', '5s',
+    '--poll-interval', '10s',
+    '--attr-timeout', '5s',
+    '--volname', 'LoopSegments'
+)
+if ($ReadOnly) {
+    $mountArgs += '--read-only'
+}
+Invoke-LoopSegmentsRclone @mountArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

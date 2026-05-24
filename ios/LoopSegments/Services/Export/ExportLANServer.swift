@@ -522,11 +522,16 @@ enum ExportLANServer {
             sendStatusJSON(connection, done: done)
             return
         }
-        if normalized == "lan_tree.json" {
-            sendLANTreeJSON(connection, done: done)
+        let (resourcePath, query) = splitPathAndQuery(normalized)
+        if resourcePath == "pcloud_list.json" {
+            sendPCloudListJSON(folderPath: query["path"] ?? "/", connection: connection, done: done)
             return
         }
-        guard let fileURL = resolveExportFile(relativePath: normalized) else {
+        if resourcePath == "local_tree.json" {
+            sendLocalTreeJSON(relativeDir: query["dir"] ?? "", connection: connection, done: done)
+            return
+        }
+        guard let fileURL = resolveExportFile(relativePath: resourcePath) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
         }
@@ -1405,6 +1410,13 @@ enum ExportLANServer {
             body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
             code { font-size: 0.9em; }
             ul { padding-left: 1.25rem; }
+            .panel { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+            .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
+            button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; }
+            #pcloud-list, #local-list { list-style: none; padding-left: 0; }
+            #pcloud-list li, #local-list li { margin: 0.25rem 0; }
+            .muted { color: #666; font-size: 0.9em; }
+            #trigger-status { min-height: 1.2em; }
             </style>
             </head><body>
             <h1>Loop Segments — LAN export</h1>
@@ -1412,6 +1424,8 @@ enum ExportLANServer {
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             \(playbackStatusBlock)
+            \(htmlExportControlPanel())
+            <h2>On phone (playback)</h2>
             <ul>
             \(fileList)
             </ul>
@@ -1425,6 +1439,231 @@ enum ExportLANServer {
             body: Data(html.utf8),
             done: done
         )
+    }
+
+    private static func splitPathAndQuery(_ normalized: String) -> (path: String, query: [String: String]) {
+        let parts = normalized.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let path = String(parts[0])
+        guard parts.count > 1 else { return (path, [:]) }
+        var query: [String: String] = [:]
+        for pair in parts[1].split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            guard kv.count == 2 else { continue }
+            let key = String(kv[0]).removingPercentEncoding ?? String(kv[0])
+            let value = String(kv[1]).removingPercentEncoding ?? String(kv[1])
+            query[key] = value
+        }
+        return (path, query)
+    }
+
+    private static func sendJSONPayload(
+        _ payload: [String: Any],
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
+            return
+        }
+        sendResponse(connection: connection, status: 200, contentType: "application/json", body: data, done: done)
+    }
+
+    private static func sendPCloudListJSON(
+        folderPath: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        Task { @MainActor in
+            let payload = await LANHTTPExportAPI.pcloudListPayload(folderPath: folderPath)
+            sendJSONPayload(payload, connection: connection, done: done)
+        }
+    }
+
+    private static func sendLocalTreeJSON(
+        relativeDir: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        let payload = LANHTTPExportAPI.localTreePayload(relativeDir: relativeDir)
+        sendJSONPayload(payload, connection: connection, done: done)
+    }
+
+    private static func htmlExportControlPanel() -> String {
+        let user = htmlEscape(lanWebDAVUsername)
+        let pass = htmlEscape(lanWebDAVPassword)
+        return """
+        <div class="panel">
+        <h2>Start export (pCloud → phone)</h2>
+        <p class="muted">Phone app must be <strong>open and in foreground</strong> on Wi‑Fi. Uses pCloud sign-in on the phone — not your PC pCloud login.</p>
+        <div class="row">
+          <button type="button" id="pcloud-up" disabled>↑ Up</button>
+          <code id="pcloud-path">/</code>
+          <button type="button" id="pcloud-refresh">Refresh</button>
+        </div>
+        <ul id="pcloud-list"><li class="muted">Loading pCloud…</li></ul>
+        <div class="row">
+          <button type="button" id="export-random">Export random in folder</button>
+          <button type="button" id="export-pause">Pause export</button>
+          <button type="button" id="export-stop">Stop export</button>
+        </div>
+        <p id="trigger-status" class="muted"></p>
+        <h3>Phone disk (WebDAV tree)</h3>
+        <div class="row">
+          <button type="button" id="local-up" disabled>↑ Up</button>
+          <code id="local-path"></code>
+          <button type="button" id="local-refresh">Refresh</button>
+        </div>
+        <ul id="local-list"><li class="muted">Loading…</li></ul>
+        </div>
+        <script>
+        (function () {
+          var AUTH = "Basic " + btoa("\(user):\(pass)");
+          var triggerUrl = "/\(LANExportTriggerControl.triggerRelativePath)";
+          var ackUrl = "/\(LANExportTriggerControl.ackRelativePath)";
+          var pcloudPath = "/";
+          var localDir = "";
+          function esc(s) {
+            return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+          }
+          function uuid() {
+            return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+              var r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+              return v.toString(16);
+            });
+          }
+          function setStatus(msg, isErr) {
+            var el = document.getElementById("trigger-status");
+            el.textContent = msg || "";
+            el.style.color = isErr ? "#b00020" : "#333";
+          }
+          async function putTrigger(body) {
+            setStatus("Sending trigger…");
+            var r = await fetch(triggerUrl, {
+              method: "PUT",
+              headers: { "Authorization": AUTH, "Content-Type": "application/json" },
+              body: JSON.stringify(body)
+            });
+            if (!r.ok) throw new Error("PUT " + r.status);
+            for (var i = 0; i < 8; i++) {
+              await new Promise(function (res) { setTimeout(res, 500); });
+              try {
+                var ack = await fetch(ackUrl, { headers: { "Authorization": AUTH } });
+                if (ack.ok) {
+                  var j = await ack.json();
+                  setStatus((j.status || "?") + ": " + (j.message || ""), j.status === "rejected");
+                  return;
+                }
+              } catch (e) {}
+            }
+            setStatus("Trigger sent — check phone app (foreground).", false);
+          }
+          async function loadPCloud() {
+            document.getElementById("pcloud-path").textContent = pcloudPath;
+            document.getElementById("pcloud-up").disabled = pcloudPath === "/";
+            var list = document.getElementById("pcloud-list");
+            list.innerHTML = "<li class=\\"muted\\">Loading…</li>";
+            try {
+              var r = await fetch("/pcloud_list.json?path=" + encodeURIComponent(pcloudPath));
+              var j = await r.json();
+              if (j.error) { list.innerHTML = "<li class=\\"muted\\">" + esc(j.error) + "</li>"; return; }
+              if (!j.entries || !j.entries.length) {
+                list.innerHTML = "<li class=\\"muted\\">(empty folder)</li>";
+                return;
+              }
+              list.innerHTML = j.entries.map(function (e) {
+                if (e.isDirectory) {
+                  return "<li><button type=\\"button\\" class=\\"pcloud-dir\\" data-path=\\"" + esc(e.path) + "\\">📁 " + esc(e.name) + "</button></li>";
+                }
+                if (e.isVideo) {
+                  return "<li>🎬 " + esc(e.name) +
+                    " <button type=\\"button\\" class=\\"export-file\\" data-href=\\"" + esc(e.href) + "\\" data-name=\\"" + esc(e.name) + "\\">Export 0:00</button></li>";
+                }
+                return "";
+              }).join("");
+            } catch (err) {
+              list.innerHTML = "<li class=\\"muted\\">" + esc(err.message || err) + "</li>";
+            }
+          }
+          async function loadLocal() {
+            document.getElementById("local-path").textContent = localDir || "(exports root)";
+            document.getElementById("local-up").disabled = !localDir;
+            var list = document.getElementById("local-list");
+            list.innerHTML = "<li class=\\"muted\\">Loading…</li>";
+            try {
+              var r = await fetch("/local_tree.json?dir=" + encodeURIComponent(localDir));
+              var j = await r.json();
+              if (!j.entries || !j.entries.length) {
+                list.innerHTML = "<li class=\\"muted\\">(empty)</li>";
+                return;
+              }
+              list.innerHTML = j.entries.map(function (e) {
+                var size = e.bytes ? " (" + Math.round(e.bytes / 1024) + " KB)" : "";
+                if (e.isDirectory) {
+                  return "<li><button type=\\"button\\" class=\\"local-dir\\" data-path=\\"" + esc(e.path) + "\\">📁 " + esc(e.name) + "</button></li>";
+                }
+                return "<li>📄 " + esc(e.name) + size + "</li>";
+              }).join("");
+            } catch (err) {
+              list.innerHTML = "<li class=\\"muted\\">" + esc(err.message || err) + "</li>";
+            }
+          }
+          document.getElementById("pcloud-up").onclick = function () {
+            var trimmed = pcloudPath.replace(/\\/$/, "");
+            if (!trimmed || trimmed === "/") { pcloudPath = "/"; loadPCloud(); return; }
+            var parts = trimmed.split("/").filter(Boolean);
+            parts.pop();
+            pcloudPath = parts.length ? "/" + parts.join("/") + "/" : "/";
+            loadPCloud();
+          };
+          document.getElementById("pcloud-refresh").onclick = loadPCloud;
+          document.getElementById("local-up").onclick = function () {
+            if (!localDir) return;
+            var parts = localDir.split("/").filter(Boolean);
+            parts.pop();
+            localDir = parts.join("/");
+            loadLocal();
+          };
+          document.getElementById("local-refresh").onclick = loadLocal;
+          document.getElementById("export-random").onclick = function () {
+            putTrigger({ version: 1, command: "start_export_random", pool: "same_folder", folderPath: pcloudPath, id: uuid(), seekMs: 0 })
+              .catch(function (e) { setStatus(e.message || e, true); });
+          };
+          document.getElementById("export-pause").onclick = function () {
+            putTrigger({ version: 1, command: "pause_export", id: uuid() })
+              .catch(function (e) { setStatus(e.message || e, true); });
+          };
+          document.getElementById("export-stop").onclick = function () {
+            putTrigger({ version: 1, command: "stop_export", id: uuid() })
+              .catch(function (e) { setStatus(e.message || e, true); });
+          };
+          document.getElementById("pcloud-list").onclick = function (ev) {
+            var t = ev.target;
+            if (t.classList.contains("pcloud-dir")) {
+              pcloudPath = t.getAttribute("data-path") || "/";
+              loadPCloud();
+            } else if (t.classList.contains("export-file")) {
+              putTrigger({
+                version: 1,
+                command: "start_export",
+                href: t.getAttribute("data-href"),
+                displayName: t.getAttribute("data-name"),
+                seekMs: 0,
+                id: uuid()
+              }).catch(function (e) { setStatus(e.message || e, true); });
+            }
+          };
+          document.getElementById("local-list").onclick = function (ev) {
+            var t = ev.target;
+            if (t.classList.contains("local-dir")) {
+              localDir = t.getAttribute("data-path") || "";
+              loadLocal();
+            }
+          };
+          loadPCloud();
+          loadLocal();
+        })();
+        </script>
+        """
     }
 
     private static func sendStatusJSON(_ connection: NWConnection, done: @escaping () -> Void) {
@@ -1470,15 +1709,6 @@ enum ExportLANServer {
         if ExportPlaybackState.shared.isLANExportActive {
             payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayload()
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
-            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
-            return
-        }
-        sendResponse(connection: connection, status: 200, contentType: "application/json", body: data, done: done)
-    }
-
-    private static func sendLANTreeJSON(_ connection: NWConnection, done: @escaping () -> Void) {
-        let payload = LANMediaTree.jsonPayload()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return

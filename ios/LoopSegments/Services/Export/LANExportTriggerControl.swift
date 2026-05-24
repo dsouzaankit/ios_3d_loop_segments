@@ -9,7 +9,7 @@ struct LANExportTrigger: Codable {
     }
 
     enum RandomPool: String, Codable {
-        case sameFolder
+        case sameFolder = "same_folder"
         case bookmarks
     }
 
@@ -21,6 +21,8 @@ struct LANExportTrigger: Codable {
     /// Idempotency token — same `id` is not processed twice.
     var id: String?
     var pool: RandomPool?
+    /// pCloud folder listing path for `start_export_random` (same_folder pool).
+    var folderPath: String?
 }
 
 struct LANExportTriggerAck: Codable {
@@ -40,7 +42,7 @@ enum LANExportTriggerControl {
     static var isEnabled: Bool {
         get {
             if UserDefaults.standard.object(forKey: enabledKey) == nil {
-                return false
+                return true
             }
             return UserDefaults.standard.bool(forKey: enabledKey)
         }
@@ -74,7 +76,7 @@ enum LANExportTriggerControl {
         onStop: @escaping () -> Void
     ) async -> String? {
         guard isEnabled else { return nil }
-        guard ExportAutoLockCoordinator.isExportPageVisible else { return nil }
+        guard ExportAutoLockCoordinator.appIsActive else { return nil }
         guard let url = triggerURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
 
         guard let data = try? Data(contentsOf: url) else { return nil }
@@ -153,12 +155,30 @@ enum LANExportTriggerControl {
             }
             let pool = mapPool(trigger.pool)
             do {
-                let picked = try await AlternateExportFilePicker.pickRandom(
-                    excluding: currentItem.fileKey,
-                    source: pool,
-                    currentItem: currentItem,
-                    credentials: credentials
-                )
+                let picked: WebDAVItem
+                if let folderRaw = trigger.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !folderRaw.isEmpty {
+                    let folder = WebDAVURLBuilder.directoryListingPath(folderRaw)
+                    picked = try await AlternateExportFilePicker.pickRandom(
+                        excluding: nil,
+                        folderPath: folder,
+                        credentials: credentials
+                    )
+                } else if pool == .sameFolder, currentItem.isDirectory {
+                    let folder = WebDAVURLBuilder.directoryListingPath(currentItem.href)
+                    picked = try await AlternateExportFilePicker.pickRandom(
+                        excluding: nil,
+                        folderPath: folder,
+                        credentials: credentials
+                    )
+                } else {
+                    picked = try await AlternateExportFilePicker.pickRandom(
+                        excluding: currentItem.isDirectory ? nil : currentItem.fileKey,
+                        source: pool,
+                        currentItem: currentItem,
+                        credentials: credentials
+                    )
+                }
                 writeAck(
                     command: trigger.command.rawValue,
                     status: "accepted",
