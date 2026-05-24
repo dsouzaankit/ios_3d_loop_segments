@@ -13,7 +13,6 @@ struct ExportView: View {
     @State private var status = ""
     @State private var errorMessage: String?
     @State private var logHint = ""
-    @State private var photosAccessNote = ""
     @State private var liveLogTail = ""
     @State private var lanHostURL: String?
     @State private var lanIPURL: String?
@@ -42,7 +41,7 @@ struct ExportView: View {
                     Text(status).font(.caption)
                 }
             }
-            Section("LAN export (PC sync)") {
+            Section("LAN export") {
                 Toggle(ExportLANServer.lanServerToggleTitle, isOn: Binding(
                     get: { ExportLANServer.isEnabled },
                     set: { enabled in
@@ -81,18 +80,16 @@ struct ExportView: View {
                             .foregroundStyle(.secondary)
                     }
                     Text(
-                        "Below Mbps cutoff: LAN preload or vanilla only (no op_00/op_01). At or above: 60s segments when codec allows — LAN server can stay on. High-bitrate mode uses minimal _working prefetch ahead of export."
+                        "Below the Mbps cutoff: LAN preload or full-file download only. At or above: 60s segments when the codec allows."
                     )
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text(
-                        "Turn on LAN server to share pcld_ios_media on :8765 and set the Mbps segment cutoff (default 35 Mbps)."
-                    )
+                    Text("Turn on to share pcld_ios_media on port 8765 and set the Mbps segment cutoff (default 35 Mbps).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Same Wi‑Fi as the PC. Use the LAN IP line below on Windows. http://iphone.local:8765/ is not a default URL — it only matches if About → Name is exactly “iPhone” and your PC resolves .local (most Windows PCs need the numeric IP).")
+                Text("Same Wi‑Fi as the device playing or controlling export. Use the LAN IP below — most PCs need the numeric address, not .local.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 LabeledContent("About → Name") {
@@ -100,17 +97,17 @@ struct ExportView: View {
                         .font(.caption)
                 }
                 if let lanIPURL {
-                    LabeledContent("LAN IP (use on PC)") {
+                    LabeledContent("LAN IP") {
                         Text(lanIPURL)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
                     }
-                    Button(copiedLANURL ? "Copied" : "Copy LAN IP URL") {
+                    Button(copiedLANURL ? "Copied" : "Copy LAN URL") {
                         UIPasteboard.general.string = lanIPURL
                         copiedLANURL = true
                     }
                 } else if ExportLANServer.isEnabled {
-                    Text("No Wi‑Fi IPv4 address — connect the phone to Wi‑Fi (same network as the PC). `.local` URLs will not work until an IP appears here.")
+                    Text("No Wi‑Fi IPv4 address — connect to Wi‑Fi on the same network as the LAN client.")
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
@@ -122,54 +119,59 @@ struct ExportView: View {
                             .textSelection(.enabled)
                     }
                 }
-                Text("Skybox WebDAV: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword). Bonjour: \(ExportLANServer.bonjourServiceName)._http._tcp")
+                Text("WebDAV auth: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("PC: Mount-LoopSegmentsRclone.ps1 maps pcld_ios_media/ over Wi‑Fi (use the LAN IP above).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text(inProgressLANFootnote)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Toggle("Vanilla download first (before HLS)", isOn: $vanillaDownloadBackup)
+                Toggle("Full WebDAV download", isOn: $vanillaDownloadBackup)
                     .disabled(session.isExportRunning)
                     .onChange(of: vanillaDownloadBackup) { _, enabled in
                         VanillaWebDAVDownload.isBackupEnabled = enabled
                     }
                     .onAppear { vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled }
                 Text(
-                    "After sparse probe fails: WebDAV download to _vanilla_download.<ext> (visible on LAN while downloading). MP4/MOV/M4V also refresh _vanilla_faststart.mp4 during download."
+                    "When sparse export cannot start, copy the whole file to pcld_ios_media/_vanilla_download.<ext>. Visible on LAN while downloading; reliable for WMV/MKV and similar."
                 )
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Picker(
-                    "pCloud HLS if WebDAV fails above",
-                    selection: $hlsTranscodeCutoffMultiplier
-                ) {
-                    ForEach(PCloudHLSLink.transcodeCutoffMultipliers, id: \.self) { mult in
-                        Text(PCloudHLSLink.transcodeCutoffOptionLabel(multiplier: mult))
-                            .tag(mult)
-                    }
-                }
-                .pickerStyle(.menu)
-                .disabled(session.isExportRunning)
-                .onChange(of: hlsTranscodeCutoffMultiplier) { _, newValue in
-                    PCloudHLSLink.transcodeCutoffMultiplier = newValue
-                }
-                .onAppear {
-                    hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
-                }
-                if session.isExportRunning {
-                    Text("HLS cutoff locked while export is running.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Text(
-                    "WMV/ASF and similar: after WebDAV probe fails, use pCloud transcode only when estimated source bitrate is above this (default 2.5 Mbps at 1×)."
-                )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("HTTP LAN page (`http://<phone-ip>:8765/`) can browse pCloud and trigger export — phone app must stay open in foreground.")
+                Text("LAN page (`http://<phone-ip>:8765/`) can browse pCloud and start, pause, or stop export — keep the app open in the foreground.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 alternateExportSection
+                DisclosureGroup("Advanced fallback") {
+                    Picker(
+                        "pCloud HLS threshold",
+                        selection: $hlsTranscodeCutoffMultiplier
+                    ) {
+                        ForEach(PCloudHLSLink.transcodeCutoffMultipliers, id: \.self) { mult in
+                            Text(PCloudHLSLink.transcodeCutoffOptionLabel(multiplier: mult))
+                                .tag(mult)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(session.isExportRunning)
+                    .onChange(of: hlsTranscodeCutoffMultiplier) { _, newValue in
+                        PCloudHLSLink.transcodeCutoffMultiplier = newValue
+                    }
+                    .onAppear {
+                        hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
+                    }
+                    if session.isExportRunning {
+                        Text("Locked while export is running.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(
+                        "Optional last resort if WebDAV probe fails and full download is off. Needs pCloud API token; often unavailable — prefer full WebDAV download or sparse _working on LAN."
+                    )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
             Section("Network (pCloud)") {
                 Text(network.interfaceLabel)
@@ -178,46 +180,13 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Tip: Settings → Cellular → Loop Segments → On. Wi‑Fi/LAN can stay on for PC sync while pCloud uses cellular.")
+                Text("Tip: Settings → Cellular → Loop Segments → On to use pCloud over cellular.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             Section("File") {
                 Text(item.name)
                 Text(item.href).font(.caption).foregroundStyle(.secondary)
-            }
-            if PhotosSegmentPublisher.workflowEnabled {
-                Section("Photos (optional — PC sync)") {
-                    Toggle("Save segments to Photos", isOn: Binding(
-                        get: { PhotosSegmentPublisher.isEnabled },
-                        set: { newValue in
-                            PhotosSegmentPublisher.isEnabled = newValue
-                            if newValue {
-                                Task { await requestPhotosAccess() }
-                            }
-                        }
-                    ))
-                    if PhotosSegmentPublisher.isEnabled {
-                        Toggle("H.264 for Photos (skip passthrough)", isOn: Binding(
-                            get: { PhotosSegmentPublisher.alwaysTranscodeH264ForPhotos },
-                            set: { PhotosSegmentPublisher.alwaysTranscodeH264ForPhotos = $0 }
-                        ))
-                        Text("On: every segment is transcoded to H.264 for Photos only (~1–3 min/segment). Off: try passthrough first; on 3302 the app transcodes. DLNA file in Exports stays full quality.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    if !photosAccessNote.isEmpty {
-                        Text(photosAccessNote)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text("With Photos on: each minute is dense-downloaded from pCloud, then saved to Photos and Exports (pcld_ios_media/loop/op_00.mp4). First segment can take a few minutes on large files.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text("PC: Mount-LoopSegmentsRclone.ps1 (Wi‑Fi) or Apple Devices → Exports → Save to PC.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
             }
             Section("During export") {
                 Text("Keep Loop Segments in the foreground during export; backgrounding or locking the phone can stop export.")
@@ -233,12 +202,12 @@ struct ExportView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            Section("Output (USB → PC → DLNA)") {
+            Section("Output files") {
                 Text(ExportPaths.exportsDirectory.path)
                     .font(.caption)
-                Text("1. Large files: sparse temp shell; each minute dense-fills only that window from pCloud (not the full file).")
-                Text("2. Passthrough to pcld_ios_media/loop/op_*.mp4; PC: Mount-LoopSegmentsRclone.ps1")
-                Text(logHint.isEmpty ? "Logs: export_latest.txt (full) · export_progress.txt (last 12 lines)" : logHint)
+                Text("Segments: pcld_ios_media/loop/op_00|01.mp4")
+                Text("Working copy: pcld_ios_media/_working.mp4 (sparse while export runs)")
+                Text(logHint.isEmpty ? "Logs: export_latest.txt · export_progress.txt" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if !liveLogTail.isEmpty {
@@ -247,10 +216,6 @@ struct ExportView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                Text("3. Or Apple Devices → Loop Segments → Exports → Save to PC")
-                Text("4. PC DLNA folder: F:\\f1_media\\3d_fullsbs_trans")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Export")
@@ -273,9 +238,6 @@ struct ExportView: View {
         .onAppear {
             ExportAutoLockCoordinator.setExportPageVisible(true)
             applyForegroundResume()
-            if PhotosSegmentPublisher.workflowEnabled, PhotosSegmentPublisher.isEnabled {
-                Task { await requestPhotosAccess() }
-            }
             triggerAutoStartExportIfNeeded()
         }
         .onDisappear {
@@ -331,7 +293,7 @@ struct ExportView: View {
     private var inProgressLANFootnote: String {
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
             let path = ExportPlaybackState.shared.vanillaLANRelativePath()
-            return "In-progress: vanilla download → \(path) (full file). Segments: pcld_ios_media/loop/op_*.mp4 when export runs."
+            return "In-progress: full download → \(path). Segments: pcld_ios_media/loop/op_*.mp4 when export runs."
         }
         if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
             return "In-progress: pCloud transcode → pcld_ios_media/_working_pcloud_transcode.mp4 (not the original file). Segments: loop/op_*.mp4"
@@ -601,29 +563,12 @@ struct ExportView: View {
         }
     }
 
-    private func requestPhotosAccess() async {
-        guard PhotosSegmentPublisher.isEnabled else {
-            photosAccessNote = ""
-            return
-        }
-        if await PhotosSegmentPublisher.ensureAccess() {
-            photosAccessNote = "Photos access OK — clips save to your library (USB import friendly)."
-        } else {
-            photosAccessNote = "Photos access needed: Settings → Loop Segments → Photos → allow access."
-        }
-    }
-
     private func startExport() async {
-        if PhotosSegmentPublisher.workflowEnabled, PhotosSegmentPublisher.isEnabled {
-            await requestPhotosAccess()
-        }
-        status = "Downloading to temp; publishing 60s chunks for DLNA as each minute is on disk…"
+        status = "Downloading from pCloud; publishing 60s segments as each minute completes…"
         do {
             try await session.startExport(item: item, seekMs: seekMs)
             syncSeekFromStore()
-            status = PhotosSegmentPublisher.workflowEnabled && PhotosSegmentPublisher.isEnabled
-                ? "Done — segment in Files → Loop Segments → Exports (and Photos). Stays until Clear media or next export."
-                : "Done — segment in Files → Exports. LAN :8765 shares media while the LAN server toggle is on."
+            status = "Done — segments in Exports. LAN :8765 shares media while the LAN server toggle is on."
         } catch SegmentExporterError.paused {
             syncSeekFromStore()
             let resume = resumeStore.resumeStatus(for: item)
@@ -646,7 +591,7 @@ struct ExportView: View {
             status = "Interrupted — partial segments may be in Exports"
         } catch {
             errorMessage = error.localizedDescription
-            status = "Failed — partial segments kept in Exports for USB sync"
+            status = "Failed — partial segments kept in Exports"
             syncSeekFromStore()
         }
         refreshLogFromDisk()
