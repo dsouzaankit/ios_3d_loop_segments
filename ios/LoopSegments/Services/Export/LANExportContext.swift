@@ -20,6 +20,7 @@ enum LANExportContext {
         return WebDAVItem(href: href, name: name, isDirectory: false, contentLength: nil)
     }
 
+    @MainActor
     static func referenceOrActive(from session: AppSession) -> WebDAVItem? {
         if let active = session.activeExportItem { return active }
         return loadReference()
