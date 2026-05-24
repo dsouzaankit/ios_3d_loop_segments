@@ -371,7 +371,7 @@ enum ExportLANServer {
         if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
             if let url = URL(string: path) {
                 var resolved = url.path.isEmpty ? "/" : url.path
-                if let query = url.percentEncodedQuery, !query.isEmpty {
+                if let query = url.query, !query.isEmpty {
                     return normalizedDAVPath(resolved) + "?" + query
                 }
                 return normalizedDAVPath(resolved)
