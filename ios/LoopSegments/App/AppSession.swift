@@ -163,10 +163,11 @@ final class AppSession: ObservableObject {
         isExportRunning = true
         ExportAutoLockCoordinator.exportDidStart()
         defer {
-            guard generation == exportGeneration else { return }
-            ExportAutoLockCoordinator.exportDidEnd()
-            isExportRunning = false
-            activeExportItem = nil
+            if generation == exportGeneration {
+                ExportAutoLockCoordinator.exportDidEnd()
+                isExportRunning = false
+                activeExportItem = nil
+            }
         }
 
         let onProgress: @Sendable (Int64) -> Void = { mediaMs in
