@@ -27,12 +27,12 @@ enum SegmentCleanup {
     }
 
 
-    /// End of export: move active root copies into `pcld_ios_media/archive/` and prune to retention limit (`loop/` unchanged).
+    /// End of export: copy active root files into `archive/` (keep root paths for LAN playback); prune (`loop/` unchanged).
     @discardableResult
     static func archiveFinishedExportMedia(log: ((String) -> Void)? = nil) -> Int {
         guard ExportMediaArchive.hasActiveExportMediaOnDisk() else { return 0 }
         let timestamp = ExportMediaArchive.newRetentionTimestamp()
-        let archived = ExportMediaArchive.archiveActiveMedia(timestamp: timestamp, log: log)
+        let archived = ExportMediaArchive.archiveActiveMedia(timestamp: timestamp, relocate: false, log: log)
         if archived > 0 {
             _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount, log: log)
         }

@@ -135,8 +135,8 @@ final class ExportCoordinator {
             if result.lanPreloadOnly {
                 if archivedOnFinish > 0 {
                     logHandler(
-                        "LAN preload finished — archived \(archivedOnFinish) file(s) to pcld_ios_media/archive/ " +
-                            "(no op_*.mp4; play archived copy via :8765)"
+                        "LAN preload finished — copied \(archivedOnFinish) file(s) to pcld_ios_media/archive/ " +
+                            "(root _working* / _vanilla_* kept on LAN; no op_*.mp4)"
                     )
                 } else {
                     logHandler(
@@ -145,8 +145,9 @@ final class ExportCoordinator {
                 }
             } else if archivedOnFinish > 0 {
                 logHandler(
-                    "Export finished — archived \(archivedOnFinish) root file(s) to pcld_ios_media/archive/ " +
-                        "(loop/op_*.mp4 kept on LAN; last \(ExportMediaArchive.retentionCount) archive batches)"
+                    "Export finished — copied \(archivedOnFinish) root file(s) to pcld_ios_media/archive/ " +
+                        "(_working*, _vanilla_*, transcode left on LAN; loop/op_*.mp4 kept; " +
+                        "last \(ExportMediaArchive.retentionCount) archive batches)"
                 )
             } else {
                 logHandler("Export finished — loop/op_*.mp4 on LAN (no root media to archive)")

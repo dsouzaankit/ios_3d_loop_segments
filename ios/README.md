@@ -163,21 +163,21 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
 
 `_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Mbps cutoff** (Export UI, default ~35): at or below → **no** `op_*.mp4` (LAN preload on `_working.mp4` or vanilla download only). **At or above** → 60s segments to `loop/op_*.mp4` when codec allows — **LAN server can stay on** (`http://&lt;phone-ip&gt;:8765/`). High-bitrate segment mode uses minimal `_working` prefetch (export cursor only). Each dense fill pauses prefetch briefly. **Seek &gt; 0:** prefetch from the seek byte offset. Export logs and **`http://&lt;phone-ip&gt;:8765/`** show **`LAN playable till 12:34, exported 11:00, started 10:00`** (also in `status.json`).
 
-Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + `_working.mp4` + `loop/op_*.mp4`. **Stop** clears paused state, removes `loop/op_*.mp4`, archives root copies to `archive/`. **Export completes** archives root copies immediately (`loop/` stays for LAN).
+Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + `_working.mp4` + `loop/op_*.mp4`. **Stop** clears paused state, removes `loop/op_*.mp4`, archives root copies to `archive/`. **Export completes** copies root media into `archive/` but **keeps** the same paths on LAN (`_working.mp4`, `_vanilla_download.*`, etc.) so WebDAV players are not broken mid-playback.
 
-**Media retention:** Finished **root-level** copies (`_working.mp4`, vanilla/transcode siblings, etc.) move into **`pcld_ios_media/archive/`** with optional **`_3D_<n>K`** + **`_<local-time>`** in the filename. **`pcld_ios_media/loop/`** (`op_00` / `op_01`) is **not** archived — it is removed on **Stop** / **`stop_export`** or overwritten on the next segment export. Retention is skipped when starting a **new** export if that title (or sparse/vanilla manifest) is still **paused / in progress**.
+**Media retention:** Active **root-level** export files — **`_working.mp4`**, **`_working.sparse.json`**, **`_vanilla_download.*`**, **`_vanilla_faststart.mp4`**, **`_working_pcloud_transcode.mp4`**, and any other unstamped siblings — use the same archive rules. Finished copies go under **`pcld_ios_media/archive/`** as `<base>[_3D_<n>K]_<local-time>.<ext>`. **`pcld_ios_media/loop/`** (`op_00` / `op_01`) is **not** archived — removed on **Stop** / **`stop_export`** or overwritten on the next segment export. Retention is skipped when starting a **new** export if that title (or sparse/vanilla manifest) is still **paused / in progress**.
 
 | Step | What happens |
 |------|----------------|
-| **New export** | Prior active root files archived under `archive/`; auto-prune keeps **10** newest batches |
-| **Export finished** | Active root copies archived to `archive/` (segments in `loop/` stay until Stop or next export) |
-| **Stop / `stop_export`** | `loop/` segments removed (+ Photos when enabled); active root copies archived |
+| **New export** | Prior active root files **moved** into `archive/`; auto-prune keeps **10** newest batches |
+| **Export finished** | **Copy** to `archive/` (root `_working*` / `_vanilla_*` / transcode **stay on LAN**); `loop/` unchanged |
+| **Stop / `stop_export`** | `loop/` removed (+ Photos when enabled); active root files **moved** into `archive/` |
 | **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
 | **Clear media** / **`clear_media`** | Removes active root files, all `archive/` retains, and `loop/` segments |
 
 **Filename pattern:** `<base>[_3D_<n>K]_yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`** (device timezone). Example: `archive/_working_3D_4K_2026-05-22_14-30-52.mp4`. Legacy in-root suffixed files are migrated into `archive/` on prune/clear.
 
-**`_3D_<n>K` tier** (only when **n > 2**, i.e. 3K and up - not 1K/2K): inferred from video dimensions before archive (probes `_working.mp4`, transcode, or vanilla copy). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
+**`_3D_<n>K` tier** (only when **n > 2**, i.e. 3K and up — not 1K/2K): inferred from video dimensions before archive (probes `_working.mp4`, `_working_pcloud_transcode.mp4`, or `_vanilla_download.*` / `_vanilla_faststart.mp4`). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
 
 | Reference width (px) | Label |
 |----------------------|--------|

@@ -77,7 +77,9 @@ enum ExportMediaArchive {
         return "\(stem).\(ext)"
     }
 
-    /// Unstamped root-level media files only (`pcld_ios_media/`, not `loop/` or `archive/`).
+    /// Unstamped root-level export media (`pcld_ios_media/`, not `loop/` or `archive/`).
+    /// Includes `_working.mp4`, `_working.sparse.json`, `_vanilla_download.*`, `_vanilla_faststart.mp4`,
+    /// `_working_pcloud_transcode.mp4`, and any other unstamped root siblings.
     static func activeRootMediaFiles() -> [URL] {
         let fm = FileManager.default
         _ = ExportPaths.mediaExportDirectory
@@ -140,8 +142,15 @@ enum ExportMediaArchive {
         }
     }
 
+    /// Archive active root export files under `archive/`.
+    /// - `relocate: true` — move off root (new-export handoff, Stop). Clears sparse/vanilla playback tied to root paths.
+    /// - `relocate: false` — copy only (export finish); root paths stay for LAN/WebDAV clients still playing.
     @discardableResult
-    static func archiveActiveMedia(timestamp: String, log: ((String) -> Void)? = nil) -> Int {
+    static func archiveActiveMedia(
+        timestamp: String,
+        relocate: Bool = true,
+        log: ((String) -> Void)? = nil
+    ) -> Int {
         migrateRetainedFilesIntoArchive(log: log)
 
         let fm = FileManager.default
@@ -161,7 +170,7 @@ enum ExportMediaArchive {
             return 0
         }
 
-        var moved = 0
+        var archived = 0
         for source in sources {
             let archivedName = suffixedFileName(
                 for: source.lastPathComponent,
@@ -173,25 +182,34 @@ enum ExportMediaArchive {
                 if fm.fileExists(atPath: destination.path) {
                     try fm.removeItem(at: destination)
                 }
-                try fm.moveItem(at: source, to: destination)
-                moved += 1
-                log?(
-                    "Archived \(ExportPaths.pathRelativeToExports(source)) → " +
-                        "\(ExportPaths.pathRelativeToExports(destination))"
-                )
+                if relocate {
+                    try fm.moveItem(at: source, to: destination)
+                    log?(
+                        "Archived \(ExportPaths.pathRelativeToExports(source)) → " +
+                            "\(ExportPaths.pathRelativeToExports(destination))"
+                    )
+                } else {
+                    try fm.copyItem(at: source, to: destination)
+                    log?(
+                        "Archived copy \(ExportPaths.pathRelativeToExports(source)) → " +
+                            "\(ExportPaths.pathRelativeToExports(destination)) " +
+                            "(left \(source.lastPathComponent) on LAN)"
+                    )
+                }
+                archived += 1
             } catch {
                 log?("Could not archive \(source.lastPathComponent): \(error.localizedDescription)")
             }
         }
 
-        if moved > 0 {
+        if archived > 0, relocate {
             WorkingSourceSparseCatalog.remove()
             if !ExportPaths.vanillaDownloadCopyExistsOnDisk() {
                 ExportPlaybackState.shared.setVanillaDownloadActive(false)
             }
             ExportPlaybackState.shared.clearSparseWorkingPlaybackHints()
         }
-        return moved
+        return archived
     }
 
     /// Root-level suffixed retains and `archive/export_*` batch folders → flat `archive/<file>…`.
