@@ -88,7 +88,7 @@ enum VanillaWebDAVDownload {
         if let fastStartDestinationURL {
             log(
                 "MP4 faststart sidecar → \(ExportPaths.pathRelativeToExports(fastStartDestinationURL)) " +
-                    "only if download lacks moov-at-head (skipped when pCloud source is pre-faststarted)"
+                    "(replaces _vanilla_download.* after download when moov was at EOF; skipped when pCloud is pre-faststarted)"
             )
         }
 
@@ -191,13 +191,21 @@ enum VanillaWebDAVDownload {
             }
         }
         if let fastStartDestinationURL {
-            _ = try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
+            let wroteSidecar = try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
                 from: destinationURL,
                 to: fastStartDestinationURL,
                 log: log
             )
+            if wroteSidecar {
+                ExportPaths.replaceVanillaDownloadWithFaststartSidecar(log: log)
+            }
         }
-        log("Vanilla download complete — \(formatBytes(onDisk)) at \(rel)")
+        let completeRel = ExportPaths.pathRelativeToExports(
+            FileManager.default.fileExists(atPath: destinationURL.path)
+                ? destinationURL
+                : (fastStartDestinationURL ?? destinationURL)
+        )
+        log("Vanilla download complete — \(formatBytes(onDisk)) (\(completeRel))")
     }
 
     /// Returns reconciled total length when the partial on disk matches pCloud; `nil` to rethrow.

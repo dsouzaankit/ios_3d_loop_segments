@@ -53,6 +53,7 @@ enum SegmentCleanup {
             removed += 1
         }
         removed += ExportMediaArchive.removeAllRetainedMedia(log: log)
+        ExportRetentionSourceCatalog.remove()
         return removed
     }
 

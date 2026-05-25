@@ -1460,7 +1460,7 @@ enum ExportLANServer {
                 let tFrag = startSec > 0 ? "#t=\(startSec)" : ""
                 let href = "\(escaped)\(tFrag)"
                 let vanillaNote = name.contains("_vanilla_faststart")
-                    ? " — faststart MP4 copy (original download unchanged)"
+                    ? " — faststart MP4 (replaces _vanilla_download.* after moov-at-end remux)"
                     : " — full vanilla WebDAV download (original extension)"
                 let seekNote = startSec > 0
                     ? " — export seek #t=\(startSec) (sequential download from 0:00)"

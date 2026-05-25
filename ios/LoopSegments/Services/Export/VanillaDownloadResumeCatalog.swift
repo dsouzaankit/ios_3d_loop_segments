@@ -80,22 +80,30 @@ enum VanillaDownloadResumeCatalog {
         guard let manifest = readManifest(),
               manifest.fileKey == fileKey,
               manifest.totalLength == totalLength else {
+            return faststartOnlyCompletePlan(fileKey: fileKey, totalLength: totalLength)
+        }
+        if fm.fileExists(atPath: destinationURL.path) {
+            let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+            if onDisk > totalLength { return .startFresh }
+            if onDisk >= totalLength { return .alreadyComplete }
+            if onDisk > 0 { return .resume(offset: onDisk) }
+        }
+        return faststartOnlyCompletePlan(fileKey: fileKey, totalLength: totalLength)
+    }
+
+    /// After moov-at-end remux the dense download is removed; faststart holds the completed local copy.
+    private static func faststartOnlyCompletePlan(fileKey: String, totalLength: Int64) -> ResumePlan {
+        guard totalLength > 0,
+              let manifest = readManifest(),
+              manifest.fileKey == fileKey,
+              manifest.totalLength == totalLength else {
             return .startFresh
         }
-        guard fm.fileExists(atPath: destinationURL.path) else {
-            return .startFresh
-        }
-        let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?.int64Value ?? 0
-        if onDisk > totalLength {
-            return .startFresh
-        }
-        if onDisk >= totalLength {
-            return .alreadyComplete
-        }
-        if onDisk > 0 {
-            return .resume(offset: onDisk)
-        }
-        return .startFresh
+        let fast = ExportPaths.vanillaFastStartURL
+        guard FileManager.default.fileExists(atPath: fast.path) else { return .startFresh }
+        let onDisk = (try? fast.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        guard onDisk > 0, onDisk >= totalLength * 90 / 100 else { return .startFresh }
+        return .alreadyComplete
     }
 
     static func initialDownloadedBytes(

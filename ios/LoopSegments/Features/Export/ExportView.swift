@@ -502,8 +502,8 @@ struct ExportView: View {
             .foregroundStyle(trimMediaAcknowledged ? .green : Color.orange)
             .sensoryFeedback(.success, trigger: trimMediaAckTrigger)
             Text(
-                "Active: loop/op_00|01.mp4, _working.mp4, _vanilla_download.* (+ sparse/vanilla .json sidecars, not suffixed). Finish copies video to archive/; root videos stay on LAN. Stop/new export moves videos to archive/. " +
-                    "10 media batches; loop/ not archived. Trim keeps 2. Clear wipes active + archive/."
+                "Active: loop/op_00|01.mp4, _working.mp4, _vanilla_faststart.mp4 (or _vanilla_download.* while downloading). Moov-at-EOF: faststart replaces download when complete. Archive uses pCloud filename[_3D_*]_<time>. Finish copies to archive/; root stays on LAN. Stop/new export moves to archive/. " +
+                    "10 timestamp batches; loop/ not archived. Trim keeps 2. Clear wipes active + archive/."
             )
                 .font(.footnote)
                 .foregroundStyle(.secondary)

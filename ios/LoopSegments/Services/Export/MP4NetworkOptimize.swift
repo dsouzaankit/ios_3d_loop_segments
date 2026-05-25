@@ -76,7 +76,7 @@ enum MP4NetworkOptimize {
         }
         log(
             "Writing faststart sidecar → \(ExportPaths.pathRelativeToExports(destinationURL)) " +
-                "(\(ExportPaths.pathRelativeToExports(sourceURL)) unchanged)"
+                "(from \(ExportPaths.pathRelativeToExports(sourceURL)); removes _vanilla_download.* when download finishes)"
         )
         try await remuxWithFastStart(from: sourceURL, to: destinationURL, log: log)
         if moovPresentInFirstBytes(of: destinationURL, scanBytes: moovScanBytes) {

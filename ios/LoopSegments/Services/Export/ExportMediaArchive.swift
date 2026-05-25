@@ -1,6 +1,6 @@
 import Foundation
 
-/// Moves finished root-level `pcld_ios_media/` files into `pcld_ios_media/archive/<name>[_3D_<n>K]_<local-time>.<ext>`.
+/// Moves finished root-level `pcld_ios_media/` files into `pcld_ios_media/archive/<pcloud-name>[_3D_<n>K]_<local-time>.<ext>`.
 /// `pcld_ios_media/loop/` (`op_*.mp4`) is not retained — only siblings like `_working.mp4`, vanilla/transcode copies.
 enum ExportMediaArchive {
     static let retentionCount = 10
@@ -62,11 +62,20 @@ enum ExportMediaArchive {
         return Date(timeIntervalSince1970: TimeInterval(epoch))
     }
 
-    /// e.g. `_working_3D_4K_2026-05-22_14-30-52.mp4` when tier is 3K+.
-    static func suffixedFileName(for fileName: String, timestamp: String, threeDNKLabel: String?) -> String {
-        let ns = fileName as NSString
-        let ext = ns.pathExtension
-        var stem = ns.deletingPathExtension
+    /// e.g. `MyMovie_3D_4K_2026-05-22_14-30-52.mp4` from pCloud `MyMovie.mp4` (falls back to on-disk slot name).
+    static func suffixedFileName(
+        forOnDiskFileName fileName: String,
+        timestamp: String,
+        threeDNKLabel: String?,
+        sourceFileName: String?
+    ) -> String {
+        let ext = (fileName as NSString).pathExtension
+        var stem: String
+        if let sourceFileName, !sourceFileName.isEmpty {
+            stem = ExportRetentionSourceCatalog.sanitizedArchiveStem(from: sourceFileName)
+        } else {
+            stem = (fileName as NSString).deletingPathExtension
+        }
         if let nk = threeDNKLabel, let tag = ExportVideoDimensions.threeDSuffixSegment(nkLabel: nk) {
             stem += tag
         }
@@ -179,6 +188,7 @@ enum ExportMediaArchive {
     static func archiveActiveMedia(
         timestamp: String,
         relocate: Bool = true,
+        sourceFileName: String? = nil,
         log: ((String) -> Void)? = nil
     ) -> Int {
         migrateRetainedFilesIntoArchive(log: log)
@@ -187,9 +197,13 @@ enum ExportMediaArchive {
         let sources = activeRootMediaFiles()
         guard !sources.isEmpty else { return 0 }
 
+        let retentionSource = sourceFileName ?? ExportRetentionSourceCatalog.read()?.sourceFileName
         let threeDNK = ExportVideoDimensions.probeNKLabelForRetention(from: sources)
         if let threeDNK, ExportVideoDimensions.threeDSuffixSegment(nkLabel: threeDNK) != nil {
             log?("Retention: inferred \(threeDNK) — archive name includes _3D_\(threeDNK)")
+        }
+        if let retentionSource {
+            log?("Retention: archive basename from pCloud — \(retentionSource)")
         }
         log?("Retention: local timestamp \(timestamp) (\(TimeZone.current.identifier))")
 
@@ -203,9 +217,10 @@ enum ExportMediaArchive {
         var archived = 0
         for source in sources {
             let archivedName = suffixedFileName(
-                for: source.lastPathComponent,
+                forOnDiskFileName: source.lastPathComponent,
                 timestamp: timestamp,
-                threeDNKLabel: threeDNK
+                threeDNKLabel: threeDNK,
+                sourceFileName: retentionSource
             )
             let destination = archiveDirectoryURL.appendingPathComponent(archivedName)
             do {
@@ -235,7 +250,7 @@ enum ExportMediaArchive {
         if relocate {
             if archived > 0 {
                 WorkingSourceSparseCatalog.remove()
-                if !ExportPaths.vanillaDownloadCopyExistsOnDisk() {
+                if !ExportPaths.vanillaPrimaryMediaExistsOnDisk() {
                     ExportPlaybackState.shared.setVanillaDownloadActive(false)
                 }
                 ExportPlaybackState.shared.clearSparseWorkingPlaybackHints()

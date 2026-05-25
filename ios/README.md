@@ -165,7 +165,9 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
 
 Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + `_working.mp4` + `loop/op_*.mp4`. **Stop** clears paused state, removes `loop/op_*.mp4`, archives root copies to `archive/`. **Export completes** copies root media into `archive/` but **keeps** the same paths on LAN (`_working.mp4`, `_vanilla_download.*`, etc.) so WebDAV players are not broken mid-playback.
 
-**Media retention:** Only **playable video** at `pcld_ios_media/` root gets suffixed archive names (`_working.mp4`, `_vanilla_download.*`, `_vanilla_faststart.mp4`, `_working_pcloud_transcode.mp4`, WMV/MKV, etc. — same extensions as LAN). Sidecars such as **`_working.sparse.json`** and **`_vanilla_download.meta.json`** keep plain names at root during export; they are **deleted** when media is **moved** off root (new export / Stop), not copied with `_3D_*` / `_<time>`. Finished **media** copies go under **`archive/`** as `<base>[_3D_<nK]_<local-time>.<ext>`. **`loop/`** is not archived. Retention is skipped when starting a **new** export if that title (or sparse/vanilla manifest) is still **paused / in progress**.
+**Media retention:** Only **playable video** at `pcld_ios_media/` root is archived. Sidecars (`_working.sparse.json`, `_vanilla_download.meta.json`, `_export_retention_source.json`) stay unstamped and are **deleted** when media is **moved** off root (new export / Stop). Finished copies go under **`archive/`** as **`<pCloud-basename>[_3D_<nK]_<local-time>.<ext>`** (device timezone), not pipeline slot names like `_working.mp4`. **`loop/`** is not archived. Retention is skipped when starting a **new** export if that title is still **paused / in progress**.
+
+**Vanilla MP4/MOV/M4V:** WebDAV fills `_vanilla_download.*` while bytes arrive. If moov was at EOF, a **`_vanilla_faststart.mp4`** sidecar is built (also refreshed during download); when the download finishes the dense **`_vanilla_download.*` file is removed** and LAN/segments use the faststart copy only. If pCloud already had moov-at-head, only the download file is kept (no sidecar).
 
 | Step | What happens |
 |------|----------------|
@@ -175,9 +177,9 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
 | **Clear media** / **`clear_media`** | Removes active root files, all `archive/` retains, and `loop/` segments |
 
-**Filename pattern:** `<base>[_3D_<n>K]_yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`** (device timezone). Example: `archive/_working_3D_4K_2026-05-22_14-30-52.mp4`. Legacy in-root suffixed files are migrated into `archive/` on prune/clear.
+**Filename pattern:** `<pCloud-basename>[_3D_<nK]_yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`**. Example: `archive/MyMovie_3D_4K_2026-05-22_14-30-52.mp4`. Legacy `_working_*` / `_vanilla_*` archive names are kept if already on disk.
 
-**`_3D_<n>K` tier** (only when **n > 2**, i.e. 3K and up — not 1K/2K): inferred from video dimensions before archive (probes `_working.mp4`, `_working_pcloud_transcode.mp4`, or `_vanilla_download.*` / `_vanilla_faststart.mp4`). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
+**`_3D_<nK>` tier** (only when **n > 2**): inferred from video dimensions before archive (probes active root media). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
 
 | Reference width (px) | Label |
 |----------------------|--------|
@@ -188,7 +190,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | 3200-5119 | 4K |
 | 2560-3199 | 3K |
 
-Implementation: `ExportMediaArchive.swift`, `ExportVideoDimensions.swift`. CI: [ios-build workflow](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml) on pushes under `ios/`.
+Implementation: `ExportMediaArchive.swift`, `ExportRetentionSourceCatalog.swift`, `ExportVideoDimensions.swift`. CI: [ios-build workflow](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml) on pushes under `ios/`.
 
 ### SMB vs HTTP / WebDAV on the phone
 

@@ -39,17 +39,22 @@ final class ExportCoordinator {
         }
 
         var archivedPriorMediaFiles = 0
+        let priorRetentionSource = ExportRetentionSourceCatalog.read()?.sourceFileName
         let skipRetentionArchive = !ExportMediaArchive.shouldArchivePriorMediaBeforeNewExport(
             continueLANExport: continueLANExport,
             item: item
         )
         if !skipRetentionArchive, ExportMediaArchive.hasActiveExportMediaOnDisk() {
             let timestamp = ExportMediaArchive.newRetentionTimestamp()
-            archivedPriorMediaFiles = ExportMediaArchive.archiveActiveMedia(timestamp: timestamp)
+            archivedPriorMediaFiles = ExportMediaArchive.archiveActiveMedia(
+                timestamp: timestamp,
+                sourceFileName: priorRetentionSource
+            )
             if archivedPriorMediaFiles > 0 {
                 _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount)
             }
         }
+        ExportRetentionSourceCatalog.save(sourceFileName: item.name, fileKey: item.fileKey)
 
         ExportPaths.clearLogsForNewExport()
         let logWriter = try ExportLogWriter(
@@ -77,7 +82,7 @@ final class ExportCoordinator {
         } else if archivedPriorMediaFiles > 0 {
             logHandler(
                 "Export started — archived \(archivedPriorMediaFiles) prior file(s) to pcld_ios_media/archive/ " +
-                    "(<name>[_3D_<n>K]_<local-time>; keeping last \(ExportMediaArchive.retentionCount) batches; loop/ ignored)"
+                    "(pCloud basename[_3D_<n>K]_<local-time>; keeping last \(ExportMediaArchive.retentionCount) batches; loop/ ignored)"
             )
         } else {
             logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
@@ -146,7 +151,7 @@ final class ExportCoordinator {
             } else if archivedOnFinish > 0 {
                 logHandler(
                     "Export finished — copied \(archivedOnFinish) root file(s) to pcld_ios_media/archive/ " +
-                        "(_working*, _vanilla_*, transcode left on LAN; loop/op_*.mp4 kept; " +
+                        "(root media left on LAN; loop/op_*.mp4 kept; " +
                         "last \(ExportMediaArchive.retentionCount) archive batches)"
                 )
             } else {

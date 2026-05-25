@@ -246,12 +246,19 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock { snapshot.vanillaLANRelativePath }
     }
 
+    func promoteVanillaLANToFaststart() {
+        lock.withLock {
+            snapshot.vanillaLANRelativePath = ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL)
+            snapshot.vanillaUsesFastStartForExport = true
+        }
+    }
+
     func vanillaDownloadUserNotice() -> String? {
         lock.withLock {
             guard snapshot.vanillaDownloadActive else { return nil }
             let path = snapshot.vanillaLANRelativePath
             let fast = snapshot.vanillaUsesFastStartForExport
-                ? " Export uses \(ExportPaths.vanillaFastStartURL.lastPathComponent); original download file unchanged."
+                ? " Segments / LAN use faststart MP4 after download (dense _vanilla_download.* removed when moov was at EOF)."
                 : ""
             return """
             Vanilla download — LAN plays \(path) while download runs (growing dense file).\(fast) \

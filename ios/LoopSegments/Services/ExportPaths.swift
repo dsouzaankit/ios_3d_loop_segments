@@ -184,22 +184,57 @@ enum ExportPaths {
         if lower.hasPrefix(".") { return true }
         if lower.contains(".staging.") { return true }
         if lower.hasSuffix(".sparse.json") { return true }
+        if lower == "_export_retention_source.json" { return true }
         if lower.hasPrefix(".faststart-") { return true }
         if lower.hasPrefix("_working_pcloud_transcode.staging") { return true }
         return false
     }
 
     static func vanillaDownloadCopyExistsOnDisk() -> Bool {
+        vanillaPrimaryMediaExistsOnDisk()
+    }
+
+    /// Dense vanilla download and/or faststart sidecar (after moov-at-end remux replaces the download file).
+    static func vanillaPrimaryMediaExistsOnDisk() -> Bool {
         let fm = FileManager.default
+        if fm.fileExists(atPath: vanillaFastStartURL.path) { return true }
         guard let names = try? fm.contentsOfDirectory(atPath: mediaExportDirectory.path) else { return false }
         return names.contains { $0.lowercased().hasPrefix("_vanilla_download.") }
+    }
+
+    /// Prefer growing `_vanilla_download.*` while downloading; otherwise completed `_vanilla_faststart.mp4`.
+    static func vanillaPrimaryLocalURL(for item: WebDAVItem) -> URL {
+        let download = vanillaDownloadURL(preservingExtensionFrom: item.name)
+        if FileManager.default.fileExists(atPath: download.path) {
+            return download
+        }
+        return vanillaFastStartURL
+    }
+
+    /// After moov-at-end remux, drop `_vanilla_download.*` and point LAN at `_vanilla_faststart.mp4`.
+    static func replaceVanillaDownloadWithFaststartSidecar(log: ((String) -> Void)? = nil) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: vanillaFastStartURL.path) else { return }
+        if let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) {
+            for url in listed {
+                let name = url.lastPathComponent.lowercased()
+                guard name.hasPrefix("_vanilla_download.") else { continue }
+                do {
+                    try fm.removeItem(at: url)
+                    log?("Removed \(pathRelativeToExports(url)) — using faststart sidecar on LAN")
+                } catch {
+                    log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+        }
+        ExportPlaybackState.shared.promoteVanillaLANToFaststart()
     }
 
     /// Hide stale sparse `_working.mp4` on LAN while vanilla (or transcode) is the active source.
     static func shouldHideSparseWorkingFromLAN() -> Bool {
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() { return true }
         if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() { return true }
-        if vanillaDownloadCopyExistsOnDisk(), ExportPlaybackState.shared.isLANExportActive { return true }
+        if vanillaPrimaryMediaExistsOnDisk(), ExportPlaybackState.shared.isLANExportActive { return true }
         return false
     }
 
@@ -410,7 +445,7 @@ enum ExportPaths {
                 log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
-        if !vanillaDownloadCopyExistsOnDisk() {
+        if !vanillaPrimaryMediaExistsOnDisk() {
             ExportPlaybackState.shared.setVanillaDownloadActive(false)
         }
         return removed
