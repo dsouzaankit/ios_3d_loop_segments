@@ -1267,6 +1267,15 @@ enum ExportLANServer {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// Plain `href` for WebDAV / PotPlayer; separate browser link with `#t=` when export seek &gt; 0.
+    private static func lanIndexPlaybackLinks(relativePath escaped: String, resumeStartSec: Int) -> String {
+        let primary = "<a href=\"\(escaped)\">\(escaped)</a>"
+        guard resumeStartSec > 0 else { return primary }
+        return """
+            \(primary) · <a href="\(escaped)#t=\(resumeStartSec)" class="lan-browser-resume">browser #t=\(formatLANClock(resumeStartSec))</a>
+            """
+    }
+
     private static func htmlDashboardStatsBlock() -> String {
         let dashboard = ExportPlaybackState.shared.lanDashboardLines()
         guard !dashboard.isEmpty else { return "" }
@@ -1431,7 +1440,7 @@ enum ExportLANServer {
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
             let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
             let seekNote = startSec > 0
-                ? "<p><em>Export seek <code>\(formatLANClock(startSec))</code> — open the vanilla file (or faststart copy) via WebDAV or a plain index link (no <code>#t=</code>; some players break on fragments). Seek in the player once dense bytes exist. Download grows from 0:00.</em></p>"
+                ? "<p><em>Export seek <code>\(formatLANClock(startSec))</code> — use the plain file link for WebDAV/PotPlayer; use <strong>browser #t=</strong> on the index for Quest-style resume (do not copy the <code>#t=</code> URL into other players). Download grows from 0:00.</em></p>"
                 : ""
             return """
             \(htmlPlaybackStatusLine(line))
@@ -1486,9 +1495,11 @@ enum ExportLANServer {
                     ? " — faststart MP4 (replaces _vanilla_download.* after moov-at-end remux)"
                     : " — full vanilla WebDAV download (original extension)"
                 let seekNote = startSec > 0
-                    ? " — export seek \(formatLANClock(startSec)) (download from 0:00; seek in player)"
+                    ? " — export seek \(formatLANClock(startSec)) (download from 0:00)"
                     : ""
-                items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(vanillaNote)\(seekNote)</li>")
+                items.append(
+                    "<li>\(lanIndexPlaybackLinks(relativePath: escaped, resumeStartSec: startSec))\(sizeNote)\(vanillaNote)\(seekNote)</li>"
+                )
                 continue
             }
             if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
@@ -1507,7 +1518,9 @@ enum ExportLANServer {
                 let startNote = startSec > 0
                     ? " — resume from \(formatLANClock(startSec)); LAN dense through ~\(formatLANClock(tillSec))"
                     : " — sparse partial copy; LAN dense through ~\(formatLANClock(tillSec))"
-                items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(startNote)</li>")
+                items.append(
+                    "<li>\(lanIndexPlaybackLinks(relativePath: escaped, resumeStartSec: startSec))\(sizeNote)\(startNote)</li>"
+                )
                 continue
             } else if name.hasSuffix(".mp4"),
                       name.contains("\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/") {
