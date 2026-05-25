@@ -1444,7 +1444,7 @@ enum ExportLANServer {
             let startedReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
             let startedNote = startedReadable
                 ? ""
-                : "<p><em>Started position is not dense on disk yet (need ~45s preroll before <code>\(formatLANClock(startSec))</code> for decode) — run export again from that seek on a new build, use <code>loop/op_00.mp4</code>, or VLC on <code>_working.mp4</code>.</em></p>"
+                : "<p><em>Started position is not dense on disk yet (need ~45s preroll before <code>\(formatLANClock(Int(startSec.rounded(.down))))</code> for decode) — run export again from that seek on a new build, use <code>loop/op_00.mp4</code>, or VLC on <code>_working.mp4</code>.</em></p>"
             return """
             \(htmlPlaybackStatusLine(line))
             \(htmlDashboardStatsBlock())
