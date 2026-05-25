@@ -1737,6 +1737,14 @@ enum ExportLANServer {
           <div id="pcloud-pinned" class="pcloud-folders pcloud-pinned"></div>
         </div>
         <div class="row">
+          <button type="button" id="export-random">Export random in folder</button>
+        </div>
+        <div class="row">
+          <button type="button" id="export-trim-media">Trim media (keep last 2)</button>
+          <button type="button" id="export-clear-media">Clear media</button>
+        </div>
+        <p id="trigger-status" class="muted"></p>
+        <div class="row">
           <button type="button" id="pcloud-up" disabled>↑ Up</button>
           <code id="pcloud-path">/</code>
           <button type="button" id="pcloud-refresh">Refresh</button>
@@ -1753,14 +1761,6 @@ enum ExportLANServer {
         </div>
         <div id="pcloud-folders" class="pcloud-folders"><span class="muted">Loading…</span></div>
         <ul id="pcloud-files"><li class="muted">Loading…</li></ul>
-        <div class="row">
-          <button type="button" id="export-random">Export random in folder</button>
-        </div>
-        <div class="row">
-          <button type="button" id="export-trim-media">Trim media (keep last 2)</button>
-          <button type="button" id="export-clear-media">Clear media</button>
-        </div>
-        <p id="trigger-status" class="muted"></p>
         </div>
         <script>
         (function () {
