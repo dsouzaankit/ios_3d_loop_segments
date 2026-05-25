@@ -154,6 +154,30 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
 
 Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + files; **Stop** clears paused state and removes published `op_*.mp4`.
 
+**Media retention (Exports folder):** When you start a **new** export (not **resume**), the app renames the previous run’s **root-level** files under **`pcld_ios_media/`** in place (same folder — no `archive/` subfolder). **`pcld_ios_media/loop/`** (`op_00` / `op_01`) is **not** retained; only overwritten on the next segment export.
+
+| Step | What happens |
+|------|----------------|
+| **New export** | Prior `_working.mp4`, `_working.sparse.json`, `_vanilla_download.*`, `_vanilla_faststart.mp4`, `_working_pcloud_transcode.mp4`, etc. are renamed with optional **`_3D_<n>K`** + **`_<local-time>`** |
+| **Auto prune** | Keeps the **10** newest retain batches (by parsed time) |
+| **Trim media (keep last 2)** | Export UI — deletes older suffixed root files; active unstamped slot + `loop/` unchanged |
+| **Clear media** | Removes active files, all suffixed retains, and `loop/` segments |
+
+**Filename pattern:** `<base>[_3D_<n>K]_yyyy-MM-dd_HH-mm-ss.<ext>` in the **device timezone** (POSIX `yyyy-MM-dd_HH-mm-ss`). Example: `_working_3D_4K_2026-05-22_14-30-52.mp4`. Legacy retains with a trailing **unix** suffix still parse and prune.
+
+**`_3D_<n>K` tier** (only when **n > 2**, i.e. 3K and up — not 1K/2K): inferred from video dimensions before rename (probes `_working.mp4`, transcode, or vanilla copy). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
+
+| Reference width (px) | Label |
+|----------------------|--------|
+| 7680+ | 8K |
+| 7168–7679 | 7K |
+| 6144–7167 | 6K |
+| 5120–6143 | 5K |
+| 3200–5119 | 4K |
+| 2560–3199 | 3K |
+
+Implementation: `ExportMediaArchive.swift`, `ExportVideoDimensions.swift`. CI: [ios-build workflow](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml) on pushes under `ios/`.
+
 ### SMB vs HTTP / WebDAV on the phone
 
 **True SMB** is not available. The app serves **HTTP + WebDAV** on **8765** (not a Windows file share). Mapped-drive / PROPFIND clients use **WebDAV**; browsers use **GET** on file URLs and the HTML index. Legacy **`net use`** notes and **PC rclone** script live under [`../windows/archive/`](../windows/archive/).

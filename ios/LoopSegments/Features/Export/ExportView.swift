@@ -23,6 +23,8 @@ struct ExportView: View {
     @State private var clearMediaAckTrigger = 0
     @State private var clearLogsAcknowledged = false
     @State private var clearLogsAckTrigger = 0
+    @State private var trimMediaAcknowledged = false
+    @State private var trimMediaAckTrigger = 0
     @State private var prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
     @State private var hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
     @State private var vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled
@@ -483,7 +485,19 @@ struct ExportView: View {
             .disabled(session.isExportRunning)
             .foregroundStyle(clearLogsAcknowledged ? .green : Color.red)
             .sensoryFeedback(.success, trigger: clearLogsAckTrigger)
-            Text("Media: pcld_ios_media/loop/op_00|01.mp4, pcld_ios_media/_working.mp4. Logs: export_latest/progress, export_session_*, search_debug.txt, Exports/logs/.")
+            Button {
+                trimExportMediaKeepingRecent()
+                acknowledgeTrimMediaTap()
+            } label: {
+                Label(
+                    trimMediaAcknowledged ? "Trimmed" : "Trim media (keep last 2)",
+                    systemImage: trimMediaAcknowledged ? "checkmark.circle.fill" : "externaldrive.fill"
+                )
+            }
+            .disabled(session.isExportRunning)
+            .foregroundStyle(trimMediaAcknowledged ? .green : Color.orange)
+            .sensoryFeedback(.success, trigger: trimMediaAckTrigger)
+            Text("Active: loop/op_00|01.mp4, _working.mp4. New export renames prior root files with _3D_<n>K when tier > 2K, then _yyyy-MM-dd_HH-mm-ss local time (keeps 10; loop/ ignored). Trim media drops older retains, keeping 2.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -544,6 +558,18 @@ struct ExportView: View {
         refreshLogHint()
     }
 
+    private func trimExportMediaKeepingRecent() {
+        guard !session.isExportRunning else { return }
+        let count = SegmentCleanup.trimExportMediaArchives()
+        liveLogTail = ""
+        let keep = ExportMediaArchive.manualKeepCount
+        let stamps = ExportMediaArchive.collectRetentionStampSuffixes().count
+        status = count > 0
+            ? "Trimmed retained media — kept \(min(stamps, keep)) timestamp(s), removed \(count) file(s)"
+            : "No retained exports to trim (at or below \(keep) timestamps in pcld_ios_media/)"
+        refreshLogHint()
+    }
+
     private func acknowledgeClearMediaTap() {
         clearMediaAcknowledged = true
         clearMediaAckTrigger += 1
@@ -554,6 +580,12 @@ struct ExportView: View {
         clearLogsAcknowledged = true
         clearLogsAckTrigger += 1
         scheduleClearAcknowledgementReset { clearLogsAcknowledged = false }
+    }
+
+    private func acknowledgeTrimMediaTap() {
+        trimMediaAcknowledged = true
+        trimMediaAckTrigger += 1
+        scheduleClearAcknowledgementReset { trimMediaAcknowledged = false }
     }
 
     private func scheduleClearAcknowledgementReset(_ reset: @escaping () -> Void) {

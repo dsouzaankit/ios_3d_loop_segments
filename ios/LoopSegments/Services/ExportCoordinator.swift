@@ -38,6 +38,15 @@ final class ExportCoordinator {
             lock.unlock()
         }
 
+        var archivedPriorMediaFiles = 0
+        if !continueLANExport, ExportMediaArchive.hasActiveExportMediaOnDisk() {
+            let timestamp = ExportMediaArchive.newRetentionTimestamp()
+            archivedPriorMediaFiles = ExportMediaArchive.archiveActiveMedia(timestamp: timestamp)
+            if archivedPriorMediaFiles > 0 {
+                _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount)
+            }
+        }
+
         ExportPaths.clearLogsForNewExport()
         let logWriter = try ExportLogWriter(
             itemName: item.name,
@@ -54,7 +63,16 @@ final class ExportCoordinator {
 
         ExportLANServer.ensureRunning(log: logHandler)
 
-        logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
+        if continueLANExport {
+            logHandler("Export resumed — kept pcld_ios_media media and checkpoint on disk")
+        } else if archivedPriorMediaFiles > 0 {
+            logHandler(
+                "Export started — retained \(archivedPriorMediaFiles) prior file(s) in pcld_ios_media/ " +
+                    "(_3D_<n>K when tier > 2K inferred, then _<timestamp>; keeping last \(ExportMediaArchive.retentionCount); loop/ ignored)"
+            )
+        } else {
+            logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
+        }
         logHandler("Logs: export_latest.txt, \(logWriter.sessionLogFileName), export_progress.txt (in Exports)")
         logHandler("pCloud region: \(credentials.region.displayName) (\(credentials.region.webDAVHost))")
         let authProvider = WebDAVAuth.provider(fallback: credentials)
@@ -109,16 +127,21 @@ final class ExportCoordinator {
                 ) {
                     logHandler(
                         "Export finished — pcld_ios_media/loop/op_*.mp4 and vanilla download " +
-                            "(pcld_ios_media/_vanilla_download.*) kept until next export or Clear media"
+                            "(pcld_ios_media/_vanilla_download.*) kept until next export renames with _<timestamp> " +
+                            "(last \(ExportMediaArchive.retentionCount) retained; loop/ not retained)"
                     )
                 } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
                     || FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
                     logHandler(
                         "Export finished — pcld_ios_media/loop/op_*.mp4 and " +
-                            "pcld_ios_media/_working_pcloud_transcode.mp4 (pCloud transcode) kept until next export or Clear media"
+                            "pcld_ios_media/_working_pcloud_transcode.mp4 (pCloud transcode) kept until next export renames with _<timestamp>"
                     )
                 } else {
-                    logHandler("Export finished — pcld_ios_media/loop/op_*.mp4 and pcld_ios_media/_working.mp4 kept until next export or Clear media")
+                    logHandler(
+                        "Export finished — pcld_ios_media/loop/op_*.mp4 and pcld_ios_media/_working.mp4 " +
+                            "kept until next export (_working* renamed with _<timestamp>; loop/ not retained; " +
+                            "last \(ExportMediaArchive.retentionCount) retained)"
+                    )
                 }
             }
             logHandler(ExportPaths.describeExportMediaOnDisk())

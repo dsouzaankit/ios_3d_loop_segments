@@ -8,7 +8,7 @@ enum SegmentCleanup {
         await PhotosSegmentPublisher.removeAllPublished(log: log)
     }
 
-    /// Segment MP4s, staging files, and `_working.mp4` in `Exports/` (not Photos).
+    /// Segment MP4s, staging files, active working/vanilla copies, and timestamp-suffixed retains in `pcld_ios_media/` (not Photos).
     @discardableResult
     static func removeExportMedia(log: ((String) -> Void)? = nil) -> Int {
         var removed = removeExportFiles(log: log)
@@ -21,7 +21,14 @@ enum SegmentCleanup {
         if ExportPaths.removeVanillaDownloadCopies(log: log) {
             removed += 1
         }
+        removed += ExportMediaArchive.removeAllRetainedMedia(log: log)
         return removed
+    }
+
+    /// Drop older timestamp-suffixed files in `pcld_ios_media/`; keep the newest `keepCount` export stamps (`loop/` untouched).
+    @discardableResult
+    static func trimExportMediaArchives(keepCount: Int = ExportMediaArchive.manualKeepCount, log: ((String) -> Void)? = nil) -> Int {
+        ExportMediaArchive.pruneRetainedMedia(keepCount: keepCount, log: log)
     }
 
     @discardableResult
