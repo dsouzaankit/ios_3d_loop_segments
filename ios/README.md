@@ -228,6 +228,7 @@ Implementation: `ExportMediaArchive.swift`, `ExportRetentionSourceCatalog.swift`
 |--------|----------------------------------------|------------------------|
 | **Pigasus** (direct URL / network file) | **Works** — uses HTTP **Range** | Should work |
 | **Skybox (WebDAV to phone)** | Often **works** for LAN export (app serves WebDAV + Basic auth) | **5K+ HEVC** may still show “too large to decode”; try segments or Pigasus |
+| **PotPlayer (WebDAV / open URL)** | Use **`http://<ip>:8765/pcld_ios_media/_working.mp4`** (not `/_working.mp4` alone on older builds). WebDAV root **`http://<ip>:8765/`** · **`admin` / `iosadmin`**. Ignore **`?WithCaption`** (player-added). Sparse holes may still break decode — prefer **`loop/op_00.mp4`**. |
 | **Quest browser** (index link, seek in player) | Works for dense-filled regions | Works (**build 173+** — skip broken faststart remux from 171–172) |
 
 **In-progress export on Quest:** **Skybox** → Add WebDAV server → `http://<ip>:8765/` · **`admin` / `iosadmin`**, or **Pigasus** / browser with direct URLs.

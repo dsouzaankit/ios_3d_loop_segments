@@ -1235,16 +1235,30 @@ enum ExportLANServer {
         })
     }
 
+    /// Some clients (PotPlayer WebDAV, hand-typed URLs) request `/_working.mp4` or `loop/op_00.mp4`
+    /// without the `pcld_ios_media/` prefix. Try the canonical path second.
+    private static func lanMediaRelativePathCandidates(_ relativePath: String) -> [String] {
+        guard !relativePath.contains("..") else { return [] }
+        let media = ExportPaths.mediaExportFolderName
+        if relativePath.hasPrefix("\(media)/") {
+            return [relativePath]
+        }
+        return [relativePath, "\(media)/\(relativePath)"]
+    }
+
     private static func resolveExportFile(relativePath: String) -> URL? {
         guard !relativePath.contains("..") else { return nil }
         if relativePath == "status.json" { return nil }
-        let allowed = ExportPaths.isLANBrowsableMediaRelativePath(relativePath)
-            || ExportPaths.isLANMediaTreeServableRelativePath(relativePath)
-            || rootServableRelativePaths().contains(relativePath)
-        guard allowed else { return nil }
-        let url = ExportPaths.urlUnderExports(relativePath: relativePath)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return url
+        for candidate in lanMediaRelativePathCandidates(relativePath) {
+            let allowed = ExportPaths.isLANBrowsableMediaRelativePath(candidate)
+                || ExportPaths.isLANMediaTreeServableRelativePath(candidate)
+                || rootServableRelativePaths().contains(candidate)
+            guard allowed else { continue }
+            let url = ExportPaths.urlUnderExports(relativePath: candidate)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            return url
+        }
+        return nil
     }
 
     private static func htmlEscape(_ text: String) -> String {
