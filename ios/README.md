@@ -169,6 +169,8 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 
 **Vanilla MP4/MOV/M4V:** WebDAV fills `_vanilla_download.*` while bytes arrive. If moov was at EOF, a **`_vanilla_faststart.mp4`** sidecar is built (also refreshed during download); when the download finishes the dense **`_vanilla_download.*` file is removed** and LAN/segments use the faststart copy only. If pCloud already had moov-at-head, only the download file is kept (no sidecar).
 
+**Multiple root media files (same export):** Usually **one** playable file at root after a path finishes (sparse → `_working.mp4`; transcode → `_working_pcloud_transcode.mp4`; vanilla moov-at-EOF → `_vanilla_faststart.mp4` only). You can still get **2+** archivable root videos when: **(1)** vanilla download is **in progress** — growing `_vanilla_download.*` plus a partial `_vanilla_faststart.mp4` from 25% remux refreshes; **(2)** **Stop** or **new-export handoff** while that pair exists (both archived in one timestamp batch if both are still on disk); **(3)** a **prior export** was not archived (paused / in-progress skip) and root media from the old run remains when the new run finishes; **(4)** **sparse + stale vanilla** for the same `fileKey` — `syncVanillaDownloadWithExportItem` can keep a partial `_vanilla_download.*` while sparse builds `_working.mp4` (finish may archive both). **`loop/op_*.mp4`** are separate and never counted as root retention media.
+
 | Step | What happens |
 |------|----------------|
 | **New export** | Prior active root files **moved** into `archive/`; auto-prune keeps **10** newest batches |
@@ -177,7 +179,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
 | **Clear media** / **`clear_media`** | Removes active root files, all `archive/` retains, and `loop/` segments |
 
-**Filename pattern:** `<pCloud-basename>[_3D_<nK]_yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`**. Example: `archive/MyMovie_3D_4K_2026-05-22_14-30-52.mp4`. Legacy `_working_*` / `_vanilla_*` archive names are kept if already on disk.
+**Filename pattern:** `<pCloud-basename>[_3D_<nK>][_appFast_]yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`**. Example: `archive/MyMovie_3D_4K_2026-05-22_14-30-52.mp4`; after in-app moov-at-end remux: `archive/MyMovie_3D_4K_appFast_2026-05-22_14-30-52.mp4`. Legacy `_working_*` / `_vanilla_*` archive names are kept if already on disk. Prune/trim batches still key on the timestamp only (`_appFast_` does not split batches).
 
 **`_3D_<nK>` tier** (only when **n > 2**): inferred from video dimensions before archive (probes active root media). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
 

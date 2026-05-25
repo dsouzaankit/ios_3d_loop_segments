@@ -228,6 +228,7 @@ enum ExportPaths {
             }
         }
         ExportPlaybackState.shared.promoteVanillaLANToFaststart()
+        ExportRetentionSourceCatalog.markAppFaststartRemuxCompleted()
     }
 
     /// Hide stale sparse `_working.mp4` on LAN while vanilla (or transcode) is the active source.

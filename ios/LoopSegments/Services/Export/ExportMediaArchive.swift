@@ -1,12 +1,14 @@
 import Foundation
 
-/// Moves finished root-level `pcld_ios_media/` files into `pcld_ios_media/archive/<pcloud-name>[_3D_<n>K]_<local-time>.<ext>`.
+/// Moves finished root-level `pcld_ios_media/` files into `pcld_ios_media/archive/<pcloud-name>[_3D_<nK>][_appFast_]<local-time>.<ext>`.
 /// `pcld_ios_media/loop/` (`op_*.mp4`) is not retained — only siblings like `_working.mp4`, vanilla/transcode copies.
 enum ExportMediaArchive {
     static let retentionCount = 10
     static let manualKeepCount = 2
 
     private static let archiveFolderName = "archive"
+    /// In archive filenames when media came from in-app moov-at-end remux (`_vanilla_faststart.mp4`).
+    static let appFastArchiveTag = "_appFast_"
 
     private static let reservedTopLevelNames: Set<String> = [
         ExportPaths.segmentLoopFolderName,
@@ -48,9 +50,28 @@ enum ExportMediaArchive {
     }
 
     private static func localRetentionSuffix(in stem: String) -> String? {
+        let withAppFast = #"_appFast_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"#
+        if let range = stem.range(of: withAppFast, options: .regularExpression) {
+            return String(stem[range.lowerBound ..< stem.endIndex])
+        }
         let pattern = #"_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"#
         guard let range = stem.range(of: pattern, options: .regularExpression) else { return nil }
         return String(stem[range.lowerBound ..< stem.endIndex])
+    }
+
+    /// Batch key for prune/trim (timestamp only — strips optional `_appFast_` from the stamped suffix).
+    static func retentionBatchSuffix(fromFileName name: String) -> String? {
+        guard let suffix = retentionFileSuffix(fromFileName: name) else { return nil }
+        if suffix.hasPrefix(appFastArchiveTag) {
+            return String(suffix.dropFirst(appFastArchiveTag.count))
+        }
+        return suffix
+    }
+
+    /// After full vanilla download + moov-at-end remux (`replaceVanillaDownloadWithFaststartSidecar`).
+    static func usesAppFaststartArchiveTag(forOnDiskFileName fileName: String) -> Bool {
+        fileName == ExportPaths.vanillaFastStartURL.lastPathComponent
+            && ExportRetentionSourceCatalog.hadAppFaststartRemux()
     }
 
     private static func retentionSortDate(fromFileSuffix suffix: String) -> Date? {
@@ -62,12 +83,13 @@ enum ExportMediaArchive {
         return Date(timeIntervalSince1970: TimeInterval(epoch))
     }
 
-    /// e.g. `MyMovie_3D_4K_2026-05-22_14-30-52.mp4` from pCloud `MyMovie.mp4` (falls back to on-disk slot name).
+    /// e.g. `MyMovie_3D_4K_appFast_2026-05-22_14-30-52.mp4` after in-app faststart remux.
     static func suffixedFileName(
         forOnDiskFileName fileName: String,
         timestamp: String,
         threeDNKLabel: String?,
-        sourceFileName: String?
+        sourceFileName: String?,
+        appFastRemux: Bool = false
     ) -> String {
         let ext = (fileName as NSString).pathExtension
         var stem: String
@@ -78,6 +100,9 @@ enum ExportMediaArchive {
         }
         if let nk = threeDNKLabel, let tag = ExportVideoDimensions.threeDSuffixSegment(nkLabel: nk) {
             stem += tag
+        }
+        if appFastRemux {
+            stem += appFastArchiveTag
         }
         stem += "_\(timestamp)"
         if ext.isEmpty {
@@ -165,7 +190,7 @@ enum ExportMediaArchive {
         var bySuffix: [String: Date] = [:]
         for name in names {
             guard isRetentionArchivableMediaFileName(name) else { continue }
-            guard let suffix = retentionFileSuffix(fromFileName: name),
+            guard let suffix = retentionBatchSuffix(fromFileName: name),
                   let date = retentionSortDate(fromFileSuffix: suffix) else { continue }
             let url = archiveDirectoryURL.appendingPathComponent(name)
             var isDir: ObjCBool = false
@@ -205,6 +230,9 @@ enum ExportMediaArchive {
         if let retentionSource {
             log?("Retention: archive basename from pCloud — \(retentionSource)")
         }
+        if sources.contains(where: { usesAppFaststartArchiveTag(forOnDiskFileName: $0.lastPathComponent) }) {
+            log?("Retention: archive includes \(appFastArchiveTag) for in-app faststart remux")
+        }
         log?("Retention: local timestamp \(timestamp) (\(TimeZone.current.identifier))")
 
         do {
@@ -216,11 +244,14 @@ enum ExportMediaArchive {
 
         var archived = 0
         for source in sources {
+            let slotName = source.lastPathComponent
+            let appFast = usesAppFaststartArchiveTag(forOnDiskFileName: slotName)
             let archivedName = suffixedFileName(
-                forOnDiskFileName: source.lastPathComponent,
+                forOnDiskFileName: slotName,
                 timestamp: timestamp,
                 threeDNKLabel: threeDNK,
-                sourceFileName: retentionSource
+                sourceFileName: retentionSource,
+                appFastRemux: appFast
             )
             let destination = archiveDirectoryURL.appendingPathComponent(archivedName)
             do {
@@ -347,7 +378,7 @@ enum ExportMediaArchive {
             return 0
         }
         var removed = 0
-        for name in names where retentionFileSuffix(fromFileName: name) == suffix {
+        for name in names where retentionBatchSuffix(fromFileName: name) == suffix {
             guard isRetentionArchivableMediaFileName(name) else { continue }
             let url = archiveDirectoryURL.appendingPathComponent(name)
             var isDir: ObjCBool = false

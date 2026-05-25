@@ -5,6 +5,8 @@ enum ExportRetentionSourceCatalog {
     struct Manifest: Codable {
         var sourceFileName: String
         var fileKey: String
+        /// Set when moov-at-end remux produced `_vanilla_faststart.mp4` (archive name gets `_appFast_`).
+        var appFaststartRemux: Bool?
     }
 
     private static var manifestURL: URL {
@@ -32,6 +34,17 @@ enum ExportRetentionSourceCatalog {
 
     static func remove() {
         try? FileManager.default.removeItem(at: manifestURL)
+    }
+
+    static func markAppFaststartRemuxCompleted() {
+        guard var manifest = read() else { return }
+        manifest.appFaststartRemux = true
+        guard let data = try? JSONEncoder().encode(manifest) else { return }
+        try? data.write(to: manifestURL, options: .atomic)
+    }
+
+    static func hadAppFaststartRemux() -> Bool {
+        read()?.appFaststartRemux == true
     }
 
     /// Safe stem for `archive/<stem>[_3D_*]_<time>.<ext>` (preserves pCloud basename, not pipeline slot names).
