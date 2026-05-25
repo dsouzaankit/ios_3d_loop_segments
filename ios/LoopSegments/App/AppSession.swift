@@ -4,6 +4,8 @@ import Foundation
 final class AppSession: ObservableObject {
     @Published var credentials: WebDAVCredentials?
     @Published var isExportRunning = false
+    /// Published so Browse/export UI refresh when coordinator busy toggles without `isExportRunning`.
+    @Published private(set) var isExportSessionActive = false
     /// WebDAV folder path stack for the browser (survives Export push/pop on the NavigationStack).
     @Published var browserPathStack: [String] = ["/"]
 
@@ -19,14 +21,29 @@ final class AppSession: ObservableObject {
     /// Survives leaving Export screen — must not be tied to `ExportView` lifetime.
     private var exportUITask: Task<Void, Never>?
 
-    /// True while this file is exporting (including after leaving Export UI).
-    func isExportActive(for item: WebDAVItem) -> Bool {
-        guard activeExportItem?.fileKey == item.fileKey else { return false }
-        return isExportRunning || exportCoordinator.isBusy
+    /// File key for the export in flight (survives brief `activeExportItem` nil while coordinator winds down).
+    var activeExportFileKey: String? {
+        if let activeExportItem { return activeExportItem.fileKey }
+        guard isExportSessionActive else { return nil }
+        return ResumeStore.shared.interruptedEntries().first?.fileKey
     }
 
-    var isExportSessionActive: Bool {
-        isExportRunning || exportCoordinator.isBusy
+    /// Item for sticky export banner / navigation (falls back to paused-in-progress resume entry).
+    var activeExportDisplayItem: WebDAVItem? {
+        if let activeExportItem { return activeExportItem }
+        guard isExportSessionActive else { return nil }
+        return Self.webDAVItem(from: ResumeStore.shared.interruptedEntries().first)
+    }
+
+    /// True while this file is exporting (including after leaving Export UI).
+    func isExportActive(for item: WebDAVItem) -> Bool {
+        guard isExportSessionActive else { return false }
+        if let active = activeExportItem, active.fileKey == item.fileKey { return true }
+        return ResumeStore.shared.exportWasInterrupted(for: item)
+    }
+
+    private func syncExportSessionActive() {
+        isExportSessionActive = isExportRunning || exportCoordinator.isBusy
     }
 
     /// Runs export work on the session so navigation away from Export does not cancel it.
@@ -185,11 +202,13 @@ final class AppSession: ObservableObject {
         let resumeCursorMs = continueLANExport ? priorResume.effectiveMs : nil
         ResumeStore.shared.beginExport(for: item, seekMs: seekMs)
         isExportRunning = true
+        syncExportSessionActive()
         ExportAutoLockCoordinator.exportDidStart()
         defer {
             if generation == exportGeneration {
                 ExportAutoLockCoordinator.exportDidEnd()
                 isExportRunning = false
+                syncExportSessionActive()
                 clearActiveExportItemWhenIdle(generation: generation)
             }
         }
@@ -242,6 +261,7 @@ final class AppSession: ObservableObject {
         guard exportCoordinator.isBusy else {
             if generation == exportGeneration {
                 activeExportItem = nil
+                syncExportSessionActive()
             }
             return
         }
@@ -251,8 +271,18 @@ final class AppSession: ObservableObject {
             }
             if generation == exportGeneration {
                 activeExportItem = nil
+                syncExportSessionActive()
             }
         }
+    }
+
+    private static func webDAVItem(from entry: ResumeEntry?) -> WebDAVItem? {
+        guard let entry,
+              let href = entry.href?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !href.isEmpty else { return nil }
+        let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        return WebDAVItem(href: href, name: name, isDirectory: false, contentLength: nil)
     }
 
     /// Stop export and clear paused state (removes loop/ segments; archives root working/vanilla copies).
@@ -266,6 +296,7 @@ final class AppSession: ObservableObject {
         exportCoordinator.userRequestedPause = false
         exportCoordinator.cancel()
         isExportRunning = false
+        syncExportSessionActive()
         if let item = activeExportItem {
             ResumeStore.shared.finishExport(for: item)
         } else if let entry = ResumeStore.mostRecentPausedExport(),
@@ -311,6 +342,7 @@ final class AppSession: ObservableObject {
         exportCoordinator.userRequestedCancel = false
         exportCoordinator.cancel()
         isExportRunning = false
+        syncExportSessionActive()
         if let item = activeExportItem {
             LANExportSourceDisplay.setPaused(item.name)
         }
@@ -328,6 +360,7 @@ final class AppSession: ObservableObject {
             exportCoordinator.userRequestedPause = false
             exportCoordinator.cancel()
             isExportRunning = false
+            syncExportSessionActive()
         }
         for _ in 0 ..< 300 where exportCoordinator.isBusy {
             try? await Task.sleep(nanoseconds: 100_000_000)

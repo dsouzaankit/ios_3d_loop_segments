@@ -22,7 +22,7 @@ enum LANExportContext {
 
     @MainActor
     static func referenceOrActive(from session: AppSession) -> WebDAVItem? {
-        if let active = session.activeExportItem { return active }
+        if let active = session.activeExportDisplayItem { return active }
         return loadReference()
     }
 }

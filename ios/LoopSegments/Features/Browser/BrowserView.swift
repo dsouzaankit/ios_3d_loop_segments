@@ -199,6 +199,14 @@ struct BrowserView: View {
             }
             .navigationTitle(navigationTitle)
             .navigationSubtitleIfAvailable(navigationSubtitle)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if session.isExportRunning, let item = session.activeExportDisplayItem {
+                    NavigationLink(value: item) {
+                        exportActivityBanner(for: item)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
             .navigationDestination(for: WebDAVItem.self) { item in
                 ExportView(item: item)
             }
@@ -272,6 +280,15 @@ struct BrowserView: View {
             .onChange(of: resumeStore.revision) { _, _ in
                 refreshResumeSidebar()
             }
+            .onChange(of: session.isExportRunning) { _, _ in
+                refreshResumeSidebar()
+            }
+            .onChange(of: session.isExportSessionActive) { _, _ in
+                refreshResumeSidebar()
+            }
+            .onChange(of: session.activeExportItem?.fileKey) { _, _ in
+                refreshResumeSidebar()
+            }
             .onChange(of: folderBookmarkStore.revision) { _, _ in
                 refreshFolderBookmarks()
             }
@@ -309,6 +326,29 @@ struct BrowserView: View {
     }
 
     @ViewBuilder
+    private func exportActivityBanner(for item: WebDAVItem) -> some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Exporting")
+                    .font(.subheadline.weight(.semibold))
+                Text(item.name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text("Open")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.orange)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.16))
+    }
+
+    @ViewBuilder
     private func videoRowLabel(for item: WebDAVItem) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Label(item.name, systemImage: "film")
@@ -341,7 +381,7 @@ struct BrowserView: View {
     }
 
     private func refreshResumeSidebar() {
-        let activeKey = session.isExportSessionActive ? session.activeExportItem?.fileKey : nil
+        let activeKey = session.activeExportFileKey
         pausedSidebarEntries = resumeStore.interruptedEntries(excludingFileKey: activeKey)
         pinnedSidebarEntries = resumeStore.pinnedCompletedEntries()
     }

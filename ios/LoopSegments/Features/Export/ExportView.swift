@@ -221,6 +221,26 @@ struct ExportView: View {
             }
         }
         .navigationTitle("Export")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if session.isExportActive(for: item) {
+                let resume = resumeStore.resumeStatus(for: item)
+                HStack(spacing: 10) {
+                    ProgressView()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Exporting")
+                            .font(.subheadline.weight(.semibold))
+                        Text(ResumeTimeFormat.formatMs(resume.effectiveMs))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.16))
+            }
+        }
         .navigationDestination(item: $switchExportTarget) { target in
             ExportView(
                 item: target.item,
