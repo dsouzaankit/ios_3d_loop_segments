@@ -657,6 +657,34 @@ enum ExportLANServer {
         return entries
     }
 
+    private static let archivePlaybackPrefix = "\(ExportPaths.mediaExportFolderName)/archive/"
+
+    /// Active export paths first (path order); `archive/` entries newest archival stamp first.
+    private static func listExportFilesForPlaybackIndex() -> [ExportFileEntry] {
+        let all = listExportFiles()
+        var active: [ExportFileEntry] = []
+        var archived: [ExportFileEntry] = []
+        for entry in all {
+            if entry.name.hasPrefix(archivePlaybackPrefix) {
+                archived.append(entry)
+            } else {
+                active.append(entry)
+            }
+        }
+        archived.sort { lhs, rhs in
+            playbackArchiveSortKey(lhs) > playbackArchiveSortKey(rhs)
+        }
+        return active + archived
+    }
+
+    private static func playbackArchiveSortKey(_ entry: ExportFileEntry) -> Date {
+        let fileName = (entry.name as NSString).lastPathComponent
+        if let stamped = ExportMediaArchive.archivedMediaSortDate(fileName: fileName) {
+            return stamped
+        }
+        return entry.modified ?? .distantPast
+    }
+
     private static func parseDepth(requestHeaders: String) -> Int {
         let line = requestHeaders
             .split(separator: "\r\n", omittingEmptySubsequences: true)
@@ -1480,7 +1508,7 @@ enum ExportLANServer {
 
     private static func playbackFileListHTML() -> String {
         var items: [String] = []
-        for entry in listExportFiles() {
+        for entry in listExportFilesForPlaybackIndex() {
             let name = entry.name
             var sizeNote = ""
             if entry.size > 0 {
@@ -1525,6 +1553,8 @@ enum ExportLANServer {
             } else if name.hasSuffix(".mp4"),
                       name.contains("\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/") {
                 note = " — ~60s segment in loop/ (Range supported)"
+            } else if name.hasPrefix(archivePlaybackPrefix) {
+                note = " — retained export (archive/)"
             } else if name.hasSuffix(".mp4") {
                 note = " — sparse in-progress source (seek in player to export start)"
             }

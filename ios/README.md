@@ -106,7 +106,7 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
-- **`playbackStatusHTML`**, **`playbackListHTML`** — server-rendered playback blocks (replace in-page without reload).
+- **`playbackStatusHTML`**, **`playbackListHTML`** — server-rendered playback blocks (replace in-page without reload). **`On phone (playback)`** lists active export paths first; **`pcld_ios_media/archive/`** entries are sorted by archival timestamp **newest first** (parsed from the filename stamp).
 - **`lanLive`** — WAN Mbps / fill dashboard lines while export is active.
 - **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.
 - **`files`** — servable export paths with `bytes` / `modified`.

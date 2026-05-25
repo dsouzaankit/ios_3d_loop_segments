@@ -83,6 +83,12 @@ enum ExportMediaArchive {
         return Date(timeIntervalSince1970: TimeInterval(epoch))
     }
 
+    /// Archival time embedded in `archive/<name>_yyyy-MM-dd_HH-mm-ss.ext` (or legacy unix suffix).
+    static func archivedMediaSortDate(fileName: String) -> Date? {
+        guard let suffix = retentionFileSuffix(fromFileName: fileName) else { return nil }
+        return retentionSortDate(fromFileSuffix: suffix)
+    }
+
     /// e.g. `MyMovie_3D_4K_appFast_2026-05-22_14-30-52.mp4` after in-app faststart remux.
     static func suffixedFileName(
         forOnDiskFileName fileName: String,
