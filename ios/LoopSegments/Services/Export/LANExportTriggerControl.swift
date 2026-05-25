@@ -7,6 +7,8 @@ struct LANExportTrigger: Codable {
         case resumeExport = "resume_export"
         case pauseExport = "pause_export"
         case stopExport = "stop_export"
+        case clearMedia = "clear_media"
+        case trimMedia = "trim_media"
     }
 
     enum RandomPool: String, Codable {
@@ -72,10 +74,13 @@ enum LANExportTriggerControl {
         credentials: WebDAVCredentials?,
         currentItem: WebDAVItem,
         isExportRunning: Bool,
+        isExportCoordinatorBusy: Bool,
         prepareForFreshStart: @escaping () async -> Void,
         onStartExport: @escaping (WebDAVItem, Int64) -> Void,
         onPause: @escaping () -> Void,
-        onStop: @escaping () -> Void
+        onStop: @escaping () -> Void,
+        onClearMedia: @escaping () -> Int,
+        onTrimMedia: @escaping () -> Int
     ) async -> String? {
         guard isEnabled else { return nil }
         guard ExportAutoLockCoordinator.appIsActive else { return nil }
@@ -251,11 +256,11 @@ enum LANExportTriggerControl {
 
         case .stopExport:
             let hasPausedExport = ResumeStore.mostRecentPausedExport() != nil
-            guard isExportRunning || hasPausedExport else {
+            guard isExportRunning || hasPausedExport || ExportMediaArchive.hasActiveExportMediaOnDisk() else {
                 writeAck(
                     command: trigger.command.rawValue,
                     status: "rejected",
-                    message: "No export running",
+                    message: "No export to stop",
                     triggerId: trigger.id
                 )
                 return "Nothing to stop"
@@ -263,11 +268,53 @@ enum LANExportTriggerControl {
             writeAck(
                 command: trigger.command.rawValue,
                 status: "accepted",
-                message: "Stop requested",
+                message: "Stop requested — loop/ removed, working copies archived",
                 triggerId: trigger.id
             )
             onStop()
             return "LAN trigger — stopped"
+
+        case .clearMedia:
+            guard !isExportRunning, !isExportCoordinatorBusy else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: "Export running — stop first",
+                    triggerId: trigger.id
+                )
+                return "Clear media rejected — export running"
+            }
+            let cleared = onClearMedia()
+            writeAck(
+                command: trigger.command.rawValue,
+                status: "accepted",
+                message: cleared > 0
+                    ? "Cleared \(cleared) media file(s) (active + archive/)"
+                    : "No media files to clear",
+                triggerId: trigger.id
+            )
+            return cleared > 0 ? "LAN trigger — cleared \(cleared) file(s)" : "LAN trigger — no media to clear"
+
+        case .trimMedia:
+            guard !isExportRunning, !isExportCoordinatorBusy else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: "Export running — stop first",
+                    triggerId: trigger.id
+                )
+                return "Trim media rejected — export running"
+            }
+            let trimmed = onTrimMedia()
+            writeAck(
+                command: trigger.command.rawValue,
+                status: "accepted",
+                message: trimmed > 0
+                    ? "Trimmed archive/ — removed \(trimmed) file(s) (kept last \(ExportMediaArchive.manualKeepCount) batches)"
+                    : "Nothing to trim (at or below \(ExportMediaArchive.manualKeepCount) batches)",
+                triggerId: trigger.id
+            )
+            return trimmed > 0 ? "LAN trigger — trimmed \(trimmed) file(s)" : "LAN trigger — nothing to trim"
         }
     }
 

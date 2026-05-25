@@ -1,15 +1,17 @@
 import Foundation
 
-/// Renames finished root-level `pcld_ios_media/` files with a local timestamp suffix before a new export overwrites them.
+/// Moves finished root-level `pcld_ios_media/` files into `pcld_ios_media/archive/<name>[_3D_<n>K]_<local-time>.<ext>`.
 /// `pcld_ios_media/loop/` (`op_*.mp4`) is not retained — only siblings like `_working.mp4`, vanilla/transcode copies.
 enum ExportMediaArchive {
     static let retentionCount = 10
     static let manualKeepCount = 2
 
+    private static let archiveFolderName = "archive"
+
     private static let reservedTopLevelNames: Set<String> = [
         ExportPaths.segmentLoopFolderName,
         "scripts",
-        "archive",
+        archiveFolderName,
     ]
 
     private static let retentionTimestampFormatter: DateFormatter = {
@@ -19,6 +21,10 @@ enum ExportMediaArchive {
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         return formatter
     }()
+
+    private static var archiveDirectoryURL: URL {
+        ExportPaths.mediaExportDirectory.appendingPathComponent(archiveFolderName, isDirectory: true)
+    }
 
     /// Local wall-clock stamp for new retains, e.g. `2026-05-22_14-30-52`.
     static func newRetentionTimestamp() -> String {
@@ -42,7 +48,6 @@ enum ExportMediaArchive {
     }
 
     private static func localRetentionSuffix(in stem: String) -> String? {
-        // `_yyyy-MM-dd_HH-mm-ss` at end of stem (after optional `_3D_4K`, etc.).
         let pattern = #"_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"#
         guard let range = stem.range(of: pattern, options: .regularExpression) else { return nil }
         return String(stem[range.lowerBound ..< stem.endIndex])
@@ -72,7 +77,7 @@ enum ExportMediaArchive {
         return "\(stem).\(ext)"
     }
 
-    /// Unstamped root-level media files only (`pcld_ios_media/`, not `loop/`).
+    /// Unstamped root-level media files only (`pcld_ios_media/`, not `loop/` or `archive/`).
     static func activeRootMediaFiles() -> [URL] {
         let fm = FileManager.default
         _ = ExportPaths.mediaExportDirectory
@@ -95,17 +100,33 @@ enum ExportMediaArchive {
         !activeRootMediaFiles().isEmpty
     }
 
-    /// Newest retain batches first (by parsed local time or legacy unix).
+    /// Retention applies only when handing off **finished** on-disk media to a **new** export — not while active or paused.
+    static func shouldArchivePriorMediaBeforeNewExport(continueLANExport: Bool, item: WebDAVItem) -> Bool {
+        if continueLANExport { return false }
+        if ResumeStore.isExportInProgress(forFileKey: item.fileKey) { return false }
+        if let manifest = WorkingSourceSparseCatalog.readManifest(),
+           ResumeStore.isExportInProgress(forFileKey: manifest.fileKey) {
+            return false
+        }
+        if let manifest = VanillaDownloadResumeCatalog.readManifest(),
+           ResumeStore.isExportInProgress(forFileKey: manifest.fileKey) {
+            return false
+        }
+        return true
+    }
+
+    /// Newest retain batches first (by parsed local time or legacy unix) under `archive/`.
     static func collectRetentionStampSuffixes() -> [String] {
+        migrateRetainedFilesIntoArchive(log: nil)
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: ExportPaths.mediaExportDirectory.path) else {
+        guard let names = try? fm.contentsOfDirectory(atPath: archiveDirectoryURL.path) else {
             return []
         }
         var bySuffix: [String: Date] = [:]
         for name in names {
             guard let suffix = retentionFileSuffix(fromFileName: name),
                   let date = retentionSortDate(fromFileSuffix: suffix) else { continue }
-            let url = ExportPaths.mediaExportDirectory.appendingPathComponent(name)
+            let url = archiveDirectoryURL.appendingPathComponent(name)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
             if let existing = bySuffix[suffix] {
@@ -121,64 +142,155 @@ enum ExportMediaArchive {
 
     @discardableResult
     static func archiveActiveMedia(timestamp: String, log: ((String) -> Void)? = nil) -> Int {
+        migrateRetainedFilesIntoArchive(log: log)
+
         let fm = FileManager.default
         let sources = activeRootMediaFiles()
         guard !sources.isEmpty else { return 0 }
 
         let threeDNK = ExportVideoDimensions.probeNKLabelForRetention(from: sources)
         if let threeDNK, ExportVideoDimensions.threeDSuffixSegment(nkLabel: threeDNK) != nil {
-            log?("Retention: inferred \(threeDNK) — suffix _3D_\(threeDNK)")
+            log?("Retention: inferred \(threeDNK) — archive name includes _3D_\(threeDNK)")
         }
         log?("Retention: local timestamp \(timestamp) (\(TimeZone.current.identifier))")
 
-        var renamed = 0
+        do {
+            try fm.createDirectory(at: archiveDirectoryURL, withIntermediateDirectories: true)
+        } catch {
+            log?("Could not create archive/: \(error.localizedDescription)")
+            return 0
+        }
+
+        var moved = 0
         for source in sources {
-            let newName = suffixedFileName(
+            let archivedName = suffixedFileName(
                 for: source.lastPathComponent,
                 timestamp: timestamp,
                 threeDNKLabel: threeDNK
             )
-            let destination = ExportPaths.mediaExportDirectory.appendingPathComponent(newName)
+            let destination = archiveDirectoryURL.appendingPathComponent(archivedName)
             do {
                 if fm.fileExists(atPath: destination.path) {
                     try fm.removeItem(at: destination)
                 }
                 try fm.moveItem(at: source, to: destination)
-                renamed += 1
+                moved += 1
                 log?(
-                    "Retained \(ExportPaths.pathRelativeToExports(source)) → " +
+                    "Archived \(ExportPaths.pathRelativeToExports(source)) → " +
                         "\(ExportPaths.pathRelativeToExports(destination))"
                 )
             } catch {
-                log?("Could not retain \(source.lastPathComponent): \(error.localizedDescription)")
+                log?("Could not archive \(source.lastPathComponent): \(error.localizedDescription)")
             }
         }
 
-        if renamed > 0 {
+        if moved > 0 {
             WorkingSourceSparseCatalog.remove()
             if !ExportPaths.vanillaDownloadCopyExistsOnDisk() {
                 ExportPlaybackState.shared.setVanillaDownloadActive(false)
             }
             ExportPlaybackState.shared.clearSparseWorkingPlaybackHints()
         }
-        return renamed
+        return moved
+    }
+
+    /// Root-level suffixed retains and `archive/export_*` batch folders → flat `archive/<file>…`.
+    @discardableResult
+    private static func migrateRetainedFilesIntoArchive(log: ((String) -> Void)?) -> Int {
+        var migrated = 0
+        migrated += migrateRootSuffixedFilesIntoArchive(log: log)
+        migrated += flattenLegacyExportBatchSubfolders(log: log)
+        return migrated
+    }
+
+    @discardableResult
+    private static func migrateRootSuffixedFilesIntoArchive(log: ((String) -> Void)?) -> Int {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: ExportPaths.mediaExportDirectory.path) else {
+            return 0
+        }
+        let stamped = names.filter { isRetentionStampedFileName($0) }
+        guard !stamped.isEmpty else { return 0 }
+        do {
+            try fm.createDirectory(at: archiveDirectoryURL, withIntermediateDirectories: true)
+        } catch {
+            log?("Could not create archive/ for migration: \(error.localizedDescription)")
+            return 0
+        }
+        var migrated = 0
+        for name in stamped {
+            let source = ExportPaths.mediaExportDirectory.appendingPathComponent(name)
+            let destination = archiveDirectoryURL.appendingPathComponent(name)
+            do {
+                if fm.fileExists(atPath: destination.path) {
+                    try fm.removeItem(at: destination)
+                }
+                try fm.moveItem(at: source, to: destination)
+                migrated += 1
+                log?("Migrated \(ExportPaths.pathRelativeToExports(source)) → archive/\(name)")
+            } catch {
+                log?("Could not migrate \(name) into archive/: \(error.localizedDescription)")
+            }
+        }
+        return migrated
+    }
+
+    /// Older builds used `archive/export_<unix>/` subfolders.
+    @discardableResult
+    private static func flattenLegacyExportBatchSubfolders(log: ((String) -> Void)?) -> Int {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: archiveDirectoryURL.path),
+              let entries = try? fm.contentsOfDirectory(atPath: archiveDirectoryURL.path) else {
+            return 0
+        }
+        var migrated = 0
+        for entry in entries where entry.hasPrefix("export_") {
+            let batchDir = archiveDirectoryURL.appendingPathComponent(entry, isDirectory: true)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: batchDir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            guard let files = try? fm.contentsOfDirectory(atPath: batchDir.path) else { continue }
+            for name in files {
+                let source = batchDir.appendingPathComponent(name)
+                var fileIsDir: ObjCBool = false
+                guard fm.fileExists(atPath: source.path, isDirectory: &fileIsDir), !fileIsDir.boolValue else {
+                    continue
+                }
+                let destination = archiveDirectoryURL.appendingPathComponent(name)
+                do {
+                    if fm.fileExists(atPath: destination.path) {
+                        try fm.removeItem(at: destination)
+                    }
+                    try fm.moveItem(at: source, to: destination)
+                    migrated += 1
+                } catch {
+                    log?("Could not flatten archive/\(entry)/\(name): \(error.localizedDescription)")
+                }
+            }
+            try? fm.removeItem(at: batchDir)
+            if !files.isEmpty {
+                log?("Flattened legacy archive/\(entry)/ (\(files.count) file(s))")
+            }
+        }
+        return migrated
     }
 
     @discardableResult
     static func removeFiles(forStampSuffix suffix: String, log: ((String) -> Void)? = nil) -> Int {
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: ExportPaths.mediaExportDirectory.path) else {
+        guard let names = try? fm.contentsOfDirectory(atPath: archiveDirectoryURL.path) else {
             return 0
         }
         var removed = 0
         for name in names where retentionFileSuffix(fromFileName: name) == suffix {
-            let url = ExportPaths.mediaExportDirectory.appendingPathComponent(name)
+            let url = archiveDirectoryURL.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
             do {
                 try fm.removeItem(at: url)
                 removed += 1
                 log?("Removed \(ExportPaths.pathRelativeToExports(url))")
             } catch {
-                log?("Could not remove \(name): \(error.localizedDescription)")
+                log?("Could not remove archive/\(name): \(error.localizedDescription)")
             }
         }
         return removed
@@ -186,6 +298,7 @@ enum ExportMediaArchive {
 
     @discardableResult
     static func pruneRetainedMedia(keepCount: Int, log: ((String) -> Void)? = nil) -> Int {
+        migrateRetainedFilesIntoArchive(log: log)
         let suffixes = collectRetentionStampSuffixes()
         guard suffixes.count > keepCount else { return 0 }
         var removed = 0
@@ -197,28 +310,11 @@ enum ExportMediaArchive {
 
     @discardableResult
     static func removeAllRetainedMedia(log: ((String) -> Void)? = nil) -> Int {
+        migrateRetainedFilesIntoArchive(log: log)
         var removed = 0
         for suffix in collectRetentionStampSuffixes() {
             removed += removeFiles(forStampSuffix: suffix, log: log)
         }
-        removed += removeLegacyArchiveFolder(log: log)
         return removed
-    }
-
-    /// Older builds used `pcld_ios_media/archive/export_<unix>/`.
-    @discardableResult
-    private static func removeLegacyArchiveFolder(log: ((String) -> Void)? = nil) -> Int {
-        let fm = FileManager.default
-        let url = ExportPaths.mediaExportDirectory.appendingPathComponent("archive", isDirectory: true)
-        guard fm.fileExists(atPath: url.path) else { return 0 }
-        let count = (try? fm.subpathsOfDirectory(atPath: url.path).count) ?? 0
-        do {
-            try fm.removeItem(at: url)
-            log?("Removed legacy pcld_ios_media/archive/ (\(count) path(s))")
-            return max(count, 1)
-        } catch {
-            log?("Could not remove legacy archive/: \(error.localizedDescription)")
-            return 0
-        }
     }
 }

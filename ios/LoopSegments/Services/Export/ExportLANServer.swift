@@ -1692,6 +1692,10 @@ enum ExportLANServer {
         <div class="row">
           <button type="button" id="export-random">Export random in folder</button>
         </div>
+        <div class="row">
+          <button type="button" id="export-trim-media">Trim media (keep last 2)</button>
+          <button type="button" id="export-clear-media">Clear media</button>
+        </div>
         <p id="trigger-status" class="muted"></p>
         </div>
         <script>
@@ -1888,7 +1892,17 @@ enum ExportLANServer {
               case "stop_export":
                 return {
                   title: "Stopping export",
-                  detail: "Please wait while the phone stops the current export." + foreground
+                  detail: "Please wait while the phone stops export, removes loop/ segments, and archives working copies." + foreground
+                };
+              case "clear_media":
+                return {
+                  title: "Clearing media",
+                  detail: "Please wait while the phone permanently deletes active export media and archive/ files." + foreground
+                };
+              case "trim_media":
+                return {
+                  title: "Trimming archive",
+                  detail: "Please wait while the phone removes older archive/ batches (keeps last 2)." + foreground
                 };
               default:
                 return {
@@ -1905,7 +1919,7 @@ enum ExportLANServer {
             var detailEl = document.getElementById("lan-export-pending-detail");
             if (titleEl && title) titleEl.textContent = title;
             if (detailEl && detail) detailEl.textContent = detail;
-            ["export-resume", "export-pause", "export-stop", "export-random"].forEach(function (id) {
+            ["export-resume", "export-pause", "export-stop", "export-random", "export-trim-media", "export-clear-media"].forEach(function (id) {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !!active;
             });
@@ -2040,6 +2054,15 @@ enum ExportLANServer {
           };
           document.getElementById("export-stop").onclick = function () {
             putTrigger({ version: 1, command: "stop_export", id: uuid() })
+              .catch(function (e) { setStatus(e.message || e, true); });
+          };
+          document.getElementById("export-trim-media").onclick = function () {
+            putTrigger({ version: 1, command: "trim_media", id: uuid() })
+              .catch(function (e) { setStatus(e.message || e, true); });
+          };
+          document.getElementById("export-clear-media").onclick = function () {
+            if (!confirm("Permanently delete active export media and all archive/ files on the phone?")) return;
+            putTrigger({ version: 1, command: "clear_media", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("pcloud-sort").onchange = function (ev) {

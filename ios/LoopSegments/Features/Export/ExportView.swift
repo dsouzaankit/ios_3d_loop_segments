@@ -455,7 +455,10 @@ struct ExportView: View {
         } header: {
             Text("Export")
         } footer: {
-            Text("Pause keeps the checkpoint and files on disk. Stop clears paused state and removes published segment files.")
+            Text(
+                "Pause keeps checkpoint, _working.mp4, and loop/ segments. Stop clears paused state, removes loop/ segments, " +
+                    "and moves _working/vanilla/transcode copies into archive/. Clear media deletes active + archive/ (not logs)."
+            )
                 .font(.footnote)
         }
     }
@@ -498,7 +501,10 @@ struct ExportView: View {
             .disabled(session.isExportRunning)
             .foregroundStyle(trimMediaAcknowledged ? .green : Color.orange)
             .sensoryFeedback(.success, trigger: trimMediaAckTrigger)
-            Text("Active: loop/op_00|01.mp4, _working.mp4. New export renames prior root files with _3D_<n>K when tier > 2K, then _yyyy-MM-dd_HH-mm-ss local time (keeps 10; loop/ ignored). Trim media drops older retains, keeping 2.")
+            Text(
+                "Active: loop/op_00|01.mp4, _working.mp4 while exporting. Finish, Stop, or new-export handoff moves root copies to archive/<name>[_3D_<n>K]_<local-time> " +
+                    "(keeps 10 batches; loop/ not archived). Trim keeps 2 archive batches. Clear wipes active + archive/."
+            )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -543,9 +549,7 @@ struct ExportView: View {
 
     private func clearExportMedia() {
         guard !session.isExportRunning else { return }
-        ResumeStore.shared.clearPinnedCompletedExports()
-        ResumeStore.shared.finishExport(for: item)
-        let count = SegmentCleanup.removeExportMedia()
+        let count = session.clearExportMedia(referenceItem: item)
         liveLogTail = ""
         status = count > 0 ? "Cleared \(count) media file(s) from Exports" : "No media files in Exports"
         refreshLogHint()
@@ -561,13 +565,13 @@ struct ExportView: View {
 
     private func trimExportMediaKeepingRecent() {
         guard !session.isExportRunning else { return }
-        let count = SegmentCleanup.trimExportMediaArchives()
+        let count = session.trimExportMediaArchives()
         liveLogTail = ""
         let keep = ExportMediaArchive.manualKeepCount
         let stamps = ExportMediaArchive.collectRetentionStampSuffixes().count
         status = count > 0
-            ? "Trimmed retained media — kept \(min(stamps, keep)) timestamp(s), removed \(count) file(s)"
-            : "No retained exports to trim (at or below \(keep) timestamps in pcld_ios_media/)"
+            ? "Trimmed archive/ media — kept \(min(stamps, keep)) timestamp batch(es), removed \(count) file(s)"
+            : "No retained exports to trim (at or below \(keep) batches in pcld_ios_media/archive/)"
         refreshLogHint()
     }
 
@@ -612,10 +616,10 @@ struct ExportView: View {
             if resume.isPaused {
                 status = "Paused — tap Start export to continue from \(ResumeTimeFormat.formatMs(resume.effectiveMs))"
             } else {
-                status = "Stopped — segment files removed from device"
+                status = "Stopped — loop/ removed; working copies archived"
             }
         } catch SegmentExporterError.cancelled {
-            status = "Stopped — segment files removed from device"
+            status = "Stopped — loop/ removed; working copies archived"
         } catch ExportError.stillStopping {
             errorMessage = ExportError.stillStopping.errorDescription
             status = "Wait for the previous export to finish stopping"

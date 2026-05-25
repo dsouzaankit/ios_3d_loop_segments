@@ -201,10 +201,9 @@ final class ResumeStore: ObservableObject {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    /// Pins the item in Browse when an export finishes and `_working.mp4` exists on disk (clears other pins). Segments are under `pcld_ios_media/loop/`.
+    /// Pins the item in Browse when an export finishes and export media exists (root, `archive/`, or `loop/`). Clears other pins.
     func pinCompletedExportIfMediaOnDisk(for item: WebDAVItem) {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: ExportPaths.workingSourceURL.path) else { return }
+        guard Self.hasCompletedExportMediaOnDisk() else { return }
         var entries = load()
         for i in entries.indices {
             entries[i].pinnedCompleted = entries[i].fileKey == item.fileKey
@@ -221,6 +220,20 @@ final class ResumeStore: ObservableObject {
             entries.append(entry)
         }
         persist(entries)
+    }
+
+    private static func hasCompletedExportMediaOnDisk() -> Bool {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: ExportPaths.workingSourceURL.path) { return true }
+        if ExportPaths.vanillaDownloadCopyExistsOnDisk() { return true }
+        if fm.fileExists(atPath: ExportPaths.workingTranscodedURL.path) { return true }
+        if !ExportMediaArchive.collectRetentionStampSuffixes().isEmpty { return true }
+        for index in 0 ..< ExportPaths.segmentFileCount {
+            if fm.fileExists(atPath: ExportPaths.segmentURL(index: index).path) {
+                return true
+            }
+        }
+        return false
     }
 
     func dismissPinnedCompleted(_ entry: ResumeEntry) {

@@ -25,6 +25,7 @@ enum LANExportTriggerRunner {
             credentials: session.credentials,
             currentItem: reference,
             isExportRunning: session.isExportRunning,
+            isExportCoordinatorBusy: session.isExportCoordinatorBusy,
             prepareForFreshStart: { await session.prepareForLANFreshExport() },
             onStartExport: { item, seek in
                 LANExportContext.saveReference(item)
@@ -37,7 +38,9 @@ enum LANExportTriggerRunner {
                 }
             },
             onPause: { session.pauseExport() },
-            onStop: { session.cancelExport() }
+            onStop: { session.cancelExport() },
+            onClearMedia: { session.clearExportMedia(referenceItem: reference) },
+            onTrimMedia: { session.trimExportMediaArchives() }
         )
     }
 }

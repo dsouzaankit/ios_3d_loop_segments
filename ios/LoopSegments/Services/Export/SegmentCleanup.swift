@@ -2,13 +2,44 @@ import Foundation
 
 /// Removes rotating segment files from app storage and the Photos library.
 enum SegmentCleanup {
-    /// Stop: segment MP4s + Photos only (`_working.mp4` kept until next export or Clear media).
+    /// Stop: segment MP4s + Photos only (root working/vanilla copies archived separately on Stop).
     static func removeAllSegments(log: ((String) -> Void)? = nil) async {
         removeExportFiles(log: log)
         await PhotosSegmentPublisher.removeAllPublished(log: log)
     }
 
-    /// Segment MP4s, staging files, active working/vanilla copies, and timestamp-suffixed retains in `pcld_ios_media/` (not Photos).
+    /// Stop / `stop_export`: drop `loop/` (+ Photos when enabled), archive root copies, prune to retention limit.
+    @discardableResult
+    static func performStopCleanup(log: ((String) -> Void)? = nil) async -> Int {
+        await removeAllSegments(log: log)
+        let timestamp = ExportMediaArchive.newRetentionTimestamp()
+        let archived = ExportMediaArchive.archiveActiveMedia(timestamp: timestamp, log: log)
+        if archived > 0 {
+            _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount, log: log)
+            log?(
+                "Stop: archived \(archived) file(s) to pcld_ios_media/archive/ " +
+                    "(<name>[_3D_<n>K]_<local-time>; loop/ removed)"
+            )
+        } else {
+            log?("Stop: removed pcld_ios_media/loop/op_*.mp4 (no root media to archive)")
+        }
+        return archived
+    }
+
+
+    /// End of export: move active root copies into `pcld_ios_media/archive/` and prune to retention limit (`loop/` unchanged).
+    @discardableResult
+    static func archiveFinishedExportMedia(log: ((String) -> Void)? = nil) -> Int {
+        guard ExportMediaArchive.hasActiveExportMediaOnDisk() else { return 0 }
+        let timestamp = ExportMediaArchive.newRetentionTimestamp()
+        let archived = ExportMediaArchive.archiveActiveMedia(timestamp: timestamp, log: log)
+        if archived > 0 {
+            _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount, log: log)
+        }
+        return archived
+    }
+
+    /// Segment MP4s, staging files, working/vanilla copies, and archived exports under `pcld_ios_media/archive/` (not Photos).
     @discardableResult
     static func removeExportMedia(log: ((String) -> Void)? = nil) -> Int {
         var removed = removeExportFiles(log: log)
@@ -25,7 +56,7 @@ enum SegmentCleanup {
         return removed
     }
 
-    /// Drop older timestamp-suffixed files in `pcld_ios_media/`; keep the newest `keepCount` export stamps (`loop/` untouched).
+    /// Drop older archived exports; keep the newest `keepCount` under `pcld_ios_media/archive/` (active slot untouched).
     @discardableResult
     static func trimExportMediaArchives(keepCount: Int = ExportMediaArchive.manualKeepCount, log: ((String) -> Void)? = nil) -> Int {
         ExportMediaArchive.pruneRetainedMedia(keepCount: keepCount, log: log)

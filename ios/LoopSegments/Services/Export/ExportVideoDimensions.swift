@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-/// Infers 3D / high-res tier labels for retention filenames (`_3D_4K`, `_3D_8K`, … when n > 2).
+/// Infers 3D / high-res tier labels for `archive/<name>_3D_<n>K_<time>.<ext>` (when n > 2).
 enum ExportVideoDimensions {
     /// Full side-by-side: tier from **coded width** (3840×2160 SBS → `4K`). Flat/OU: from **longer edge**.
     /// Returns a label only when n > 2 (3K, 4K, 5K, … — not 1K/2K).

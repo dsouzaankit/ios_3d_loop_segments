@@ -39,7 +39,11 @@ final class ExportCoordinator {
         }
 
         var archivedPriorMediaFiles = 0
-        if !continueLANExport, ExportMediaArchive.hasActiveExportMediaOnDisk() {
+        let skipRetentionArchive = !ExportMediaArchive.shouldArchivePriorMediaBeforeNewExport(
+            continueLANExport: continueLANExport,
+            item: item
+        )
+        if !skipRetentionArchive, ExportMediaArchive.hasActiveExportMediaOnDisk() {
             let timestamp = ExportMediaArchive.newRetentionTimestamp()
             archivedPriorMediaFiles = ExportMediaArchive.archiveActiveMedia(timestamp: timestamp)
             if archivedPriorMediaFiles > 0 {
@@ -65,10 +69,15 @@ final class ExportCoordinator {
 
         if continueLANExport {
             logHandler("Export resumed — kept pcld_ios_media media and checkpoint on disk")
+        } else if skipRetentionArchive, ExportMediaArchive.hasActiveExportMediaOnDisk() {
+            logHandler(
+                "Export started — kept pcld_ios_media/ as-is (paused or in-progress export; " +
+                    "prior media not moved to archive/ until finished)"
+            )
         } else if archivedPriorMediaFiles > 0 {
             logHandler(
-                "Export started — retained \(archivedPriorMediaFiles) prior file(s) in pcld_ios_media/ " +
-                    "(_3D_<n>K when tier > 2K inferred, then _<timestamp>; keeping last \(ExportMediaArchive.retentionCount); loop/ ignored)"
+                "Export started — archived \(archivedPriorMediaFiles) prior file(s) to pcld_ios_media/archive/ " +
+                    "(<name>[_3D_<n>K]_<local-time>; keeping last \(ExportMediaArchive.retentionCount) batches; loop/ ignored)"
             )
         } else {
             logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
@@ -117,32 +126,30 @@ final class ExportCoordinator {
             } onCancel: {
                 self.exporter.cancel()
             }
-            if result.lanPreloadOnly {
-                logHandler(
-                    "LAN preload finished — pcld_ios_media/_working.mp4 on disk (no op_*.mp4; below bitrate cutoff). Play via :8765"
+            if result.reachedEnd {
+                WorkingSourceSparseCatalog.clearLANPlaybackStartHintAfterExportFinished(
+                    fileURL: ExportPaths.workingSourceURL
                 )
-            } else {
-                if FileManager.default.fileExists(
-                    atPath: ExportPaths.vanillaDownloadURL(preservingExtensionFrom: item.name).path
-                ) {
+            }
+            let archivedOnFinish = SegmentCleanup.archiveFinishedExportMedia(log: logHandler)
+            if result.lanPreloadOnly {
+                if archivedOnFinish > 0 {
                     logHandler(
-                        "Export finished — pcld_ios_media/loop/op_*.mp4 and vanilla download " +
-                            "(pcld_ios_media/_vanilla_download.*) kept until next export renames with _<timestamp> " +
-                            "(last \(ExportMediaArchive.retentionCount) retained; loop/ not retained)"
-                    )
-                } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
-                    || FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
-                    logHandler(
-                        "Export finished — pcld_ios_media/loop/op_*.mp4 and " +
-                            "pcld_ios_media/_working_pcloud_transcode.mp4 (pCloud transcode) kept until next export renames with _<timestamp>"
+                        "LAN preload finished — archived \(archivedOnFinish) file(s) to pcld_ios_media/archive/ " +
+                            "(no op_*.mp4; play archived copy via :8765)"
                     )
                 } else {
                     logHandler(
-                        "Export finished — pcld_ios_media/loop/op_*.mp4 and pcld_ios_media/_working.mp4 " +
-                            "kept until next export (_working* renamed with _<timestamp>; loop/ not retained; " +
-                            "last \(ExportMediaArchive.retentionCount) retained)"
+                        "LAN preload finished — no root media to archive (no op_*.mp4; below bitrate cutoff)"
                     )
                 }
+            } else if archivedOnFinish > 0 {
+                logHandler(
+                    "Export finished — archived \(archivedOnFinish) root file(s) to pcld_ios_media/archive/ " +
+                        "(loop/op_*.mp4 kept on LAN; last \(ExportMediaArchive.retentionCount) archive batches)"
+                )
+            } else {
+                logHandler("Export finished — loop/op_*.mp4 on LAN (no root media to archive)")
             }
             logHandler(ExportPaths.describeExportMediaOnDisk())
             logHandler("Files: On My iPhone → Loop Segments → Exports (same folder as export_latest.txt)")
@@ -172,8 +179,7 @@ final class ExportCoordinator {
                 throw SegmentExporterError.paused
             }
             if userRequestedCancel {
-                await SegmentCleanup.removeAllSegments(log: logHandler)
-                logHandler("Cleanup: removed pcld_ios_media/loop/op_*.mp4 from Exports (_working.mp4 kept until next export)")
+                await SegmentCleanup.performStopCleanup(log: logHandler)
                 logWriter.finish(status: "cancelled")
                 throw SegmentExporterError.cancelled
             }

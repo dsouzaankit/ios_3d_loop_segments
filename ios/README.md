@@ -132,9 +132,11 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 | **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). |
 | **`pause_export`** | Pause the running export (checkpoint kept on phone). |
-| **`stop_export`** | Stop running export or clear a paused export. |
+| **`stop_export`** | Same as in-app **Stop** — removes `loop/`, archives root copies, clears checkpoint. |
+| **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
+| **`clear_media`** | Same as **Clear media** — deletes active + `archive/` (rejected while export running). |
 
-Optional fields: **`pool`**, **`folderPath`** (for random), **`id`** (UUID — duplicate ids are ignored).
+Triggers are polled only while **Loop Segments is open in the foreground** (~2s). Optional fields: **`pool`**, **`folderPath`** (for random), **`id`** (UUID — duplicate ids are ignored).
 
 **Ack** (`export_trigger.ack.json`): `{ "receivedAt", "command", "status", "message", "triggerId" }` where **`status`** is `accepted` \| `rejected` \| `ignored`.
 
@@ -161,29 +163,30 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
 
 `_working.mp4` is **sparse**: the file size and MP4 index at EOF make the browser **scrubber show the full movie duration** (you can drag near the end) even when most of the middle is still empty. **Only dense byte spans** play on LAN — not the scrubber position alone. **Mbps cutoff** (Export UI, default ~35): at or below → **no** `op_*.mp4` (LAN preload on `_working.mp4` or vanilla download only). **At or above** → 60s segments to `loop/op_*.mp4` when codec allows — **LAN server can stay on** (`http://&lt;phone-ip&gt;:8765/`). High-bitrate segment mode uses minimal `_working` prefetch (export cursor only). Each dense fill pauses prefetch briefly. **Seek &gt; 0:** prefetch from the seek byte offset. Export logs and **`http://&lt;phone-ip&gt;:8765/`** show **`LAN playable till 12:34, exported 11:00, started 10:00`** (also in `status.json`).
 
-Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + files; **Stop** clears paused state and removes published `op_*.mp4`.
+Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + `_working.mp4` + `loop/op_*.mp4`. **Stop** clears paused state, removes `loop/op_*.mp4`, archives root copies to `archive/`. **Export completes** archives root copies immediately (`loop/` stays for LAN).
 
-**Media retention:** When you start a **new** export (not **resume**), the app renames the previous run’s **root-level** files under private **`pcld_ios_media/`** in place (Application Support). **`pcld_ios_media/loop/`** (`op_00` / `op_01`) is **not** retained; only overwritten on the next segment export.
+**Media retention:** Finished **root-level** copies (`_working.mp4`, vanilla/transcode siblings, etc.) move into **`pcld_ios_media/archive/`** with optional **`_3D_<n>K`** + **`_<local-time>`** in the filename. **`pcld_ios_media/loop/`** (`op_00` / `op_01`) is **not** archived — it is removed on **Stop** / **`stop_export`** or overwritten on the next segment export. Retention is skipped when starting a **new** export if that title (or sparse/vanilla manifest) is still **paused / in progress**.
 
 | Step | What happens |
 |------|----------------|
-| **New export** | Prior `_working.mp4`, `_working.sparse.json`, `_vanilla_download.*`, `_vanilla_faststart.mp4`, `_working_pcloud_transcode.mp4`, etc. are renamed with optional **`_3D_<n>K`** + **`_<local-time>`** |
-| **Auto prune** | Keeps the **10** newest retain batches (by parsed time) |
-| **Trim media (keep last 2)** | Export UI — deletes older suffixed root files; active unstamped slot + `loop/` unchanged |
-| **Clear media** | Removes active files, all suffixed retains, and `loop/` segments |
+| **New export** | Prior active root files archived under `archive/`; auto-prune keeps **10** newest batches |
+| **Export finished** | Active root copies archived to `archive/` (segments in `loop/` stay until Stop or next export) |
+| **Stop / `stop_export`** | `loop/` segments removed (+ Photos when enabled); active root copies archived |
+| **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
+| **Clear media** / **`clear_media`** | Removes active root files, all `archive/` retains, and `loop/` segments |
 
-**Filename pattern:** `<base>[_3D_<n>K]_yyyy-MM-dd_HH-mm-ss.<ext>` in the **device timezone** (POSIX `yyyy-MM-dd_HH-mm-ss`). Example: `_working_3D_4K_2026-05-22_14-30-52.mp4`. Legacy retains with a trailing **unix** suffix still parse and prune.
+**Filename pattern:** `<base>[_3D_<n>K]_yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`** (device timezone). Example: `archive/_working_3D_4K_2026-05-22_14-30-52.mp4`. Legacy in-root suffixed files are migrated into `archive/` on prune/clear.
 
-**`_3D_<n>K` tier** (only when **n > 2**, i.e. 3K and up — not 1K/2K): inferred from video dimensions before rename (probes `_working.mp4`, transcode, or vanilla copy). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
+**`_3D_<n>K` tier** (only when **n > 2**, i.e. 3K and up - not 1K/2K): inferred from video dimensions before archive (probes `_working.mp4`, transcode, or vanilla copy). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
 
 | Reference width (px) | Label |
 |----------------------|--------|
 | 7680+ | 8K |
-| 7168–7679 | 7K |
-| 6144–7167 | 6K |
-| 5120–6143 | 5K |
-| 3200–5119 | 4K |
-| 2560–3199 | 3K |
+| 7168-7679 | 7K |
+| 6144-7167 | 6K |
+| 5120-6143 | 5K |
+| 3200-5119 | 4K |
+| 2560-3199 | 3K |
 
 Implementation: `ExportMediaArchive.swift`, `ExportVideoDimensions.swift`. CI: [ios-build workflow](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml) on pushes under `ios/`.
 

@@ -12,6 +12,7 @@ final class AppSession: ObservableObject {
     private(set) var userRequestedExportPause = false
     /// Created on first export (lazy init for export stack).
     private lazy var exportCoordinator = ExportCoordinator()
+    var isExportCoordinatorBusy: Bool { exportCoordinator.isBusy }
     @Published private(set) var activeExportItem: WebDAVItem?
     /// Bumped on each new export start / cancel so stale async unwinds cannot clobber state.
     private var exportGeneration = 0
@@ -188,11 +189,6 @@ final class AppSession: ObservableObject {
             let resumeMs: Int64 = result.reachedEnd ? 0 : result.lastMediaTimeMs
             ResumeStore.shared.saveSeekMs(resumeMs, for: item)
             ResumeStore.shared.finishExport(for: item)
-            if result.reachedEnd {
-                WorkingSourceSparseCatalog.clearLANPlaybackStartHintAfterExportFinished(
-                    fileURL: ExportPaths.workingSourceURL
-                )
-            }
             ResumeStore.shared.pinCompletedExportIfMediaOnDisk(for: item)
             if generation == exportGeneration {
                 LANExportSourceDisplay.setFinished(item.name)
@@ -216,8 +212,9 @@ final class AppSession: ObservableObject {
         }
     }
 
-    /// Stop export and clear paused state (removes published segment files).
+    /// Stop export and clear paused state (removes loop/ segments; archives root working/vanilla copies).
     func cancelExport() {
+        let cleanupAfterCoordinator = isExportRunning || exportCoordinator.isBusy
         exportGeneration += 1
         userRequestedExportCancel = true
         userRequestedExportPause = false
@@ -237,6 +234,28 @@ final class AppSession: ObservableObject {
             }
         }
         LANExportSourceDisplay.clearActive()
+        if !cleanupAfterCoordinator {
+            Task {
+                await SegmentCleanup.performStopCleanup(log: { SearchDebugLog.log("Stop: \($0)") })
+            }
+        }
+    }
+
+    /// Mirrors Export UI **Clear media** (permanent; not export logs).
+    @discardableResult
+    func clearExportMedia(referenceItem: WebDAVItem) -> Int {
+        guard !isExportRunning, !exportCoordinator.isBusy else { return 0 }
+        ResumeStore.shared.clearPinnedCompletedExports()
+        ResumeStore.shared.clearPausedExports()
+        ResumeStore.shared.finishExport(for: referenceItem)
+        return SegmentCleanup.removeExportMedia(log: { SearchDebugLog.log("Clear media: \($0)") })
+    }
+
+    /// Mirrors Export UI **Trim media (keep last 2)**.
+    @discardableResult
+    func trimExportMediaArchives() -> Int {
+        guard !isExportRunning, !exportCoordinator.isBusy else { return 0 }
+        return SegmentCleanup.trimExportMediaArchives(log: { SearchDebugLog.log("Trim media: \($0)") })
     }
 
     /// Pause export: saves checkpoint, keeps export marked paused, keeps media on disk.
