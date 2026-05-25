@@ -7,6 +7,8 @@ enum ExportRetentionSourceCatalog {
         var fileKey: String
         /// Set when moov-at-end remux produced `_vanilla_faststart.mp4` (archive name gets `_appFast_`).
         var appFaststartRemux: Bool?
+        /// Root slot filenames already copied/moved to `archive/` this export (e.g. `_working.mp4`).
+        var archivedRootSlotNames: [String]?
     }
 
     private static var manifestURL: URL {
@@ -14,7 +16,16 @@ enum ExportRetentionSourceCatalog {
     }
 
     static func save(sourceFileName: String, fileKey: String) {
-        let manifest = Manifest(sourceFileName: sourceFileName, fileKey: fileKey)
+        let manifest = Manifest(
+            sourceFileName: sourceFileName,
+            fileKey: fileKey,
+            appFaststartRemux: nil,
+            archivedRootSlotNames: []
+        )
+        write(manifest)
+    }
+
+    private static func write(_ manifest: Manifest) {
         guard let data = try? JSONEncoder().encode(manifest) else { return }
         try? FileManager.default.createDirectory(
             at: ExportPaths.mediaExportDirectory,
@@ -39,12 +50,24 @@ enum ExportRetentionSourceCatalog {
     static func markAppFaststartRemuxCompleted() {
         guard var manifest = read() else { return }
         manifest.appFaststartRemux = true
-        guard let data = try? JSONEncoder().encode(manifest) else { return }
-        try? data.write(to: manifestURL, options: .atomic)
+        write(manifest)
     }
 
     static func hadAppFaststartRemux() -> Bool {
         read()?.appFaststartRemux == true
+    }
+
+    static func isRootSlotAlreadyArchived(_ slotFileName: String) -> Bool {
+        read()?.archivedRootSlotNames?.contains(slotFileName) == true
+    }
+
+    static func recordArchivedRootSlot(_ slotFileName: String) {
+        guard var manifest = read() else { return }
+        var slots = manifest.archivedRootSlotNames ?? []
+        guard !slots.contains(slotFileName) else { return }
+        slots.append(slotFileName)
+        manifest.archivedRootSlotNames = slots
+        write(manifest)
     }
 
     /// Safe stem for `archive/<stem>[_3D_*]_<time>.<ext>` (preserves pCloud basename, not pipeline slot names).

@@ -186,7 +186,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | Step | What happens |
 |------|----------------|
 | **New export** | Prior active root files **moved** into `archive/`; auto-prune keeps **10** newest batches |
-| **Export finished** | **Copy** to `archive/` (root `_working*` / `_vanilla_*` / transcode **stay on LAN**); `loop/` unchanged |
+| **Export finished** | **Copy** to `archive/` (root `_working*` / `_vanilla_*` / transcode **stay on LAN**); `loop/` unchanged. Same root slot is **not** copied again on Stop or fresh Start — only removed from root if already retained. |
 | **Stop / `stop_export`** | `loop/` removed (+ Photos when enabled); active root files **moved** into `archive/` |
 | **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
 | **Clear media** / **`clear_media`** | Removes active root files, all `archive/` retains, and `loop/` segments |

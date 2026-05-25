@@ -235,8 +235,29 @@ enum ExportMediaArchive {
         }
 
         var archived = 0
+        var clearedAlreadyRetained = 0
         for source in sources {
             let slotName = source.lastPathComponent
+            if ExportRetentionSourceCatalog.isRootSlotAlreadyArchived(slotName) {
+                if relocate {
+                    do {
+                        try fm.removeItem(at: source)
+                        clearedAlreadyRetained += 1
+                        log?(
+                            "Removed \(ExportPaths.pathRelativeToExports(source)) — " +
+                                "already retained in archive/ (not duplicated)"
+                        )
+                    } catch {
+                        log?("Could not remove \(slotName): \(error.localizedDescription)")
+                    }
+                } else {
+                    log?(
+                        "Skipped archive copy of \(ExportPaths.pathRelativeToExports(source)) — " +
+                            "already in archive/"
+                    )
+                }
+                continue
+            }
             let appFast = usesAppFaststartArchiveTag(forOnDiskFileName: slotName)
             let archivedName = suffixedFileName(
                 forOnDiskFileName: slotName,
@@ -264,6 +285,7 @@ enum ExportMediaArchive {
                             "(left \(source.lastPathComponent) on LAN)"
                     )
                 }
+                ExportRetentionSourceCatalog.recordArchivedRootSlot(slotName)
                 archived += 1
             } catch {
                 log?("Could not archive \(source.lastPathComponent): \(error.localizedDescription)")
@@ -271,7 +293,7 @@ enum ExportMediaArchive {
         }
 
         if relocate {
-            if archived > 0 {
+            if archived > 0 || clearedAlreadyRetained > 0 {
                 WorkingSourceSparseCatalog.remove()
                 if !ExportPaths.vanillaPrimaryMediaExistsOnDisk() {
                     ExportPlaybackState.shared.setVanillaDownloadActive(false)
