@@ -88,7 +88,7 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 | Area | Contents |
 |------|----------|
 | **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
-| **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. |
+| **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
 | **Middle** | Playback status + **On phone (playback)** file list (auto-refreshed from `status.json`). |
 | **Bottom** | pCloud browse — bookmarked folders, horizontal folder grid, vertical file list, sort by **name / size / date**. |
 
@@ -129,7 +129,7 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 | `command` | Behavior |
 |-----------|----------|
 | **`start_export`** | Export `href` from `seekMs`. **Auto-stops** any running export first (no manual stop required). |
-| **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. |
+| **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). |
 | **`pause_export`** | Pause the running export (checkpoint kept on phone). |
 | **`stop_export`** | Same as in-app **Stop** — removes `loop/`, archives root copies, clears checkpoint. |

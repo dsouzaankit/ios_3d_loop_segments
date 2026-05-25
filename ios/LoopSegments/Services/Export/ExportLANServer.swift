@@ -1304,12 +1304,19 @@ enum ExportLANServer {
               .replace(/</g, "&lt;")
               .replace(/"/g, "&quot;");
           }
+          function setMediaMaintenanceEnabled(enabled) {
+            ["export-trim-media", "export-clear-media"].forEach(function (id) {
+              var btn = document.getElementById(id);
+              if (btn) btn.disabled = !enabled;
+            });
+          }
           function applyExportSource(src) {
             if (window._exportSourcePending) return;
             var wrap = document.getElementById("lan-export-source-wrap");
             if (!wrap) return;
             if (!src || !src.displayName) {
               wrap.style.display = "none";
+              setMediaMaintenanceEnabled(true);
               return;
             }
             wrap.style.display = "";
@@ -1326,6 +1333,7 @@ enum ExportLANServer {
             if (actions) actions.style.display = active ? "" : "none";
             if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
             if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
+            setMediaMaintenanceEnabled(src.phase !== "running");
           }
           window.updateExportSourceLine = function (phase, displayName) {
             var labels = { running: "Exporting", paused: "Paused export", finished: "Last export" };
