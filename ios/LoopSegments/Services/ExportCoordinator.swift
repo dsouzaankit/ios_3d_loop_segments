@@ -76,8 +76,7 @@ final class ExportCoordinator {
             logHandler("Export resumed — kept pcld_ios_media media and checkpoint on disk")
         } else if skipRetentionArchive, ExportMediaArchive.hasActiveExportMediaOnDisk() {
             logHandler(
-                "Export started — kept pcld_ios_media/ as-is (paused or in-progress export; " +
-                    "prior media not moved to archive/ until finished)"
+                "Export started — kept pcld_ios_media/ as-is (LAN resume; same checkpoint and on-disk media)"
             )
         } else if archivedPriorMediaFiles > 0 {
             logHandler(

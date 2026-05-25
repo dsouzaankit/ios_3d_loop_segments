@@ -165,18 +165,10 @@ enum ExportMediaArchive {
         !activeRootMediaFiles().isEmpty
     }
 
-    /// Retention applies only when handing off **finished** on-disk media to a **new** export — not while active or paused.
+    /// Archive root media before a **fresh** export start. Skip only when resuming the same on-disk session (`continueLANExport`).
     static func shouldArchivePriorMediaBeforeNewExport(continueLANExport: Bool, item: WebDAVItem) -> Bool {
         if continueLANExport { return false }
-        if ResumeStore.isExportInProgress(forFileKey: item.fileKey) { return false }
-        if let manifest = WorkingSourceSparseCatalog.readManifest(),
-           ResumeStore.isExportInProgress(forFileKey: manifest.fileKey) {
-            return false
-        }
-        if let manifest = VanillaDownloadResumeCatalog.readManifest(),
-           ResumeStore.isExportInProgress(forFileKey: manifest.fileKey) {
-            return false
-        }
+        _ = item
         return true
     }
 
