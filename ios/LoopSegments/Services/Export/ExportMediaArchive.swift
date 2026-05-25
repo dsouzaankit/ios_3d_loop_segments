@@ -77,10 +77,22 @@ enum ExportMediaArchive {
         return "\(stem).\(ext)"
     }
 
-    /// Unstamped root-level export media (`pcld_ios_media/`, not `loop/` or `archive/`).
-    /// Includes `_working.mp4`, `_working.sparse.json`, `_vanilla_download.*`, `_vanilla_faststart.mp4`,
-    /// `_working_pcloud_transcode.mp4`, and any other unstamped root siblings.
+    /// Playable video files at `pcld_ios_media/` root eligible for `_3D_*` / `_<timestamp>` archive names.
+    static func isRetentionArchivableMediaFileName(_ name: String) -> Bool {
+        ExportPaths.isLANBrowsableMediaFile(fileName: name)
+    }
+
+    /// Unstamped root-level **media** only (`pcld_ios_media/`, not `loop/`, `archive/`, or sidecars like `.sparse.json`).
     static func activeRootMediaFiles() -> [URL] {
+        unstampedRootFiles(where: { isRetentionArchivableMediaFileName($0) })
+    }
+
+    /// Unstamped root sidecars (manifests, meta JSON) — not suffixed; removed when media is relocated off root.
+    private static func activeRootCompanionFiles() -> [URL] {
+        unstampedRootFiles(where: { !isRetentionArchivableMediaFileName($0) })
+    }
+
+    private static func unstampedRootFiles(where include: (String) -> Bool) -> [URL] {
         let fm = FileManager.default
         _ = ExportPaths.mediaExportDirectory
         guard let rootNames = try? fm.contentsOfDirectory(atPath: ExportPaths.mediaExportDirectory.path) else {
@@ -90,12 +102,29 @@ enum ExportMediaArchive {
         for name in rootNames {
             guard !reservedTopLevelNames.contains(name) else { continue }
             guard !isRetentionStampedFileName(name) else { continue }
+            guard include(name) else { continue }
             let url = ExportPaths.mediaExportDirectory.appendingPathComponent(name)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
             files.append(url)
         }
         return files
+    }
+
+    @discardableResult
+    private static func removeActiveRootCompanionFiles(log: ((String) -> Void)? = nil) -> Int {
+        let fm = FileManager.default
+        var removed = 0
+        for url in activeRootCompanionFiles() {
+            do {
+                try fm.removeItem(at: url)
+                removed += 1
+                log?("Removed companion \(ExportPaths.pathRelativeToExports(url)) (not retained media)")
+            } catch {
+                log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        return removed
     }
 
     static func hasActiveExportMediaOnDisk() -> Bool {
@@ -117,7 +146,7 @@ enum ExportMediaArchive {
         return true
     }
 
-    /// Newest retain batches first (by parsed local time or legacy unix) under `archive/`.
+    /// Newest retain batches first (by parsed local time or legacy unix) under `archive/` (media files only).
     static func collectRetentionStampSuffixes() -> [String] {
         migrateRetainedFilesIntoArchive(log: nil)
         let fm = FileManager.default
@@ -126,6 +155,7 @@ enum ExportMediaArchive {
         }
         var bySuffix: [String: Date] = [:]
         for name in names {
+            guard isRetentionArchivableMediaFileName(name) else { continue }
             guard let suffix = retentionFileSuffix(fromFileName: name),
                   let date = retentionSortDate(fromFileSuffix: suffix) else { continue }
             let url = archiveDirectoryURL.appendingPathComponent(name)
@@ -202,12 +232,15 @@ enum ExportMediaArchive {
             }
         }
 
-        if archived > 0, relocate {
-            WorkingSourceSparseCatalog.remove()
-            if !ExportPaths.vanillaDownloadCopyExistsOnDisk() {
-                ExportPlaybackState.shared.setVanillaDownloadActive(false)
+        if relocate {
+            if archived > 0 {
+                WorkingSourceSparseCatalog.remove()
+                if !ExportPaths.vanillaDownloadCopyExistsOnDisk() {
+                    ExportPlaybackState.shared.setVanillaDownloadActive(false)
+                }
+                ExportPlaybackState.shared.clearSparseWorkingPlaybackHints()
             }
-            ExportPlaybackState.shared.clearSparseWorkingPlaybackHints()
+            _ = removeActiveRootCompanionFiles(log: log)
         }
         return archived
     }
@@ -227,7 +260,7 @@ enum ExportMediaArchive {
         guard let names = try? fm.contentsOfDirectory(atPath: ExportPaths.mediaExportDirectory.path) else {
             return 0
         }
-        let stamped = names.filter { isRetentionStampedFileName($0) }
+        let stamped = names.filter { isRetentionStampedFileName($0) && isRetentionArchivableMediaFileName($0) }
         guard !stamped.isEmpty else { return 0 }
         do {
             try fm.createDirectory(at: archiveDirectoryURL, withIntermediateDirectories: true)
@@ -300,6 +333,7 @@ enum ExportMediaArchive {
         }
         var removed = 0
         for name in names where retentionFileSuffix(fromFileName: name) == suffix {
+            guard isRetentionArchivableMediaFileName(name) else { continue }
             let url = archiveDirectoryURL.appendingPathComponent(name)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
@@ -332,6 +366,21 @@ enum ExportMediaArchive {
         var removed = 0
         for suffix in collectRetentionStampSuffixes() {
             removed += removeFiles(forStampSuffix: suffix, log: log)
+        }
+        let fm = FileManager.default
+        if let names = try? fm.contentsOfDirectory(atPath: archiveDirectoryURL.path) {
+            for name in names where !isRetentionArchivableMediaFileName(name) {
+                let url = archiveDirectoryURL.appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+                do {
+                    try fm.removeItem(at: url)
+                    removed += 1
+                    log?("Removed non-media archive/ \(name)")
+                } catch {
+                    log?("Could not remove archive/\(name): \(error.localizedDescription)")
+                }
+            }
         }
         return removed
     }

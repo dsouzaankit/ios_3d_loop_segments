@@ -502,8 +502,8 @@ struct ExportView: View {
             .foregroundStyle(trimMediaAcknowledged ? .green : Color.orange)
             .sensoryFeedback(.success, trigger: trimMediaAckTrigger)
             Text(
-                "Active: loop/op_00|01.mp4, _working.mp4, _vanilla_download.*. On finish, copies to archive/ but keeps root paths on LAN. Stop or new export moves root files to archive/. " +
-                    "Keeps 10 batches; loop/ not archived. Trim keeps 2. Clear wipes active + archive/."
+                "Active: loop/op_00|01.mp4, _working.mp4, _vanilla_download.* (+ sparse/vanilla .json sidecars, not suffixed). Finish copies video to archive/; root videos stay on LAN. Stop/new export moves videos to archive/. " +
+                    "10 media batches; loop/ not archived. Trim keeps 2. Clear wipes active + archive/."
             )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
