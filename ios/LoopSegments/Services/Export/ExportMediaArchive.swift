@@ -27,13 +27,13 @@ enum ExportMediaArchive {
 
     /// Suffix token in the filename, including leading `_` (new local time or legacy unix).
     static func retentionFileSuffix(fromFileName name: String) -> String? {
-        let stem = (name as NSString).deletingPathExtension.lastPathComponent
+        let stem = (name as NSString).deletingPathExtension
         if let local = localRetentionSuffix(in: stem) {
             return local
         }
         guard let underscore = stem.lastIndex(of: "_") else { return nil }
         let token = stem[stem.index(after: underscore)...]
-        guard token.count >= 10, token.allSatisfy(\.isNumber), Int(token) != nil else { return nil }
+        guard token.count >= 10, token.allSatisfy({ $0.isNumber }), Int(token) != nil else { return nil }
         return "_\(token)"
     }
 
@@ -45,7 +45,7 @@ enum ExportMediaArchive {
         // `_yyyy-MM-dd_HH-mm-ss` at end of stem (after optional `_3D_4K`, etc.).
         let pattern = #"_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"#
         guard let range = stem.range(of: pattern, options: .regularExpression) else { return nil }
-        return String(stem[range])
+        return String(stem[range.lowerBound ..< stem.endIndex])
     }
 
     private static func retentionSortDate(fromFileSuffix suffix: String) -> Date? {
@@ -61,7 +61,7 @@ enum ExportMediaArchive {
     static func suffixedFileName(for fileName: String, timestamp: String, threeDNKLabel: String?) -> String {
         let ns = fileName as NSString
         let ext = ns.pathExtension
-        var stem = ns.deletingPathExtension.lastPathComponent
+        var stem = ns.deletingPathExtension
         if let nk = threeDNKLabel, let tag = ExportVideoDimensions.threeDSuffixSegment(nkLabel: nk) {
             stem += tag
         }
