@@ -1346,7 +1346,7 @@ final class SegmentExporter {
         )
         if seekMs > 0 {
             logHandler(
-                "Vanilla export seek — \(ExportTimelineLog.wallClock(seconds: seekSeconds)) for segments / LAN #t=; " +
+                "Vanilla export seek — \(ExportTimelineLog.wallClock(seconds: seekSeconds)) for segments / LAN resume hint; " +
                     "WebDAV download fills the file from 0:00 (or resumes partial _vanilla_download.*)"
             )
         }

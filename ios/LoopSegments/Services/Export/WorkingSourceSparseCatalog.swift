@@ -9,7 +9,7 @@ enum WorkingSourceSparseCatalog {
         var spans: [Span]
         var headOnDisk: Bool
         var tailOnDisk: Bool
-        /// Resume / seek start for LAN `#t=` links (seconds).
+        /// Resume / seek start for LAN index notes and playback anchor (seconds).
         var playbackStartSeconds: Double?
         var durationSeconds: Double?
         var exportCursorSeconds: Double?
@@ -230,7 +230,7 @@ enum WorkingSourceSparseCatalog {
         }
     }
 
-    /// Clears seek-start hint in manifest after a finished export so the LAN index `#t=` link is not stuck on the old seek time.
+    /// Clears seek-start hint in manifest after a finished export so LAN resume hints are not stuck on the old seek time.
     static func clearLANPlaybackStartHintAfterExportFinished(fileURL: URL) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: fileURL.path),

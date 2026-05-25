@@ -566,7 +566,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
     }
 
-    /// After a full export, LAN `#t=` and status lines should anchor at 0:00, not the last checkpoint.
+    /// After a full export, LAN resume hints and status lines should anchor at 0:00, not the last checkpoint.
     func resetPlaybackAnchorAfterFinishedExport() {
         lock.withLock {
             snapshot.playbackStartSeconds = 0
@@ -821,7 +821,7 @@ final class ExportPlaybackState: @unchecked Sendable {
             durationSeconds: duration
         )
         let tillNote = snap.vanillaDownloadActive
-            ? "sequential download from file start (use index #t= for export seek)"
+            ? "sequential download from file start (seek in player to export start)"
             : "contiguous dense from playback start"
         let tillLabel: String
         if snap.vanillaDownloadActive, duration <= 0, snap.totalFileBytes > 0 {

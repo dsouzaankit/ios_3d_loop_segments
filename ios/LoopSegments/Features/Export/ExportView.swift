@@ -301,7 +301,7 @@ struct ExportView: View {
         if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
             return "In-progress: pCloud transcode → pcld_ios_media/_working_pcloud_transcode.mp4 (not the original file). Segments: loop/op_*.mp4"
         }
-        return "In-progress: index → pcld_ios_media/_working.mp4 (#t= resume while paused). Segments: pcld_ios_media/loop/op_*.mp4"
+        return "In-progress: index → pcld_ios_media/_working.mp4 (seek in player; WebDAV path has no #t=). Segments: pcld_ios_media/loop/op_*.mp4"
     }
 
     @ViewBuilder

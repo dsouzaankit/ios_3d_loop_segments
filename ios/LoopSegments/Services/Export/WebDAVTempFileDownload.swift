@@ -364,7 +364,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         )
     }
 
-    /// Byte span `[0, seek preroll anchor)` — real media from pCloud for scrub/`#t=` before export seek.
+    /// Byte span `[0, seek preroll anchor)` — real media from pCloud for player seek before export anchor.
     func lanPrefixBeforeSeekRange(seekSeconds: Double, durationSeconds: Double) -> TimelineByteRange? {
         guard seekSeconds > 0.5, totalLength > 0, durationSeconds > 0 else { return nil }
         let end = Self.lanPlaybackDenseAnchorByte(
@@ -399,7 +399,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
         publishLANPlaybackState()
     }
 
-    /// Fill ~45s preroll before wall-clock seek so `#t=` / browser decode has keyframe bytes on disk.
+    /// Fill ~45s preroll before wall-clock seek so player decode at the export start has keyframe bytes on disk.
     func ensureLANPlaybackPrerollGapFilled(seekSeconds: Double, durationSeconds: Double) async throws {
         guard seekSeconds > 0.5 else { return }
         guard let gap = Self.lanPlaybackPrerollGapRange(
