@@ -44,6 +44,15 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
 - 60s segments when source is **at/above** the Mbps cutoff (and codec allows); phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. Below cutoff: LAN preload to EOF only (no segments). **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND / listings for Skybox, Windows clients). **Quest Skybox:** add **WebDAV** with **`admin` / `iosadmin`**. **PC:** browser / `Invoke-WebRequest` / **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **[`rclone`](../windows/RCLONE-PHONE-MOUNT.md)** mount to a drive letter can feel **sluggish** — not required if Skybox talks to the phone directly. **Dense fill** per minute when segments run.
+
+### On-disk layout (Files app vs LAN)
+
+| Location on phone | Visible in **Files** / **USB** | Served on **LAN :8765** |
+|-------------------|--------------------------------|-------------------------|
+| **`Documents/Exports/`** — `export_latest.txt`, `export_session_*`, `logs/`, `loop_segments_ok.txt` | Yes (`UIFileSharingEnabled`) | Yes (root allowlist) |
+| **`Library/Application Support/pcld_ios_media/`** — `_working.mp4`, `loop/op_*.mp4`, `_vanilla_*`, retained suffixed copies | **No** (sandbox) | Yes as **`/pcld_ios_media/...`** (same URLs for rclone / Skybox) |
+
+On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** is moved into Application Support automatically. **rclone** and **WebDAV** paths are unchanged (`L:\pcld_ios_media\...`). Copy **segment MP4s** from the PC via LAN/rclone, not Apple Devices USB.
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
@@ -154,7 +163,7 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
 
 Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + files; **Stop** clears paused state and removes published `op_*.mp4`.
 
-**Media retention (Exports folder):** When you start a **new** export (not **resume**), the app renames the previous run’s **root-level** files under **`pcld_ios_media/`** in place (same folder — no `archive/` subfolder). **`pcld_ios_media/loop/`** (`op_00` / `op_01`) is **not** retained; only overwritten on the next segment export.
+**Media retention:** When you start a **new** export (not **resume**), the app renames the previous run’s **root-level** files under private **`pcld_ios_media/`** in place (Application Support). **`pcld_ios_media/loop/`** (`op_00` / `op_01`) is **not** retained; only overwritten on the next segment export.
 
 | Step | What happens |
 |------|----------------|
@@ -503,12 +512,12 @@ Until a token is saved, treat **Search**, **HLS transcode**, and **REST-backed m
 
 ## Windows sync (LAN → DLNA)
 
-**`Documents/Exports/pcld_ios_media/loop/op_00.mp4` (and `op_01`) are the rotating segment sources; `pcld_ios_media/_working.mp4` is the sparse working copy.**
+**`pcld_ios_media/loop/op_00.mp4` (and `op_01`)** are the rotating segment sources; **`pcld_ios_media/_working.mp4`** is the sparse working copy (on disk under Application Support; LAN URL unchanged).
 
 | Step | PowerShell / action |
 |------|------------------------|
-| Phone **Exports** → PC | **`http://<ip>:8765/`** in a browser, **`Invoke-WebRequest`**, USB, or **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**; optional **`../windows/Mount-LoopSegmentsRclone.ps1 -TestOnly`** |
-| Manual USB | **Apple Devices** → Loop Segments → Exports → Save to PC |
+| Phone **media** → PC | **`http://<ip>:8765/pcld_ios_media/`**, **`Invoke-WebRequest`**, **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**, or **[`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md)** |
+| Phone **logs** → PC | **`http://<ip>:8765/`** (`export_latest.txt`, …) or **Apple Devices** → Loop Segments → **Exports** (logs only; media not in Files) |
 | rclone+WinFsp mount on PC (optional; can be sluggish) | **[`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md)** — Skybox WebDAV to the phone does not need this |
 
 ```powershell

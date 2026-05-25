@@ -3,7 +3,7 @@ import Foundation
 import Network
 import UIKit
 
-/// Serves `Documents/Exports/` on the LAN when enabled (HTTP + WebDAV).
+/// Serves export logs from `Documents/Exports/` and media from private `Application Support/pcld_ios_media/` on the LAN (HTTP + WebDAV).
 /// `pcld_ios_media/` accepts authenticated PUT/MKCOL for PC scripts and nested folders; export pipeline paths stay read-only.
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
@@ -1550,7 +1550,7 @@ enum ExportLANServer {
               <span id="lan-export-pending-detail">Please wait — keep Loop Segments open in the foreground on the phone.</span>
             </div>
             \(htmlExportSourceLineBlock())
-            <p>Serving <code>Documents/Exports/</code> on port \(defaultPort).</p>
+            <p>Serving on port \(defaultPort): logs under <code>Documents/Exports/</code>; media under <code>pcld_ios_media/</code> (private on phone, not in Files app).</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             <div id="lan-playback-status">\(playbackStatusBlock)</div>

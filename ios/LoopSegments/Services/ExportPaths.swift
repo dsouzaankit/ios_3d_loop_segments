@@ -5,47 +5,79 @@ enum ExportPaths {
     static let segmentDurationSeconds = 60
     /// Anchor folder for DLNA navigation (`L:\…\pcld_ios_media\`). Holds `_working.mp4`; segments live in `loop/`.
     static let mediaExportFolderName = "pcld_ios_media"
-    /// Alternating segment slots for DLNA looping — `Exports/pcld_ios_media/loop/`.
+    /// Alternating segment slots for DLNA looping — `pcld_ios_media/loop/` (on disk under Application Support).
     static let segmentLoopFolderName = "loop"
     /// Two slots rotating under `pcld_ios_media/loop/` — PC sees both via rclone mount (`Mount-LoopSegmentsRclone.ps1`).
     static let segmentFileCount = 2
 
-    /// Creates `Exports/pcld_ios_media/`.
-    static var mediaExportDirectory: URL {
-        let dir = exportsDirectory.appendingPathComponent(mediaExportFolderName, isDirectory: true)
+    /// Shared logs + USB-visible files (`UIFileSharingEnabled`).
+    static var exportsDirectory: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let dir = docs.appendingPathComponent("Exports", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    /// Creates `Exports/pcld_ios_media/loop/` (segment pair for players that loop a folder).
+    /// Large export media — `Library/Application Support/pcld_ios_media/` (not in Files / USB; same LAN URLs).
+    static var mediaExportDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent(mediaExportFolderName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Volume used for free-space checks (media lives here).
+    static var exportDiskSpaceCheckDirectory: URL { mediaExportDirectory }
+
+    /// Creates `pcld_ios_media/loop/` under Application Support.
     static var segmentLoopDirectory: URL {
         let dir = mediaExportDirectory.appendingPathComponent(segmentLoopFolderName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    /// LAN export triggers and PC scripts — `Exports/pcld_ios_media/scripts/`.
+    /// LAN export triggers and PC scripts — `pcld_ios_media/scripts/`.
     static var lanExportScriptsDirectory: URL {
         let dir = mediaExportDirectory.appendingPathComponent("scripts", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    /// Path under `Exports/` for WebDAV and LAN ( POSIX, no leading slash).
+    /// LAN / log label for a file URL (`pcld_ios_media/...` or `export_latest.txt`, etc.).
     static func pathRelativeToExports(_ url: URL) -> String {
-        let base = exportsDirectory.standardizedFileURL.path
         let path = url.standardizedFileURL.path
-        guard path.hasPrefix(base) else { return url.lastPathComponent }
-        var rel = String(path.dropFirst(base.count))
+        let mediaBase = mediaExportDirectory.standardizedFileURL.path
+        if path == mediaBase {
+            return mediaExportFolderName
+        }
+        if path.hasPrefix(mediaBase + "/") {
+            var suffix = String(path.dropFirst(mediaBase.count))
+            while suffix.hasPrefix("/") { suffix = String(suffix.dropFirst()) }
+            return suffix.isEmpty ? mediaExportFolderName : "\(mediaExportFolderName)/\(suffix)"
+        }
+        let exportBase = exportsDirectory.standardizedFileURL.path
+        guard path.hasPrefix(exportBase) else { return url.lastPathComponent }
+        var rel = String(path.dropFirst(exportBase.count))
         while rel.hasPrefix("/") { rel = String(rel.dropFirst()) }
         return rel.isEmpty ? url.lastPathComponent : rel
     }
 
-    /// Join `Exports/` + relative path segments (avoids `appendingPathComponent` with embedded `/`).
+    /// Resolve LAN/log relative path to on-disk URL (media → Application Support; logs → Documents/Exports).
     static func urlUnderExports(relativePath: String) -> URL {
         let trimmed = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        var url = exportsDirectory
         guard !trimmed.isEmpty else { return exportsDirectory }
+        if trimmed == mediaExportFolderName {
+            return mediaExportDirectory
+        }
+        if trimmed.hasPrefix("\(mediaExportFolderName)/") {
+            let suffix = String(trimmed.dropFirst(mediaExportFolderName.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            var url = mediaExportDirectory
+            for segment in suffix.split(separator: "/") {
+                url = url.appendingPathComponent(String(segment))
+            }
+            return url
+        }
+        var url = exportsDirectory
         for segment in trimmed.split(separator: "/") {
             url = url.appendingPathComponent(String(segment))
         }
@@ -86,13 +118,6 @@ enum ExportPaths {
             try fm.moveItem(at: staging, to: final)
         }
         log?("DLNA slot \(final.lastPathComponent) published (~60s wall-clock cadence)")
-    }
-
-    static var exportsDirectory: URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let dir = docs.appendingPathComponent("Exports", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
     }
 
     static var segmentOutputPath: String {
@@ -391,6 +416,54 @@ enum ExportPaths {
         return removed
     }
 
+    private static var applicationSupportMediaDirectoryURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent(mediaExportFolderName, isDirectory: true)
+    }
+
+    /// Move `Documents/Exports/pcld_ios_media/` → `Application Support/pcld_ios_media/` (hidden from Files; LAN paths unchanged).
+    static func migrateMediaFromDocumentsExports(log: ((String) -> Void)? = nil) {
+        let fm = FileManager.default
+        let legacy = exportsDirectory.appendingPathComponent(mediaExportFolderName, isDirectory: true)
+        guard fm.fileExists(atPath: legacy.path) else { return }
+
+        let target = applicationSupportMediaDirectoryURL
+        if !fm.fileExists(atPath: target.path) {
+            do {
+                try fm.moveItem(at: legacy, to: target)
+                log?(
+                    "Moved \(mediaExportFolderName)/ to Application Support — hidden from Files/USB; " +
+                        "LAN/rclone still use /\(mediaExportFolderName)/ on :8765"
+                )
+            } catch {
+                log?("Could not move \(mediaExportFolderName)/ to Application Support: \(error.localizedDescription)")
+            }
+            return
+        }
+
+        guard let names = try? fm.contentsOfDirectory(atPath: legacy.path) else { return }
+        var merged = 0
+        for name in names {
+            let src = legacy.appendingPathComponent(name)
+            let dst = target.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: src.path, isDirectory: &isDir) else { continue }
+            if fm.fileExists(atPath: dst.path) { continue }
+            do {
+                try fm.moveItem(at: src, to: dst)
+                merged += 1
+            } catch {
+                log?("Could not merge legacy \(name): \(error.localizedDescription)")
+            }
+        }
+        if merged > 0 {
+            log?("Merged \(merged) item(s) from Documents/Exports/\(mediaExportFolderName)/ into Application Support")
+        }
+        if let left = try? fm.contentsOfDirectory(atPath: legacy.path), left.isEmpty {
+            try? fm.removeItem(at: legacy)
+        }
+    }
+
     /// Rename legacy export filenames from older builds (idempotent).
     static func migrateLegacyExportFilenames(log: ((String) -> Void)? = nil) {
         let fm = FileManager.default
@@ -566,13 +639,9 @@ enum ExportPaths {
         _ = clearExportLogs(log: log)
     }
 
-    /// Names and sizes of segment / working-source files for post-export logs and troubleshooting Files visibility.
+    /// Names and sizes of media files for post-export logs (media is private; logs stay under Documents/Exports).
     static func describeExportMediaOnDisk() -> String {
         let fm = FileManager.default
-        let dir = exportsDirectory
-        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else {
-            return "Exports/: could not list directory"
-        }
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         var parts: [String] = []
@@ -580,39 +649,20 @@ enum ExportPaths {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             parts.append("\(label) \(formatter.string(fromByteCount: size))")
         }
-        func appendMP4(at url: URL, label: String) {
-            appendFile(at: url, label: label)
-        }
-        for name in names.sorted() where name.hasSuffix(".mp4") {
-            appendMP4(at: dir.appendingPathComponent(name), label: name)
-        }
-        let mediaDir = dir.appendingPathComponent(mediaExportFolderName)
         for rel in lanBrowsableMediaRelativePaths() {
             let url = urlUnderExports(relativePath: rel)
             appendFile(at: url, label: rel)
         }
-        let transcoded = workingTranscodedURL
-        if fm.fileExists(atPath: transcoded.path) {
-            appendMP4(at: transcoded, label: pathRelativeToExports(transcoded))
-        }
-        let loopDir = dir.appendingPathComponent(mediaExportFolderName).appendingPathComponent(segmentLoopFolderName)
-        if let loopNames = try? fm.contentsOfDirectory(atPath: loopDir.path) {
-            for name in loopNames.sorted() where name.hasSuffix(".mp4") {
-                appendMP4(
-                    at: loopDir.appendingPathComponent(name),
-                    label: "\(mediaExportFolderName)/\(segmentLoopFolderName)/\(name)"
-                )
-            }
-        }
         if parts.isEmpty {
-            return "Exports/: no .mp4 on disk — Files → On My iPhone → Loop Segments → Exports"
+            return "Media: no playable files under \(mediaExportFolderName)/ (LAN :8765; not in Files app)"
         }
-        return "Exports on disk: " + parts.joined(separator: "; ")
+        return "Media on disk (private, LAN only): " + parts.joined(separator: "; ")
     }
 
-    /// Call at launch so `Exports/` exists; writes a tiny probe file (non-zero in Files if sharing works).
+    /// Call at launch so export dirs exist; writes a tiny probe file in shared `Exports/` (visible in Files).
     static func ensureExportDirectories() {
         _ = exportsDirectory
+        migrateMediaFromDocumentsExports()
         _ = mediaExportDirectory
         _ = segmentLoopDirectory
         _ = lanExportScriptsDirectory

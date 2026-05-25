@@ -1760,7 +1760,7 @@ final class SegmentExporter {
     }
 
     private static func freeDiskBytes() -> Int64? {
-        let path = ExportPaths.exportsDirectory.path
+        let path = ExportPaths.exportDiskSpaceCheckDirectory.path
         guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
               let freeNumber = attrs[.systemFreeSize] as? NSNumber else {
             return nil

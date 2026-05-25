@@ -201,7 +201,7 @@ final class ResumeStore: ObservableObject {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    /// Pins the item in Browse when an export finishes and `_working.mp4` exists under `Exports/pcld_ios_media/` (clears other pins). Segments are under `pcld_ios_media/loop/`.
+    /// Pins the item in Browse when an export finishes and `_working.mp4` exists on disk (clears other pins). Segments are under `pcld_ios_media/loop/`.
     func pinCompletedExportIfMediaOnDisk(for item: WebDAVItem) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: ExportPaths.workingSourceURL.path) else { return }

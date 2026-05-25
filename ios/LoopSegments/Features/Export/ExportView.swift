@@ -205,7 +205,8 @@ struct ExportView: View {
                     .foregroundStyle(.secondary)
             }
             Section("Output files") {
-                Text(ExportPaths.exportsDirectory.path)
+                Text("Logs (Files/USB): \(ExportPaths.exportsDirectory.path)")
+                Text("Media (LAN only): Application Support/\(ExportPaths.mediaExportFolderName)/")
                     .font(.caption)
                 Text("Segments: pcld_ios_media/loop/op_00|01.mp4")
                 Text("Working copy: pcld_ios_media/_working.mp4 (sparse while export runs)")

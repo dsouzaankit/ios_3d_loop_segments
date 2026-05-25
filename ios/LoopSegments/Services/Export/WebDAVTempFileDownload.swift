@@ -1530,7 +1530,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     }
 
     static func ensureFreeDiskSpace(forBytes needed: Int64) throws {
-        let path = ExportPaths.exportsDirectory.path
+        let path = ExportPaths.exportDiskSpaceCheckDirectory.path
         guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
               let freeNumber = attrs[.systemFreeSize] as? NSNumber else {
             return
