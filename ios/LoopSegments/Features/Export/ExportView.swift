@@ -16,7 +16,6 @@ struct ExportView: View {
     @State private var liveLogTail = ""
     @State private var lanHostURL: String?
     @State private var lanIPURL: String?
-    @State private var exportTask: Task<Void, Never>?
     @State private var showAutoLockHelp = false
     @State private var copiedLANURL = false
     @State private var clearMediaAcknowledged = false
@@ -69,14 +68,14 @@ struct ExportView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .disabled(session.isExportRunning)
+                    .disabled(session.isExportSessionActive)
                     .onChange(of: prefetchCutoffMbps) { _, newValue in
                         ExportLANServer.backgroundPrefetchCutoffMbps = newValue
                     }
                     .onAppear {
                         prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
                     }
-                    if session.isExportRunning {
+                    if session.isExportSessionActive {
                         Text("Cutoff locked while export is running.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -131,7 +130,7 @@ struct ExportView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Toggle("Full WebDAV download", isOn: $vanillaDownloadBackup)
-                    .disabled(session.isExportRunning)
+                    .disabled(session.isExportSessionActive)
                     .onChange(of: vanillaDownloadBackup) { _, enabled in
                         VanillaWebDAVDownload.isBackupEnabled = enabled
                     }
@@ -156,14 +155,14 @@ struct ExportView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .disabled(session.isExportRunning)
+                    .disabled(session.isExportSessionActive)
                     .onChange(of: hlsTranscodeCutoffMultiplier) { _, newValue in
                         PCloudHLSLink.transcodeCutoffMultiplier = newValue
                     }
                     .onAppear {
                         hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
                     }
-                    if session.isExportRunning {
+                    if session.isExportSessionActive {
                         Text("Locked while export is running.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -265,7 +264,7 @@ struct ExportView: View {
             }
             ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
             while ExportLANServer.isEnabled, !Task.isCancelled {
-                if session.isExportRunning {
+                if session.isExportSessionActive {
                     refreshLogFromDisk()
                 }
                 let urls = ExportLANServer.displayLANURLs
@@ -317,7 +316,7 @@ struct ExportView: View {
             AlternateExportFileSource.stored = newValue
         }
 
-        if session.isExportRunning {
+        if session.isExportSessionActive {
             Text("Stop or pause the current export before switching to another file.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -335,14 +334,14 @@ struct ExportView: View {
                 Label("Export random file", systemImage: "shuffle")
             }
         }
-        .disabled(session.isExportRunning || alternateExportBusy)
+        .disabled(session.isExportSessionActive || alternateExportBusy)
 
         Button {
             showAlternateFilePicker = true
         } label: {
             Label("Choose file…", systemImage: "film.stack")
         }
-        .disabled(session.isExportRunning || alternateExportBusy)
+        .disabled(session.isExportSessionActive || alternateExportBusy)
 
         Text(
             "Opens export for another video at 0:00 — random from the pool above, or pick from the list. " +
@@ -355,8 +354,7 @@ struct ExportView: View {
     @ViewBuilder
     private var exportControlsSection: some View {
         let resume = resumeStore.resumeStatus(for: item)
-        let isThisFileExporting = session.isExportRunning
-            && session.activeExportItem?.fileKey == item.fileKey
+        let isThisFileExporting = session.isExportActive(for: item)
 
         Section {
             if isThisFileExporting {
@@ -366,7 +364,7 @@ struct ExportView: View {
                     Text(ResumeTimeFormat.formatMs(resume.effectiveMs))
                         .monospacedDigit()
                 }
-            } else if resume.isPaused {
+            } else if resume.isPaused, !isThisFileExporting {
                 Label("Export paused", systemImage: "pause.circle.fill")
                     .foregroundStyle(.orange)
                 Text("Checkpoint saved. Tap Start export to continue — segments and _working.mp4 stay on the phone.")
@@ -424,7 +422,7 @@ struct ExportView: View {
                 }
             }
 
-            if resume.hasResumePoint, !session.isExportRunning {
+            if resume.hasResumePoint, !session.isExportSessionActive {
                 Button("Reset to 0:00", role: .destructive) {
                     resumeStore.clearResume(for: item)
                     seekMs = 0
@@ -432,23 +430,18 @@ struct ExportView: View {
                 }
             }
 
-            Button(session.isExportRunning ? "Exporting…" : "Start export") {
-                exportTask?.cancel()
-                exportTask = Task { await startExport() }
+            Button(isThisFileExporting ? "Exporting…" : "Start export") {
+                session.runExportUITask { await startExport() }
             }
-            .disabled(session.isExportRunning)
+            .disabled(session.isExportSessionActive)
 
-            if session.isExportRunning {
+            if isThisFileExporting {
                 Button("Pause") {
                     session.pauseExport()
-                    exportTask?.cancel()
-                    exportTask = nil
                     status = "Paused — tap Start export to continue from checkpoint"
                 }
                 Button("Stop", role: .destructive) {
                     session.cancelExport()
-                    exportTask?.cancel()
-                    exportTask = nil
                     status = "Stopping…"
                 }
             }
@@ -474,7 +467,7 @@ struct ExportView: View {
                     systemImage: clearMediaAcknowledged ? "checkmark.circle.fill" : "film"
                 )
             }
-            .disabled(session.isExportRunning)
+            .disabled(session.isExportSessionActive)
             .foregroundStyle(clearMediaAcknowledged ? .green : Color.red)
             .sensoryFeedback(.success, trigger: clearMediaAckTrigger)
             Button {
@@ -486,7 +479,7 @@ struct ExportView: View {
                     systemImage: clearLogsAcknowledged ? "checkmark.circle.fill" : "doc.text"
                 )
             }
-            .disabled(session.isExportRunning)
+            .disabled(session.isExportSessionActive)
             .foregroundStyle(clearLogsAcknowledged ? .green : Color.red)
             .sensoryFeedback(.success, trigger: clearLogsAckTrigger)
             Button {
@@ -498,7 +491,7 @@ struct ExportView: View {
                     systemImage: trimMediaAcknowledged ? "checkmark.circle.fill" : "externaldrive.fill"
                 )
             }
-            .disabled(session.isExportRunning)
+            .disabled(session.isExportSessionActive)
             .foregroundStyle(trimMediaAcknowledged ? .green : Color.orange)
             .sensoryFeedback(.success, trigger: trimMediaAckTrigger)
             Text(
@@ -524,13 +517,13 @@ struct ExportView: View {
     private func applyForegroundResume() {
         let resume = resumeStore.resumeStatus(for: item)
         syncLANResumeHintFromStore()
-        if session.isExportRunning, session.activeExportItem?.fileKey == item.fileKey {
+        if session.isExportActive(for: item) {
             if status.isEmpty || status.hasPrefix("Export paused") {
                 status = "Export running — logs refresh while app is open"
             }
         } else {
             syncSeekFromStore()
-            if resume.isPaused {
+            if resume.isPaused, !session.isExportActive(for: item) {
                 status = "Export paused — continue from \(ResumeTimeFormat.formatMs(seekMs)) (tap Start export)"
             } else if resume.savedSeekMs > 0, status.isEmpty {
                 status = "Will start from \(ResumeTimeFormat.formatMs(seekMs))"
@@ -548,7 +541,7 @@ struct ExportView: View {
     }
 
     private func clearExportMedia() {
-        guard !session.isExportRunning else { return }
+        guard !session.isExportSessionActive else { return }
         let count = session.clearExportMedia(referenceItem: item)
         liveLogTail = ""
         status = count > 0 ? "Cleared \(count) media file(s) from Exports" : "No media files in Exports"
@@ -556,7 +549,7 @@ struct ExportView: View {
     }
 
     private func clearExportLogs() {
-        guard !session.isExportRunning else { return }
+        guard !session.isExportSessionActive else { return }
         let count = ExportPaths.clearExportLogs()
         liveLogTail = ""
         status = count > 0 ? "Cleared \(count) log file(s) from Exports" : "No log files in Exports"
@@ -564,7 +557,7 @@ struct ExportView: View {
     }
 
     private func trimExportMediaKeepingRecent() {
-        guard !session.isExportRunning else { return }
+        guard !session.isExportSessionActive else { return }
         let count = session.trimExportMediaArchives()
         liveLogTail = ""
         let keep = ExportMediaArchive.manualKeepCount
@@ -671,9 +664,8 @@ struct ExportView: View {
         didAutoStartExport = true
         seekMs = max(0, autoStartSeekMs)
         resumeStore.saveSeekMs(seekMs, for: item)
-        guard !session.isExportRunning else { return }
-        exportTask?.cancel()
-        exportTask = Task { await startExport() }
+        guard !session.isExportSessionActive else { return }
+        session.runExportUITask { await startExport() }
     }
 
     private func beginExportOnDifferentFile(_ picked: WebDAVItem, autoStart: Bool, seekMs startSeekMs: Int64 = 0) {
@@ -681,16 +673,15 @@ struct ExportView: View {
         resumeStore.saveSeekMs(seek, for: picked)
         if picked.fileKey == item.fileKey {
             seekMs = seek
-            guard autoStart, !session.isExportRunning else { return }
-            exportTask?.cancel()
-            exportTask = Task { await startExport() }
+            guard autoStart, !session.isExportSessionActive else { return }
+            session.runExportUITask { await startExport() }
             return
         }
         switchExportTarget = ExportSwitchTarget(item: picked, autoStart: autoStart, seekMs: seek)
     }
 
     private func exportRandomFile() async {
-        guard !session.isExportRunning else { return }
+        guard !session.isExportSessionActive else { return }
         guard let credentials = session.credentials else {
             errorMessage = ExportError.notSignedIn.errorDescription
             return

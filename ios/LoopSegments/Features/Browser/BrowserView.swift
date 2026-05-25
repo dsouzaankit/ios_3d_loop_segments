@@ -341,7 +341,8 @@ struct BrowserView: View {
     }
 
     private func refreshResumeSidebar() {
-        pausedSidebarEntries = resumeStore.interruptedEntries()
+        let activeKey = session.isExportSessionActive ? session.activeExportItem?.fileKey : nil
+        pausedSidebarEntries = resumeStore.interruptedEntries(excludingFileKey: activeKey)
         pinnedSidebarEntries = resumeStore.pinnedCompletedEntries()
     }
 
@@ -378,7 +379,7 @@ struct BrowserView: View {
                 updatedAt: nil,
                 sourceDurationMs: nil
             )
-        if session.isExportRunning, session.activeExportItem?.fileKey == item.fileKey {
+        if session.isExportActive(for: item) {
             Text("Exporting")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.orange)

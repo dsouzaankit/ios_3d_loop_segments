@@ -99,7 +99,7 @@ enum LANExportSourceDisplay {
            !name.isEmpty {
             return ("paused", name)
         }
-        // exportInProgress in ResumeStore means paused/checkpointed — not actively exporting.
+        // exportInProgress without a running export session = user-paused / checkpointed.
         if let paused = ResumeStore.mostRecentPausedExport() {
             return ("paused", paused.displayName)
         }

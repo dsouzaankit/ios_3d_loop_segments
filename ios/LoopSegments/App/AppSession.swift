@@ -16,6 +16,29 @@ final class AppSession: ObservableObject {
     @Published private(set) var activeExportItem: WebDAVItem?
     /// Bumped on each new export start / cancel so stale async unwinds cannot clobber state.
     private var exportGeneration = 0
+    /// Survives leaving Export screen — must not be tied to `ExportView` lifetime.
+    private var exportUITask: Task<Void, Never>?
+
+    /// True while this file is exporting (including after leaving Export UI).
+    func isExportActive(for item: WebDAVItem) -> Bool {
+        guard activeExportItem?.fileKey == item.fileKey else { return false }
+        return isExportRunning || exportCoordinator.isBusy
+    }
+
+    var isExportSessionActive: Bool {
+        isExportRunning || exportCoordinator.isBusy
+    }
+
+    /// Runs export work on the session so navigation away from Export does not cancel it.
+    func runExportUITask(_ operation: @escaping @MainActor () async -> Void) {
+        exportUITask?.cancel()
+        exportUITask = Task { await operation() }
+    }
+
+    func cancelExportUITask() {
+        exportUITask?.cancel()
+        exportUITask = nil
+    }
 
     init() {
         credentials = credentialStore.load()
@@ -167,7 +190,7 @@ final class AppSession: ObservableObject {
             if generation == exportGeneration {
                 ExportAutoLockCoordinator.exportDidEnd()
                 isExportRunning = false
-                activeExportItem = nil
+                clearActiveExportItemWhenIdle(generation: generation)
             }
         }
 
@@ -195,7 +218,10 @@ final class AppSession: ObservableObject {
             }
         } catch let error {
             guard generation == exportGeneration else { throw error }
-            if userRequestedExportPause {
+            if exportCoordinator.isBusy {
+                // Task/view cancelled while coordinator still exporting — keep LAN on "running".
+                LANExportSourceDisplay.setRunning(item.name)
+            } else if userRequestedExportPause {
                 LANExportSourceDisplay.setPaused(item.name)
             } else if userRequestedExportCancel {
                 LANExportSourceDisplay.clearActive()
@@ -212,8 +238,26 @@ final class AppSession: ObservableObject {
         }
     }
 
+    private func clearActiveExportItemWhenIdle(generation: Int) {
+        guard exportCoordinator.isBusy else {
+            if generation == exportGeneration {
+                activeExportItem = nil
+            }
+            return
+        }
+        Task { @MainActor in
+            for _ in 0 ..< 300 where exportCoordinator.isBusy {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if generation == exportGeneration {
+                activeExportItem = nil
+            }
+        }
+    }
+
     /// Stop export and clear paused state (removes loop/ segments; archives root working/vanilla copies).
     func cancelExport() {
+        cancelExportUITask()
         let cleanupAfterCoordinator = isExportRunning || exportCoordinator.isBusy
         exportGeneration += 1
         userRequestedExportCancel = true

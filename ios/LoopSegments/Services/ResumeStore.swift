@@ -189,9 +189,11 @@ final class ResumeStore: ObservableObject {
         )
     }
 
-    func interruptedEntries() -> [ResumeEntry] {
+    func interruptedEntries(excludingFileKey activeFileKey: String? = nil) -> [ResumeEntry] {
         load()
-            .filter(\.exportInProgress)
+            .filter { entry in
+                entry.exportInProgress && entry.fileKey != activeFileKey
+            }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
