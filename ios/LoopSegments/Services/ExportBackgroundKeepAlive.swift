@@ -11,10 +11,22 @@ final class ExportBackgroundKeepAlive: NSObject {
     private var queuePlayer: AVQueuePlayer?
     private var playerLooper: AVPlayerLooper?
     private var timeoutTask: Task<Void, Never>?
+    private var nowPlayingRefreshTask: Task<Void, Never>?
     private var exportSubtitle = ""
     private var startedAt = Date()
     private var exportSessionEligible = false
     private var remoteCommandsRegistered = false
+    private(set) var lastStartError: String?
+
+    private static let lockScreenArtwork: MPMediaItemArtwork = {
+        let size = CGSize(width: 300, height: 300)
+        return MPMediaItemArtwork(boundsSize: size) { _ in
+            UIGraphicsImageRenderer(size: size).image { context in
+                UIColor.systemOrange.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+            }
+        }
+    }()
 
     private override init() {
         super.init()
@@ -35,18 +47,21 @@ final class ExportBackgroundKeepAlive: NSObject {
         guard ExportKeepAliveSettings.isEnabled else { return }
         exportSubtitle = exportTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         startedAt = Date()
-        startPlayback()
+        Task { await startPlaybackAsync() }
     }
 
     /// User turned off the toggle mid-export — stop audio only; export session unchanged.
     func stopForUserSettingOff() {
+        let keepEligible = exportSessionEligible
         tearDownPlayback()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         unregisterRemoteCommands()
+        NowPlayingFirstResponder.deactivate()
         try? AVAudioSession.sharedInstance().setActive(
             false,
             options: [.notifyOthersOnDeactivation]
         )
+        exportSessionEligible = keepEligible
     }
 
     var isActive: Bool { queuePlayer != nil }
@@ -58,30 +73,54 @@ final class ExportBackgroundKeepAlive: NSObject {
 
     // MARK: - Playback
 
-    private func startPlayback() {
+    private func startPlaybackAsync() async {
         tearDownPlayback()
+        lastStartError = nil
         do {
             try configureAudioSession()
             let url = try SilentKeepAliveAudioGenerator.ensureFileURL()
             let template = AVPlayerItem(url: url)
+            template.audioTimePitchAlgorithm = .timeDomain
+            try await waitUntilReadyToPlay(template)
+
             let player = AVQueuePlayer()
+            player.automaticallyWaitsToMinimizeStalling = false
             playerLooper = AVPlayerLooper(player: player, templateItem: template)
             queuePlayer = player
-            player.volume = 0.0001
+            // File is digital silence; full volume keeps the playback pipeline (and lock screen) alive.
+            player.volume = 1
             player.actionAtItemEnd = .advance
             ensureRemoteCommandsRegistered()
-            UIApplication.shared.beginReceivingRemoteControlEvents()
-            applyNowPlayingInfo(playbackRate: 1)
+            NowPlayingFirstResponder.activate()
+            applyNowPlayingInfo(playbackRate: 1, elapsedSeconds: 0)
             player.play()
+            startNowPlayingRefresh()
             scheduleTimeoutIfNeeded()
-            SearchDebugLog.log("Keep Alive: silent loop started (lock screen — play to resume after stop)")
+            SearchDebugLog.log("Keep Alive: silent loop started — lock screen should show Now Playing")
         } catch {
+            lastStartError = error.localizedDescription
             SearchDebugLog.log("Keep Alive: failed to start — \(error.localizedDescription)")
             tearDownPlayback()
         }
     }
 
+    private func waitUntilReadyToPlay(_ item: AVPlayerItem) async throws {
+        for _ in 0 ..< 200 {
+            switch item.status {
+            case .readyToPlay:
+                return
+            case .failed:
+                throw item.error ?? SilentKeepAliveAudioGenerator.GeneratorError.buffer
+            default:
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+        throw SilentKeepAliveAudioGenerator.GeneratorError.buffer
+    }
+
     private func tearDownPlayback() {
+        nowPlayingRefreshTask?.cancel()
+        nowPlayingRefreshTask = nil
         timeoutTask?.cancel()
         timeoutTask = nil
         queuePlayer?.pause()
@@ -94,6 +133,7 @@ final class ExportBackgroundKeepAlive: NSObject {
         tearDownPlayback()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         unregisterRemoteCommands()
+        NowPlayingFirstResponder.deactivate()
         try? AVAudioSession.sharedInstance().setActive(
             false,
             options: [.notifyOthersOnDeactivation]
@@ -102,28 +142,47 @@ final class ExportBackgroundKeepAlive: NSObject {
 
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try session.setCategory(.playback, mode: .default)
         try session.setActive(true)
     }
 
-    private func applyNowPlayingInfo(playbackRate: Double = 1, albumHint: String? = nil) {
+    private func applyNowPlayingInfo(
+        playbackRate: Double = 1,
+        elapsedSeconds: Double = 0,
+        albumHint: String? = nil
+    ) {
         let hint = albumHint
             ?? (playbackRate > 0
                 ? "Export running — stop on lock screen when finished"
                 : "Tap play to resume Keep Alive (export still running)")
-        var info: [String: Any] = [
+        var duration: Double = 60
+        if let timeout = ExportKeepAliveSettings.timeoutSeconds {
+            duration = max(60, timeout - Date().timeIntervalSince(startedAt))
+        }
+        let info: [String: Any] = [
             MPMediaItemPropertyTitle: "Keep Alive",
             MPMediaItemPropertyArtist: exportSubtitle.isEmpty ? "Loop Segments" : exportSubtitle,
             MPMediaItemPropertyAlbumTitle: hint,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
             MPNowPlayingInfoPropertyPlaybackRate: playbackRate,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0,
-            MPMediaItemPropertyPlaybackDuration: 60,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: max(0, elapsedSeconds),
+            MPMediaItemPropertyPlaybackDuration: duration,
+            MPMediaItemPropertyArtwork: Self.lockScreenArtwork,
         ]
-        if let timeout = ExportKeepAliveSettings.timeoutSeconds {
-            let remaining = max(0, timeout - Date().timeIntervalSince(startedAt))
-            info[MPMediaItemPropertyPlaybackDuration] = remaining
-        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func startNowPlayingRefresh() {
+        nowPlayingRefreshTask?.cancel()
+        nowPlayingRefreshTask = Task { @MainActor in
+            while !Task.isCancelled, let player = queuePlayer {
+                let elapsed = player.currentTime().seconds
+                let safeElapsed = elapsed.isFinite ? max(0, elapsed) : 0
+                let rate: Double = player.rate > 0 ? 1 : 0
+                applyNowPlayingInfo(playbackRate: rate, elapsedSeconds: safeElapsed)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
     }
 
     // MARK: - Lock screen remote
@@ -167,7 +226,7 @@ final class ExportBackgroundKeepAlive: NSObject {
     private func playFromLockScreen() {
         if let queuePlayer {
             queuePlayer.play()
-            applyNowPlayingInfo(playbackRate: 1)
+            applyNowPlayingInfo(playbackRate: 1, elapsedSeconds: queuePlayer.currentTime().seconds)
             SearchDebugLog.log("Keep Alive: resumed from lock screen")
             return
         }
@@ -176,14 +235,16 @@ final class ExportBackgroundKeepAlive: NSObject {
             return
         }
         startedAt = Date()
-        startPlayback()
+        Task { await startPlaybackAsync() }
         SearchDebugLog.log("Keep Alive: restarted loop from lock screen")
     }
 
     private func pauseFromLockScreen() {
         queuePlayer?.pause()
+        let elapsed = queuePlayer?.currentTime().seconds ?? 0
         applyNowPlayingInfo(
             playbackRate: 0,
+            elapsedSeconds: elapsed.isFinite ? elapsed : 0,
             albumHint: "Paused — tap play to resume Keep Alive"
         )
     }
@@ -192,8 +253,10 @@ final class ExportBackgroundKeepAlive: NSObject {
         tearDownPlayback()
         try? configureAudioSession()
         ensureRemoteCommandsRegistered()
+        NowPlayingFirstResponder.activate()
         applyNowPlayingInfo(
             playbackRate: 0,
+            elapsedSeconds: 0,
             albumHint: "Stopped — tap play to resume Keep Alive (export still running)"
         )
         SearchDebugLog.log("Keep Alive: stopped from lock screen (tap play to restart; export continues)")

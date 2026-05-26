@@ -219,9 +219,18 @@ struct ExportView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     if ExportBackgroundKeepAlive.shared.isActive {
-                        Text("Keep Alive is playing now.")
+                        Text("Keep Alive is playing — lock the phone to see Now Playing.")
                             .font(.footnote)
                             .foregroundStyle(.orange)
+                    } else if session.isExportActive(for: item),
+                              let err = ExportBackgroundKeepAlive.shared.lastStartError {
+                        Text("Keep Alive failed: \(err)")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    } else if exportKeepAliveEnabled {
+                        Text("Turn on before Start export. After export starts, lock the phone — check Control Center if the lock screen card is hidden.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 } else {
                     Text(

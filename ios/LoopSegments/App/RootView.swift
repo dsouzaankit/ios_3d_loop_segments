@@ -17,6 +17,10 @@ struct RootView: View {
                 AuthView()
             }
         }
+        .background {
+            NowPlayingFirstResponderAnchor()
+                .frame(width: 0, height: 0)
+        }
         .onAppear {
             syncLANServices()
         }
