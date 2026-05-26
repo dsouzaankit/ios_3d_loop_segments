@@ -1461,6 +1461,47 @@ enum ExportLANServer {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// JSON string literal safe to embed in generated `<script>` blocks.
+    private static func jsonStringLiteral(_ text: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: text),
+              let encoded = String(data: data, encoding: .utf8) else {
+            return "\"\""
+        }
+        return encoded
+    }
+
+    /// Pause/stop gating — shared by monitor and `/browse` scripts.
+    private static func htmlLANPauseStopClientScript() -> String {
+        """
+          window._phonePauseStopEnabled = \(LANPhoneInteractionState.acceptsPauseStopTriggers ? "true" : "false");
+          window._phonePauseStopReason = \(jsonStringLiteral(LANPhoneInteractionState.pauseStopDisabledReason));
+          function updatePauseStopButtons() {
+            var enabled = window._phonePauseStopEnabled !== false;
+            var reason = window._phonePauseStopReason || "";
+            var pending = !!window._exportSourcePending;
+            var hint = document.getElementById("lan-pause-stop-hint");
+            if (hint) {
+              hint.textContent = enabled ? "" : reason;
+              hint.style.display = enabled ? "none" : "";
+            }
+            ["export-pause", "export-stop"].forEach(function (id) {
+              var btn = document.getElementById(id);
+              if (!btn) return;
+              btn.disabled = pending || !enabled;
+              btn.title = !enabled && reason ? reason : "";
+            });
+          }
+          function applyPhoneInteraction(pi) {
+            if (!pi) return;
+            window._phonePauseStopEnabled = pi.pauseStopEnabled !== false;
+            window._phonePauseStopReason = pi.pauseStopDisabledReason || "";
+            updatePauseStopButtons();
+          }
+          window.updatePauseStopButtons = updatePauseStopButtons;
+          updatePauseStopButtons();
+        """
+    }
+
     /// Click-only anchor during export (no real `href` → Chrome cannot speculative-prefetch multi-GB URLs).
     private static func lanMediaClickAnchor(relativePath: String, innerHTML: String, extraClass: String = "") -> String {
         let pathAttr = htmlEscape(relativePath)
@@ -1527,16 +1568,23 @@ enum ExportLANServer {
         let phaseClass = phase == "running" ? " is-active" : (phase == "paused" ? " is-paused" : "")
         let pauseHidden = phase == "running" ? "" : " style=\"display:none\""
         let resumeHidden = phase == "paused" ? "" : " style=\"display:none\""
+        let pauseStopEnabled = LANPhoneInteractionState.acceptsPauseStopTriggers
+        let pauseStopReason = htmlEscape(LANPhoneInteractionState.pauseStopDisabledReason)
+        let pauseStopDisabledAttr = pauseStopEnabled ? "" : " disabled"
+        let pauseStopTitleAttr = pauseStopEnabled ? "" : " title=\"\(pauseStopReason)\""
+        let pauseStopHintHidden = pauseStopEnabled ? " style=\"display:none\"" : ""
+        let pauseStopHintText = pauseStopEnabled ? "" : pauseStopReason
         return """
         <div id="lan-export-source-wrap" class="export-source-line\(phaseClass)"\(hidden)>
           <div class="export-source-main">
             <strong id="lan-export-source-label">\(label):</strong>
             <span id="lan-export-source-name">\(name)</span>
+            <p id="lan-pause-stop-hint" class="lan-pause-stop-hint"\(pauseStopHintHidden)>\(pauseStopHintText)</p>
           </div>
           <div class="export-source-actions" id="lan-export-source-actions"\(actionsHidden)>
             <button type="button" id="export-resume"\(resumeHidden)>Start export</button>
-            <button type="button" id="export-pause"\(pauseHidden)>Pause export</button>
-            <button type="button" id="export-stop">Stop export</button>
+            <button type="button" id="export-pause"\(pauseHidden)\(pauseStopDisabledAttr)\(pauseStopTitleAttr)>Pause export</button>
+            <button type="button" id="export-stop"\(pauseStopDisabledAttr)\(pauseStopTitleAttr)>Stop export</button>
           </div>
         </div>
         """
@@ -1587,6 +1635,7 @@ enum ExportLANServer {
               if (btn) btn.disabled = !enabled;
             });
           }
+          \(htmlLANPauseStopClientScript())
           function applyExportSource(src) {
             if (window._exportSourcePending) return;
             var wrap = document.getElementById("lan-export-source-wrap");
@@ -1611,6 +1660,7 @@ enum ExportLANServer {
             if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
             if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
             setMediaMaintenanceEnabled(src.phase !== "running");
+            updatePauseStopButtons();
           }
           window.updateExportSourceLine = function (phase, displayName) {
             var labels = { running: "Exporting", paused: "Paused export", finished: "Last export" };
@@ -1672,6 +1722,7 @@ enum ExportLANServer {
               .then(function (r) { return r.json(); })
               .then(function (j) {
                 applyExportSource(j.exportSource);
+                applyPhoneInteraction(j.phoneInteraction);
                 applyLive(j.lanLive);
                 if (typeof j.playbackStatusHTML === "string") {
                   var status = document.getElementById("lan-playback-status");
@@ -1881,6 +1932,7 @@ enum ExportLANServer {
           <div class="export-source-main">
             <strong id="lan-export-source-label">Export source:</strong>
             <span id="lan-export-source-name"></span>
+            <p id="lan-pause-stop-hint" class="lan-pause-stop-hint" style="display:none"></p>
           </div>
           <div class="export-source-actions" id="lan-export-source-actions" style="display:none">
             <button type="button" id="export-resume" style="display:none">Start export</button>
@@ -1944,12 +1996,22 @@ enum ExportLANServer {
         <script>
         (function () {
           \(htmlLANMediaClickScript())
+          var AUTH = "Basic " + btoa("\(htmlEscape(lanWebDAVUsername)):\(htmlEscape(lanWebDAVPassword))");
+          var triggerUrl = "/\(LANExportTriggerControl.triggerRelativePath)";
+          var ackUrl = "/\(LANExportTriggerControl.ackRelativePath)";
+          function uuid() {
+            return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+              var r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+              return v.toString(16);
+            });
+          }
           function esc(s) {
             return String(s)
               .replace(/&/g, "&amp;")
               .replace(/</g, "&lt;")
               .replace(/"/g, "&quot;");
           }
+          \(htmlLANPauseStopClientScript())
           function applyExportSource(src) {
             var wrap = document.getElementById("lan-export-source-wrap");
             if (!wrap || !src || !src.displayName) {
@@ -1966,10 +2028,44 @@ enum ExportLANServer {
             var actions = document.getElementById("lan-export-source-actions");
             var pauseBtn = document.getElementById("export-pause");
             var resumeBtn = document.getElementById("export-resume");
+            var stopBtn = document.getElementById("export-stop");
             var active = src.phase === "running" || src.phase === "paused";
             if (actions) actions.style.display = active ? "" : "none";
             if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
             if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
+            if (stopBtn) stopBtn.style.display = active ? "" : "none";
+            updatePauseStopButtons();
+          }
+          async function putTrigger(body) {
+            if ((body.command === "pause_export" || body.command === "stop_export")
+                && window._phonePauseStopEnabled === false) {
+              alert(window._phonePauseStopReason || "Pause and stop require the app in the foreground on the phone.");
+              return;
+            }
+            var r = await fetch(triggerUrl, {
+              method: "PUT",
+              headers: { "Authorization": AUTH, "Content-Type": "application/json" },
+              body: JSON.stringify(body)
+            });
+            if (!r.ok) {
+              var errText = "";
+              try { errText = await r.text(); } catch (e) {}
+              alert("Trigger failed: " + r.status + (errText ? " — " + errText.trim() : ""));
+              return;
+            }
+            for (var i = 0; i < 8; i++) {
+              await new Promise(function (res) { setTimeout(res, 500); });
+              try {
+                var ack = await fetch(ackUrl, { headers: { "Authorization": AUTH } });
+                if (ack.ok) {
+                  var j = await ack.json();
+                  if (j.status === "rejected") {
+                    alert((j.message || "Rejected") + "");
+                  }
+                  return;
+                }
+              } catch (e) {}
+            }
           }
           function applyLive(live) {
             if (!live) return;
@@ -2000,6 +2096,7 @@ enum ExportLANServer {
               .then(function (r) { return r.json(); })
               .then(function (j) {
                 applyExportSource(j.exportSource);
+                applyPhoneInteraction(j.phoneInteraction);
                 applyLive(j.lanLive);
                 if (typeof j.playbackStatusHTML === "string") {
                   var status = document.getElementById("lan-playback-status");
@@ -2022,6 +2119,26 @@ enum ExportLANServer {
           var listsBtn = document.getElementById("lan-refresh-lists");
           if (statusBtn) statusBtn.onclick = refreshStatus;
           if (listsBtn) listsBtn.onclick = refreshLists;
+          var pauseBtn = document.getElementById("export-pause");
+          var stopBtn = document.getElementById("export-stop");
+          var resumeBtn = document.getElementById("export-resume");
+          if (pauseBtn) pauseBtn.onclick = function () {
+            if (window._phonePauseStopEnabled === false) {
+              alert(window._phonePauseStopReason || "Pause requires the app in the foreground on the phone.");
+              return;
+            }
+            putTrigger({ version: 1, command: "pause_export", id: uuid() }).then(refreshStatus);
+          };
+          if (stopBtn) stopBtn.onclick = function () {
+            if (window._phonePauseStopEnabled === false) {
+              alert(window._phonePauseStopReason || "Stop requires the app in the foreground on the phone.");
+              return;
+            }
+            putTrigger({ version: 1, command: "stop_export", id: uuid() }).then(refreshStatus);
+          };
+          if (resumeBtn) resumeBtn.onclick = function () {
+            putTrigger({ version: 1, command: "resume_export", id: uuid() }).then(refreshStatus);
+          };
         })();
         </script>
         """
@@ -2054,6 +2171,7 @@ enum ExportLANServer {
                 .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; }
                 .lan-playback-logs-scroll { max-height: calc(5 * 1.75lh); overflow: auto; border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem 0.4rem; }
                 .muted { color: #666; font-size: 0.9em; }
+                .lan-pause-stop-hint { margin: 0.35rem 0 0; font-size: 0.88em; color: #8a4b00; line-height: 1.35; }
                 button:disabled { opacity: 0.55; cursor: not-allowed; }
                 </style>
                 </head><body>
@@ -2163,6 +2281,8 @@ enum ExportLANServer {
             }
             .lan-playback-logs-scroll ul { margin: 0; padding-left: 1.25rem; }
             #lan-export-logs li { word-break: break-all; }
+            .lan-pause-stop-hint { margin: 0.35rem 0 0; font-size: 0.88em; color: #8a4b00; line-height: 1.35; max-width: 36rem; }
+            button:disabled[title] { cursor: not-allowed; }
             #trigger-status { min-height: 1.2em; }
             </style>
             </head><body>
@@ -2569,9 +2689,15 @@ enum ExportLANServer {
             document.querySelectorAll(".export-file").forEach(function (btn) {
               btn.disabled = !!active;
             });
+            if (window.updatePauseStopButtons) updatePauseStopButtons();
           }
           window.setExportPending = setExportPending;
           async function putTrigger(body) {
+            if ((body.command === "pause_export" || body.command === "stop_export")
+                && window._phonePauseStopEnabled === false) {
+              setStatus(window._phonePauseStopReason || "Pause and stop require the app in the foreground on the phone.", true);
+              return;
+            }
             var pending = exportPendingMessage(body.command, body);
             setExportPending(true, pending.title, pending.detail);
             try {
@@ -2692,10 +2818,18 @@ enum ExportLANServer {
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("export-pause").onclick = function () {
+            if (window._phonePauseStopEnabled === false) {
+              setStatus(window._phonePauseStopReason || "Pause requires the app in the foreground on the phone.", true);
+              return;
+            }
             putTrigger({ version: 1, command: "pause_export", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("export-stop").onclick = function () {
+            if (window._phonePauseStopEnabled === false) {
+              setStatus(window._phonePauseStopReason || "Stop requires the app in the foreground on the phone.", true);
+              return;
+            }
             putTrigger({ version: 1, command: "stop_export", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
@@ -2798,6 +2932,7 @@ enum ExportLANServer {
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
         }
+        payload["phoneInteraction"] = LANPhoneInteractionState.statusPayload()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return

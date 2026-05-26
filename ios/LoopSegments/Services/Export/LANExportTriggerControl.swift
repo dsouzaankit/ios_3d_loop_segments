@@ -236,6 +236,15 @@ enum LANExportTriggerControl {
             return "LAN trigger — resume \(item.name)"
 
         case .pauseExport:
+            guard LANPhoneInteractionState.acceptsPauseStopTriggers else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: LANPhoneInteractionState.pauseStopDisabledReason,
+                    triggerId: trigger.id
+                )
+                return "Pause rejected — phone not in foreground"
+            }
             guard isExportRunning else {
                 writeAck(
                     command: trigger.command.rawValue,
@@ -255,6 +264,15 @@ enum LANExportTriggerControl {
             return "LAN trigger — paused"
 
         case .stopExport:
+            guard LANPhoneInteractionState.acceptsPauseStopTriggers else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: LANPhoneInteractionState.pauseStopDisabledReason,
+                    triggerId: trigger.id
+                )
+                return "Stop rejected — phone not in foreground"
+            }
             let hasPausedExport = ResumeStore.mostRecentPausedExport() != nil
             guard isExportRunning || hasPausedExport || ExportMediaArchive.hasActiveExportMediaOnDisk() else {
                 writeAck(

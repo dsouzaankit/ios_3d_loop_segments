@@ -165,7 +165,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 
 | Path | Purpose |
 |------|---------|
-| **`/status.json`** | Live state: `exportSource`, optional `lanLive` (slim during export), `playbackStatusHTML` when idle. File lists deferred to **`status_lists.json`**. |
+| **`/status.json`** | Live state: `exportSource`, `phoneInteraction`, optional `lanLive` (slim during export), `playbackStatusHTML` when idle. File lists deferred to **`status_lists.json`**. |
 | **`/status_lists.json`** | `playbackListHTML`, `exportLogsListHTML`, capped `files[]` (active + recent archive + logs). |
 | **`/pcloud_list.json?path=/Folder/`** | pCloud folder listing (directories + video files). |
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
@@ -176,6 +176,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
+- **`phoneInteraction`** — `{ "pauseStopEnabled", "pauseStopDisabledReason" }` — LAN **Pause** / **Stop** and matching triggers are rejected when the app is not **active** in the foreground.
 - **`playbackStatusHTML`**, **`playbackListHTML`**, **`exportLogsListHTML`** — on **`status_lists.json`** (or manual refresh on `/`). **`playbackListHTML`** = media + capped **`archive/`** (newest first; **8** rows during export, **32** when idle). During export, media/archive rows are **click-to-open** (`href="#"` + `data-lan-media-href`, opens a **new tab** so the monitor page stays open); WebDAV (PotPlayer) is unchanged.
 - **`lanLive`** — while export is active: `playableStatusLine` + **`dashboardLines`** (duration, elapsed, bitrate, WAN Mbps, dense-fill %, …). Update via **Refresh status** on **`/`** (no auto-poll). Idle **`/browse`** includes the same metrics inside **`playbackStatusHTML`**.
 - **`listsDeferred`** — `true` on **`status.json`**; fetch lists via **`status_lists.json`**.
