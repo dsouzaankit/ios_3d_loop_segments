@@ -3,15 +3,18 @@ import Foundation
 import MediaPlayer
 import UIKit
 
-/// Loops silent audio during export so iOS keeps the process alive behind the lock screen.
+/// Loops muted local media (or synthetic tone) during export for lock-screen / background audio.
 @MainActor
 final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     static let shared = ExportBackgroundKeepAlive()
 
+    private var queuePlayer: AVQueuePlayer?
+    private var playerLooper: AVPlayerLooper?
     private var audioPlayer: AVAudioPlayer?
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
     private var playbackBackend = ""
+    private var loopSourceLabel = ""
     private var timeoutTask: Task<Void, Never>?
     private var nowPlayingRefreshTask: Task<Void, Never>?
     private var exportSubtitle = ""
@@ -20,6 +23,8 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private var remoteCommandsRegistered = false
     private var loopPlaying = false
     private(set) var lastStartError: String?
+
+    private static let playbackVolume: Float = 0.02
 
     private static let lockScreenArtwork: MPMediaItemArtwork = {
         let size = CGSize(width: 300, height: 300)
@@ -35,7 +40,6 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         super.init()
     }
 
-    /// Call when the user enables Keep Alive (foreground) so `setActive` is less likely to fail at export start.
     func prepareAudioSessionIfEnabled() {
         guard ExportKeepAliveSettings.isEnabled else { return }
         do {
@@ -74,7 +78,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         exportSessionEligible = keepEligible
     }
 
-    var isActive: Bool { audioPlayer != nil || audioEngine != nil }
+    var isActive: Bool { queuePlayer != nil || audioPlayer != nil || audioEngine != nil }
 
     var isLoopPlaying: Bool { loopPlaying }
 
@@ -83,19 +87,25 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private func startPlayback() {
         tearDownPlayback()
         lastStartError = nil
+        loopSourceLabel = ""
         let session = AVAudioSession.sharedInstance()
         let otherAudio = session.isOtherAudioPlaying
         do {
             try configureAudioSession()
-            do {
-                try startSilentPlayer()
-                playbackBackend = "AVAudioPlayer"
-            } catch let playerError {
-                logKeepAlive(
-                    "Keep Alive: player path failed (\(Self.describeError(playerError))), trying engine"
-                )
-                try startSilentEngine()
-                playbackBackend = "AVAudioEngine"
+            if let media = KeepAliveMediaSource.firstPlayable() {
+                do {
+                    try startMediaLoop(candidate: media)
+                    playbackBackend = "AVPlayerLooper"
+                    loopSourceLabel = media.label
+                } catch let mediaError {
+                    logKeepAlive(
+                        "Keep Alive: media loop failed (\(Self.describeError(mediaError))), trying tone"
+                    )
+                    try startSyntheticTone()
+                }
+            } else {
+                logKeepAlive("Keep Alive: no local media yet — using synthetic tone")
+                try startSyntheticTone()
             }
             loopPlaying = true
             ensureRemoteCommandsRegistered()
@@ -103,14 +113,39 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             applyNowPlayingInfo(playbackRate: 1, elapsedSeconds: 0)
             startNowPlayingRefresh()
             scheduleTimeoutIfNeeded()
+            let sourceNote = loopSourceLabel.isEmpty ? "" : " source=\(loopSourceLabel)"
             logKeepAlive(
-                "Keep Alive: started via \(playbackBackend) (otherAudio=\(otherAudio))"
+                "Keep Alive: started via \(playbackBackend)\(sourceNote) (otherAudio=\(otherAudio))"
             )
         } catch {
             lastStartError = Self.describeError(error)
             logKeepAlive("Keep Alive: failed — \(lastStartError!)")
             tearDownPlayback()
         }
+    }
+
+    private func startSyntheticTone() throws {
+        do {
+            try startSilentPlayer()
+            playbackBackend = "AVAudioPlayer"
+        } catch let playerError {
+            logKeepAlive(
+                "Keep Alive: tone player failed (\(Self.describeError(playerError))), trying engine"
+            )
+            try startSilentEngine()
+            playbackBackend = "AVAudioEngine"
+        }
+    }
+
+    private func startMediaLoop(candidate: KeepAliveMediaSource.Candidate) throws {
+        let item = AVPlayerItem(url: candidate.url)
+        let queue = AVQueuePlayer()
+        queue.volume = Self.playbackVolume
+        queue.automaticallyWaitsToMinimizeStalling = false
+        let looper = AVPlayerLooper(player: queue, templateItem: item)
+        queue.play()
+        queuePlayer = queue
+        playerLooper = looper
     }
 
     private func startSilentPlayer() throws {
@@ -123,7 +158,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         }
         player.delegate = self
         player.numberOfLoops = -1
-        player.volume = 0.02
+        player.volume = Self.playbackVolume
         guard player.prepareToPlay() else {
             throw KeepAliveFailure.message("AVAudioPlayer prepareToPlay returned false")
         }
@@ -142,7 +177,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             throw KeepAliveFailure.message("invalid hardware output format")
         }
         engine.connect(node, to: engine.mainMixerNode, format: format)
-        engine.mainMixerNode.outputVolume = 0.02
+        engine.mainMixerNode.outputVolume = Self.playbackVolume
 
         let frames = AVAudioFrameCount(format.sampleRate * 2)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
@@ -171,6 +206,11 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         timeoutTask?.cancel()
         timeoutTask = nil
         loopPlaying = false
+        playerLooper?.disableLooping()
+        playerLooper = nil
+        queuePlayer?.pause()
+        queuePlayer?.removeAllItems()
+        queuePlayer = nil
         audioPlayer?.stop()
         audioPlayer = nil
         playerNode?.stop()
@@ -178,6 +218,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         playerNode = nil
         audioEngine = nil
         playbackBackend = ""
+        loopSourceLabel = ""
     }
 
     private func stopFully() {
@@ -218,9 +259,12 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         elapsedSeconds: Double = 0,
         albumHint: String? = nil
     ) {
+        let mutedSource = loopSourceLabel.isEmpty
+            ? "Muted loop — export running"
+            : "Muted loop of \(loopSourceLabel)"
         let hint = albumHint
             ?? (playbackRate > 0
-                ? "Export running — stop on lock screen when finished"
+                ? "\(mutedSource) — stop on lock screen when finished"
                 : "Tap play to resume Keep Alive (export still running)")
         var duration: Double = 60
         if let timeout = ExportKeepAliveSettings.timeoutSeconds {
@@ -313,6 +357,16 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func playFromLockScreen() {
+        if let queue = queuePlayer, queue.timeControlStatus != .playing {
+            queue.play()
+            loopPlaying = true
+            applyNowPlayingInfo(
+                playbackRate: 1,
+                elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60)
+            )
+            logKeepAlive("Keep Alive: resumed from lock screen (media loop)")
+            return
+        }
         if let player = audioPlayer, !player.isPlaying {
             player.play()
             loopPlaying = true
@@ -320,7 +374,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
                 playbackRate: 1,
                 elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60)
             )
-            logKeepAlive("Keep Alive: resumed from lock screen (player)")
+            logKeepAlive("Keep Alive: resumed from lock screen (tone)")
             return
         }
         if let node = playerNode, let engine = audioEngine, !engine.isRunning {
@@ -345,6 +399,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func pauseFromLockScreen() {
+        queuePlayer?.pause()
         audioPlayer?.pause()
         playerNode?.pause()
         loopPlaying = false

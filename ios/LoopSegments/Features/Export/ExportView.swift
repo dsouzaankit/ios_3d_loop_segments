@@ -342,9 +342,9 @@ struct ExportView: View {
                     ExportKeepAliveSettings.timeoutHours = hours
                 }
                 Text(
-                    "While export runs, silent loop audio shows “Keep Alive” on the lock screen (Now Playing). " +
-                        "Turn on before Start export. If start fails, check export_latest.txt for the step (setCategory / setActive / player / engine). " +
-                        "LAN :8765 and triggers stay up while export runs (locked OK). iOS may still suspend in Low Power Mode."
+                    "While export runs, loops muted audio on the lock screen (Now Playing). Prefers loop/op_*.mp4, " +
+                        "_working, or newest archive/ file; otherwise a built-in tone. Volume is near-silent. " +
+                        "Turn on before Start export. LAN :8765 stays up while export runs (locked OK)."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)

@@ -1,0 +1,6 @@
+KeepAlive_silence.mp3
+---------------------
+Bundled silence track for Keep Alive loop (same idea as looping a silent MP3).
+
+Source: https://github.com/anars/blank-audio — file copied from "1-minute-of-silence.mp3".
+Review repository terms before App Store submission if needed.

@@ -89,6 +89,31 @@ enum ExportMediaArchive {
         return retentionSortDate(fromFileSuffix: suffix)
     }
 
+    /// Newest playable file under `pcld_ios_media/archive/` (Keep Alive muted loop fallback).
+    static func newestArchivedPlayableMediaURL() -> URL? {
+        migrateRetainedFilesIntoArchive(log: nil)
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: archiveDirectoryURL.path) else {
+            return nil
+        }
+        var best: (url: URL, date: Date)?
+        for name in names {
+            guard isRetentionArchivableMediaFileName(name) else { continue }
+            let url = archiveDirectoryURL.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+            let date = archivedMediaSortDate(fileName: name)
+                ?? (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? .distantPast
+            if let current = best {
+                if date > current.date { best = (url, date) }
+            } else {
+                best = (url, date)
+            }
+        }
+        return best?.url
+    }
+
     /// e.g. `MyMovie_3D_4K_appFast_2026-05-22_14-30-52.mp4` after in-app faststart remux.
     static func suffixedFileName(
         forOnDiskFileName fileName: String,
