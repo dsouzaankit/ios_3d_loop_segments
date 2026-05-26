@@ -52,6 +52,31 @@ jobs:
             -configuration Debug \
             build CODE_SIGNING_ALLOWED=NO
 
+      - name: Verify KeepAlive_silence.mp3 in app bundle
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          APP="$(find ~/Library/Developer/Xcode/DerivedData -path '*/Build/Products/*-iphonesimulator/LoopSegments.app' -type d 2>/dev/null | head -1)"
+          if [[ -z "$APP" ]]; then
+            APP="$(find build/DerivedData -path '*/Build/Products/*-iphonesimulator/LoopSegments.app' -type d 2>/dev/null | head -1)"
+          fi
+          if [[ -z "$APP" ]]; then
+            echo "LoopSegments.app not found — skipping KeepAlive bundle check"
+            exit 0
+          fi
+          FOUND="$(find "$APP" -name 'KeepAlive_silence.mp3' -print | head -1)"
+          if [[ -z "$FOUND" ]]; then
+            echo "ERROR: KeepAlive_silence.mp3 not in $APP (list bundle):"
+            find "$APP" -maxdepth 3 -type f | head -40
+            exit 1
+          fi
+          SIZE="$(stat -f%z "$FOUND" 2>/dev/null || stat -c%s "$FOUND")"
+          echo "OK: $FOUND ($SIZE bytes)"
+          if [[ "$SIZE" -lt 4096 ]]; then
+            echo "ERROR: KeepAlive_silence.mp3 too small"
+            exit 1
+          fi
+
   build-ipa:
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
@@ -159,6 +184,12 @@ jobs:
             cp "$EXPORT_PATH"/*.ipa LoopSegments.ipa
             unzip -q LoopSegments.ipa -d Payload
             verify_ipa_bundle_id
+            KEEP="$(find Payload -name 'KeepAlive_silence.mp3' -print | head -1)"
+            if [[ -z "$KEEP" ]]; then
+              echo "ERROR: KeepAlive_silence.mp3 missing from signed IPA"
+              exit 1
+            fi
+            echo "OK: KeepAlive in IPA at $KEEP"
           else
             echo "No APPLE_ID secret — building unsigned IPA (re-sign in Sideloadly)."
             xcodebuild -project LoopSegments.xcodeproj \
@@ -174,6 +205,13 @@ jobs:
             package_unsigned_ipa
             unzip -q LoopSegments.ipa -d Payload
             verify_ipa_bundle_id
+            KEEP="$(find Payload -name 'KeepAlive_silence.mp3' -print | head -1)"
+            if [[ -z "$KEEP" ]]; then
+              echo "ERROR: KeepAlive_silence.mp3 missing from IPA"
+              find Payload -maxdepth 4 -type f | head -40
+              exit 1
+            fi
+            echo "OK: KeepAlive in IPA at $KEEP"
           fi
 
       - name: Upload IPA artifact

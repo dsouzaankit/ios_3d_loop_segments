@@ -14,6 +14,8 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private var loopSourceLabel = ""
     private var timeoutTask: Task<Void, Never>?
     private var nowPlayingRefreshTask: Task<Void, Never>?
+    private var playbackWatchdogTask: Task<Void, Never>?
+    private var sessionObserversInstalled = false
     private var exportSubtitle = ""
     private var startedAt = Date()
     private var exportSessionEligible = false
@@ -91,7 +93,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             try configureAudioSession()
             guard let media = KeepAliveMediaSource.firstPlayable() else {
                 throw KeepAliveFailure.message(
-                    "KeepAlive_silence.mp3 missing or not playable (must exist in app Resources)"
+                    "KeepAlive_silence.mp3 not available — \(KeepAliveMediaSource.failureReason())"
                 )
             }
             do {
@@ -106,6 +108,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             NowPlayingFirstResponder.activate()
             applyNowPlayingInfo(playbackRate: 1, elapsedSeconds: 0)
             startNowPlayingRefresh()
+            startPlaybackWatchdog()
             scheduleTimeoutIfNeeded()
             let sourceNote = loopSourceLabel.isEmpty ? "" : " source=\(loopSourceLabel)"
             logKeepAlive(
@@ -132,6 +135,8 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private func tearDownPlayback() {
         nowPlayingRefreshTask?.cancel()
         nowPlayingRefreshTask = nil
+        playbackWatchdogTask?.cancel()
+        playbackWatchdogTask = nil
         timeoutTask?.cancel()
         timeoutTask = nil
         loopPlaying = false
@@ -209,8 +214,9 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
             MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
         } else {
-            // Mix mode: keep audio alive but avoid competing with the user's preferred lock-screen player.
+            // Mix mode: no Now Playing card, but mark playback so iOS keeps the audio background entitlement active.
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
         }
     }
 
@@ -224,6 +230,97 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
                 applyNowPlayingInfo(playbackRate: rate, elapsedSeconds: elapsed)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
+        }
+    }
+
+    private func startPlaybackWatchdog() {
+        playbackWatchdogTask?.cancel()
+        playbackWatchdogTask = Task { @MainActor in
+            while !Task.isCancelled, exportSessionEligible {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard !Task.isCancelled, exportSessionEligible, ExportKeepAliveSettings.isEnabled else {
+                    return
+                }
+                if !isActive {
+                    logKeepAlive("Keep Alive: watchdog restart (player missing during export)")
+                    startPlayback()
+                    continue
+                }
+                guard loopPlaying, let queue = queuePlayer else { continue }
+                if queue.timeControlStatus == .playing { continue }
+                logKeepAlive("Keep Alive: watchdog resume (player stalled)")
+                do {
+                    try configureAudioSession()
+                } catch {
+                    logKeepAlive("Keep Alive: watchdog session failed — \(Self.describeError(error))")
+                }
+                queue.play()
+            }
+        }
+    }
+
+    private func installSessionObserversIfNeeded() {
+        guard !sessionObserversInstalled else { return }
+        sessionObserversInstalled = true
+        let center = NotificationCenter.default
+        center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in self?.handleAudioSessionInterruption(notification) }
+        }
+        center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleMediaServicesReset() }
+        }
+    }
+
+    private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else { return }
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue)
+        else { return }
+        switch type {
+        case .began:
+            logKeepAlive("Keep Alive: audio session interrupted")
+        case .ended:
+            let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+            guard options.contains(.shouldResume) else { return }
+            logKeepAlive("Keep Alive: resuming after interruption")
+            resumeAfterSessionDisruption()
+        @unknown default:
+            break
+        }
+    }
+
+    private func handleMediaServicesReset() {
+        guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else { return }
+        logKeepAlive("Keep Alive: media services reset — restarting loop")
+        startPlayback()
+    }
+
+    private func resumeAfterSessionDisruption() {
+        do {
+            try configureAudioSession()
+        } catch {
+            logKeepAlive("Keep Alive: resume failed — \(Self.describeError(error))")
+            return
+        }
+        if let queue = queuePlayer {
+            queue.play()
+            loopPlaying = true
+            applyNowPlayingInfo(
+                playbackRate: 1,
+                elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60)
+            )
+        } else {
+            startPlayback()
         }
     }
 

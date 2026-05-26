@@ -15,11 +15,11 @@ targets:
     sources:
       - path: LoopSegments
         excludes:
-          - Resources/KeepAlive_silence.mp3
-          - Resources/KeepAlive_silence-credits.txt
+          - Resources
     resources:
-      - path: LoopSegments/Resources/KeepAlive_silence.mp3
-      - path: LoopSegments/Resources/KeepAlive_silence-credits.txt
+      - path: LoopSegments/Resources
+        excludes:
+          - Info.plist
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -28,5 +28,5 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.loopsegments.app
         MARKETING_VERSION: "1.2.6"
-        CURRENT_PROJECT_VERSION: "186"
+        CURRENT_PROJECT_VERSION: "188"
         TARGETED_DEVICE_FAMILY: "1,2"

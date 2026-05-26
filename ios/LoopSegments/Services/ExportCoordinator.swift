@@ -190,7 +190,10 @@ final class ExportCoordinator {
                 logWriter.finish(status: "cancelled")
                 throw SegmentExporterError.cancelled
             }
-            logHandler("Export interrupted by media reader (not Stop) — try seek 0 min or Wi‑Fi")
+            logHandler(
+                "Export interrupted (often iOS suspended the app after ~10–30 min locked) — " +
+                    "enable Keep Alive, stay on Wi‑Fi, then Start export to resume"
+            )
             logWriter.finish(status: "interrupted", error: SegmentExporterError.cancelled)
             throw SegmentExporterError.readerInterrupted
         } catch {
