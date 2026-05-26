@@ -36,6 +36,13 @@ jobs:
         working-directory: ios
         run: xcodegen generate
 
+      - name: Verify Xcode project lists KeepAlive MP3
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          grep -q 'KeepAlive_silence.mp3' LoopSegments.xcodeproj/project.pbxproj
+          echo "OK: KeepAlive_silence.mp3 in Xcode project"
+
       - name: Resolve Swift packages
         working-directory: ios
         run: |
@@ -94,6 +101,13 @@ jobs:
       - name: Generate project
         working-directory: ios
         run: xcodegen generate
+
+      - name: Verify Xcode project lists KeepAlive MP3
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          grep -q 'KeepAlive_silence.mp3' LoopSegments.xcodeproj/project.pbxproj
+          echo "OK: KeepAlive_silence.mp3 in Xcode project"
 
       - name: Resolve Swift packages
         working-directory: ios

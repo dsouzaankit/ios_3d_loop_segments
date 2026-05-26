@@ -15,14 +15,23 @@ targets:
     sources:
       - path: LoopSegments
         excludes:
-          - Resources/Info.plist
-          - Resources/KeepAlive_silence.mp3
-          - Resources/KeepAlive_silence-credits.txt
-          - Resources/PrivacyInfo.xcprivacy
-    resources:
+          - Resources
       - path: LoopSegments/Resources/KeepAlive_silence.mp3
+        buildPhase: resources
       - path: LoopSegments/Resources/KeepAlive_silence-credits.txt
+        buildPhase: resources
       - path: LoopSegments/Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    preBuildScripts:
+      - name: Copy KeepAlive silence into app bundle
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          RES="${SRCROOT}/LoopSegments/Resources"
+          DEST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "$DEST"
+          cp "${RES}/KeepAlive_silence.mp3" "${DEST}/"
+          cp "${RES}/KeepAlive_silence-credits.txt" "${DEST}/"
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -31,5 +40,5 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.loopsegments.app
         MARKETING_VERSION: "1.2.6"
-        CURRENT_PROJECT_VERSION: "189"
+        CURRENT_PROJECT_VERSION: "190"
         TARGETED_DEVICE_FAMILY: "1,2"
