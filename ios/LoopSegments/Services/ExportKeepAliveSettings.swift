@@ -4,6 +4,7 @@ import Foundation
 enum ExportKeepAliveSettings {
     static let enabledKey = "export_keep_alive_enabled"
     static let timeoutHoursKey = "export_keep_alive_timeout_hours"
+    static let preferLockScreenControlsKey = "export_keep_alive_prefer_lock_screen_controls"
 
     /// Off by default — user opts in (battery / App Store expectations).
     static var isEnabled: Bool {
@@ -24,6 +25,12 @@ enum ExportKeepAliveSettings {
         let hours = timeoutHours
         guard hours > 0 else { return nil }
         return hours * 3600
+    }
+
+    /// Default `false`: mix with other audio (e.g. Evermusic) and don't try to own lock-screen controls.
+    static var preferLockScreenControls: Bool {
+        get { UserDefaults.standard.bool(forKey: preferLockScreenControlsKey) }
+        set { UserDefaults.standard.set(newValue, forKey: preferLockScreenControlsKey) }
     }
 
     static let timeoutOptions: [(label: String, hours: Double)] = [

@@ -7,9 +7,17 @@ enum KeepAliveMediaSource {
         let label: String
     }
 
-    /// Prefer in-export segments, then active root media, then newest archive file.
+    /// Prefer bundled silence (inaudible) so we don't accidentally loop audible archive media.
+    /// Then fall back to in-export segments / working / archive media.
     static func orderedCandidates() -> [Candidate] {
         var list: [Candidate] = []
+        // Bundled silence MP3 (https://github.com/anars/blank-audio — 1-minute-of-silence.mp3).
+        if let bundled = Bundle.main.url(forResource: "KeepAlive_silence", withExtension: "mp3") {
+            list.append(Candidate(url: bundled, label: "KeepAlive_silence.mp3"))
+        }
+        if let bundled = Bundle.main.url(forResource: "KeepAlive_tone", withExtension: "caf") {
+            list.append(Candidate(url: bundled, label: "KeepAlive_tone.caf"))
+        }
         for index in 0 ..< ExportPaths.segmentFileCount {
             let url = ExportPaths.segmentURL(index: index)
             list.append(Candidate(url: url, label: url.lastPathComponent))
@@ -39,13 +47,6 @@ enum KeepAliveMediaSource {
                     label: "archive/\(archive.lastPathComponent)"
                 )
             )
-        }
-        // Bundled silence MP3 (https://github.com/anars/blank-audio — 1-minute-of-silence.mp3).
-        if let bundled = Bundle.main.url(forResource: "KeepAlive_silence", withExtension: "mp3") {
-            list.append(Candidate(url: bundled, label: "KeepAlive_silence.mp3"))
-        }
-        if let bundled = Bundle.main.url(forResource: "KeepAlive_tone", withExtension: "caf") {
-            list.append(Candidate(url: bundled, label: "KeepAlive_tone.caf"))
         }
         return list
     }

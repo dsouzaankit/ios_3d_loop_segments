@@ -29,6 +29,7 @@ struct ExportView: View {
     @State private var vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled
     @State private var exportKeepAliveEnabled = ExportKeepAliveSettings.isEnabled
     @State private var exportKeepAliveTimeoutHours = ExportKeepAliveSettings.timeoutHours
+    @State private var exportKeepAlivePreferControls = ExportKeepAliveSettings.preferLockScreenControls
     @State private var alternateExportSource = AlternateExportFileSource.stored
     @State private var alternateExportBusy = false
     @State private var showAlternateFilePicker = false
@@ -333,6 +334,14 @@ struct ExportView: View {
                     }
                 }
             if exportKeepAliveEnabled {
+                Toggle("Prefer lock screen controls (stops other audio)", isOn: $exportKeepAlivePreferControls)
+                    .onChange(of: exportKeepAlivePreferControls) { _, enabled in
+                        ExportKeepAliveSettings.preferLockScreenControls = enabled
+                        ExportBackgroundKeepAlive.shared.prepareAudioSessionIfEnabled()
+                        if session.isExportActive(for: item) {
+                            ExportBackgroundKeepAlive.shared.startIfEnabled(exportTitle: item.name)
+                        }
+                    }
                 Picker("Keep Alive duration", selection: $exportKeepAliveTimeoutHours) {
                     ForEach(ExportKeepAliveSettings.timeoutOptions, id: \.hours) { option in
                         Text(option.label).tag(option.hours)
@@ -342,9 +351,9 @@ struct ExportView: View {
                     ExportKeepAliveSettings.timeoutHours = hours
                 }
                 Text(
-                    "While export runs, loops muted audio on the lock screen (Now Playing). Prefers loop/op_*.mp4, " +
-                        "_working, or newest archive/ file; otherwise a built-in tone. Volume is near-silent. " +
-                        "Turn on before Start export. LAN :8765 stays up while export runs (locked OK)."
+                    exportKeepAlivePreferControls
+                        ? "Keeps export alive and shows Keep Alive on lock screen / Control Center (may stop other audio apps)."
+                        : "Keeps export alive in the background without taking over lock-screen controls (recommended if you use Evermusic)."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)

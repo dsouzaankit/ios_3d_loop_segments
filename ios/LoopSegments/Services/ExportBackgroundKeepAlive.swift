@@ -232,9 +232,9 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         do {
-            // Keep Alive wants to reliably surface as the active Now Playing session on lock screen.
-            // Mixing often causes iOS to keep showing another app’s controls (even though audio is playing).
-            try session.setCategory(.playback, mode: .default, options: [])
+            let wantsControls = ExportKeepAliveSettings.preferLockScreenControls
+            let options: AVAudioSession.CategoryOptions = wantsControls ? [] : [.mixWithOthers]
+            try session.setCategory(.playback, mode: .default, options: options)
         } catch {
             throw KeepAliveFailure.stage("setCategory", error)
         }
@@ -282,9 +282,13 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             MPMediaItemPropertyPlaybackDuration: duration,
             MPMediaItemPropertyArtwork: Self.lockScreenArtwork,
         ]
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        // Nudges iOS to surface this session on lock screen / Control Center.
-        MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
+        if ExportKeepAliveSettings.preferLockScreenControls {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
+        } else {
+            // Mix mode: keep audio alive but avoid competing with the user's preferred lock-screen player.
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        }
     }
 
     private func startNowPlayingRefresh() {
