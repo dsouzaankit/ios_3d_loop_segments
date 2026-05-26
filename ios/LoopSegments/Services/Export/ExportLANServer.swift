@@ -2119,26 +2119,28 @@ enum ExportLANServer {
           var listsBtn = document.getElementById("lan-refresh-lists");
           if (statusBtn) statusBtn.onclick = refreshStatus;
           if (listsBtn) listsBtn.onclick = refreshLists;
-          var pauseBtn = document.getElementById("export-pause");
-          var stopBtn = document.getElementById("export-stop");
-          var resumeBtn = document.getElementById("export-resume");
-          if (pauseBtn) pauseBtn.onclick = function () {
-            if (window._phonePauseStopEnabled === false) {
-              alert(window._phonePauseStopReason || "Pause requires the app in the foreground on the phone.");
-              return;
-            }
-            putTrigger({ version: 1, command: "pause_export", id: uuid() }).then(refreshStatus);
-          };
-          if (stopBtn) stopBtn.onclick = function () {
-            if (window._phonePauseStopEnabled === false) {
-              alert(window._phonePauseStopReason || "Stop requires the app in the foreground on the phone.");
-              return;
-            }
-            putTrigger({ version: 1, command: "stop_export", id: uuid() }).then(refreshStatus);
-          };
-          if (resumeBtn) resumeBtn.onclick = function () {
-            putTrigger({ version: 1, command: "resume_export", id: uuid() }).then(refreshStatus);
-          };
+          if (!document.getElementById("trigger-status")) {
+            var pauseBtn = document.getElementById("export-pause");
+            var stopBtn = document.getElementById("export-stop");
+            var resumeBtn = document.getElementById("export-resume");
+            if (pauseBtn) pauseBtn.onclick = function () {
+              if (window._phonePauseStopEnabled === false) {
+                alert(window._phonePauseStopReason || "Pause requires the app in the foreground on the phone.");
+                return;
+              }
+              putTrigger({ version: 1, command: "pause_export", id: uuid() }).then(refreshStatus);
+            };
+            if (stopBtn) stopBtn.onclick = function () {
+              if (window._phonePauseStopEnabled === false) {
+                alert(window._phonePauseStopReason || "Stop requires the app in the foreground on the phone.");
+                return;
+              }
+              putTrigger({ version: 1, command: "stop_export", id: uuid() }).then(refreshStatus);
+            };
+            if (resumeBtn) resumeBtn.onclick = function () {
+              putTrigger({ version: 1, command: "resume_export", id: uuid() }).then(refreshStatus);
+            };
+          }
         })();
         </script>
         """
