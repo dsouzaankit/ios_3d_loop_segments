@@ -69,8 +69,25 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse** and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. **Paused exports** sidebar hides the file that is actively exporting.
-- **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Build 190+:** MP3 is in the app bundle (CI verifies the IPA). Lock screen **Play** / **Pause** / **Stop** (optional **Prefer lock screen controls** takes over Now Playing; default **mix** keeps other apps’ lock-screen player). **Build 187+:** restarts the silence loop if playback stalls. Export continues until in-app stop. **LAN :8765** while export runs (locked OK). Not reliable in Low Power Mode. See **Background / lock screen** below for the ~30 minute limit.
+- **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Build 190+:** MP3 in the app bundle (CI verifies IPA). **Build 187+:** background-task renewal + silence-loop watchdog. **Build 193+:** lock-screen Play/Pause logging, minimal Now Playing text (no pCloud filename), reclaim card after another app stops. See **Keep Alive: mix vs lock screen** and **Background / lock screen** below. Not reliable in Low Power Mode.
   - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin` / `iosadmin`**), since they expose pCloud folder/file names.
+
+### Keep Alive: mix vs lock screen
+
+Both modes run the **same silent MP3 loop in the background** during export. The toggle only changes how the app shares iOS audio / Now Playing with other apps (e.g. Evermusic).
+
+| Setting | Audio session | Lock screen / Control Center | Other music apps (Evermusic) |
+|---------|---------------|------------------------------|------------------------------|
+| **Keep Alive on**, **Prefer lock screen controls** **off** (**mix mode**, default) | `.playback` + **mix with others** | Usually **no** Keep Alive card; Play/Pause may **not** control our loop | Can play **alongside** export; long playlists can **pause** our loop and risk iOS suspending export/LAN |
+| **Prefer lock screen controls** **on** | `.playback` **exclusive** | **Keep Alive** card; Play/Pause should stop/start the silence loop | May **stop or duck** other audio; better for unattended locked export |
+
+**Mix mode is not “background only.”** It means “keep export alive **without** taking the lock screen from other apps.” After another app **stops** playing, **build 193+** tries to **resume the loop** and **reclaim** the Keep Alive card once (`Keep Alive: reclaimed lock screen Now Playing` in **`export_latest.txt`**).
+
+**Long Evermusic (or any music) during export:** if our loop stays interrupted, iOS may no longer treat Loop Segments as a background **audio** app → export can **interrupt** and **LAN** can drop after ~15–30+ minutes. For long locked exports, avoid long other-app playback, or use **Prefer lock screen controls** (and accept that other music may not run).
+
+**Lock screen Now Playing text:** **Title** `Keep Alive`, **Artist** `Loop Segments`, short subtitle (`Export running` / `Paused`) — not the pCloud file name.
+
+**Remote control logs in `export_latest.txt`:** `pause from lock screen — loop stopped`, `play — already looping`, `play from lock screen`, `resuming after interruption`, `reclaimed lock screen Now Playing`.
 
 ### Background / lock screen (iOS limits)
 
@@ -84,6 +101,10 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 | **`Export interrupted`** / status **`interrupted`** | Reader cancelled mid-run (Wi‑Fi drop, app killed, etc.) — resume with **Start export**. |
 | **`Auto-pause: 2h reached`** | In-app 2 h cap. |
 | **`Keep Alive: failed`** / missing MP3 | Bundling bug (fixed **build 190+**), not iOS. |
+| **`Keep Alive: pause from lock screen`** | Lock-screen Pause reached the app; loop should stop. |
+| **`Keep Alive: play — already looping`** | Lock-screen Play while loop already running (normal). |
+| **`Keep Alive: resuming after interruption`** | Another app released audio; loop retrying. |
+| **`Keep Alive: reclaimed lock screen Now Playing`** | Mix mode: card shown again after other app stopped. |
 
 **Locked-screen risk (still real, but unproven at exactly ~30 min):** iOS *can* suspend apps that are not playing background audio. Early tests *looked* like a ~30 min cutoff when Keep Alive was broken (MP3 not in the bundle) or logs were read as **interrupted** without checking archive playback. Treat **~30 min** as a rough watchpoint, not a confirmed iOS timer.
 

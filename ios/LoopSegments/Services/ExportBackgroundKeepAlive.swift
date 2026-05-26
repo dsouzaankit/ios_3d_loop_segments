@@ -16,11 +16,11 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private var nowPlayingRefreshTask: Task<Void, Never>?
     private var playbackWatchdogTask: Task<Void, Never>?
     private var sessionObserversInstalled = false
-    private var exportSubtitle = ""
     private var startedAt = Date()
     private var exportSessionEligible = false
     private var remoteCommandsRegistered = false
     private var loopPlaying = false
+    private var userPausedFromLockScreen = false
     private(set) var lastStartError: String?
 
     private static let playbackVolume: Float = 0.02
@@ -50,8 +50,8 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     func beginExportSession(exportTitle: String) {
+        installSessionObserversIfNeeded()
         exportSessionEligible = true
-        exportSubtitle = exportTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         startIfEnabled(exportTitle: exportTitle)
     }
 
@@ -62,7 +62,6 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
 
     func startIfEnabled(exportTitle: String) {
         guard ExportKeepAliveSettings.isEnabled else { return }
-        exportSubtitle = exportTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         startedAt = Date()
         startPlayback()
     }
@@ -104,6 +103,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
                 throw KeepAliveFailure.stage("AVPlayerLooper KeepAlive_silence.mp3", mediaError)
             }
             loopPlaying = true
+            userPausedFromLockScreen = false
             ensureRemoteCommandsRegistered()
             NowPlayingFirstResponder.activate()
             applyNowPlayingInfo(playbackRate: 1, elapsedSeconds: 0)
@@ -140,6 +140,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         timeoutTask?.cancel()
         timeoutTask = nil
         loopPlaying = false
+        userPausedFromLockScreen = false
         playerLooper?.disableLooping()
         playerLooper = nil
         queuePlayer?.pause()
@@ -187,37 +188,45 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private func applyNowPlayingInfo(
         playbackRate: Double = 1,
         elapsedSeconds: Double = 0,
-        albumHint: String? = nil
+        albumHint: String? = nil,
+        forceLockScreenCard: Bool = false
     ) {
-        let mutedSource = loopSourceLabel.isEmpty
-            ? "Muted loop — export running"
-            : "Muted loop of \(loopSourceLabel)"
-        let hint = albumHint
-            ?? (playbackRate > 0
-                ? "\(mutedSource) — stop on lock screen when finished"
-                : "Tap play to resume Keep Alive (export still running)")
+        let subtitle = albumHint ?? (playbackRate > 0 ? "Export running" : "Paused")
         var duration: Double = 60
         if let timeout = ExportKeepAliveSettings.timeoutSeconds {
             duration = max(60, timeout - Date().timeIntervalSince(startedAt))
         }
         let info: [String: Any] = [
             MPMediaItemPropertyTitle: "Keep Alive",
-            MPMediaItemPropertyArtist: exportSubtitle.isEmpty ? "Loop Segments" : exportSubtitle,
-            MPMediaItemPropertyAlbumTitle: hint,
+            MPMediaItemPropertyArtist: "Loop Segments",
+            MPMediaItemPropertyAlbumTitle: subtitle,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
             MPNowPlayingInfoPropertyPlaybackRate: playbackRate,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: max(0, elapsedSeconds),
             MPMediaItemPropertyPlaybackDuration: duration,
             MPMediaItemPropertyArtwork: Self.lockScreenArtwork,
         ]
-        if ExportKeepAliveSettings.preferLockScreenControls {
+        let showCard = forceLockScreenCard || ExportKeepAliveSettings.preferLockScreenControls
+        if showCard {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
             MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
         } else {
-            // Mix mode: no Now Playing card, but mark playback so iOS keeps the audio background entitlement active.
+            // Mix mode: no Now Playing card while another app may own lock screen; playbackState helps background audio.
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
         }
+    }
+
+    private func syncLoopPlayingFromQueue() {
+        guard let queue = queuePlayer else {
+            loopPlaying = false
+            return
+        }
+        loopPlaying = queue.timeControlStatus == .playing
+    }
+
+    private var isQueuePlaying: Bool {
+        queuePlayer?.timeControlStatus == .playing
     }
 
     private func startNowPlayingRefresh() {
@@ -226,6 +235,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             while !Task.isCancelled, isActive {
                 let elapsed = Date().timeIntervalSince(startedAt)
                     .truncatingRemainder(dividingBy: 60)
+                syncLoopPlayingFromQueue()
                 let rate: Double = loopPlaying ? 1 : 0
                 applyNowPlayingInfo(playbackRate: rate, elapsedSeconds: elapsed)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -277,6 +287,28 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         ) { [weak self] _ in
             Task { @MainActor in self?.handleMediaServicesReset() }
         }
+        center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in self?.handleAudioSessionRouteChange(notification) }
+        }
+    }
+
+    private func handleAudioSessionRouteChange(_ notification: Notification) {
+        guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else { return }
+        guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+        else { return }
+        switch reason {
+        case .categoryChange:
+            guard !userPausedFromLockScreen, !isQueuePlaying, isActive else { return }
+            logKeepAlive("Keep Alive: audio route/category change — trying to resume loop")
+            resumeAfterSessionDisruption(reclaimLockScreen: true)
+        default:
+            break
+        }
     }
 
     private func handleAudioSessionInterruption(_ notification: Notification) {
@@ -287,13 +319,27 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         else { return }
         switch type {
         case .began:
+            // Another app started playback; the queue can silently stop.
+            userPausedFromLockScreen = false
+            loopPlaying = false
+            applyNowPlayingInfo(
+                playbackRate: 0,
+                elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60),
+                albumHint: "Interrupted"
+            )
             logKeepAlive("Keep Alive: audio session interrupted")
         case .ended:
             let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-            guard options.contains(.shouldResume) else { return }
-            logKeepAlive("Keep Alive: resuming after interruption")
-            resumeAfterSessionDisruption()
+            // Some interruptions end without `.shouldResume` even though the user stopped the other app.
+            // Keep Alive is best-effort; try to resume either way.
+            let note = options.contains(.shouldResume) ? "" : " (no shouldResume)"
+            logKeepAlive("Keep Alive: resuming after interruption\(note)")
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 900_000_000) // let the other player fully deactivate
+                guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else { return }
+                resumeAfterSessionDisruption(reclaimLockScreen: true)
+            }
         @unknown default:
             break
         }
@@ -305,20 +351,26 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         startPlayback()
     }
 
-    private func resumeAfterSessionDisruption() {
+    private func resumeAfterSessionDisruption(reclaimLockScreen: Bool = false) {
         do {
             try configureAudioSession()
         } catch {
             logKeepAlive("Keep Alive: resume failed — \(Self.describeError(error))")
             return
         }
+        NowPlayingFirstResponder.activate()
         if let queue = queuePlayer {
             queue.play()
-            loopPlaying = true
+            syncLoopPlayingFromQueue()
             applyNowPlayingInfo(
-                playbackRate: 1,
-                elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60)
+                playbackRate: loopPlaying ? 1 : 0,
+                elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60),
+                albumHint: loopPlaying ? "Export running" : "Paused",
+                forceLockScreenCard: reclaimLockScreen
             )
+            if reclaimLockScreen {
+                logKeepAlive("Keep Alive: reclaimed lock screen Now Playing")
+            }
         } else {
             startPlayback()
         }
@@ -385,19 +437,25 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func playFromLockScreen() {
-        if let queue = queuePlayer, queue.timeControlStatus != .playing {
-            queue.play()
-            loopPlaying = true
-            applyNowPlayingInfo(
-                playbackRate: 1,
-                elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60)
-            )
-            logKeepAlive("Keep Alive: resumed from lock screen (media loop)")
-            return
-        }
-        if isActive, loopPlaying { return }
         guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else {
             logKeepAlive("Keep Alive: play ignored — no export session")
+            return
+        }
+        if let queue = queuePlayer {
+            if isQueuePlaying {
+                logKeepAlive("Keep Alive: play — already looping (tap pause to stop)")
+                return
+            }
+            userPausedFromLockScreen = false
+            try? configureAudioSession()
+            queue.play()
+            syncLoopPlayingFromQueue()
+            applyNowPlayingInfo(
+                playbackRate: 1,
+                elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60),
+                forceLockScreenCard: true
+            )
+            logKeepAlive("Keep Alive: play from lock screen — loop \(loopPlaying ? "playing" : "not playing")")
             return
         }
         startedAt = Date()
@@ -406,13 +464,20 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func pauseFromLockScreen() {
-        queuePlayer?.pause()
+        guard let queue = queuePlayer else {
+            logKeepAlive("Keep Alive: pause ignored — no player")
+            return
+        }
+        queue.pause()
         loopPlaying = false
+        userPausedFromLockScreen = true
         applyNowPlayingInfo(
             playbackRate: 0,
             elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60),
-            albumHint: "Paused — tap play to resume Keep Alive"
+            albumHint: "Paused",
+            forceLockScreenCard: true
         )
+        logKeepAlive("Keep Alive: pause from lock screen — loop stopped")
     }
 
     private func stopFromLockScreen() {
@@ -423,13 +488,14 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         applyNowPlayingInfo(
             playbackRate: 0,
             elapsedSeconds: 0,
-            albumHint: "Stopped — tap play to resume Keep Alive (export still running)"
+            albumHint: "Stopped"
         )
         logKeepAlive("Keep Alive: stopped from lock screen (tap play to restart; export continues)")
     }
 
     private func toggleFromLockScreen() {
-        if loopPlaying {
+        logKeepAlive("Keep Alive: toggle from lock screen")
+        if isQueuePlaying {
             pauseFromLockScreen()
         } else {
             playFromLockScreen()

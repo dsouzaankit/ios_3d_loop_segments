@@ -352,8 +352,8 @@ struct ExportView: View {
                 }
                 Text(
                     exportKeepAlivePreferControls
-                        ? "Keeps export alive and shows Keep Alive on lock screen / Control Center (may stop other audio apps)."
-                        : "Keeps export alive in the background without taking over lock-screen controls (recommended if you use Evermusic). Uses KeepAlive_silence.mp3 only."
+                        ? "Keeps export alive and shows Keep Alive on lock screen / Control Center (may stop other audio apps). Play/Pause on that card controls the silence loop."
+                        : "Keeps export alive without owning lock screen while other apps play. After another app stops, Keep Alive reclaims the card and resumes the loop. Turn on “Prefer lock screen controls” for Play/Pause on the card at all times."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
