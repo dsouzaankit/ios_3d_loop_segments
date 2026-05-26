@@ -10,7 +10,7 @@ Notes:
 LAN: below Mbps cutoff → preload/full file only; at/above → op_*.mp4 when codec allows (LAN server optional).
 _working.mp4: full-timeline LAN play is reliable at seek=0:00; seek>0 see “Seek > 0” below.
 Av1 is not supported, prefer h.265!
-phone must be unlocked, app in foreground, screen on:
+phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-screen audio):
   Optional: Settings > Display & Brightness > Auto-Lock > Never!
 
 
@@ -57,6 +57,7 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse** and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. **Paused exports** sidebar hides the file that is actively exporting.
+- **Keep Alive (optional):** Export → **During export** → **Keep Alive (lock screen)**. Generates `KeepAlive_1min.caf` under **Application Support** `LoopSegmentsKeepAlive/` (not visible in Files). Loops it with `audio` background mode; lock screen **Play** resumes/restarts, **Pause** pauses, **Stop** ends the loop (export continues). Optional auto-stop after 1–8 h. While export runs, **LAN :8765** and **export triggers** keep polling when the phone is locked (WebDAV still `admin` / `iosadmin`). Not reliable in Low Power Mode.
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 

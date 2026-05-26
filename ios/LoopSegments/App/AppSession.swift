@@ -204,8 +204,10 @@ final class AppSession: ObservableObject {
         isExportRunning = true
         syncExportSessionActive()
         ExportAutoLockCoordinator.exportDidStart()
+        ExportBackgroundKeepAlive.shared.beginExportSession(exportTitle: item.name)
         defer {
             if generation == exportGeneration {
+                ExportBackgroundKeepAlive.shared.endExportSession()
                 ExportAutoLockCoordinator.exportDidEnd()
                 isExportRunning = false
                 syncExportSessionActive()
@@ -297,6 +299,7 @@ final class AppSession: ObservableObject {
         exportCoordinator.cancel()
         isExportRunning = false
         syncExportSessionActive()
+        ExportBackgroundKeepAlive.shared.endExportSession()
         if let item = activeExportItem {
             ResumeStore.shared.finishExport(for: item)
         } else if let entry = ResumeStore.mostRecentPausedExport(),
@@ -343,6 +346,7 @@ final class AppSession: ObservableObject {
         exportCoordinator.cancel()
         isExportRunning = false
         syncExportSessionActive()
+        ExportBackgroundKeepAlive.shared.endExportSession()
         if let item = activeExportItem {
             LANExportSourceDisplay.setPaused(item.name)
         }

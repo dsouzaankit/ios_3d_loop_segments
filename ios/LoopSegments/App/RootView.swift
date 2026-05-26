@@ -4,6 +4,11 @@ struct RootView: View {
     @EnvironmentObject private var session: AppSession
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Foreground, or export still running (Keep Alive / background task) — keep LAN server + trigger polling.
+    private var lanServicesActive: Bool {
+        scenePhase == .active || session.isExportSessionActive
+    }
+
     var body: some View {
         Group {
             if session.credentials != nil {
@@ -13,13 +18,20 @@ struct RootView: View {
             }
         }
         .onAppear {
-            LANExportTriggerRunner.setAppActive(true, session: session)
+            syncLANServices()
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
-            }
-            LANExportTriggerRunner.setAppActive(phase == .active, session: session)
+        .onChange(of: scenePhase) { _, _ in
+            syncLANServices()
         }
+        .onChange(of: session.isExportSessionActive) { _, _ in
+            syncLANServices()
+        }
+    }
+
+    private func syncLANServices() {
+        if lanServicesActive {
+            ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
+        }
+        LANExportTriggerRunner.setAppActive(lanServicesActive, session: session)
     }
 }

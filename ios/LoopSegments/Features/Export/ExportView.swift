@@ -27,6 +27,8 @@ struct ExportView: View {
     @State private var prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
     @State private var hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
     @State private var vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled
+    @State private var exportKeepAliveEnabled = ExportKeepAliveSettings.isEnabled
+    @State private var exportKeepAliveTimeoutHours = ExportKeepAliveSettings.timeoutHours
     @State private var alternateExportSource = AlternateExportFileSource.stored
     @State private var alternateExportBusy = false
     @State private var showAlternateFilePicker = false
@@ -190,9 +192,44 @@ struct ExportView: View {
                 Text(item.href).font(.caption).foregroundStyle(.secondary)
             }
             Section("During export") {
-                Text("Keep Loop Segments in the foreground during export; backgrounding or locking the phone can stop export.")
+                Toggle("Keep Alive (lock screen)", isOn: $exportKeepAliveEnabled)
+                    .onChange(of: exportKeepAliveEnabled) { _, enabled in
+                        ExportKeepAliveSettings.isEnabled = enabled
+                        if enabled, session.isExportActive(for: item) {
+                            ExportBackgroundKeepAlive.shared.startIfEnabled(exportTitle: item.name)
+                        } else if !enabled {
+                            ExportBackgroundKeepAlive.shared.stopForUserSettingOff()
+                        }
+                    }
+                if exportKeepAliveEnabled {
+                    Picker("Keep Alive duration", selection: $exportKeepAliveTimeoutHours) {
+                        ForEach(ExportKeepAliveSettings.timeoutOptions, id: \.hours) { option in
+                            Text(option.label).tag(option.hours)
+                        }
+                    }
+                    .onChange(of: exportKeepAliveTimeoutHours) { _, hours in
+                        ExportKeepAliveSettings.timeoutHours = hours
+                    }
+                    Text(
+                        "While export runs, loops a 1-minute silent track titled “Keep Alive” on the lock screen " +
+                            "(Now Playing). Pause stops audio; Stop ends the loop; Play restarts it — export keeps going " +
+                            "until you pause/stop in the app. LAN :8765 and triggers stay up while export runs (locked OK). " +
+                            "iOS may still suspend in Low Power Mode."
+                    )
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    if ExportBackgroundKeepAlive.shared.isActive {
+                        Text("Keep Alive is playing now.")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                } else {
+                    Text(
+                        "Without Keep Alive, keep the app in the foreground; locking or backgrounding can stop export."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
                 Button("Open Display in Settings") {
                     Task {
                         _ = await ExportAutoLockCoordinator.openAutoLockSettings()
