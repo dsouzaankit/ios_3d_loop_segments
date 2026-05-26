@@ -59,6 +59,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 | **`pcld_ios_media/logs/export_latest.txt`** | **Current run only** — full live log (LAN). Cleared when the next export starts. |
 | **`pcld_ios_media/logs/export_progress.txt`** | Last ~12 lines of the current run (small file for PC polling). |
 | **`pcld_ios_media/logs/export_<basename>_<local-time>_<status>.txt`** | **Saved history** when a run ends (`completed`, `interrupted`, `paused`, …). Kept across exports (last **40** runs; oldest pruned). |
+| **`pcld_ios_media/logs/loop_segments_ok.txt`** | Launch probe (app version + timestamp); refreshed each launch. |
 
 On disk under **Application Support** (not in the Files app). LAN also accepts legacy URLs **`/export_latest.txt`**, **`/export_progress.txt`**, and **`/logs/export_…txt`** (same files).
 
