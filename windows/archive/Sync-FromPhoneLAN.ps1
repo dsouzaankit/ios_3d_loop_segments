@@ -86,7 +86,10 @@ function Get-LANBaseUrl {
 
 function Get-LANStatus {
     param([string] $BaseUrl)
-    return Invoke-RestMethod -Uri "$BaseUrl/status.json" -Method Get -TimeoutSec 30
+    $status = Invoke-RestMethod -Uri "$BaseUrl/status.json" -Method Get -TimeoutSec 30
+    $lists = Invoke-RestMethod -Uri "$BaseUrl/status_lists.json" -Method Get -TimeoutSec 60
+    if ($lists.files) { $status | Add-Member -NotePropertyName files -NotePropertyValue $lists.files -Force }
+    return $status
 }
 
 function Get-FileSha256Hex {

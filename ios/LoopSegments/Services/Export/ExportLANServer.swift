@@ -675,8 +675,12 @@ enum ExportLANServer {
     }
 
     private static var lanIndexSnapshot: LANIndexSnapshot?
-    private static let lanIndexSnapshotTTLIdle: TimeInterval = 5
-    private static let lanIndexSnapshotTTLExport: TimeInterval = 15
+    private static let lanIndexSnapshotTTLIdle: TimeInterval = 30
+    private static let lanIndexSnapshotTTLExport: TimeInterval = 45
+    /// Browser poll interval for `status.json` (live metrics / export bar).
+    private static let lanStatusPollMs = 30_000
+    /// Browser poll interval for `status_lists.json` (media + log link HTML).
+    private static let lanStatusListsPollMs = 60_000
     private static let lanStatusFilesCap = 48
 
     private static var lanIndexSnapshotTTL: TimeInterval {
@@ -1443,13 +1447,13 @@ enum ExportLANServer {
         """
     }
 
-    /// Poll `status.json` for export source + LAN playback stats.
+    /// Poll `status.json` for export source + LAN playback stats; lists on `status_lists.json`.
     private static func htmlLANLiveRefreshScript() -> String {
-        let pollMs = ExportPlaybackState.shared.isLANExportActive ? 3000 : 5000
         return """
         <script>
         (function () {
-          var pollMs = \(pollMs);
+          var pollMs = \(lanStatusPollMs);
+          var listPollMs = \(lanStatusListsPollMs);
           function esc(s) {
             return String(s)
               .replace(/&/g, "&amp;")
@@ -1547,15 +1551,10 @@ enum ExportLANServer {
             }
             applyPhoneInteraction(j.phoneInteraction);
           }
-          var listPollTimer = null;
-          var listPollMsActive = 25000;
-          var listPollMsIdle = 12000;
-          function ensureListPolling(exportActive) {
-            var ms = exportActive ? listPollMsActive : listPollMsIdle;
-            if (listPollTimer) clearInterval(listPollTimer);
-            listPollTimer = setInterval(pollLists, ms);
-          }
           function pollLists() {
+            if (typeof window.refreshLANBookmarks === "function") {
+              window.refreshLANBookmarks().catch(function () {});
+            }
             return fetch("status_lists.json", { cache: "no-store" })
               .then(function (r) { return r.json(); })
               .then(function (j) {
@@ -1574,17 +1573,14 @@ enum ExportLANServer {
             return fetch("status.json", { cache: "no-store" })
               .then(function (r) { return r.json(); })
               .then(function (j) {
+                applyExportSource(j.exportSource);
+                applyLive(j.lanLive);
+                applyPhoneInteraction(j.phoneInteraction);
                 applyPlaybackSection(j);
-                if (j.listsDeferred) {
-                  return pollLists().then(function () { return j; });
-                }
-                return j;
+                return pollLists().then(function () { return j; });
               });
           };
           function poll() {
-            if (typeof window.refreshLANBookmarks === "function") {
-              window.refreshLANBookmarks().catch(function () {});
-            }
             fetch("status.json", { cache: "no-store" })
               .then(function (r) { return r.json(); })
               .then(function (j) {
@@ -1592,24 +1588,13 @@ enum ExportLANServer {
                 applyLive(j.lanLive);
                 applyPhoneInteraction(j.phoneInteraction);
                 applyPlaybackSection(j);
-                if (j.listsDeferred) {
-                  if (!window._listPollStarted) {
-                    window._listPollStarted = true;
-                    pollLists();
-                  }
-                  ensureListPolling(true);
-                } else {
-                  window._listPollStarted = false;
-                  if (listPollTimer) {
-                    clearInterval(listPollTimer);
-                    listPollTimer = null;
-                  }
-                }
               })
               .catch(function () {});
           }
           poll();
+          pollLists();
           setInterval(poll, pollMs);
+          setInterval(pollLists, listPollMs);
         })();
         </script>
         """
@@ -1771,16 +1756,8 @@ enum ExportLANServer {
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         refreshLANMetricsBeforeStatusResponse()
         let playbackStatusBlock = playbackStatusHTMLBlock()
-        let exportActive = ExportPlaybackState.shared.isLANExportActive
-        let mediaList: String
-        let logList: String
-        if exportActive {
-            mediaList = "<li><em>Loading playback links…</em></li>"
-            logList = "<li><em>Loading export logs…</em></li>"
-        } else {
-            mediaList = autoreleasepool { playbackMediaFileListHTML() }
-            logList = autoreleasepool { exportLogsFileListHTML() }
-        }
+        let mediaList = "<li><em>Loading playback links…</em></li>"
+        let logList = "<li><em>Loading export logs…</em></li>"
         let html = """
             <!DOCTYPE html>
             <html lang="en"><head>
@@ -2428,12 +2405,34 @@ enum ExportLANServer {
         """
     }
 
-    /// Playback/log link HTML only — polled less often than `status.json` during export.
+    private static func statusFilesJSONArray(from index: LANIndexSnapshot) -> [[String: Any]] {
+        var fileEntries: [ExportFileEntry] = index.playback + index.logs
+        if fileEntries.count > lanStatusFilesCap {
+            fileEntries = Array(fileEntries.prefix(lanStatusFilesCap))
+        }
+        var entries: [[String: Any]] = []
+        entries.reserveCapacity(fileEntries.count)
+        for entry in fileEntries {
+            var dict: [String: Any] = ["name": entry.name]
+            if entry.size > 0 {
+                dict["bytes"] = entry.size
+            }
+            if let modified = entry.modified {
+                dict["modified"] = ISO8601DateFormatter().string(from: modified)
+            }
+            entries.append(dict)
+        }
+        return entries
+    }
+
+    /// Playback/log link HTML + file index — polled less often than `status.json`.
     private static func sendStatusListsJSON(_ connection: NWConnection, done: @escaping () -> Void) {
         var payload: [String: Any] = [:]
         autoreleasepool {
+            let index = currentLANIndexSnapshot()
             payload["playbackListHTML"] = playbackMediaFileListHTML()
             payload["exportLogsListHTML"] = exportLogsFileListHTML()
+            payload["files"] = statusFilesJSONArray(from: index)
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
@@ -2448,27 +2447,8 @@ enum ExportLANServer {
         var payload: [String: Any] = [
             "exportsDirectory": "Exports",
             "port": Int(defaultPort),
+            "listsDeferred": true,
         ]
-        if !exportActive {
-            let index = currentLANIndexSnapshot()
-            var fileEntries: [ExportFileEntry] = index.playback + index.logs
-            if fileEntries.count > lanStatusFilesCap {
-                fileEntries = Array(fileEntries.prefix(lanStatusFilesCap))
-            }
-            var entries: [[String: Any]] = []
-            entries.reserveCapacity(fileEntries.count)
-            for entry in fileEntries {
-                var dict: [String: Any] = ["name": entry.name]
-                if entry.size > 0 {
-                    dict["bytes"] = entry.size
-                }
-                if let modified = entry.modified {
-                    dict["modified"] = ISO8601DateFormatter().string(from: modified)
-                }
-                entries.append(dict)
-            }
-            payload["files"] = entries
-        }
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
             var playback = ExportPlaybackState.shared.frozenStatusPayload
             let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
@@ -2489,18 +2469,11 @@ enum ExportLANServer {
         }
         if exportActive {
             payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayload()
-            payload["listsDeferred"] = true
         }
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
         }
         payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
-        if !exportActive {
-            autoreleasepool {
-                payload["playbackListHTML"] = playbackMediaFileListHTML()
-                payload["exportLogsListHTML"] = exportLogsFileListHTML()
-            }
-        }
         payload["phoneInteraction"] = LANPhoneInteractionState.statusPayload()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
