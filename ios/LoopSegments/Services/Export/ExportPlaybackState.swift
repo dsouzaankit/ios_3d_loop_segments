@@ -467,6 +467,9 @@ final class ExportPlaybackState: @unchecked Sendable {
             prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (minute dense fill)"
             lines.append("LAN sequential prefetch: \(prefetch)")
         }
+        if snap.lanExportActive, lines.count > 10 {
+            return Array(lines.prefix(10))
+        }
         return lines
     }
 

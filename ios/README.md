@@ -126,7 +126,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (Export tab → **Export another file**, above **Exports folder**) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
-2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`** (live metrics every **60 s** while export runs), **`status_lists.json`** (media/log links + **`files`** every **120 s**), **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). Direct log URLs (e.g. **`/export_latest.txt`**) are always lightweight. Index lists **active + recent archive** paths only (capped; not a full recursive scan). pCloud folder browse on the index loads only when you tap **Refresh** (not on page open).
+2. **URLs:** **`http://<phone-ip>:8765/`** — **light monitor** (playback, logs, pause/stop; no pCloud JS). **`http://<phone-ip>:8765/browse`** — full page with pCloud folder browser (phone must be signed in to pCloud). **`status.json`** every **60 s**, **`status_lists.json`** every **120 s**. Direct **`/export_latest.txt`** is always safe. Use monitor **`/`** during large exports to avoid crashes; open **`/browse`** only when you need LAN export-from-folder.
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
@@ -145,7 +145,7 @@ Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authoriz
 
 ### LAN HTTP page (browser control)
 
-Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Loop Segments must stay open in the foreground** — the app polls export triggers every ~2 s while active.
+Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (pCloud UI) on the same Wi‑Fi. Monitor does not call pCloud APIs. **`/browse`** uses the phone’s pCloud sign-in (not the PC’s). **Loop Segments must stay open in the foreground** — export triggers poll every ~2 s while active.
 
 #### Page layout
 

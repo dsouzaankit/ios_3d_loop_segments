@@ -536,7 +536,7 @@ enum ExportLANServer {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
             if isBrowserLikeRequest(requestHeaders: requestHeaders) {
-                sendIndexHTML(connection, done: done)
+                sendMinimalIndexHTML(connection, done: done)
                 return
             }
             // Skybox validates with GET / — use 200 + DAV XML (207 on GET confuses some clients).
@@ -548,6 +548,14 @@ enum ExportLANServer {
                 httpStatus: 200,
                 httpPhrase: "OK"
             )
+            return
+        }
+        if normalized == "browse" {
+            if isBrowserLikeRequest(requestHeaders: requestHeaders) {
+                sendBrowseIndexHTML(connection, done: done)
+                return
+            }
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
         }
         if normalized == "status.json" {
@@ -703,7 +711,9 @@ enum ExportLANServer {
     private static func buildLANIndexSnapshot() -> LANIndexSnapshot {
         autoreleasepool {
             let playback = ExportPaths.listLANPlaybackIndexRelativePaths().compactMap { exportFileEntry(relativePath: $0) }
-            let logs = ExportPaths.listLANLogIndexRelativePaths().compactMap { exportFileEntry(relativePath: $0) }
+            let logs = ExportPaths.listLANLogIndexRelativePaths()
+                .prefix(24)
+                .compactMap { exportFileEntry(relativePath: $0) }
             return LANIndexSnapshot(playback: playback, logs: logs, builtAt: Date())
         }
     }
@@ -1458,7 +1468,15 @@ enum ExportLANServer {
     }
 
     /// Poll `status.json` for export source + LAN playback stats; lists on `status_lists.json`.
-    private static func htmlLANLiveRefreshScript() -> String {
+    /// `monitorOnly` — default `/` page: no pCloud bookmark fetch on list poll.
+    private static func htmlLANLiveRefreshScript(monitorOnly: Bool = false) -> String {
+        let bookmarkPoll = monitorOnly
+            ? ""
+            : """
+            if (typeof window.refreshLANBookmarks === "function") {
+              window.refreshLANBookmarks().catch(function () {});
+            }
+            """
         return """
         <script>
         (function () {
@@ -1562,9 +1580,7 @@ enum ExportLANServer {
             applyPhoneInteraction(j.phoneInteraction);
           }
           function pollLists() {
-            if (typeof window.refreshLANBookmarks === "function") {
-              window.refreshLANBookmarks().catch(function () {});
-            }
+            \(bookmarkPoll)
             return fetch("status_lists.json", { cache: "no-store" })
               .then(function (r) { return r.json(); })
               .then(function (j) {
@@ -1768,7 +1784,56 @@ enum ExportLANServer {
             : items.joined()
     }
 
-    private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+    /// Lightweight monitor page (playback + logs + pause/stop). No embedded pCloud browser.
+    private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        let html = """
+            <!DOCTYPE html>
+            <html lang="en"><head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Loop Segments — LAN monitor</title>
+            <style>
+            body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
+            code { font-size: 0.9em; }
+            ul { padding-left: 1.25rem; }
+            .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
+            .export-source-line.is-active { background: #fffbea; border-color: #c8a415; }
+            .export-source-line.is-paused { background: #fff5f0; border-color: #d08050; }
+            .export-source-main { flex: 1 1 12rem; min-width: 0; }
+            .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+            .export-source-line #lan-export-source-name { word-break: break-all; }
+            .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; }
+            .lan-playback-logs-scroll { max-height: calc(5 * 1.75lh); overflow: auto; border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem 0.4rem; }
+            .lan-pause-stop-hint { margin: 0.35rem 0 0; font-size: 0.88em; color: #8a4b00; }
+            button:disabled { opacity: 0.55; cursor: not-allowed; }
+            </style>
+            </head><body>
+            <h1>Loop Segments — LAN monitor</h1>
+            <p><a href="/browse">Open pCloud browser &amp; export controls</a> · <a href="export_latest.txt">export_latest.txt</a></p>
+            <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status">
+              <strong id="lan-export-pending-title">Processing export request</strong>
+              <span id="lan-export-pending-detail">Keep Loop Segments open in the foreground on the phone.</span>
+            </div>
+            \(htmlExportSourceLineBlock())
+            <div id="lan-playback-status">\(htmlPlaybackStatusShell())</div>
+            <h2>On phone (playback)</h2>
+            <ul id="lan-playback-files"><li><em>Loading playback links…</em></li></ul>
+            <h3>Export logs</h3>
+            <div class="lan-playback-logs-scroll"><ul id="lan-export-logs"><li><em>Loading…</em></li></ul></div>
+            \(htmlLANLiveRefreshScript(monitorOnly: true))
+            </body></html>
+            """
+        sendResponse(
+            connection: connection,
+            status: 200,
+            contentType: "text/html; charset=utf-8",
+            body: Data(html.utf8),
+            done: done
+        )
+    }
+
+    /// Full LAN page with pCloud folder browser (heavier — use `/` for monitor-only).
+    private static func sendBrowseIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         let playbackStatusBlock = htmlPlaybackStatusShell()
         let mediaList = "<li><em>Loading playback links…</em></li>"
         let logList = "<li><em>Loading export logs…</em></li>"
@@ -1833,6 +1898,7 @@ enum ExportLANServer {
             </style>
             </head><body>
             <h1>Loop Segments — LAN export</h1>
+            <p><a href="/">← Light monitor</a> (playback + logs only)</p>
             <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status" aria-live="polite">
               <strong id="lan-export-pending-title">Processing export request</strong>
               <span id="lan-export-pending-detail">Please wait — keep Loop Segments open in the foreground on the phone.</span>
@@ -1859,7 +1925,7 @@ enum ExportLANServer {
             </div>
             </div>
             \(htmlExportControlPanel())
-            \(htmlLANLiveRefreshScript())
+            \(htmlLANLiveRefreshScript(monitorOnly: false))
             </body></html>
             """
         sendResponse(
@@ -2278,10 +2344,7 @@ enum ExportLANServer {
                   var j = await ack.json();
                   setStatus((j.status || "?") + ": " + (j.message || ""), j.status === "rejected");
                   if (j.status === "accepted" && window.refreshLANPlayback) {
-                    for (var p = 0; p < 6; p++) {
-                      await new Promise(function (res) { setTimeout(res, 500); });
-                      try { await window.refreshLANPlayback(); } catch (e) {}
-                    }
+                    try { await window.refreshLANPlayback(); } catch (e) {}
                   }
                   return;
                 }
@@ -2550,7 +2613,7 @@ enum ExportLANServer {
         } else if hasRangeHeader {
             sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
             return
-        } else if isSparseWorkingSource, method == "GET" {
+        } else if isSparseWorkingSource, method == "GET", fileSize <= 256 * 1024 * 1024 {
             let tailStart = ExportPlaybackState.shared.indexTailStartByte
             let moovInHead = MP4NetworkOptimize.moovPresentInFirstBytes(
                 of: fileURL,
