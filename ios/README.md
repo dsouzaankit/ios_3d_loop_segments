@@ -10,7 +10,7 @@ Notes:
 LAN: below Mbps cutoff → preload/full file only; at/above → op_*.mp4 when codec allows (LAN server optional).
 _working.mp4: full-timeline LAN play is reliable at seek=0:00; seek>0 see “Seek > 0” below.
 Av1 is not supported, prefer h.265!
-phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-screen audio):
+phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-screen audio; **build 188+** embeds silence MP3 + renews background while locked):
   Optional: Settings > Display & Brightness > Auto-Lock > Never!
 
 
