@@ -353,7 +353,7 @@ struct ExportView: View {
                 Text(
                     exportKeepAlivePreferControls
                         ? "Keeps export alive and shows Keep Alive on lock screen / Control Center (may stop other audio apps)."
-                        : "Keeps export alive in the background without taking over lock-screen controls (recommended if you use Evermusic)."
+                        : "Keeps export alive in the background without taking over lock-screen controls (recommended if you use Evermusic). Uses KeepAlive_silence.mp3 only."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
