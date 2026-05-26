@@ -126,7 +126,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (Export tab → **Export another file**, above **Exports folder**) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
-2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). The index **polls `status.json` every 5 s** (**3 s** while export is active) for export source, playback list, and WAN Mbps / fill stats (session metrics reset on each export start or resume). The index lists **active + recent archive** paths only (not a full recursive scan) so large exports do not reload the entire sparse manifest or media tree on every poll.
+2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **`status_lists.json`** (playback + log link HTML), **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). While export is active the index **polls `status.json` every 3 s** for export source + live Mbps/fill stats only (no file index, no list HTML); **`status_lists.json` every ~25 s** refreshes media/log links. Idle: **`status.json` every 5 s** includes lists. Direct log URLs (e.g. **`/export_latest.txt`**) are always lightweight. Index lists **active + recent archive** paths only (capped; not a full recursive scan).
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
@@ -160,7 +160,8 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 
 | Path | Purpose |
 |------|---------|
-| **`/status.json`** | Live state: file index, `exportSource`, playback HTML fragments, optional `lanLive` dashboard. |
+| **`/status.json`** | Live state: `exportSource`, playback status HTML, optional `lanLive` dashboard; full file index + list HTML when idle. During export: `listsDeferred: true` — lists omitted (see **`status_lists.json`**). |
+| **`/status_lists.json`** | `playbackListHTML` + `exportLogsListHTML` only (polled ~25 s during export). |
 | **`/pcloud_list.json?path=/Folder/`** | pCloud folder listing (directories + video files). |
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
