@@ -255,7 +255,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | **2** | **Stop** / handoff during **(1)** | Both files if still present | One archive timestamp batch; `_appFast_` only if replace already ran. |
 | **4** | **Sparse + kept vanilla** (below) | `_working.mp4` + `_vanilla_download.*` | Rare; see **Sparse + vanilla overlap**. |
 
-**Fresh export vs LAN resume:** Any **new** Start export (not `continueLANExport`) **moves** existing root media into `archive/` first (including leftovers from a **paused** or **interrupted** run), then starts the new job. **LAN resume** (`continueLANExport` — same title, checkpoint seek within ~5 s) keeps `_working` / `loop/` / vanilla on disk and does **not** archive first.
+**Fresh export vs LAN resume:** Any **new** Start export (not `continueLANExport`) **moves** existing root media into `archive/` first (including leftovers from a **paused** or **interrupted** run), then starts the new job. **LAN resume** (`continueLANExport` — same title paused: checkpoint &gt; ~0.25 s **or** partial `_vanilla_download.*` for that file) keeps `_working` / `loop/` / vanilla on disk and does **not** archive first; WebDAV vanilla fill still resumes from the last byte via `_vanilla_download.meta.json`.
 
 **Sparse + vanilla overlap (case 4):** At the start of **every** export, `syncVanillaDownloadWithExportItem` runs. If a partial or complete `_vanilla_download.*` already exists for the **same** pCloud `fileKey` + size (e.g. an earlier vanilla attempt or interrupted vanilla download), that file is **kept** so WebDAV download can resume. A **sparse** export on the same title does **not** delete that vanilla copy (`abandonSparseWorkingForRecovery` only runs on the vanilla/HLS recovery path, not on a successful sparse probe). So you can have **`_working.mp4`** (sparse mirror) and **`_vanilla_download.*`** (dense partial/full copy) at the same root. LAN may **hide** `_working.mp4` while a vanilla download is active (`shouldHideSparseWorkingFromLAN`). **Finish** can **copy both** into `archive/` (same timestamp batch, two filenames from the pCloud basename). To avoid overlap: **Stop** or start a **fresh** export (archives first), or **Clear media**.
 
@@ -493,7 +493,7 @@ Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN serv
 |---|--------|-------|----------|
 | **D1** | **Stop** during vanilla download | AV1 or WMV recovery | **`--- cancelled ---`**; partial **`_vanilla_download.*`** kept; **no** stale probe ERROR (AV1) |
 | **D2** | **Pause** during sparse segment export | HEVC high, minute 2+ | Checkpoint saved; **`op_*.mp4`** + **`_working.mp4`** kept; resume continues from cursor |
-| **D3** | **Resume** partial vanilla | Kill app mid-vanilla | **`_vanilla_download.meta.json`** → download continues from last byte |
+| **D3** | **Resume** partial vanilla | Pause / kill app mid-vanilla, **Start export** again | **`_vanilla_download.meta.json`** → download continues from last byte (even at **Start at 0:00**; build **213+**) |
 | **D4** | **Stop** during sparse segments | B1 in progress | **`op_*.mp4`** removed; **`_working.mp4`** kept |
 | **D5** | Per-minute failsafe | Simulated passthrough error one minute | Log *skip*; export **continues**; later minutes still publish |
 
@@ -544,7 +544,7 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 
 **With REST on + token:** `search` API (~20 s) → shallow **folder index** (~15 s) → WebDAV fallback as above.
 
-**Live UI while WebDAV runs:** current folder (short path), `folders visited / 80`, queue depth, hit count, ETA (rate-based, capped by timeout). Same line is written periodically to **`pcld_ios_media/logs/search_debug.txt`** (listed on LAN `:8765` when the file exists; legacy **`/search_debug.txt`** URL works).
+**Live UI while WebDAV runs:** current folder (short path), `folders visited / 80`, queue depth, hit count, ETA (rate-based, capped by timeout). Same line is written periodically to **`pcld_ios_media/logs/search_debug.txt`** (capped at **64 KB** on disk; listed on LAN `:8765` when the file exists; legacy **`/search_debug.txt`** URL works).
 
 **Empty results:** distinct messages for **WebDAV timeout** (not finished scanning), **no matches**, and **missing API token** (optional REST). Do not treat a 10 s timeout across many bookmarks as “login missing.”
 

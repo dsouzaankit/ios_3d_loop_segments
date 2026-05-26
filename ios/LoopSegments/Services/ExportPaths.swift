@@ -258,6 +258,29 @@ enum ExportPaths {
         return names.contains { $0.lowercased().hasPrefix("_vanilla_download.") }
     }
 
+    /// Paused export can resume WebDAV byte offset via `_vanilla_download.meta.json` (even when media checkpoint is 0:00).
+    static func hasResumableVanillaDownload(for item: WebDAVItem) -> Bool {
+        let destination = vanillaDownloadURL(preservingExtensionFrom: item.name)
+        var totalLength = item.contentLength ?? 0
+        if totalLength <= 0, let manifest = VanillaDownloadResumeCatalog.readManifest() {
+            if manifest.fileKey == item.fileKey
+                || VanillaDownloadResumeCatalog.matchesAfterRename(item: item, totalLength: manifest.totalLength) {
+                totalLength = manifest.totalLength
+            }
+        }
+        guard totalLength > 0 else { return false }
+        switch VanillaDownloadResumeCatalog.resumePlan(
+            fileKey: item.fileKey,
+            totalLength: totalLength,
+            destinationURL: destination
+        ) {
+        case .startFresh:
+            return false
+        case .resume, .alreadyComplete:
+            return true
+        }
+    }
+
     /// Prefer growing `_vanilla_download.*` while downloading; otherwise completed `_vanilla_faststart.mp4`.
     static func vanillaPrimaryLocalURL(for item: WebDAVItem) -> URL {
         let download = vanillaDownloadURL(preservingExtensionFrom: item.name)

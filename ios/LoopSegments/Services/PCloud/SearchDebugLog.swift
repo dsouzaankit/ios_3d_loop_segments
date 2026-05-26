@@ -3,7 +3,7 @@ import Foundation
 /// Append-only search trace under `pcld_ios_media/logs/search_debug.txt` (private; LAN when served).
 enum SearchDebugLog {
     private static let queue = DispatchQueue(label: "com.loopsegments.search-debug")
-    private static let maxBytes = 256 * 1024
+    private static let maxBytes = 64 * 1024
 
     static var logURL: URL {
         ExportPaths.searchDebugLogURL

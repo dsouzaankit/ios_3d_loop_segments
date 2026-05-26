@@ -197,8 +197,10 @@ final class AppSession: ObservableObject {
         activeExportItem = item
         LANExportSourceDisplay.setRunning(item.name)
         let priorResume = ResumeStore.shared.resumeStatus(for: item)
-        // Paused checkpoint resume (incl. timed auto-pause): keep on-disk media/logs; ignore UI seek drift.
-        let continueLANExport = priorResume.isPaused && priorResume.effectiveMs > 250
+        // Paused resume (incl. timed auto-pause): keep on-disk media/logs; ignore UI seek drift.
+        // Vanilla WebDAV fill can resume from partial bytes even when checkpoint/Start at is still 0:00.
+        let continueLANExport = priorResume.isPaused
+            && (priorResume.effectiveMs > 250 || ExportPaths.hasResumableVanillaDownload(for: item))
         let seekMsForRun = continueLANExport ? priorResume.effectiveMs : seekMs
         let resumeCursorMs = continueLANExport ? priorResume.effectiveMs : nil
         ResumeStore.shared.beginExport(for: item, seekMs: seekMsForRun)
