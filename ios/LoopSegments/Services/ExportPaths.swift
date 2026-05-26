@@ -305,6 +305,9 @@ enum ExportPaths {
     /// Max `archive/` rows on the LAN index (avoids scanning the full media tree every poll).
     static let lanPlaybackArchiveIndexLimit = 32
 
+    /// Recent `archive/` rows while export runs (click-to-open; keeps monitor list small).
+    static let lanPlaybackArchiveIndexLimitDuringExport = 8
+
     /// Active + recent archive paths for the LAN HTML index (non-recursive; cheap for `status.json` polling).
     static func listLANPlaybackIndexRelativePaths(
         maxArchiveEntries: Int = lanPlaybackArchiveIndexLimit

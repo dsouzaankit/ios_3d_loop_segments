@@ -176,7 +176,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
-- **`playbackStatusHTML`**, **`playbackListHTML`**, **`exportLogsListHTML`** — on **`status_lists.json`** (or manual refresh on `/`). **`playbackListHTML`** = media only (capped archive, newest first). **`exportLogsListHTML`** = logs sorted **newest first**. During export, video rows on lists are **text-only** (no `href`) so Chrome cannot prefetch multi‑GB files.
+- **`playbackStatusHTML`**, **`playbackListHTML`**, **`exportLogsListHTML`** — on **`status_lists.json`** (or manual refresh on `/`). **`playbackListHTML`** = media + capped **`archive/`** (newest first; **8** rows during export, **32** when idle). During export, media/archive rows are **click-to-open** (`href="#"` + `data-lan-media-href`, opens a **new tab** so the monitor page stays open); WebDAV (PotPlayer) is unchanged.
 - **`lanLive`** — while export is active: `playableStatusLine` + **`dashboardLines`** (duration, elapsed, bitrate, WAN Mbps, dense-fill %, …). Update via **Refresh status** on **`/`** (no auto-poll). Idle **`/browse`** includes the same metrics inside **`playbackStatusHTML`**.
 - **`listsDeferred`** — `true` on **`status.json`**; fetch lists via **`status_lists.json`**.
 - **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.

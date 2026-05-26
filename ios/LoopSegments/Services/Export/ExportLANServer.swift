@@ -503,6 +503,24 @@ enum ExportLANServer {
         return false
     }
 
+    /// Block browser full-file GET of large media during export (prefetch / accidental navigation). WebDAV and Range GET stay allowed.
+    private static func shouldRejectBrowserMediaGETDuringExport(
+        requestHeaders: String,
+        method: String,
+        fileURL: URL,
+        fileSize: Int64
+    ) -> Bool {
+        guard method == "GET" else { return false }
+        if isBrowserPrefetchRequest(requestHeaders: requestHeaders) { return true }
+        guard isBrowserLikeRequest(requestHeaders: requestHeaders) else { return false }
+        guard !isWebDAVClient(requestHeaders: requestHeaders) else { return false }
+        let hasRange = requestHeaders.split(separator: "\r\n").contains { $0.lowercased().hasPrefix("range:") }
+        if hasRange { return false }
+        let name = fileURL.lastPathComponent.lowercased()
+        if name.hasPrefix("op_") && name.hasSuffix(".mp4") { return false }
+        return fileSize > 32 * 1024 * 1024
+    }
+
     private static func lanWebDAVAuthHeaderLines() -> [String] {
         ["WWW-Authenticate: Basic realm=\"\(lanWebDAVRealm)\""]
     }
@@ -724,7 +742,9 @@ enum ExportLANServer {
     private static func buildLANIndexSnapshot() -> LANIndexSnapshot {
         autoreleasepool {
             let exportActive = ExportPlaybackState.shared.isLANExportActive
-            let archiveCap = exportActive ? 0 : ExportPaths.lanPlaybackArchiveIndexLimit
+            let archiveCap = exportActive
+                ? ExportPaths.lanPlaybackArchiveIndexLimitDuringExport
+                : ExportPaths.lanPlaybackArchiveIndexLimit
             let playback = ExportPaths.listLANPlaybackIndexRelativePaths(maxArchiveEntries: archiveCap)
                 .compactMap { exportFileEntry(relativePath: $0) }
             let logCap = exportActive ? 4 : 24
@@ -1441,23 +1461,50 @@ enum ExportLANServer {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    /// During export, omit `href` on video paths so Chrome does not speculative-prefetch multi-GB files.
-    private static func omitVideoHrefOnLANIndex(relativePath: String) -> Bool {
+    /// Click-only anchor during export (no real `href` → Chrome cannot speculative-prefetch multi-GB URLs).
+    private static func lanMediaClickAnchor(relativePath: String, innerHTML: String, extraClass: String = "") -> String {
+        let pathAttr = htmlEscape(relativePath)
+        let cls = extraClass.isEmpty ? "lan-media-link" : "lan-media-link \(extraClass)"
+        return "<a href=\"#\" class=\"\(cls)\" data-lan-media-href=\"\(pathAttr)\">\(innerHTML)</a>"
+    }
+
+    private static func lanMediaListUsesClickOnly(relativePath: String) -> Bool {
         ExportPlaybackState.shared.isLANExportActive
             && ExportPaths.isLANBrowsableMediaRelativePath(relativePath)
     }
 
-    /// Plain `href` for WebDAV / PotPlayer; separate browser link with `#t=` when export seek &gt; 0.
+    /// Playback list link — direct `href` when idle; click-only during export. Separate browser `#t=` when seek &gt; 0.
     private static func lanIndexPlaybackLinks(relativePath name: String, resumeStartSec: Int) -> String {
         let escaped = htmlEscape(name)
-        if omitVideoHrefOnLANIndex(relativePath: name) {
-            return "<code>\(escaped)</code>"
+        if lanMediaListUsesClickOnly(relativePath: name) {
+            let primary = lanMediaClickAnchor(relativePath: name, innerHTML: escaped)
+            guard resumeStartSec > 0 else { return primary }
+            let resumePath = "\(name)#t=\(resumeStartSec)"
+            let resumeLabel = htmlEscape("browser #t=\(formatLANClock(resumeStartSec))")
+            return """
+                \(primary) · \(lanMediaClickAnchor(relativePath: resumePath, innerHTML: resumeLabel, extraClass: "lan-browser-resume"))
+                """
         }
         let primary = "<a href=\"\(escaped)\">\(escaped)</a>"
         guard resumeStartSec > 0 else { return primary }
         return """
             \(primary) · <a href="\(escaped)#t=\(resumeStartSec)" class="lan-browser-resume">browser #t=\(formatLANClock(resumeStartSec))</a>
             """
+    }
+
+    /// Opens `data-lan-media-href` in a new tab (capture) — no real `href` (no Chrome prefetch); LAN page stays open.
+    private static func htmlLANMediaClickScript() -> String {
+        """
+          document.addEventListener("click", function (e) {
+            var a = e.target && e.target.closest ? e.target.closest("a.lan-media-link") : null;
+            if (!a) return;
+            var url = a.getAttribute("data-lan-media-href");
+            if (!url) return;
+            if (e.button !== 0 && e.button !== 1) return;
+            e.preventDefault();
+            window.open(url, "_blank", "noopener,noreferrer");
+          }, true);
+        """
     }
 
     private static func htmlDashboardStatsBlock() -> String {
@@ -1525,6 +1572,7 @@ enum ExportLANServer {
         return """
         <script>
         (function () {
+          \(htmlLANMediaClickScript())
           var pollMs = \(lanStatusPollMs);
           var listPollMs = \(lanStatusListsPollMs);
           function esc(s) {
@@ -1737,8 +1785,8 @@ enum ExportLANServer {
             }
             if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
                 let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
-                let link = omitVideoHrefOnLANIndex(relativePath: name)
-                    ? "<code>\(escaped)</code>"
+                let link = lanMediaListUsesClickOnly(relativePath: name)
+                    ? lanMediaClickAnchor(relativePath: name, innerHTML: escaped)
                     : "<a href=\"\(escaped)\">\(escaped)</a>"
                 items.append(
                     "<li>\(link)\(sizeNote)" +
@@ -1766,9 +1814,9 @@ enum ExportLANServer {
             } else if name.hasSuffix(".mp4") {
                 note = " — sparse in-progress source (seek in player to export start)"
             }
-            if omitVideoHrefOnLANIndex(relativePath: name) {
+            if lanMediaListUsesClickOnly(relativePath: name) {
                 items.append(
-                    "<li><code>\(escaped)</code>\(sizeNote)\(note) — use WebDAV during export (no browser prefetch)</li>"
+                    "<li>\(lanMediaClickAnchor(relativePath: name, innerHTML: escaped))\(sizeNote)\(note)</li>"
                 )
             } else {
                 items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
@@ -1781,7 +1829,7 @@ enum ExportLANServer {
         }
         if ExportPlaybackState.shared.isLANExportActive {
             items.append(
-                "<li><em>Video paths are text-only during export (Chrome may prefetch &lt;a href&gt; and jetsam the phone).</em></li>"
+                "<li><em>Media/archive links open in a new tab on click (LAN page stays open; blocks Chrome prefetch). WebDAV unchanged.</em></li>"
             )
         }
         return items.isEmpty
@@ -1853,16 +1901,38 @@ enum ExportLANServer {
             let url = ExportPaths.segmentURL(index: index)
             guard fm.fileExists(atPath: url.path) else { continue }
             let rel = ExportPaths.pathRelativeToExports(url)
-            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a></li>")
+            let esc = htmlEscape(rel)
+            let link = lanMediaListUsesClickOnly(relativePath: rel)
+                ? lanMediaClickAnchor(relativePath: rel, innerHTML: esc)
+                : "<a href=\"\(esc)\">\(esc)</a>"
+            items.append("<li>\(link)</li>")
         }
         if fm.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
             let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL)
-            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a> (growing transcode)</li>")
+            let esc = htmlEscape(rel)
+            let link = lanMediaListUsesClickOnly(relativePath: rel)
+                ? lanMediaClickAnchor(relativePath: rel, innerHTML: esc)
+                : "<a href=\"\(esc)\">\(esc)</a>"
+            items.append("<li>\(link) (growing transcode)</li>")
         }
         if fm.fileExists(atPath: ExportPaths.workingSourceURL.path),
            !ExportPaths.shouldHideSparseWorkingFromLAN() {
             let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
-            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a> (sparse)</li>")
+            let esc = htmlEscape(rel)
+            let link = lanMediaListUsesClickOnly(relativePath: rel)
+                ? lanMediaClickAnchor(relativePath: rel, innerHTML: esc)
+                : "<a href=\"\(esc)\">\(esc)</a>"
+            items.append("<li>\(link) (sparse)</li>")
+        }
+        if ExportPlaybackState.shared.isLANExportActive {
+            for rel in ExportPaths.listLANPlaybackIndexRelativePaths(
+                maxArchiveEntries: ExportPaths.lanPlaybackArchiveIndexLimitDuringExport
+            ) where rel.contains("/archive/") {
+                let esc = htmlEscape(rel)
+                items.append(
+                    "<li>\(lanMediaClickAnchor(relativePath: rel, innerHTML: esc)) (archive)</li>"
+                )
+            }
         }
         return items.isEmpty
             ? "<li><em>No media files yet.</em></li>"
@@ -1873,6 +1943,7 @@ enum ExportLANServer {
         """
         <script>
         (function () {
+          \(htmlLANMediaClickScript())
           function esc(s) {
             return String(s)
               .replace(/&/g, "&amp;")
@@ -2041,6 +2112,7 @@ enum ExportLANServer {
             <html lang="en"><head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta http-equiv="x-dns-prefetch-control" content="off">
             <title>Loop Segments — LAN export</title>
             <style>
             .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
@@ -2740,21 +2812,6 @@ enum ExportLANServer {
         requestHeaders: String,
         done: @escaping () -> Void
     ) {
-        if ExportPlaybackState.shared.isLANExportActive,
-           isBrowserPrefetchRequest(requestHeaders: requestHeaders),
-           ExportPaths.isLANBrowsableMediaFile(fileName: fileURL.lastPathComponent) {
-            sendResponse(
-                connection: connection,
-                status: 503,
-                contentType: "text/plain",
-                body: Data(
-                    "Export active — browser prefetch disabled. Use WebDAV (PotPlayer) or open export_latest.txt on the monitor page."
-                        .utf8
-                ),
-                done: done
-            )
-            return
-        }
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
               let sizeNum = attrs[.size] as? NSNumber,
@@ -2763,6 +2820,26 @@ enum ExportLANServer {
             return
         }
         let fileSize = sizeNum.int64Value
+        if ExportPlaybackState.shared.isLANExportActive,
+           ExportPaths.isLANBrowsableMediaFile(fileName: fileURL.lastPathComponent),
+           shouldRejectBrowserMediaGETDuringExport(
+               requestHeaders: requestHeaders,
+               method: method,
+               fileURL: fileURL,
+               fileSize: fileSize
+           ) {
+            sendResponse(
+                connection: connection,
+                status: 503,
+                contentType: "text/plain",
+                body: Data(
+                    "Export active — browser prefetch blocked. Click the media link on the LAN page, use WebDAV (PotPlayer), or open export_latest.txt."
+                        .utf8
+                ),
+                done: done
+            )
+            return
+        }
         let contentType = mimeType(for: fileURL)
         let modified = attrs[.modificationDate] as? Date
         let etag = fileETag(size: fileSize)
