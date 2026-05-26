@@ -17,12 +17,12 @@ enum WebDAVSearchClient {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return [] }
 
-        let started = ContinuousClock.now
+        let started = Date()
         let folderLimit = max(1, maxFoldersToVisit)
         var throttle = ProgressThrottle(minInterval: 0.2)
 
         func elapsedSeconds() -> Double {
-            Double(ContinuousClock.now - started) / 1_000_000_000
+            Date().timeIntervalSince(started)
         }
 
         func report(
@@ -182,19 +182,23 @@ enum WebDAVSearchClient {
 
     private struct ProgressThrottle: Sendable {
         let minInterval: Double
-        private var lastAt: ContinuousClock.Instant?
+        private var lastAt: Date?
         private var lastVisited = 0
+
+        init(minInterval: Double) {
+            self.minInterval = minInterval
+        }
 
         mutating func fire(
             _ snapshot: WebDAVSearchProgress,
             force: Bool,
             handler: @Sendable (WebDAVSearchProgress) -> Void
         ) {
-            let now = ContinuousClock.now
+            let now = Date()
             let visited = snapshot.foldersVisited
             let intervalElapsed: Bool
             if let lastAt {
-                intervalElapsed = Double(now - lastAt) / 1_000_000_000 >= minInterval
+                intervalElapsed = now.timeIntervalSince(lastAt) >= minInterval
             } else {
                 intervalElapsed = true
             }

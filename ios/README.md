@@ -529,7 +529,7 @@ Same toggles as **Settings that gate behavior** (above). **Full WebDAV download*
 
 The Photos import sub-workflow is **off** (`PhotosSegmentPublisher.workflowEnabled = false` in source). Re-enable there to restore the export UI and library sync.
 
-## Browse search (build 206–209)
+## Browse search (build 206–210)
 
 All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 
