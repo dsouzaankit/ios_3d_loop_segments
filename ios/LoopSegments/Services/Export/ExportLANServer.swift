@@ -1517,10 +1517,10 @@ enum ExportLANServer {
         let autoPollStart = deferAutoPoll
             ? ""
             : """
-          poll();
-          setTimeout(pollLists, 5000);
-          setInterval(poll, pollMs);
-          setInterval(pollLists, listPollMs);
+            poll();
+            setTimeout(pollLists, 5000);
+            setInterval(poll, pollMs);
+            setInterval(pollLists, listPollMs);
             """
         return """
         <script>
