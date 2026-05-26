@@ -68,8 +68,10 @@ final class SegmentExporter {
         isCancelled = false
         cancelLock.unlock()
         ExportPlaybackState.shared.setLANExportActive(true)
+        ExportLANServer.setExportSessionActiveForBrowser(true)
         defer {
             tempDownload?.flushLANPlaybackManifestForExportEnd()
+            ExportLANServer.setExportSessionActiveForBrowser(false)
             ExportPlaybackState.shared.setLANExportActive(false)
             ExportPlaybackState.shared.setLANPreloadOnly(false)
             tempDownload?.cancel()

@@ -9,6 +9,8 @@ enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
     /// Per-response cap — open-ended `Range: bytes=0-` must not ship multi-GB (Quest browser / Safari OOM).
     private static let maxResponseBodyBytes: Int64 = 32 * 1024 * 1024
+    /// Cap full-file browser GET of logs during export (Safari/Chrome may prefetch `export_latest.txt`).
+    private static let maxBrowserTextBytesDuringExport: Int64 = 512 * 1024
     /// PC script uploads via WebDAV PUT (Basic auth required).
     private static let maxWebDAVPutBytes: Int = 2 * 1024 * 1024
     /// LAN WebDAV Basic auth (Skybox, mapped drives). GET without auth still works for PC sync.
@@ -75,16 +77,41 @@ enum ExportLANServer {
     private static var listener: NWListener?
     private static var connections: [ObjectIdentifier: NWConnection] = [:]
     private static let queue = DispatchQueue(label: "com.loopsegments.lan-server")
+    /// Mirrors export session for browser HTML only — read on LAN queue without `ExportPlaybackState` lock.
+    private static var exportSessionActiveForBrowser = false
+    private static var cachedMDNSHostLabel: String?
     /// Bonjour service name (`loopsegments._http._tcp.local` in browsers) — not a pingable hostname.
     static let bonjourServiceName = "loopsegments"
     /// Settings → General → About → Name (e.g. `John's iPhone` → `http://johns-iphone.local:8765/`, not `iphone.local` unless named "iPhone").
+    @MainActor
     static var deviceAboutName: String {
         UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Call from the main actor (e.g. `RootView.onAppear`) — `UIDevice` is unsafe on the LAN server queue.
+    @MainActor
+    static func warmCachesOnMainActor() {
+        let label = deviceMDNSHostLabel()
+        lock.lock()
+        cachedMDNSHostLabel = label
+        lock.unlock()
+    }
+
+    static func setExportSessionActiveForBrowser(_ active: Bool) {
+        lock.lock()
+        exportSessionActiveForBrowser = active
+        lock.unlock()
+    }
+
+    private static var isExportSessionActiveForBrowser: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return exportSessionActiveForBrowser
+    }
+
     /// mDNS host label from this iPhone (Settings → General → About → Name → `<name>.local`).
     static var deviceMDNSHostName: String {
-        "\(deviceMDNSHostLabel()).local"
+        "\(resolvedMDNSHostName()).local"
     }
     /// @deprecated Misleading; use `deviceMDNSHostName`. Kept for call-site compatibility.
     static var bonjourHostName: String { deviceMDNSHostName }
@@ -144,7 +171,7 @@ enum ExportLANServer {
                     switch state {
                     case .ready:
                         let ip = Self.primaryLANIPv4Address()
-                        let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
+                        let hostURL = "http://\(Self.resolvedMDNSHostName()).local:\(defaultPort)/"
                         let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
                         lock.lock()
                         advertisedBaseURL = hostURL
@@ -555,7 +582,7 @@ enum ExportLANServer {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
             if shouldServeMinimalMonitorHTML(requestHeaders: requestHeaders) {
-                sendMinimalIndexHTML(connection, done: done)
+                sendBrowserMonitorHTML(connection, done: done)
                 return
             }
             // Skybox validates with GET / — use 200 + DAV XML (207 on GET confuses some clients).
@@ -570,7 +597,7 @@ enum ExportLANServer {
             return
         }
         if normalized == "browse" {
-            if ExportPlaybackState.shared.isLANExportActive {
+            if isExportSessionActiveForBrowser {
                 sendBrowseUnavailableDuringExport(connection: connection, done: done)
                 return
             }
@@ -733,14 +760,80 @@ enum ExportLANServer {
         </head>
         <body>
         <h1>Export running</h1>
-        <p>This page intentionally has <strong>no hyperlinks</strong>. Chrome desktop was prefetching
+        <p>This page intentionally has <strong>no hyperlinks</strong>. Browsers (Chrome, Safari) were prefetching
         <code>/browse</code> and video paths from the monitor and crashing the app during large exports.</p>
         <p><strong>Live log</strong> — type in the address bar (same host, port 8765):</p>
         <p><code>/export_latest.txt</code></p>
         <p><strong>Progress tail</strong>:</p>
         <p><code>/pcld_ios_media/logs/export_progress.txt</code></p>
         <p><strong>Playback</strong> — PotPlayer / WebDAV on this host (unchanged).</p>
-        <p>When export is idle, reload <code>/</code> for the full monitor with refresh buttons.</p>
+        <p>When export is idle, reload <code>/</code> for refresh buttons (still no prefetchable links).</p>
+        </body>
+        </html>
+        """.utf8
+    )
+
+    /// Idle browser monitor — static HTML + manual fetch only (no hrefs; no Swift string build on GET /).
+    private static let minimalMonitorHTMLIdle = Data(
+        """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="Cache-Control" content="no-store">
+        <title>Loop Segments — LAN monitor</title>
+        <style>
+        body { font: -apple-system-body; margin: 1.25rem; line-height: 1.45; max-width: 42rem; }
+        code { font-size: 0.92em; word-break: break-all; }
+        button { font: inherit; padding: 0.4rem 0.75rem; margin: 0.25rem 0.5rem 0.25rem 0; }
+        #lan-status { margin-top: 0.75rem; font-size: 0.92em; max-height: 40vh; overflow: auto; }
+        </style>
+        </head>
+        <body>
+        <h1>Loop Segments — LAN monitor</h1>
+        <p>No links on this page (browsers prefetch them and can jetsam the phone during export).</p>
+        <p><strong>Live log:</strong> <code>/export_latest.txt</code> · <strong>Progress:</strong> <code>/pcld_ios_media/logs/export_progress.txt</code></p>
+        <p><strong>pCloud UI:</strong> type <code>/browse</code> in the address bar when export is idle.</p>
+        <p><strong>Playback:</strong> WebDAV on this host (PotPlayer, Skybox).</p>
+        <button type="button" id="lan-refresh-status">Refresh status</button>
+        <button type="button" id="lan-refresh-lists">Refresh file list</button>
+        <div id="lan-status"></div>
+        <script>
+        (function () {
+          var out = document.getElementById("lan-status");
+          document.getElementById("lan-refresh-status").onclick = function () {
+            if (out) out.textContent = "Loading status…";
+            fetch("status.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(function (j) {
+                if (!out) return;
+                var lines = [];
+                if (j.exportSource && j.exportSource.displayName) {
+                  lines.push((j.exportSource.label || "Export") + ": " + j.exportSource.displayName);
+                }
+                if (j.lanLive && j.lanLive.playableStatusLine) {
+                  lines.push(j.lanLive.playableStatusLine);
+                } else if (j.playbackStatusHTML) {
+                  out.innerHTML = j.playbackStatusHTML;
+                  return;
+                }
+                out.textContent = lines.length ? lines.join("\\n") : "status.json OK (see console)";
+              })
+              .catch(function () { if (out) out.textContent = "status.json failed"; });
+          };
+          document.getElementById("lan-refresh-lists").onclick = function () {
+            if (out) out.textContent = "Loading lists…";
+            fetch("status_lists.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(function (j) {
+                if (!out) return;
+                out.innerHTML = (j.playbackListHTML || "") + (j.exportLogsListHTML || "");
+              })
+              .catch(function () { if (out) out.textContent = "status_lists.json failed"; });
+          };
+        })();
+        </script>
         </body>
         </html>
         """.utf8
@@ -2057,80 +2150,23 @@ enum ExportLANServer {
         )
     }
 
-    /// Lightweight monitor page (playback + logs + pause/stop). No embedded pCloud browser.
-    private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        if ExportPlaybackState.shared.isLANExportActive {
-            sendResponse(
-                connection: connection,
-                status: 200,
-                contentType: "text/html; charset=utf-8",
-                body: minimalMonitorHTMLDuringExport,
-                done: done
-            )
-            return
-        }
-        autoreleasepool {
-            let html = """
-                <!DOCTYPE html>
-                <html lang="en"><head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <meta http-equiv="Cache-Control" content="no-store">
-                <meta http-equiv="x-dns-prefetch-control" content="off">
-                <title>Loop Segments — LAN monitor</title>
-                <style>
-                body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
-                code { font-size: 0.9em; }
-                ul { padding-left: 1.25rem; }
-                .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
-                .export-source-line.is-active { background: #fffbea; border-color: #c8a415; }
-                .export-source-line.is-paused { background: #fff5f0; border-color: #d08050; }
-                .export-source-main { flex: 1 1 12rem; min-width: 0; }
-                .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-                .export-source-line #lan-export-source-name { word-break: break-all; }
-                .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; }
-                .lan-playback-logs-scroll { max-height: calc(5 * 1.75lh); overflow: auto; border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem 0.4rem; }
-                .lan-pause-stop-hint { margin: 0.35rem 0 0; font-size: 0.88em; color: #8a4b00; }
-                button:disabled { opacity: 0.55; cursor: not-allowed; }
-                </style>
-                </head><body>
-                <h1>Loop Segments — LAN monitor</h1>
-                <p><a href="/browse">Open pCloud browser &amp; export controls</a> · <a href="export_latest.txt">export_latest.txt</a></p>
-                <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status">
-                  <strong id="lan-export-pending-title">Processing export request</strong>
-                  <span id="lan-export-pending-detail">Keep Loop Segments open in the foreground on the phone.</span>
-                </div>
-                \(htmlExportSourceLineShell())
-                <div id="lan-playback-status">\(htmlPlaybackStatusShell())</div>
-                <p class="muted">No auto-refresh (tap buttons). Use direct log link while export runs.</p>
-                <p>
-                  <button type="button" id="lan-refresh-status">Refresh status</button>
-                  <button type="button" id="lan-refresh-lists">Refresh file list</button>
-                </p>
-                <h2>On phone (playback)</h2>
-                <ul id="lan-playback-files">
-                \(htmlMonitorStaticPlaybackLinks())
-                </ul>
-                <h3>Export logs</h3>
-                <div class="lan-playback-logs-scroll"><ul id="lan-export-logs">
-                <li><a href="export_latest.txt">export_latest.txt</a></li>
-                </ul></div>
-                \(htmlMonitorManualRefreshScript())
-                </body></html>
-                """
-            sendResponse(
-                connection: connection,
-                status: 200,
-                contentType: "text/html; charset=utf-8",
-                body: Data(html.utf8),
-                done: done
-            )
-        }
+    /// Browser `GET /` — prebuilt bytes only (no filesystem, no `ExportPlaybackState`, no dynamic Swift HTML).
+    private static func sendBrowserMonitorHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        let body = isExportSessionActiveForBrowser
+            ? minimalMonitorHTMLDuringExport
+            : minimalMonitorHTMLIdle
+        sendResponse(
+            connection: connection,
+            status: 200,
+            contentType: "text/html; charset=utf-8",
+            body: body,
+            done: done
+        )
     }
 
     /// Full LAN page with pCloud folder browser (heavier — use `/` for monitor-only).
     private static func sendBrowseIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        if ExportPlaybackState.shared.isLANExportActive {
+        if isExportSessionActiveForBrowser {
             sendBrowseUnavailableDuringExport(connection: connection, done: done)
             return
         }
@@ -2873,7 +2909,7 @@ enum ExportLANServer {
         requestHeaders: String,
         done: @escaping () -> Void
     ) {
-        if ExportPlaybackState.shared.isLANExportActive,
+        if isExportSessionActiveForBrowser,
            isBrowserPrefetchRequest(requestHeaders: requestHeaders),
            !isWebDAVClient(requestHeaders: requestHeaders) {
             sendResponse(
@@ -2911,6 +2947,12 @@ enum ExportLANServer {
         let status: Int
         let phrase: String
         let hasRangeHeader = requestHeaders.split(separator: "\r\n").contains { $0.lowercased().hasPrefix("range:") }
+        let capBrowserTextDuringExport = isExportSessionActiveForBrowser
+            && !isWebDAVClient(requestHeaders: requestHeaders)
+            && method == "GET"
+            && contentType.hasPrefix("text/")
+            && !hasRangeHeader
+            && fileSize > maxBrowserTextBytesDuringExport
 
         if let range = parseByteRange(requestHeaders: requestHeaders, fileSize: fileSize) {
             byteStart = range.start
@@ -2984,11 +3026,18 @@ enum ExportLANServer {
         } else {
             byteStart = 0
             byteEnd = fileSize - 1
-            if capResponseBody {
+            if capBrowserTextDuringExport {
+                byteEnd = maxBrowserTextBytesDuringExport - 1
+                status = 206
+                phrase = "Partial Content"
+            } else if capResponseBody {
                 byteEnd = clampResponseEnd(byteStart: 0, byteEnd: byteEnd, fileSize: fileSize)
+                status = byteEnd >= fileSize - 1 ? 200 : 206
+                phrase = status == 206 ? "Partial Content" : "OK"
+            } else {
+                status = byteEnd >= fileSize - 1 ? 200 : 206
+                phrase = status == 206 ? "Partial Content" : "OK"
             }
-            status = byteEnd >= fileSize - 1 ? 200 : 206
-            phrase = status == 206 ? "Partial Content" : "OK"
         }
 
         let bodyLength = byteEnd - byteStart + 1
@@ -3202,13 +3251,25 @@ enum ExportLANServer {
 
     // MARK: - IPv4
 
-    /// User-visible device label for mDNS (Settings → General → About → Name).
+    private static func resolvedMDNSHostName() -> String {
+        lock.lock()
+        let cached = cachedMDNSHostLabel
+        lock.unlock()
+        if let cached, !cached.isEmpty { return cached }
+        return deviceMDNSHostLabelFromPOSIX()
+    }
+
+    /// User-visible device label for mDNS (Settings → General → About → Name). Main actor only.
     private static func deviceMDNSHostLabel() -> String {
         let deviceName = UIDevice.current.name
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
         if !deviceName.isEmpty {
             return sanitizeMDNSHostLabel(deviceName)
         }
+        return deviceMDNSHostLabelFromPOSIX()
+    }
+
+    private static func deviceMDNSHostLabelFromPOSIX() -> String {
         var buffer = [CChar](repeating: 0, count: 256)
         if gethostname(&buffer, buffer.count) == 0 {
             let host = String(cString: buffer)

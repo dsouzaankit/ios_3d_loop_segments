@@ -188,7 +188,7 @@ The HTML index uses fixed JavaScript timers (embedded at page load; not configur
 | **Manual** | **`GET /status.json`** | Monitor **`/`** only — tap **Refresh status** (no timer). |
 | **Manual** | **`GET /status_lists.json`** | Monitor **`/`** — tap **Refresh file list**. |
 | **`/browse` only** | Auto **60 s** / **120 s** | Full page timers (heavier; avoid during 9 GB+ export). |
-| **On first open** | **`GET /`** | Idle: static links + manual refresh buttons. **During export:** a tiny HTML page with **no links and no JavaScript** (Chrome was prefetching `/browse` and video URLs from the monitor and jetsaming the phone). Type **`/export_latest.txt`** in the address bar for the log; use **WebDAV** for playback. **`/browse`** returns 503 while export runs. |
+| **On first open** | **`GET /`** | Browsers always get **prebuilt HTML** (no Swift assembly, no disk scan, no `href` links). **During export:** text-only instructions. **Idle:** refresh buttons fetch `status.json` / `status_lists.json` on tap only. Type **`/export_latest.txt`** in the address bar for the log; **WebDAV** for playback. **`/browse`** returns 503 while export runs. |
 | **Never auto** | **`GET /export_latest.txt`**, media files, WebDAV | Log/media bytes change on disk only; reload or follow a link to see updates. |
 
 **Every 60 s** (`status.json` while export active) — live export / playback metrics:

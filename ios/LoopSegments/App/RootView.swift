@@ -22,6 +22,7 @@ struct RootView: View {
                 .frame(width: 0, height: 0)
         }
         .onAppear {
+            ExportLANServer.warmCachesOnMainActor()
             LANPhoneInteractionState.update(scenePhase: scenePhase)
             syncLANServices()
         }
