@@ -20,6 +20,8 @@ final class AppSession: ObservableObject {
     private var exportGeneration = 0
     /// Survives leaving Export screen — must not be tied to `ExportView` lifetime.
     private var exportUITask: Task<Void, Never>?
+    private var exportAutoPauseTask: Task<Void, Never>?
+    private static let exportAutoPauseSeconds: TimeInterval = 2 * 60 * 60
 
     /// File key for the export in flight (survives brief `activeExportItem` nil while coordinator winds down).
     var activeExportFileKey: String? {
@@ -205,8 +207,20 @@ final class AppSession: ObservableObject {
         syncExportSessionActive()
         ExportAutoLockCoordinator.exportDidStart()
         ExportBackgroundKeepAlive.shared.beginExportSession(exportTitle: item.name)
+        exportAutoPauseTask?.cancel()
+        exportAutoPauseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(Self.exportAutoPauseSeconds * 1_000_000_000))
+            guard generation == self.exportGeneration else { return }
+            guard self.isExportRunning else { return }
+            guard !self.userRequestedExportPause, !self.userRequestedExportCancel else { return }
+            ExportRuntimeLog.mirror("Auto-pause: 2h reached — pausing export (resume later via Start export).")
+            self.pauseExport()
+        }
         defer {
             if generation == exportGeneration {
+                exportAutoPauseTask?.cancel()
+                exportAutoPauseTask = nil
                 ExportBackgroundKeepAlive.shared.endExportSession()
                 ExportAutoLockCoordinator.exportDidEnd()
                 isExportRunning = false
@@ -289,6 +303,8 @@ final class AppSession: ObservableObject {
 
     /// Stop export and clear paused state (removes loop/ segments; archives root working/vanilla copies).
     func cancelExport() {
+        exportAutoPauseTask?.cancel()
+        exportAutoPauseTask = nil
         cancelExportUITask()
         let cleanupAfterCoordinator = isExportRunning || exportCoordinator.isBusy
         exportGeneration += 1
@@ -339,6 +355,8 @@ final class AppSession: ObservableObject {
     /// Pause export: saves checkpoint, keeps export marked paused, keeps media on disk.
     func pauseExport() {
         guard isExportRunning else { return }
+        exportAutoPauseTask?.cancel()
+        exportAutoPauseTask = nil
         userRequestedExportPause = true
         userRequestedExportCancel = false
         exportCoordinator.userRequestedPause = true
