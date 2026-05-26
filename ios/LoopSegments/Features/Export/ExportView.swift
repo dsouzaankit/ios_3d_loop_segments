@@ -27,6 +27,7 @@ struct ExportView: View {
     @State private var prefetchCutoffMbps = ExportLANServer.backgroundPrefetchCutoffMbps
     @State private var hlsTranscodeCutoffMultiplier = PCloudHLSLink.transcodeCutoffMultiplier
     @State private var vanillaDownloadBackup = VanillaWebDAVDownload.isBackupEnabled
+    @State private var exportAutoPauseMinutes = ExportAutoPauseSettings.timeoutMinutes
     @State private var exportKeepAliveEnabled = ExportKeepAliveSettings.isEnabled
     @State private var exportKeepAliveTimeoutHours = ExportKeepAliveSettings.timeoutHours
     @State private var exportKeepAlivePreferControls = ExportKeepAliveSettings.preferLockScreenControls
@@ -39,6 +40,7 @@ struct ExportView: View {
     var body: some View {
         Form {
             exportControlsSection
+            exportAutoPauseSection
             keepAliveSection
             randomExportTriggerSection
             exportsFolderSection
@@ -313,6 +315,36 @@ struct ExportView: View {
             return "In-progress: pCloud transcode → pcld_ios_media/_working_pcloud_transcode.mp4 (not the original file). Segments: loop/op_*.mp4"
         }
         return "In-progress: index → plain _working link (WebDAV) or browser #t= when seek>0. Segments: pcld_ios_media/loop/op_*.mp4"
+    }
+
+    @ViewBuilder
+    private var exportAutoPauseSection: some View {
+        Section {
+            Picker("Pause export after", selection: $exportAutoPauseMinutes) {
+                ForEach(ExportAutoPauseSettings.timeoutOptionsMinutes, id: \.self) { minutes in
+                    Text(ExportAutoPauseSettings.optionLabel(minutes: minutes))
+                        .tag(minutes)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(session.isExportSessionActive)
+            .onChange(of: exportAutoPauseMinutes) { _, minutes in
+                ExportAutoPauseSettings.timeoutMinutes = minutes
+            }
+            if session.isExportSessionActive {
+                Text("Locked while export is running — applies to the next run.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Auto-pause")
+        } footer: {
+            Text(
+                "While export runs, automatically pauses at the checkpoint after this duration (default 2 hours). " +
+                    "Does not stop or archive — tap Start export to resume. Log line: Auto-pause: … in export_latest.txt."
+            )
+            .font(.footnote)
+        }
     }
 
     @ViewBuilder

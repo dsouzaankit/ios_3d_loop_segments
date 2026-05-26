@@ -21,7 +21,6 @@ final class AppSession: ObservableObject {
     /// Survives leaving Export screen — must not be tied to `ExportView` lifetime.
     private var exportUITask: Task<Void, Never>?
     private var exportAutoPauseTask: Task<Void, Never>?
-    private static let exportAutoPauseSeconds: TimeInterval = 2 * 60 * 60
 
     /// File key for the export in flight (survives brief `activeExportItem` nil while coordinator winds down).
     var activeExportFileKey: String? {
@@ -198,7 +197,7 @@ final class AppSession: ObservableObject {
         activeExportItem = item
         LANExportSourceDisplay.setRunning(item.name)
         let priorResume = ResumeStore.shared.resumeStatus(for: item)
-        // Paused checkpoint resume (incl. 2h auto-pause): keep on-disk media/logs; ignore UI seek drift.
+        // Paused checkpoint resume (incl. timed auto-pause): keep on-disk media/logs; ignore UI seek drift.
         let continueLANExport = priorResume.isPaused && priorResume.effectiveMs > 250
         let seekMsForRun = continueLANExport ? priorResume.effectiveMs : seekMs
         let resumeCursorMs = continueLANExport ? priorResume.effectiveMs : nil
@@ -210,11 +209,11 @@ final class AppSession: ObservableObject {
         exportAutoPauseTask?.cancel()
         exportAutoPauseTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(Self.exportAutoPauseSeconds * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(ExportAutoPauseSettings.timeoutSeconds * 1_000_000_000))
             guard generation == self.exportGeneration else { return }
             guard self.isExportRunning else { return }
             guard !self.userRequestedExportPause, !self.userRequestedExportCancel else { return }
-            ExportRuntimeLog.mirror("Auto-pause: 2h reached — pausing export (resume later via Start export).")
+            ExportRuntimeLog.mirror(ExportAutoPauseSettings.autoPauseLogLine)
             self.pauseExport()
         }
         defer {

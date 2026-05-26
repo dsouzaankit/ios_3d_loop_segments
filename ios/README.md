@@ -102,7 +102,7 @@ Both modes run the **same silent MP3 loop in the background** during export. The
 |--------------|---------|
 | **`completed (end of file)`** / **Reached end of file** | Normal finish — audio stopping afterward is expected. |
 | **`Export interrupted`** / status **`interrupted`** | Reader cancelled mid-run (Wi‑Fi drop, app killed, etc.) — resume with **Start export**. |
-| **`Auto-pause: 2h reached`** | In-app 2 h cap. |
+| **`Auto-pause: … reached`** | In-app cap (Export → **Auto-pause**, default **2 hours**; options 3–150 min). |
 | **`Keep Alive: failed`** / missing MP3 | Bundling bug (fixed **build 190+**), not iOS. |
 | **`Keep Alive: pause from lock screen`** | Lock-screen Pause reached the app; loop should stop. |
 | **`Keep Alive: play — already looping`** | Lock-screen Play while loop already running (normal). |
@@ -115,7 +115,7 @@ Both modes run the **same silent MP3 loop in the background** during export. The
 |-----------|----------------|---------------------------|
 | **`beginBackgroundTask` / renewal** (`BackgroundTaskKeeper`) | Short grace when the app moves to background (~**tens of seconds** per task; Apple discourages chaining). Used so export can finish a slice of work after lock, **not** to extend runtime by 30+ minutes. | **No** — do not rely on this past a brief transition. |
 | **`UIBackgroundModes` → `audio`** + **Keep Alive** | While the app is **actually playing audio** (muted silence loop) with an active **playback** audio session, iOS treats the app like a music player and may keep it running **much longer** than an idle background app. | **Best effort** — this is the intended path for lock-screen export; still not a guarantee (Low Power Mode, memory pressure, audio interrupted by another app, system kill). |
-| **2 h auto-pause** (in-app) | Deliberate cap: **`Auto-pause: 2h reached`** in **`export_latest.txt`**. | N/A (by design). |
+| **Export auto-pause** (in-app) | Deliberate cap: pauses at checkpoint after the chosen duration (default **2 h**; Export screen picker: 3, 5, 15, 30, 60, 90, 120, 150 min). Log: **`Auto-pause: … reached`** in **`export_latest.txt`**. | N/A (by design). |
 
 **There is no API to request “another 30 minutes” of generic background time.** iOS does not grant stacked 30-minute extensions via `beginBackgroundTask`. Long runs depend on **Keep Alive audio** (and stable Wi‑Fi for WebDAV reads), not on background-task renewal.
 
