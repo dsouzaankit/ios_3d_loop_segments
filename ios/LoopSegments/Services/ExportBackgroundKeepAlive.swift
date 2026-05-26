@@ -121,7 +121,7 @@ final class ExportBackgroundKeepAlive: NSObject {
         ]
         if let timeout = ExportKeepAliveSettings.timeoutSeconds {
             let remaining = max(0, timeout - Date().timeIntervalSince(startedAt))
-            info[MPNowPlayingInfoPropertyPlaybackDuration] = remaining
+            info[MPMediaItemPropertyPlaybackDuration] = remaining
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
