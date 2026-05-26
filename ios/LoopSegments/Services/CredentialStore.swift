@@ -14,6 +14,9 @@ final class CredentialStore {
         SecItemDelete(query as CFDictionary)
         var add = query
         add[kSecValueData as String] = data
+        // Allow reading while the phone is locked (after first unlock),
+        // so LAN WebDAV proxy navigation can still reach pCloud.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(add as CFDictionary, nil)
     }
 
