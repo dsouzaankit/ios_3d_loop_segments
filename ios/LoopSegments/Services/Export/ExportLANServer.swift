@@ -1450,7 +1450,7 @@ enum ExportLANServer {
     /// Plain `href` for WebDAV / PotPlayer; separate browser link with `#t=` when export seek &gt; 0.
     private static func lanIndexPlaybackLinks(relativePath name: String, resumeStartSec: Int) -> String {
         let escaped = htmlEscape(name)
-        if omitVideoHrefOnLANIndex(name) {
+        if omitVideoHrefOnLANIndex(relativePath: name) {
             return "<code>\(escaped)</code>"
         }
         let primary = "<a href=\"\(escaped)\">\(escaped)</a>"
@@ -1737,7 +1737,7 @@ enum ExportLANServer {
             }
             if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
                 let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
-                let link = omitVideoHrefOnLANIndex(name)
+                let link = omitVideoHrefOnLANIndex(relativePath: name)
                     ? "<code>\(escaped)</code>"
                     : "<a href=\"\(escaped)\">\(escaped)</a>"
                 items.append(
