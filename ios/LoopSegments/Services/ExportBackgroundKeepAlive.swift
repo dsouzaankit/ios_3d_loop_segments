@@ -281,6 +281,8 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             MPMediaItemPropertyArtwork: Self.lockScreenArtwork,
         ]
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        // Nudges iOS to surface this session on lock screen / Control Center.
+        MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
     }
 
     private func startNowPlayingRefresh() {
