@@ -36,14 +36,6 @@ enum ExportPaths {
         return dir
     }
 
-    /// Silent Keep Alive loop audio — not in Files / USB (Application Support only).
-    static var keepAliveAudioDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("LoopSegmentsKeepAlive", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-
     /// LAN export triggers and PC scripts — `pcld_ios_media/scripts/`.
     static var lanExportScriptsDirectory: URL {
         let dir = mediaExportDirectory.appendingPathComponent("scripts", isDirectory: true)

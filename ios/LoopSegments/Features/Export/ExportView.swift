@@ -38,6 +38,8 @@ struct ExportView: View {
     var body: some View {
         Form {
             exportControlsSection
+            keepAliveSection
+            randomExportTriggerSection
             exportsFolderSection
             if !status.isEmpty {
                 Section("Status") {
@@ -191,64 +193,6 @@ struct ExportView: View {
                 Text(item.name)
                 Text(item.href).font(.caption).foregroundStyle(.secondary)
             }
-            Section("During export") {
-                Toggle("Keep Alive (lock screen)", isOn: $exportKeepAliveEnabled)
-                    .onChange(of: exportKeepAliveEnabled) { _, enabled in
-                        ExportKeepAliveSettings.isEnabled = enabled
-                        if enabled, session.isExportActive(for: item) {
-                            ExportBackgroundKeepAlive.shared.startIfEnabled(exportTitle: item.name)
-                        } else if !enabled {
-                            ExportBackgroundKeepAlive.shared.stopForUserSettingOff()
-                        }
-                    }
-                if exportKeepAliveEnabled {
-                    Picker("Keep Alive duration", selection: $exportKeepAliveTimeoutHours) {
-                        ForEach(ExportKeepAliveSettings.timeoutOptions, id: \.hours) { option in
-                            Text(option.label).tag(option.hours)
-                        }
-                    }
-                    .onChange(of: exportKeepAliveTimeoutHours) { _, hours in
-                        ExportKeepAliveSettings.timeoutHours = hours
-                    }
-                    Text(
-                        "While export runs, loops a 1-minute silent track titled “Keep Alive” on the lock screen " +
-                            "(Now Playing). Pause stops audio; Stop ends the loop; Play restarts it — export keeps going " +
-                            "until you pause/stop in the app. LAN :8765 and triggers stay up while export runs (locked OK). " +
-                            "iOS may still suspend in Low Power Mode."
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    if ExportBackgroundKeepAlive.shared.isActive {
-                        Text("Keep Alive is playing — lock the phone to see Now Playing.")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    } else if session.isExportActive(for: item),
-                              let err = ExportBackgroundKeepAlive.shared.lastStartError {
-                        Text("Keep Alive failed: \(err)")
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    } else if exportKeepAliveEnabled {
-                        Text("Turn on before Start export. After export starts, lock the phone — check Control Center if the lock screen card is hidden.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text(
-                        "Without Keep Alive, keep the app in the foreground; locking or backgrounding can stop export."
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                }
-                Button("Open Display in Settings") {
-                    Task {
-                        _ = await ExportAutoLockCoordinator.openAutoLockSettings()
-                        showAutoLockHelp = true
-                    }
-                }
-                Text("Screen stays on while Loop Segments is open in the foreground. Path: \(ExportAutoLockCoordinator.manualPath).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
             Section("Output files") {
                 Text("Logs (Files/USB): \(ExportPaths.exportsDirectory.path)")
                 Text("Media (LAN only): Application Support/\(ExportPaths.mediaExportFolderName)/")
@@ -370,7 +314,83 @@ struct ExportView: View {
     }
 
     @ViewBuilder
-    private var alternateExportSection: some View {
+    private var keepAliveSection: some View {
+        Section("Keep Alive") {
+            Toggle("Keep Alive (lock screen)", isOn: $exportKeepAliveEnabled)
+                .onAppear {
+                    if exportKeepAliveEnabled {
+                        ExportBackgroundKeepAlive.shared.prepareAudioSessionIfEnabled()
+                    }
+                }
+                .onChange(of: exportKeepAliveEnabled) { _, enabled in
+                    ExportKeepAliveSettings.isEnabled = enabled
+                    if enabled {
+                        ExportBackgroundKeepAlive.shared.prepareAudioSessionIfEnabled()
+                        if session.isExportActive(for: item) {
+                            ExportBackgroundKeepAlive.shared.startIfEnabled(exportTitle: item.name)
+                        }
+                    } else {
+                        ExportBackgroundKeepAlive.shared.stopForUserSettingOff()
+                    }
+                }
+            if exportKeepAliveEnabled {
+                Picker("Keep Alive duration", selection: $exportKeepAliveTimeoutHours) {
+                    ForEach(ExportKeepAliveSettings.timeoutOptions, id: \.hours) { option in
+                        Text(option.label).tag(option.hours)
+                    }
+                }
+                .onChange(of: exportKeepAliveTimeoutHours) { _, hours in
+                    ExportKeepAliveSettings.timeoutHours = hours
+                }
+                Text(
+                    "While export runs, silent loop audio shows “Keep Alive” on the lock screen (Now Playing). " +
+                        "Turn on before Start export. If start fails, check export_latest.txt for the step (setCategory / setActive / player / engine). " +
+                        "LAN :8765 and triggers stay up while export runs (locked OK). iOS may still suspend in Low Power Mode."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                if ExportBackgroundKeepAlive.shared.isActive {
+                    Text("Keep Alive is playing — lock the phone to see Now Playing.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                } else if session.isExportActive(for: item),
+                          let err = ExportBackgroundKeepAlive.shared.lastStartError {
+                    Text("Keep Alive failed: \(err)")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                } else if exportKeepAliveEnabled {
+                    Text("Turn on before Start export. After export starts, lock the phone — check Control Center if the lock screen card is hidden.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text(
+                    "Without Keep Alive, keep the app in the foreground; locking or backgrounding can stop export."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            }
+            Button("Open Display in Settings") {
+                Task {
+                    _ = await ExportAutoLockCoordinator.openAutoLockSettings()
+                    showAutoLockHelp = true
+                }
+            }
+            Text("Screen stays on while Loop Segments is open in the foreground. Path: \(ExportAutoLockCoordinator.manualPath).")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var randomExportTriggerSection: some View {
+        Section("Export another file") {
+            alternateExportControls
+        }
+    }
+
+    @ViewBuilder
+    private var alternateExportControls: some View {
         Picker("Random pool", selection: $alternateExportSource) {
             ForEach(AlternateExportFileSource.allCases) { source in
                 Text(source.label).tag(source)

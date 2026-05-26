@@ -66,6 +66,8 @@ final class ExportCoordinator {
         let logHandler: (String) -> Void = { line in
             logWriter.log(line)
         }
+        ExportRuntimeLog.setMirror(logHandler)
+        defer { ExportRuntimeLog.setMirror(nil) }
 
         BackgroundTaskKeeper.begin()
         defer { BackgroundTaskKeeper.end() }
