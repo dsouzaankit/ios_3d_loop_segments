@@ -232,7 +232,9 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            // Keep Alive wants to reliably surface as the active Now Playing session on lock screen.
+            // Mixing often causes iOS to keep showing another app’s controls (even though audio is playing).
+            try session.setCategory(.playback, mode: .default, options: [])
         } catch {
             throw KeepAliveFailure.stage("setCategory", error)
         }
