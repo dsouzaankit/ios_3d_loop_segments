@@ -766,6 +766,9 @@ enum ExportLANServer {
         for rel in ExportPaths.lanBrowsableMediaRelativePaths() {
             names.insert(rel)
         }
+        for rel in ExportPaths.listExportHistoryLogRelativePaths() {
+            names.insert(rel)
+        }
         return names
     }
 
@@ -1301,6 +1304,7 @@ enum ExportLANServer {
         for candidate in lanMediaRelativePathCandidates(relativePath) {
             let allowed = ExportPaths.isLANBrowsableMediaRelativePath(candidate)
                 || ExportPaths.isLANMediaTreeServableRelativePath(candidate)
+                || ExportPaths.isLANExportHistoryLogRelativePath(candidate)
                 || rootServableRelativePaths().contains(candidate)
             guard allowed else { continue }
             let url = ExportPaths.urlUnderExports(relativePath: candidate)

@@ -6,8 +6,8 @@ final class ExportLogWriter: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.loopsegments.export-log")
     private let primaryURL: URL
-    private let archiveURL: URL
-    private let sessionURL: URL
+    /// Per-run history kept under `Exports/logs/` (not deleted when the next export starts).
+    private let historyURL: URL
     private let progressURL: URL
     private var text: String
     private var lastFlushError: String?
@@ -21,8 +21,7 @@ final class ExportLogWriter: @unchecked Sendable {
         ExportPaths.ensureExportDirectories()
         let stamp = Int(Date().timeIntervalSince1970)
         primaryURL = ExportPaths.latestLogTextURL
-        archiveURL = ExportPaths.logsDirectory.appendingPathComponent("export_\(stamp).txt")
-        sessionURL = ExportPaths.exportsDirectory.appendingPathComponent("export_session_\(stamp).txt")
+        historyURL = ExportPaths.logsDirectory.appendingPathComponent("export_\(stamp).txt")
         progressURL = ExportPaths.exportProgressURL
 
         text = """
@@ -67,8 +66,8 @@ final class ExportLogWriter: @unchecked Sendable {
         }
     }
 
-    var sessionLogFileName: String {
-        sessionURL.lastPathComponent
+    var historyLogFileName: String {
+        "logs/\(historyURL.lastPathComponent)"
     }
 
     // MARK: - Private
@@ -89,8 +88,7 @@ final class ExportLogWriter: @unchecked Sendable {
         guard !data.isEmpty else { return }
 
         try Self.writeAtomically(data, to: primaryURL)
-        try Self.writeAtomically(data, to: archiveURL)
-        try Self.writeAtomically(data, to: sessionURL)
+        try Self.writeAtomically(data, to: historyURL)
         try Self.writeAtomically(data, to: ExportPaths.latestLogURL)
 
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
@@ -99,9 +97,6 @@ final class ExportLogWriter: @unchecked Sendable {
             let progress = lines.suffix(Self.progressLineCount).joined(separator: "\n") + "\n"
             try progress.write(to: progressURL, atomically: true, encoding: .utf8)
         }
-
-        let logArchive = archiveURL.deletingPathExtension().appendingPathExtension("log")
-        try Self.writeAtomically(data, to: logArchive)
         lastFlushError = nil
     }
 

@@ -86,9 +86,14 @@ final class ExportCoordinator {
                     "(pCloud basename[_3D_<n>K]_<local-time>; keeping last \(ExportMediaArchive.retentionCount) batches; loop/ ignored)"
             )
         } else {
-            logHandler("Export started — cleared prior export_latest.txt / export_progress.txt / old session logs")
+            logHandler(
+                "Export started — cleared export_latest.txt / export_progress.txt " +
+                    "(kept logs/export_*.txt history, last \(ExportPaths.exportLogRetentionCount) runs)"
+            )
         }
-        logHandler("Logs: export_latest.txt, \(logWriter.sessionLogFileName), export_progress.txt (in Exports)")
+        logHandler(
+            "Logs: export_latest.txt (live), \(logWriter.historyLogFileName) (this run, kept), export_progress.txt"
+        )
         logHandler("pCloud region: \(credentials.region.displayName) (\(credentials.region.webDAVHost))")
         let authProvider = WebDAVAuth.provider(fallback: credentials)
         logHandler("Verifying file access (HEAD)…")

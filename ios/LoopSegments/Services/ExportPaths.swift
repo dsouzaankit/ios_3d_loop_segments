@@ -124,6 +124,9 @@ enum ExportPaths {
         exportsDirectory.appendingPathComponent(segmentPattern).path
     }
 
+    /// How many `logs/export_<unix>.txt` files to keep (oldest removed after each new export).
+    static let exportLogRetentionCount = 40
+
     /// Under `Exports/` so USB / Apple Devices on Windows can see logs (sibling `Documents/Logs` is often hidden).
     static var logsDirectory: URL {
         let dir = exportsDirectory.appendingPathComponent("logs", isDirectory: true)
@@ -612,14 +615,69 @@ enum ExportPaths {
         return removed
     }
 
-    /// Export + search logs under `Exports/` (keeps `loop_segments_ok.txt`).
+    /// Relative paths under `Exports/` for retained per-run logs (`logs/export_<unix>.txt`).
+    static func listExportHistoryLogRelativePaths() -> [String] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) else { return [] }
+        return names
+            .filter { $0.hasPrefix("export_") && $0.hasSuffix(".txt") }
+            .sorted(by: >)
+            .map { "logs/\($0)" }
+    }
+
+    static func isLANExportHistoryLogRelativePath(_ relativePath: String) -> Bool {
+        relativePath.hasPrefix("logs/export_") && relativePath.hasSuffix(".txt")
+    }
+
+    /// Move legacy duplicate `export_session_*.txt` into `logs/` once (same content as history).
+    static func migrateLegacyExportSessionLogs(log: ((String) -> Void)? = nil) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: exportsDirectory.path) else { return }
+        for name in names where name.hasPrefix("export_session_") && name.hasSuffix(".txt") {
+            let legacy = exportsDirectory.appendingPathComponent(name)
+            let stamp = name.dropFirst("export_session_".count).dropLast(".txt".count)
+            let dest = logsDirectory.appendingPathComponent("export_\(stamp).txt")
+            if fm.fileExists(atPath: dest.path) {
+                try? fm.removeItem(at: legacy)
+                log?("Removed legacy duplicate \(name) (history already in logs/)")
+                continue
+            }
+            do {
+                try fm.moveItem(at: legacy, to: dest)
+                log?("Moved legacy \(name) → logs/\(dest.lastPathComponent)")
+            } catch {
+                log?("Could not migrate \(name): \(error.localizedDescription)")
+            }
+        }
+    }
+
     @discardableResult
-    static func clearExportLogs(log: ((String) -> Void)? = nil) -> Int {
-        _ = exportsDirectory
-        _ = logsDirectory
+    static func pruneExportLogHistory(log: ((String) -> Void)? = nil) -> Int {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) else { return 0 }
+        let sorted = names
+            .filter { $0.hasPrefix("export_") && ($0.hasSuffix(".txt") || $0.hasSuffix(".log")) }
+            .sorted(by: >)
+        var removed = 0
+        guard sorted.count > exportLogRetentionCount else { return 0 }
+        for name in sorted.dropFirst(exportLogRetentionCount) {
+            let url = logsDirectory.appendingPathComponent(name)
+            do {
+                try fm.removeItem(at: url)
+                removed += 1
+                log?("Pruned old log logs/\(name)")
+            } catch {
+                log?("Could not prune logs/\(name): \(error.localizedDescription)")
+            }
+        }
+        return removed
+    }
+
+    /// Clears live pointers only (`export_latest*`, `export_progress.txt`) — keeps `logs/export_*.txt` history.
+    @discardableResult
+    static func clearCurrentExportLogPointers(log: ((String) -> Void)? = nil) -> Int {
         let fm = FileManager.default
         var removed = 0
-
         for url in [latestLogTextURL, latestLogURL, exportProgressURL] {
             guard fm.fileExists(atPath: url.path) else { continue }
             do {
@@ -630,11 +688,20 @@ enum ExportPaths {
                 log?("Could not clear \(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
+        return removed
+    }
+
+    /// Export + search logs under `Exports/` (keeps `loop_segments_ok.txt`).
+    @discardableResult
+    static func clearExportLogs(log: ((String) -> Void)? = nil) -> Int {
+        _ = exportsDirectory
+        _ = logsDirectory
+        var removed = clearCurrentExportLogPointers(log: log)
 
         let searchDebug = exportsDirectory.appendingPathComponent("search_debug.txt")
-        if fm.fileExists(atPath: searchDebug.path) {
+        if FileManager.default.fileExists(atPath: searchDebug.path) {
             do {
-                try fm.removeItem(at: searchDebug)
+                try FileManager.default.removeItem(at: searchDebug)
                 removed += 1
                 log?("Cleared \(searchDebug.lastPathComponent)")
             } catch {
@@ -642,11 +709,11 @@ enum ExportPaths {
             }
         }
 
-        if let names = try? fm.contentsOfDirectory(atPath: exportsDirectory.path) {
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: exportsDirectory.path) {
             for name in names where name.hasPrefix("export_session_") {
                 let url = exportsDirectory.appendingPathComponent(name)
                 do {
-                    try fm.removeItem(at: url)
+                    try FileManager.default.removeItem(at: url)
                     removed += 1
                     log?("Cleared \(name)")
                 } catch {
@@ -655,11 +722,11 @@ enum ExportPaths {
             }
         }
 
-        if let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) {
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: logsDirectory.path) {
             for name in names where name.hasPrefix("export_") {
                 let url = logsDirectory.appendingPathComponent(name)
                 do {
-                    try fm.removeItem(at: url)
+                    try FileManager.default.removeItem(at: url)
                     removed += 1
                     log?("Cleared logs/\(name)")
                 } catch {
@@ -670,9 +737,11 @@ enum ExportPaths {
         return removed
     }
 
-    /// Remove prior export log snapshots so `export_latest.txt` / `export_progress.txt` only reflect this run.
+    /// New export: reset live log files only; retain and prune `logs/export_*.txt` history.
     static func clearLogsForNewExport(log: ((String) -> Void)? = nil) {
-        _ = clearExportLogs(log: log)
+        migrateLegacyExportSessionLogs(log: log)
+        _ = clearCurrentExportLogPointers(log: log)
+        _ = pruneExportLogHistory(log: log)
     }
 
     /// Names and sizes of media files for post-export logs (media is private; logs stay under Documents/Exports).
@@ -704,6 +773,7 @@ enum ExportPaths {
         _ = lanExportScriptsDirectory
         _ = logsDirectory
         migrateLegacyExportFilenames()
+        migrateLegacyExportSessionLogs()
         SearchDebugLog.ensureReady()
         let probe = exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
         let text = "Loop Segments \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") \(ISO8601DateFormatter().string(from: Date()))\n"

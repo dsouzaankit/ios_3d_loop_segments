@@ -744,7 +744,10 @@ struct ExportView: View {
         let latestBytes = fileByteCount(latest)
         let progressBytes = fileByteCount(progress)
         let probeBytes = fileByteCount(probe)
-        logHint = "export_latest.txt \(latestBytes) B · export_progress.txt \(progressBytes) B · ok.txt \(probeBytes) B"
+        let historyCount = ExportPaths.listExportHistoryLogRelativePaths().count
+        logHint =
+            "export_latest.txt \(latestBytes) B · export_progress.txt \(progressBytes) B · " +
+            "logs/ \(historyCount) saved run(s) · ok.txt \(probeBytes) B"
     }
 
     private func fileByteCount(_ url: URL) -> Int64 {
