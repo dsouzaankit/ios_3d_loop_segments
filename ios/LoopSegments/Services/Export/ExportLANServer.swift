@@ -488,6 +488,11 @@ enum ExportLANServer {
         return false
     }
 
+    /// `GET /` monitor HTML for any non-WebDAV client (Cursor fetch, curl, browsers without `Accept: text/html`).
+    private static func shouldServeMinimalMonitorHTML(requestHeaders: String) -> Bool {
+        !isWebDAVClient(requestHeaders: requestHeaders)
+    }
+
     private static func lanWebDAVAuthHeaderLines() -> [String] {
         ["WWW-Authenticate: Basic realm=\"\(lanWebDAVRealm)\""]
     }
@@ -535,7 +540,7 @@ enum ExportLANServer {
     ) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
-            if isBrowserLikeRequest(requestHeaders: requestHeaders) {
+            if shouldServeMinimalMonitorHTML(requestHeaders: requestHeaders) {
                 sendMinimalIndexHTML(connection, done: done)
                 return
             }
@@ -715,7 +720,7 @@ enum ExportLANServer {
             let playback = ExportPaths.listLANPlaybackIndexRelativePaths(maxArchiveEntries: archiveCap)
                 .compactMap { exportFileEntry(relativePath: $0) }
             let logCap = exportActive ? 4 : 24
-            let logs = ExportPaths.listLANLogIndexRelativePaths()
+            let logs = ExportPaths.listLANLogIndexRelativePaths(maxHistoryEntries: logCap)
                 .prefix(logCap)
                 .compactMap { exportFileEntry(relativePath: $0) }
             return LANIndexSnapshot(playback: playback, logs: logs, builtAt: Date())
@@ -876,7 +881,27 @@ enum ExportLANServer {
     }
 
     private static func mediaPropfindChildDepthLimit(from depth: Int) -> Int {
-        depth == 2 ? 999 : depth
+        let requested = depth >= 2 ? 2 : max(0, depth)
+        if ExportPlaybackState.shared.isLANExportActive {
+            return min(requested, 1)
+        }
+        return min(requested, 3)
+    }
+
+    /// Root PROPFIND/GET-DAV children — light path during export (no archive scan / full log sort).
+    private static func propfindRootChildEntries() -> [ExportFileEntry] {
+        if ExportPlaybackState.shared.isLANExportActive {
+            return propfindRootChildEntriesDuringExport()
+        }
+        return listExportFilesForPlaybackIndex() + listExportLogEntriesForLANIndex()
+    }
+
+    private static func propfindRootChildEntriesDuringExport() -> [ExportFileEntry] {
+        autoreleasepool {
+            let paths = ExportPaths.listLANPlaybackIndexRelativePaths(maxArchiveEntries: 0)
+                + ExportPaths.listLANLogIndexRelativePaths(maxHistoryEntries: 4)
+            return paths.compactMap { exportFileEntry(relativePath: $0) }
+        }
     }
 
     private static func appendMediaDirectoryPropfind(
@@ -1352,7 +1377,8 @@ enum ExportLANServer {
                         modified: nil
                     )
                 )
-                for entry in listExportFilesForPlaybackIndex() + listExportLogEntriesForLANIndex() {
+                let entries = propfindRootChildEntries()
+                for entry in entries {
                     responses.append(
                         propfindEntryXML(
                             href: davListingHref(path: "/\(entry.name)", isCollection: false),
@@ -1479,6 +1505,24 @@ enum ExportLANServer {
             <button type="button" id="export-resume"\(resumeHidden)>Start export</button>
             <button type="button" id="export-pause"\(pauseHidden)\(pauseStopDisabledAttr)\(pauseStopTitleAttr)>Pause export</button>
             <button type="button" id="export-stop"\(pauseStopDisabledAttr)\(pauseStopTitleAttr)>Stop export</button>
+          </div>
+        </div>
+        """
+    }
+
+    /// Empty export-source bar for `GET /` (filled only via manual **Refresh status** → `status.json`).
+    private static func htmlExportSourceLineShell() -> String {
+        """
+        <div id="lan-export-source-wrap" class="export-source-line" style="display:none">
+          <div class="export-source-main">
+            <strong id="lan-export-source-label">Export source:</strong>
+            <span id="lan-export-source-name"></span>
+            <p id="lan-pause-stop-hint" class="lan-pause-stop-hint" style="display:none"></p>
+          </div>
+          <div class="export-source-actions" id="lan-export-source-actions" style="display:none">
+            <button type="button" id="export-resume" style="display:none">Start export</button>
+            <button type="button" id="export-pause" style="display:none">Pause export</button>
+            <button type="button" id="export-stop" style="display:none">Stop export</button>
           </div>
         </div>
         """
@@ -1936,59 +1980,61 @@ enum ExportLANServer {
 
     /// Lightweight monitor page (playback + logs + pause/stop). No embedded pCloud browser.
     private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        let html = """
-            <!DOCTYPE html>
-            <html lang="en"><head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Loop Segments — LAN monitor</title>
-            <style>
-            body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
-            code { font-size: 0.9em; }
-            ul { padding-left: 1.25rem; }
-            .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
-            .export-source-line.is-active { background: #fffbea; border-color: #c8a415; }
-            .export-source-line.is-paused { background: #fff5f0; border-color: #d08050; }
-            .export-source-main { flex: 1 1 12rem; min-width: 0; }
-            .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-            .export-source-line #lan-export-source-name { word-break: break-all; }
-            .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; }
-            .lan-playback-logs-scroll { max-height: calc(5 * 1.75lh); overflow: auto; border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem 0.4rem; }
-            .lan-pause-stop-hint { margin: 0.35rem 0 0; font-size: 0.88em; color: #8a4b00; }
-            button:disabled { opacity: 0.55; cursor: not-allowed; }
-            </style>
-            </head><body>
-            <h1>Loop Segments — LAN monitor</h1>
-            <p><a href="/browse">Open pCloud browser &amp; export controls</a> · <a href="export_latest.txt">export_latest.txt</a></p>
-            <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status">
-              <strong id="lan-export-pending-title">Processing export request</strong>
-              <span id="lan-export-pending-detail">Keep Loop Segments open in the foreground on the phone.</span>
-            </div>
-            \(htmlExportSourceLineBlock())
-            <div id="lan-playback-status">\(htmlPlaybackStatusShell())</div>
-            <p class="muted">No auto-refresh (tap buttons). Use direct log link while export runs.</p>
-            <p>
-              <button type="button" id="lan-refresh-status">Refresh status</button>
-              <button type="button" id="lan-refresh-lists">Refresh file list</button>
-            </p>
-            <h2>On phone (playback)</h2>
-            <ul id="lan-playback-files">
-            \(htmlMonitorStaticPlaybackLinks())
-            </ul>
-            <h3>Export logs</h3>
-            <div class="lan-playback-logs-scroll"><ul id="lan-export-logs">
-            <li><a href="export_latest.txt">export_latest.txt</a></li>
-            </ul></div>
-            \(htmlMonitorManualRefreshScript())
-            </body></html>
-            """
-        sendResponse(
-            connection: connection,
-            status: 200,
-            contentType: "text/html; charset=utf-8",
-            body: Data(html.utf8),
-            done: done
-        )
+        autoreleasepool {
+            let html = """
+                <!DOCTYPE html>
+                <html lang="en"><head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>Loop Segments — LAN monitor</title>
+                <style>
+                body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
+                code { font-size: 0.9em; }
+                ul { padding-left: 1.25rem; }
+                .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
+                .export-source-line.is-active { background: #fffbea; border-color: #c8a415; }
+                .export-source-line.is-paused { background: #fff5f0; border-color: #d08050; }
+                .export-source-main { flex: 1 1 12rem; min-width: 0; }
+                .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+                .export-source-line #lan-export-source-name { word-break: break-all; }
+                .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; }
+                .lan-playback-logs-scroll { max-height: calc(5 * 1.75lh); overflow: auto; border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem 0.4rem; }
+                .lan-pause-stop-hint { margin: 0.35rem 0 0; font-size: 0.88em; color: #8a4b00; }
+                button:disabled { opacity: 0.55; cursor: not-allowed; }
+                </style>
+                </head><body>
+                <h1>Loop Segments — LAN monitor</h1>
+                <p><a href="/browse">Open pCloud browser &amp; export controls</a> · <a href="export_latest.txt">export_latest.txt</a></p>
+                <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status">
+                  <strong id="lan-export-pending-title">Processing export request</strong>
+                  <span id="lan-export-pending-detail">Keep Loop Segments open in the foreground on the phone.</span>
+                </div>
+                \(htmlExportSourceLineShell())
+                <div id="lan-playback-status">\(htmlPlaybackStatusShell())</div>
+                <p class="muted">No auto-refresh (tap buttons). Use direct log link while export runs.</p>
+                <p>
+                  <button type="button" id="lan-refresh-status">Refresh status</button>
+                  <button type="button" id="lan-refresh-lists">Refresh file list</button>
+                </p>
+                <h2>On phone (playback)</h2>
+                <ul id="lan-playback-files">
+                \(htmlMonitorStaticPlaybackLinks())
+                </ul>
+                <h3>Export logs</h3>
+                <div class="lan-playback-logs-scroll"><ul id="lan-export-logs">
+                <li><a href="export_latest.txt">export_latest.txt</a></li>
+                </ul></div>
+                \(htmlMonitorManualRefreshScript())
+                </body></html>
+                """
+            sendResponse(
+                connection: connection,
+                status: 200,
+                contentType: "text/html; charset=utf-8",
+                body: Data(html.utf8),
+                done: done
+            )
+        }
     }
 
     /// Full LAN page with pCloud folder browser (heavier — use `/` for monitor-only).

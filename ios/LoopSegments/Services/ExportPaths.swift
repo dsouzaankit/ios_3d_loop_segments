@@ -332,25 +332,31 @@ enum ExportPaths {
             }
         }
 
-        let archiveDir = mediaExportDirectory.appendingPathComponent("archive", isDirectory: true)
-        if fm.fileExists(atPath: archiveDir.path),
-           let names = try? fm.contentsOfDirectory(atPath: archiveDir.path) {
-            let videos = names.filter { isLANBrowsableMediaFile(fileName: $0) }
-            let capped = cappedNewestArchiveFileNames(in: archiveDir, names: videos, limit: maxArchiveEntries)
-            for name in capped {
-                appendFileIfPresent(archiveDir.appendingPathComponent(name))
+        if maxArchiveEntries > 0 {
+            let archiveDir = mediaExportDirectory.appendingPathComponent("archive", isDirectory: true)
+            if fm.fileExists(atPath: archiveDir.path),
+               let names = try? fm.contentsOfDirectory(atPath: archiveDir.path) {
+                let videos = names.filter { isLANBrowsableMediaFile(fileName: $0) }
+                let capped = cappedNewestArchiveFileNames(in: archiveDir, names: videos, limit: maxArchiveEntries)
+                for name in capped {
+                    appendFileIfPresent(archiveDir.appendingPathComponent(name))
+                }
             }
         }
         return paths
     }
 
     /// Live + history log paths for the LAN index (logs folder only).
-    static func listLANLogIndexRelativePaths() -> [String] {
+    static func listLANLogIndexRelativePaths(maxHistoryEntries: Int? = nil) -> [String] {
         var paths = [
             pathRelativeToExports(latestLogTextURL),
             pathRelativeToExports(exportProgressURL),
         ]
-        paths.append(contentsOf: listExportHistoryLogRelativePaths())
+        var history = listExportHistoryLogRelativePaths()
+        if let maxHistoryEntries, maxHistoryEntries >= 0, history.count > maxHistoryEntries {
+            history = Array(history.prefix(maxHistoryEntries))
+        }
+        paths.append(contentsOf: history)
         return paths
     }
 

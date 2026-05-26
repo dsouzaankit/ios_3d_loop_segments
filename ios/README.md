@@ -188,7 +188,7 @@ The HTML index uses fixed JavaScript timers (embedded at page load; not configur
 | **Manual** | **`GET /status.json`** | Monitor **`/`** only — tap **Refresh status** (no timer). |
 | **Manual** | **`GET /status_lists.json`** | Monitor **`/`** — tap **Refresh file list**. |
 | **`/browse` only** | Auto **60 s** / **120 s** | Full page timers (heavier; avoid during 9 GB+ export). |
-| **On first open** | **`GET /`** | Static links (log, `loop/`, `_working*`) — **no** background fetch until you tap refresh. |
+| **On first open** | **`GET /`** | Static links (log, `loop/`, `_working*`) — **no** JSON, **no** archive scan, **no** background fetch until you tap refresh. Non-WebDAV clients (browser, Cursor, curl) get this HTML; Skybox/WebDAV still get a minimal DAV listing on `GET /`. |
 | **Never auto** | **`GET /export_latest.txt`**, media files, WebDAV | Log/media bytes change on disk only; reload or follow a link to see updates. |
 
 **Every 60 s** (`status.json` while export active) — live export / playback metrics:
