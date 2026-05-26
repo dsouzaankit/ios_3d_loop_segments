@@ -194,12 +194,14 @@ struct ExportView: View {
                 Text(item.href).font(.caption).foregroundStyle(.secondary)
             }
             Section("Output files") {
-                Text("Logs (Files/USB): \(ExportPaths.exportsDirectory.path)")
-                Text("Media (LAN only): Application Support/\(ExportPaths.mediaExportFolderName)/")
+                Text("Logs + media (LAN only): Application Support/\(ExportPaths.mediaExportFolderName)/")
                     .font(.caption)
+                Text("Files app: Exports/loop_segments_ok.txt only (safe to delete rest of Exports/)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Text("Segments: pcld_ios_media/loop/op_00|01.mp4")
                 Text("Working copy: pcld_ios_media/_working.mp4 (sparse while export runs)")
-                Text(logHint.isEmpty ? "Logs: export_latest.txt · export_progress.txt" : logHint)
+                Text(logHint.isEmpty ? "Logs: pcld_ios_media/logs/export_latest.txt" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if !liveLogTail.isEmpty {
@@ -754,8 +756,8 @@ struct ExportView: View {
         let probeBytes = fileByteCount(probe)
         let historyCount = ExportPaths.listExportHistoryLogRelativePaths().count
         logHint =
-            "export_latest.txt \(latestBytes) B · export_progress.txt \(progressBytes) B · " +
-            "logs/ \(historyCount) saved run(s) · ok.txt \(probeBytes) B"
+            "pcld_ios_media/logs/export_latest.txt \(latestBytes) B · export_progress \(progressBytes) B · " +
+            "\(historyCount) saved run(s) · Files ok.txt \(probeBytes) B"
     }
 
     private func fileByteCount(_ url: URL) -> Int64 {

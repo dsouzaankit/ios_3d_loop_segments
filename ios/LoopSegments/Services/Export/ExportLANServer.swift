@@ -3,7 +3,7 @@ import Foundation
 import Network
 import UIKit
 
-/// Serves export logs from `Documents/Exports/` and media from private `Application Support/pcld_ios_media/` on the LAN (HTTP + WebDAV).
+/// Serves export logs and media from private `Application Support/pcld_ios_media/` on the LAN (HTTP + WebDAV).
 /// `pcld_ios_media/` accepts authenticated PUT/MKCOL for PC scripts and nested folders; export pipeline paths stay read-only.
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
@@ -680,9 +680,8 @@ enum ExportLANServer {
     private static let archivePlaybackPrefix = "\(ExportPaths.mediaExportFolderName)/archive/"
 
     private static func isLANExportLogRelativePath(_ relativePath: String) -> Bool {
-        relativePath == ExportPaths.latestLogTextURL.lastPathComponent
-            || relativePath == ExportPaths.exportProgressURL.lastPathComponent
-            || ExportPaths.isLANExportHistoryLogRelativePath(relativePath)
+        ExportPaths.isLANExportLogRelativePath(relativePath)
+            || ExportPaths.canonicalLANLogRelativePath(relativePath) != nil
     }
 
     /// Playback/media paths (no logs); `archive/` entries newest archival stamp first.
@@ -703,7 +702,7 @@ enum ExportLANServer {
         return active + archived
     }
 
-    /// `export_latest.txt`, `export_progress.txt`, and `logs/export_*.txt` — newest first.
+    /// `pcld_ios_media/logs/export_*.txt` (live + history) — newest first.
     private static func listExportLogEntriesForLANIndex() -> [ExportFileEntry] {
         listExportFiles()
             .filter { isLANExportLogRelativePath($0.name) }
@@ -714,7 +713,7 @@ enum ExportLANServer {
 
     private static func exportLogSortKey(_ entry: ExportFileEntry) -> Date {
         let fileName = (entry.name as NSString).lastPathComponent
-        if entry.name.hasPrefix("logs/") {
+        if entry.name.hasPrefix("\(ExportPaths.exportLogsLANPrefix)/") {
             return ExportPaths.exportLogFileSortDate(fileName: fileName)
         }
         return entry.modified ?? .distantPast
@@ -777,8 +776,8 @@ enum ExportLANServer {
 
     private static func rootServableRelativePaths() -> Set<String> {
         [
-            ExportPaths.latestLogTextURL.lastPathComponent,
-            ExportPaths.exportProgressURL.lastPathComponent,
+            ExportPaths.pathRelativeToExports(ExportPaths.latestLogTextURL),
+            ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL),
             "status.json",
         ]
     }
@@ -1323,7 +1322,8 @@ enum ExportLANServer {
     private static func resolveExportFile(relativePath: String) -> URL? {
         guard !relativePath.contains("..") else { return nil }
         if relativePath == "status.json" { return nil }
-        for candidate in lanMediaRelativePathCandidates(relativePath) {
+        let resolvedPath = ExportPaths.canonicalLANLogRelativePath(relativePath) ?? relativePath
+        for candidate in lanMediaRelativePathCandidates(resolvedPath) {
             let allowed = ExportPaths.isLANBrowsableMediaRelativePath(candidate)
                 || ExportPaths.isLANMediaTreeServableRelativePath(candidate)
                 || ExportPaths.isLANExportHistoryLogRelativePath(candidate)
@@ -1754,7 +1754,7 @@ enum ExportLANServer {
               <span id="lan-export-pending-detail">Please wait — keep Loop Segments open in the foreground on the phone.</span>
             </div>
             \(htmlExportSourceLineBlock())
-            <p>Serving on port \(defaultPort): logs under <code>Documents/Exports/</code>; media under <code>pcld_ios_media/</code> (private on phone, not in Files app).</p>
+            <p>Serving on port \(defaultPort): logs and media under <code>pcld_ios_media/</code> (private on phone, not in Files app). Legacy URLs <code>/export_latest.txt</code> and <code>/logs/export_*.txt</code> still work.</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             <div id="lan-playback-status">\(playbackStatusBlock)</div>
