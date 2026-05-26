@@ -49,18 +49,20 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 | Location on phone | Visible in **Files** / **USB** | Served on **LAN :8765** |
 |-------------------|--------------------------------|-------------------------|
-| **`Documents/Exports/`** — `export_latest.txt`, **`logs/export_<unix>.txt`** (history), `loop_segments_ok.txt` | Yes (`UIFileSharingEnabled`) | Yes (`export_latest.txt` + **`logs/export_*.txt`** on LAN) |
+| **`Documents/Exports/`** — `export_latest.txt`, **`logs/export_*.txt`** (history), `loop_segments_ok.txt` | Yes (`UIFileSharingEnabled`) | Yes (`export_latest.txt` + **`logs/export_*.txt`** on LAN) |
 | **`Library/Application Support/pcld_ios_media/`** — `_working.mp4`, `loop/op_*.mp4`, `_vanilla_*`, retained suffixed copies | **No** (sandbox) | Yes as **`/pcld_ios_media/...`** (same URLs for rclone / Skybox) |
 
 ### Export logs (live vs history)
 
 | File | Purpose |
 |------|---------|
-| **`export_latest.txt`** (+ `.log`) | **Current run only** — overwritten on each new export start. |
-| **`export_progress.txt`** | Last ~12 lines of the current run (for PC tools that only poll one small file). |
-| **`logs/export_<unix>.txt`** | **Per-run history** — kept across exports (last **40** runs; older pruned). **Not** duplicated at `export_session_*` anymore. |
+| **`export_latest.txt`** | **Current run only** — full live log (LAN/USB). Cleared when the next export starts. |
+| **`export_progress.txt`** | Last ~12 lines of the current run (small file for PC polling). |
+| **`logs/export_<basename>_<local-time>_<status>.txt`** | **Saved history** when a run ends (`completed`, `interrupted`, `paused`, …). Kept across exports (last **40** runs; oldest pruned). |
 
-**Start export** clears only the live files above; it **does not** delete `logs/export_*.txt`. **Clear logs** (Export tab) removes everything including history. Copy history from **Files → Loop Segments → Exports → logs/** or LAN **`http://<ip>:8765/logs/export_<unix>.txt`**.
+While a run is active there are **two** live copies (`export_latest.txt` + a temporary `logs/export_<unix>.txt`); when the run finishes the `logs/` copy is **renamed** to the descriptive name above. There is **no** `.log` duplicate (legacy `export_latest.log` / `export_session_*` are removed on upgrade).
+
+**Start export** archives any finished `export_latest.txt`, clears live files, and **keeps** `logs/export_*.txt` history. **Clear logs** (Export tab) deletes everything including history. Copy history from **Files → Loop Segments → Exports → logs/** or LAN **`http://<ip>:8765/logs/export_…txt`**.
 
 On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** is moved into Application Support automatically. **rclone** and **WebDAV** paths are unchanged (`L:\pcld_ios_media\...`). Copy **segment MP4s** from the PC via LAN/rclone, not Apple Devices USB.
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.

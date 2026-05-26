@@ -6,8 +6,9 @@ final class ExportLogWriter: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.loopsegments.export-log")
     private let primaryURL: URL
-    /// Per-run history kept under `Exports/logs/` (not deleted when the next export starts).
-    private let historyURL: URL
+    /// Per-run history under `Exports/logs/`; renamed on finish (kept across exports).
+    private var historyURL: URL
+    private let sourceItemName: String
     private let progressURL: URL
     private var text: String
     private var lastFlushError: String?
@@ -20,6 +21,7 @@ final class ExportLogWriter: @unchecked Sendable {
     init(itemName: String, seekMs: Int64, href: String) throws {
         ExportPaths.ensureExportDirectories()
         let stamp = Int(Date().timeIntervalSince1970)
+        sourceItemName = itemName
         primaryURL = ExportPaths.latestLogTextURL
         historyURL = ExportPaths.logsDirectory.appendingPathComponent("export_\(stamp).txt")
         progressURL = ExportPaths.exportProgressURL
@@ -50,6 +52,11 @@ final class ExportLogWriter: @unchecked Sendable {
                 appendLine("ERROR: \(error.localizedDescription)")
             }
             appendLine("--- \(status) ---")
+            historyURL = ExportPaths.finalizeExportHistoryLog(
+                historyURL: historyURL,
+                sourceFileName: sourceItemName,
+                status: status
+            )
         }
     }
 
@@ -89,7 +96,6 @@ final class ExportLogWriter: @unchecked Sendable {
 
         try Self.writeAtomically(data, to: primaryURL)
         try Self.writeAtomically(data, to: historyURL)
-        try Self.writeAtomically(data, to: ExportPaths.latestLogURL)
 
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
         if !lines.isEmpty {

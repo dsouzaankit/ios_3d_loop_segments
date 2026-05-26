@@ -755,7 +755,6 @@ enum ExportLANServer {
     private static func rootServableRelativePaths() -> Set<String> {
         [
             ExportPaths.latestLogTextURL.lastPathComponent,
-            ExportPaths.latestLogURL.lastPathComponent,
             ExportPaths.exportProgressURL.lastPathComponent,
             "status.json",
         ]

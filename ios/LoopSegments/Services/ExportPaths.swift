@@ -134,11 +134,12 @@ enum ExportPaths {
         return dir
     }
 
-    static var latestLogURL: URL {
+    /// Legacy duplicate of `export_latest.txt` (removed on launch / clear; do not write).
+    static var legacyLatestLogURL: URL {
         exportsDirectory.appendingPathComponent("export_latest.log")
     }
 
-    /// Duplicate as `.txt` — Windows USB / Apple Devices often lists `.txt` in `Exports` but not `.log`.
+    /// Live export log for the current run (USB / LAN / Files).
     static var latestLogTextURL: URL {
         exportsDirectory.appendingPathComponent("export_latest.txt")
     }
@@ -629,6 +630,124 @@ enum ExportPaths {
         relativePath.hasPrefix("logs/export_") && relativePath.hasSuffix(".txt")
     }
 
+    static func sanitizedExportLogStem(_ fileName: String) -> String {
+        let stem = (fileName as NSString).deletingPathExtension
+        var out = ""
+        for scalar in stem.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                out.unicodeScalars.append(scalar)
+            } else if scalar == "_" || scalar == "-" {
+                out.append(String(scalar))
+            } else {
+                out.append("_")
+            }
+        }
+        while out.contains("__") { out = out.replacingOccurrences(of: "__", with: "_") }
+        let trimmed = out.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        let capped = String(trimmed.prefix(72))
+        return capped.isEmpty ? "export" : capped
+    }
+
+    static func exportLogStatusSlug(from status: String) -> String {
+        let s = status.lowercased()
+        if s.contains("completed") || s.contains("end of file") { return "completed" }
+        if s.contains("paused") { return "paused" }
+        if s.contains("interrupt") { return "interrupted" }
+        if s.contains("cancel") { return "cancelled" }
+        if s.contains("fail") { return "failed" }
+        return "stopped"
+    }
+
+    /// Rename `logs/export_<unix>.txt` → `logs/export_<basename>_<local-time>_<status>.txt` when a run ends.
+    @discardableResult
+    static func finalizeExportHistoryLog(
+        historyURL: URL,
+        sourceFileName: String,
+        status: String,
+        log: ((String) -> Void)? = nil
+    ) -> URL {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: historyURL.path) else { return historyURL }
+        let stamp = ExportMediaArchive.newRetentionTimestamp()
+        let safe = sanitizedExportLogStem(sourceFileName)
+        let slug = exportLogStatusSlug(from: status)
+        var dest = logsDirectory.appendingPathComponent("export_\(safe)_\(stamp)_\(slug).txt")
+        var attempt = 0
+        while fm.fileExists(atPath: dest.path), attempt < 5 {
+            attempt += 1
+            dest = logsDirectory.appendingPathComponent(
+                "export_\(safe)_\(stamp)_\(slug)_\(attempt).txt"
+            )
+        }
+        do {
+            try fm.moveItem(at: historyURL, to: dest)
+            log?("Saved export history → logs/\(dest.lastPathComponent)")
+            return dest
+        } catch {
+            log?("Could not rename history log: \(error.localizedDescription)")
+            return historyURL
+        }
+    }
+
+    /// If the previous run only left `export_latest.txt`, move it into `logs/` before clearing live files.
+    static func archiveOrphanedLiveExportLog(log: ((String) -> Void)? = nil) {
+        let fm = FileManager.default
+        let latest = latestLogTextURL
+        guard fm.fileExists(atPath: latest.path),
+              let text = try? String(contentsOf: latest, encoding: .utf8),
+              text.contains("--- ")
+        else { return }
+        guard let statusLine = text.split(separator: "\n", omittingEmptySubsequences: true)
+            .last(where: { $0.contains("--- ") })
+        else { return }
+        let status = String(statusLine)
+            .replacingOccurrences(of: "---", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let itemName: String
+        if let fileLine = text.split(separator: "\n", omittingEmptySubsequences: true)
+            .first(where: { $0.hasPrefix("File: ") }) {
+            itemName = String(fileLine.dropFirst("File: ".count))
+        } else {
+            itemName = "unknown"
+        }
+        let stamp = ExportMediaArchive.newRetentionTimestamp()
+        let safe = sanitizedExportLogStem(itemName)
+        let slug = exportLogStatusSlug(from: status)
+        let dest = logsDirectory.appendingPathComponent("export_\(safe)_\(stamp)_\(slug).txt")
+        guard !fm.fileExists(atPath: dest.path) else { return }
+        do {
+            try fm.moveItem(at: latest, to: dest)
+            log?("Archived prior live log → logs/\(dest.lastPathComponent)")
+        } catch {
+            log?("Could not archive export_latest.txt: \(error.localizedDescription)")
+        }
+    }
+
+    /// Remove legacy `.log` duplicates and `export_session_*` at Exports root.
+    static func migrateLegacyExportLogDuplicates(log: ((String) -> Void)? = nil) {
+        migrateLegacyExportSessionLogs(log: log)
+        let fm = FileManager.default
+        for url in [legacyLatestLogURL] {
+            guard fm.fileExists(atPath: url.path) else { continue }
+            do {
+                try fm.removeItem(at: url)
+                log?("Removed legacy \(url.lastPathComponent)")
+            } catch {
+                log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        guard let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) else { return }
+        for name in names where name.hasSuffix(".log") {
+            let url = logsDirectory.appendingPathComponent(name)
+            do {
+                try fm.removeItem(at: url)
+                log?("Removed legacy logs/\(name)")
+            } catch {
+                log?("Could not remove logs/\(name): \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Move legacy duplicate `export_session_*.txt` into `logs/` once (same content as history).
     static func migrateLegacyExportSessionLogs(log: ((String) -> Void)? = nil) {
         let fm = FileManager.default
@@ -656,7 +775,7 @@ enum ExportPaths {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) else { return 0 }
         let sorted = names
-            .filter { $0.hasPrefix("export_") && ($0.hasSuffix(".txt") || $0.hasSuffix(".log")) }
+            .filter { $0.hasPrefix("export_") && $0.hasSuffix(".txt") }
             .sorted(by: >)
         var removed = 0
         guard sorted.count > exportLogRetentionCount else { return 0 }
@@ -678,7 +797,7 @@ enum ExportPaths {
     static func clearCurrentExportLogPointers(log: ((String) -> Void)? = nil) -> Int {
         let fm = FileManager.default
         var removed = 0
-        for url in [latestLogTextURL, latestLogURL, exportProgressURL] {
+        for url in [latestLogTextURL, legacyLatestLogURL, exportProgressURL] {
             guard fm.fileExists(atPath: url.path) else { continue }
             do {
                 try fm.removeItem(at: url)
@@ -739,7 +858,8 @@ enum ExportPaths {
 
     /// New export: reset live log files only; retain and prune `logs/export_*.txt` history.
     static func clearLogsForNewExport(log: ((String) -> Void)? = nil) {
-        migrateLegacyExportSessionLogs(log: log)
+        migrateLegacyExportLogDuplicates(log: log)
+        archiveOrphanedLiveExportLog(log: log)
         _ = clearCurrentExportLogPointers(log: log)
         _ = pruneExportLogHistory(log: log)
     }
@@ -773,7 +893,7 @@ enum ExportPaths {
         _ = lanExportScriptsDirectory
         _ = logsDirectory
         migrateLegacyExportFilenames()
-        migrateLegacyExportSessionLogs()
+        migrateLegacyExportLogDuplicates()
         SearchDebugLog.ensureReady()
         let probe = exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
         let text = "Loop Segments \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") \(ISO8601DateFormatter().string(from: Date()))\n"
