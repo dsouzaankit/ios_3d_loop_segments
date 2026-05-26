@@ -405,12 +405,12 @@ private struct KeepAliveFailure: Error {
 
     static func stage(_ step: String, _ error: Error) -> KeepAliveFailure {
         let ns = error as NSError
-        KeepAliveFailure(
+        return KeepAliveFailure(
             display: "\(step): \(error.localizedDescription) (\(ns.domain) \(ns.code))"
         )
     }
 
     static func message(_ text: String) -> KeepAliveFailure {
-        KeepAliveFailure(display: text)
+        return KeepAliveFailure(display: text)
     }
 }
