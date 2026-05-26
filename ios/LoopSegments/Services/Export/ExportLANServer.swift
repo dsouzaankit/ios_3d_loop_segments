@@ -664,6 +664,41 @@ enum ExportLANServer {
         let modified: Date?
     }
 
+    private struct LANIndexSnapshot {
+        let playback: [ExportFileEntry]
+        let logs: [ExportFileEntry]
+        let builtAt: Date
+    }
+
+    private static var lanIndexSnapshot: LANIndexSnapshot?
+    private static let lanIndexSnapshotTTL: TimeInterval = 5
+    private static let lanStatusFilesCap = 48
+
+    private static func exportFileEntry(relativePath: String) -> ExportFileEntry? {
+        guard let url = resolveExportFile(relativePath: relativePath) else { return nil }
+        let fm = FileManager.default
+        let attrs = try? fm.attributesOfItem(atPath: url.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        let modified = attrs?[.modificationDate] as? Date
+        return ExportFileEntry(name: relativePath, url: url, size: size, modified: modified)
+    }
+
+    private static func buildLANIndexSnapshot() -> LANIndexSnapshot {
+        let playback = ExportPaths.listLANPlaybackIndexRelativePaths().compactMap { exportFileEntry(relativePath: $0) }
+        let logs = ExportPaths.listLANLogIndexRelativePaths().compactMap { exportFileEntry(relativePath: $0) }
+        return LANIndexSnapshot(playback: playback, logs: logs, builtAt: Date())
+    }
+
+    private static func currentLANIndexSnapshot() -> LANIndexSnapshot {
+        if let cached = lanIndexSnapshot,
+           Date().timeIntervalSince(cached.builtAt) < lanIndexSnapshotTTL {
+            return cached
+        }
+        let snapshot = buildLANIndexSnapshot()
+        lanIndexSnapshot = snapshot
+        return snapshot
+    }
+
     private static func listExportFiles() -> [ExportFileEntry] {
         let fm = FileManager.default
         var entries: [ExportFileEntry] = []
@@ -684,37 +719,16 @@ enum ExportLANServer {
             || ExportPaths.canonicalLANLogRelativePath(relativePath) != nil
     }
 
-    /// Playback/media paths (no logs); `archive/` entries newest archival stamp first.
+    /// Playback/media paths (no logs); active first, then `archive/` newest-first (capped).
     private static func listExportFilesForPlaybackIndex() -> [ExportFileEntry] {
-        let all = listExportFiles().filter { !isLANExportLogRelativePath($0.name) }
-        var active: [ExportFileEntry] = []
-        var archived: [ExportFileEntry] = []
-        for entry in all {
-            if entry.name.hasPrefix(archivePlaybackPrefix) {
-                archived.append(entry)
-            } else {
-                active.append(entry)
-            }
-        }
-        archived.sort { lhs, rhs in
-            playbackArchiveSortKey(lhs) > playbackArchiveSortKey(rhs)
-        }
-        return active + archived
+        currentLANIndexSnapshot().playback
     }
 
     /// `pcld_ios_media/logs/export_*.txt` (live + history) — newest first.
     private static func listExportLogEntriesForLANIndex() -> [ExportFileEntry] {
-        let liveLatest = ExportPaths.pathRelativeToExports(ExportPaths.latestLogTextURL)
-        let liveProgress = ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL)
-        return listExportFiles()
-            .filter { entry in
-                entry.name == liveLatest
-                    || entry.name == liveProgress
-                    || ExportPaths.isLANExportHistoryLogRelativePath(entry.name)
-            }
-            .sorted { lhs, rhs in
-                exportLogSortKey(lhs) > exportLogSortKey(rhs)
-            }
+        currentLANIndexSnapshot().logs.sorted { lhs, rhs in
+            exportLogSortKey(lhs) > exportLogSortKey(rhs)
+        }
     }
 
     private static func exportLogSortKey(_ entry: ExportFileEntry) -> Date {
@@ -1610,7 +1624,10 @@ enum ExportLANServer {
 
     private static func playbackMediaFileListHTML() -> String {
         var items: [String] = []
-        for entry in listExportFilesForPlaybackIndex() {
+        let entries = listExportFilesForPlaybackIndex()
+        let limit = ExportPaths.lanPlaybackArchiveIndexLimit + 12
+        let capped = entries.count > limit
+        for entry in entries.prefix(limit) {
             let name = entry.name
             var sizeNote = ""
             if entry.size > 0 {
@@ -1661,6 +1678,11 @@ enum ExportLANServer {
                 note = " — sparse in-progress source (seek in player to export start)"
             }
             items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
+        }
+        if capped {
+            items.append(
+                "<li><em>… \(entries.count - limit) more file(s) on phone — use WebDAV/rclone for full tree.</em></li>"
+            )
         }
         return items.isEmpty
             ? "<li><em>No export files yet — start export on the phone.</em></li>"
@@ -2343,18 +2365,20 @@ enum ExportLANServer {
 
     private static func sendStatusJSON(_ connection: NWConnection, done: @escaping () -> Void) {
         refreshLANMetricsBeforeStatusResponse()
-        let fm = FileManager.default
+        let index = currentLANIndexSnapshot()
+        var fileEntries: [ExportFileEntry] = index.playback + index.logs
+        if fileEntries.count > lanStatusFilesCap {
+            fileEntries = Array(fileEntries.prefix(lanStatusFilesCap))
+        }
         var entries: [[String: Any]] = []
-        for rel in rootServableRelativePaths().union(Set(ExportPaths.lanBrowsableMediaRelativePaths())).sorted() {
-            guard let url = resolveExportFile(relativePath: rel) else { continue }
-            var dict: [String: Any] = ["name": rel]
-            if let attrs = try? fm.attributesOfItem(atPath: url.path) {
-                if let size = attrs[.size] as? NSNumber {
-                    dict["bytes"] = size.int64Value
-                }
-                if let modified = attrs[.modificationDate] as? Date {
-                    dict["modified"] = ISO8601DateFormatter().string(from: modified)
-                }
+        entries.reserveCapacity(fileEntries.count)
+        for entry in fileEntries {
+            var dict: [String: Any] = ["name": entry.name]
+            if entry.size > 0 {
+                dict["bytes"] = entry.size
+            }
+            if let modified = entry.modified {
+                dict["modified"] = ISO8601DateFormatter().string(from: modified)
             }
             entries.append(dict)
         }

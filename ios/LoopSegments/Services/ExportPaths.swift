@@ -302,6 +302,62 @@ enum ExportPaths {
         return lanBrowsableMediaExtensions.contains(ext)
     }
 
+    /// Max `archive/` rows on the LAN index (avoids scanning the full media tree every poll).
+    static let lanPlaybackArchiveIndexLimit = 32
+
+    /// Active + recent archive paths for the LAN HTML index (non-recursive; cheap for `status.json` polling).
+    static func listLANPlaybackIndexRelativePaths(
+        maxArchiveEntries: Int = lanPlaybackArchiveIndexLimit
+    ) -> [String] {
+        let fm = FileManager.default
+        var paths: [String] = []
+
+        func appendFileIfPresent(_ url: URL) {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return }
+            paths.append(pathRelativeToExports(url))
+        }
+
+        for index in 0 ..< segmentFileCount {
+            appendFileIfPresent(segmentURL(index: index))
+        }
+        appendFileIfPresent(workingSourceURL)
+        appendFileIfPresent(workingTranscodedURL)
+        appendFileIfPresent(vanillaFastStartURL)
+
+        if let names = try? fm.contentsOfDirectory(atPath: mediaExportDirectory.path) {
+            for name in names.sorted() where name.lowercased().hasPrefix("_vanilla_download.") {
+                guard isLANBrowsableMediaFile(fileName: name) else { continue }
+                appendFileIfPresent(mediaExportDirectory.appendingPathComponent(name))
+            }
+        }
+
+        let archiveDir = mediaExportDirectory.appendingPathComponent("archive", isDirectory: true)
+        if fm.fileExists(atPath: archiveDir.path),
+           let names = try? fm.contentsOfDirectory(atPath: archiveDir.path) {
+            let videos = names.filter { isLANBrowsableMediaFile(fileName: $0) }
+            let sorted = videos.sorted { lhs, rhs in
+                let l = ExportMediaArchive.archivedMediaSortDate(fileName: lhs) ?? .distantPast
+                let r = ExportMediaArchive.archivedMediaSortDate(fileName: rhs) ?? .distantPast
+                return l > r
+            }
+            for name in sorted.prefix(max(0, maxArchiveEntries)) {
+                appendFileIfPresent(archiveDir.appendingPathComponent(name))
+            }
+        }
+        return paths
+    }
+
+    /// Live + history log paths for the LAN index (logs folder only).
+    static func listLANLogIndexRelativePaths() -> [String] {
+        var paths = [
+            pathRelativeToExports(latestLogTextURL),
+            pathRelativeToExports(exportProgressURL),
+        ]
+        paths.append(contentsOf: listExportHistoryLogRelativePaths())
+        return paths
+    }
+
     /// All playable media under `pcld_ios_media/` (recursive). New files appear on LAN without allowlist updates.
     static func lanBrowsableMediaRelativePaths() -> [String] {
         let fm = FileManager.default

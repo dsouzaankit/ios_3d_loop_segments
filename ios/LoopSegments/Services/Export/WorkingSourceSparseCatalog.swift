@@ -135,7 +135,7 @@ enum WorkingSourceSparseCatalog {
         refreshPlaybackStateFromDisk(for: fileURL)
     }
 
-    /// During export: refresh fill % / playable till from disk spans only (keep live seek + cursor).
+    /// During export: refresh file size + head/tail for LAN (spans stay in memory from the exporter).
     static func refreshDiskLayoutOnly(for fileURL: URL) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: fileURL.path),
@@ -144,6 +144,15 @@ enum WorkingSourceSparseCatalog {
             return
         }
         let total = sizeNum.int64Value
+        if ExportPlaybackState.shared.isLANExportActive {
+            let probed = probeLayoutOnDisk(fileURL: fileURL, totalLength: total)
+            ExportPlaybackState.shared.updateLANLiveFileSize(
+                totalBytes: total,
+                headOnDisk: probed.headOnDisk,
+                tailOnDisk: probed.tailOnDisk
+            )
+            return
+        }
         let layout = mergedLayoutOnDisk(fileURL: fileURL, totalLength: total)
         ExportPlaybackState.shared.updateDiskLayout(
             totalBytes: total,

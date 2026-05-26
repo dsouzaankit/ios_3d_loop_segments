@@ -610,6 +610,19 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
     }
 
+    /// LAN poll during active export — refresh file size + head/tail probes only (keep in-memory spans).
+    func updateLANLiveFileSize(totalBytes: Int64, headOnDisk: Bool, tailOnDisk: Bool) {
+        lock.withLock {
+            snapshot.totalFileBytes = totalBytes
+            snapshot.headOnDisk = headOnDisk
+            snapshot.tailOnDisk = tailOnDisk
+            snapshot.indexTailStart = max(
+                0,
+                totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
+            )
+        }
+    }
+
     /// Reload LAN gating from disk manifest (export may be idle).
     func restoreLANPlayback(
         totalBytes: Int64,
