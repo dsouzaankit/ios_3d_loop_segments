@@ -164,7 +164,7 @@ final class ExportCoordinator {
                 logHandler("Export finished — loop/op_*.mp4 on LAN (no root media to archive)")
             }
             logHandler(ExportPaths.describeExportMediaOnDisk())
-            logHandler("Files: On My iPhone → Loop Segments → Exports (same folder as export_latest.txt)")
+            logHandler("Logs: http://<phone-ip>:8765/pcld_ios_media/logs/export_latest.txt (or legacy /export_latest.txt)")
             if PhotosSegmentPublisher.isEnabled, !result.lanPreloadOnly {
                 logHandler("Photos: syncing finished segments to library…")
                 await PhotosSegmentPublisher.publishAllSegmentsFromExports(log: logHandler)

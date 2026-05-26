@@ -49,20 +49,22 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 | Location on phone | Visible in **Files** / **USB** | Served on **LAN :8765** |
 |-------------------|--------------------------------|-------------------------|
-| **`Documents/Exports/`** — `export_latest.txt`, **`logs/export_*.txt`** (history), `loop_segments_ok.txt` | Yes (`UIFileSharingEnabled`) | Yes (`export_latest.txt` + **`logs/export_*.txt`** on LAN) |
-| **`Library/Application Support/pcld_ios_media/`** — `_working.mp4`, `loop/op_*.mp4`, `_vanilla_*`, retained suffixed copies | **No** (sandbox) | Yes as **`/pcld_ios_media/...`** (same URLs for rclone / Skybox) |
+| **`Documents/Exports/`** | Empty after upgrade (safe to delete in Files) | — |
+| **`Library/Application Support/pcld_ios_media/`** — media, **`logs/`** (export logs + `loop_segments_ok.txt` probe) | **No** (sandbox) | Yes as **`/pcld_ios_media/...`** (legacy **`/export_latest.txt`**, **`/logs/export_*.txt`**, **`/loop_segments_ok.txt`**) |
 
 ### Export logs (live vs history)
 
 | File | Purpose |
 |------|---------|
-| **`export_latest.txt`** | **Current run only** — full live log (LAN/USB). Cleared when the next export starts. |
-| **`export_progress.txt`** | Last ~12 lines of the current run (small file for PC polling). |
-| **`logs/export_<basename>_<local-time>_<status>.txt`** | **Saved history** when a run ends (`completed`, `interrupted`, `paused`, …). Kept across exports (last **40** runs; oldest pruned). |
+| **`pcld_ios_media/logs/export_latest.txt`** | **Current run only** — full live log (LAN). Cleared when the next export starts. |
+| **`pcld_ios_media/logs/export_progress.txt`** | Last ~12 lines of the current run (small file for PC polling). |
+| **`pcld_ios_media/logs/export_<basename>_<local-time>_<status>.txt`** | **Saved history** when a run ends (`completed`, `interrupted`, `paused`, …). Kept across exports (last **40** runs; oldest pruned). |
 
-While a run is active there are **two** live copies (`export_latest.txt` + a temporary `logs/export_<unix>.txt`); when the run finishes the `logs/` copy is **renamed** to the descriptive name above. There is **no** `.log` duplicate (legacy `export_latest.log` / `export_session_*` are removed on upgrade).
+On disk under **Application Support** (not in the Files app). LAN also accepts legacy URLs **`/export_latest.txt`**, **`/export_progress.txt`**, and **`/logs/export_…txt`** (same files).
 
-**Start export** archives any finished `export_latest.txt`, clears live files, and **keeps** `logs/export_*.txt` history. **Clear logs** (Export tab) deletes everything including history. Copy history from **Files → Loop Segments → Exports → logs/** or LAN **`http://<ip>:8765/logs/export_…txt`**.
+While a run is active there are **two** live copies (`export_latest.txt` + a temporary `export_<unix>.txt` in the same folder); when the run finishes the unix copy is **renamed** to the descriptive name above. There is **no** `.log` duplicate (legacy `export_latest.log` / `export_session_*` are removed on upgrade).
+
+**Start export** archives any finished live log, clears live pointers, and **keeps** history. **Clear logs** (Export tab) deletes all log files. Copy from LAN **`http://<ip>:8765/pcld_ios_media/logs/…`** (or legacy **`/export_latest.txt`**). On upgrade, logs move automatically out of **Documents/Exports/**.
 
 On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** is moved into Application Support automatically. **rclone** and **WebDAV** paths are unchanged (`L:\pcld_ios_media\...`). Copy **segment MP4s** from the PC via LAN/rclone, not Apple Devices USB.
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
@@ -128,7 +130,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
-LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Root **logs** (`export_latest.txt`, …) and **`logs/export_*.txt`** history are served; **`search_debug.txt`** is not served. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
+LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, `search_debug.txt`); legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
 
 **PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** (Basic auth **`admin` / `iosadmin`**) can create nested folders and small files (e.g. `pcld_ios_media/scripts/run.ps1`, ≤ 2 MB per PUT). **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
 
@@ -150,7 +152,7 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 |------|----------|
 | **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
 | **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
-| **Middle** | Playback status + **On phone (playback)** file list (auto-refreshed from `status.json`). |
+| **Middle** | Playback status + **On phone (playback)** file list (auto-refreshed from `status.json`). Logs live under **`pcld_ios_media/logs/`** (LAN also accepts legacy `/export_latest.txt` and `/logs/export_*.txt`). |
 | **Bottom** | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. |
 
 #### JSON APIs (GET unless noted)
@@ -167,7 +169,7 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
-- **`playbackStatusHTML`**, **`playbackListHTML`** — server-rendered playback blocks (replace in-page without reload). **`On phone (playback)`** lists active export paths first; **`pcld_ios_media/archive/`** entries are sorted by archival timestamp **newest first** (parsed from the filename stamp).
+- **`playbackStatusHTML`**, **`playbackListHTML`** — server-rendered playback blocks (replace in-page without reload). **`On phone (playback)`** lists active export paths first; **`pcld_ios_media/archive/`** entries are sorted by archival timestamp **newest first** (parsed from the filename stamp). History logs are under **`pcld_ios_media/logs/`**.
 - **`lanLive`** — WAN Mbps / fill dashboard lines while export is active.
 - **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.
 - **`files`** — servable export paths with `bytes` / `modified`.
@@ -605,7 +607,7 @@ Until a token is saved, treat **Search**, **HLS transcode**, and **REST-backed m
 | Step | PowerShell / action |
 |------|------------------------|
 | Phone **media** → PC | **`http://<ip>:8765/pcld_ios_media/`**, **`Invoke-WebRequest`**, **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**, or **[`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md)** |
-| Phone **logs** → PC | **`http://<ip>:8765/`** (`export_latest.txt`, …) or **Apple Devices** → Loop Segments → **Exports** (logs only; media not in Files) |
+| Phone **logs** → PC | **`http://<ip>:8765/pcld_ios_media/logs/export_latest.txt`** (or legacy **`/export_latest.txt`**) — not in Files app |
 | rclone+WinFsp mount on PC (optional; can be sluggish) | **[`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md)** — Skybox WebDAV to the phone does not need this |
 
 ```powershell
