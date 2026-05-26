@@ -684,9 +684,9 @@ enum ExportLANServer {
             || ExportPaths.canonicalLANLogRelativePath(relativePath) != nil
     }
 
-    /// Active export paths first (path order); `archive/` entries newest archival stamp first.
+    /// Playback/media paths (no logs); `archive/` entries newest archival stamp first.
     private static func listExportFilesForPlaybackIndex() -> [ExportFileEntry] {
-        let all = listExportFiles()
+        let all = listExportFiles().filter { !isLANExportLogRelativePath($0.name) }
         var active: [ExportFileEntry] = []
         var archived: [ExportFileEntry] = []
         for entry in all {
@@ -1466,8 +1466,12 @@ enum ExportLANServer {
               if (status) status.innerHTML = j.playbackStatusHTML;
             }
             if (typeof j.playbackListHTML === "string") {
-              var list = document.getElementById("lan-playback-files");
-              if (list) list.innerHTML = j.playbackListHTML;
+              var files = document.getElementById("lan-playback-files");
+              if (files) files.innerHTML = j.playbackListHTML;
+            }
+            if (typeof j.exportLogsListHTML === "string") {
+              var logs = document.getElementById("lan-export-logs");
+              if (logs) logs.innerHTML = j.exportLogsListHTML;
             }
           }
           window.refreshLANPlayback = function () {
@@ -1559,7 +1563,7 @@ enum ExportLANServer {
         return ""
     }
 
-    private static func playbackFileListHTML() -> String {
+    private static func playbackMediaFileListHTML() -> String {
         var items: [String] = []
         for entry in listExportFilesForPlaybackIndex() {
             let name = entry.name
@@ -1618,10 +1622,33 @@ enum ExportLANServer {
             : items.joined()
     }
 
+    private static func exportLogsFileListHTML() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        var items: [String] = []
+        for entry in listExportLogEntriesForLANIndex() {
+            let escaped = htmlEscape(entry.name)
+            var meta = ""
+            if entry.size > 0 {
+                meta += " (\(entry.size / 1024) KB)"
+            }
+            if let modified = entry.modified {
+                meta += " — \(htmlEscape(formatter.string(from: modified)))"
+            }
+            items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(meta)</li>")
+        }
+        return items.isEmpty
+            ? "<li><em>No export logs yet.</em></li>"
+            : items.joined()
+    }
+
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         refreshLANMetricsBeforeStatusResponse()
         let playbackStatusBlock = playbackStatusHTMLBlock()
-        let fileList = playbackFileListHTML()
+        let mediaList = playbackMediaFileListHTML()
+        let logList = exportLogsFileListHTML()
         let html = """
             <!DOCTYPE html>
             <html lang="en"><head>
@@ -1658,6 +1685,25 @@ enum ExportLANServer {
             #pcloud-files li { margin: 0.35rem 0; display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
             .file-meta { color: #666; font-size: 0.85em; }
             .muted { color: #666; font-size: 0.9em; }
+            .lan-playback-section { display: flex; flex-direction: column; }
+            .lan-playback-media { order: 1; margin: 0 0 0.25rem; }
+            .lan-playback-media ul { margin: 0; padding-left: 1.25rem; }
+            .lan-playback-logs-block { order: 2; margin: 0; }
+            .lan-playback-subhead { margin: 1rem 0 0.35rem; font-size: 1em; font-weight: 600; }
+            .lan-playback-logs-scroll {
+              max-height: calc(5 * 1.75lh);
+              overflow-x: auto;
+              overflow-y: auto;
+              -webkit-overflow-scrolling: touch;
+              overscroll-behavior: contain;
+              margin: 0 0 0.5rem;
+              padding: 0.2rem 0.4rem 0.2rem 0;
+              border: 1px solid #ddd;
+              border-radius: 6px;
+              background: #fafafa;
+            }
+            .lan-playback-logs-scroll ul { margin: 0; padding-left: 1.25rem; }
+            #lan-export-logs li { word-break: break-all; }
             #trigger-status { min-height: 1.2em; }
             </style>
             </head><body>
@@ -1672,9 +1718,21 @@ enum ExportLANServer {
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             <div id="lan-playback-status">\(playbackStatusBlock)</div>
             <h2>On phone (playback)</h2>
+            <div class="lan-playback-section">
+            <div id="lan-playback-media" class="lan-playback-media">
             <ul id="lan-playback-files">
-            \(fileList)
+            \(mediaList)
             </ul>
+            </div>
+            <div id="lan-playback-logs" class="lan-playback-logs-block">
+            <h3 class="lan-playback-subhead">Export logs (newest first)</h3>
+            <div class="lan-playback-logs-scroll" aria-label="Export log files">
+            <ul id="lan-export-logs">
+            \(logList)
+            </ul>
+            </div>
+            </div>
+            </div>
             \(htmlExportControlPanel())
             \(htmlLANLiveRefreshScript())
             </body></html>
@@ -2262,7 +2320,8 @@ enum ExportLANServer {
             payload["exportSource"] = exportSource
         }
         payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
-        payload["playbackListHTML"] = playbackFileListHTML()
+        payload["playbackListHTML"] = playbackMediaFileListHTML()
+        payload["exportLogsListHTML"] = exportLogsFileListHTML()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return

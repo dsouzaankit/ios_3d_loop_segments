@@ -728,6 +728,41 @@ enum ExportPaths {
             .map { "\(exportLogsLANPrefix)/\($0)" }
     }
 
+    /// Newest-first sort key for `logs/export_*.txt` (stamped name, unix infix, else file mtime).
+    static func exportLogFileSortDate(fileName: String) -> Date {
+        if let stamped = exportLogStampedDate(fromFileName: fileName) {
+            return stamped
+        }
+        if let unix = exportLogUnixTimestamp(fromFileName: fileName) {
+            return Date(timeIntervalSince1970: TimeInterval(unix))
+        }
+        let url = logsDirectory.appendingPathComponent(fileName)
+        if let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+            return modified
+        }
+        return .distantPast
+    }
+
+    private static func exportLogUnixTimestamp(fromFileName name: String) -> Int? {
+        guard name.hasPrefix("export_"), name.hasSuffix(".txt") else { return nil }
+        let stem = (name as NSString).deletingPathExtension
+        let rest = stem.dropFirst("export_".count)
+        guard let underscore = rest.firstIndex(of: "_") else {
+            return Int(rest)
+        }
+        let prefix = rest[..<underscore]
+        guard prefix.allSatisfy(\.isNumber), let unix = Int(prefix) else { return nil }
+        return unix
+    }
+
+    private static func exportLogStampedDate(fromFileName name: String) -> Date? {
+        let stem = (name as NSString).deletingPathExtension
+        let pattern = #"_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"#
+        guard let range = stem.range(of: pattern, options: .regularExpression) else { return nil }
+        let token = String(stem[range]).dropFirst()
+        return ExportMediaArchive.archivedMediaSortDate(fileName: "x\(token).txt")
+    }
+
     static func isLANExportHistoryLogRelativePath(_ relativePath: String) -> Bool {
         let prefix = "\(exportLogsLANPrefix)/export_"
         guard relativePath.hasPrefix(prefix), relativePath.hasSuffix(".txt") else { return false }

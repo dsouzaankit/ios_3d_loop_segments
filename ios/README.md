@@ -153,7 +153,7 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 |------|----------|
 | **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
 | **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
-| **Middle** | Playback status + **On phone (playback)** file list (auto-refreshed from `status.json`). Logs live under **`pcld_ios_media/logs/`** (LAN also accepts legacy `/export_latest.txt` and `/logs/export_*.txt`). |
+| **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, `archive/`), then **Export logs (newest first)** (`export_latest.txt`, `export_progress.txt`, `pcld_ios_media/logs/export_*.txt`) in a scroll panel (~5 rows tall). Auto-refreshed from `status.json`. Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
 | **Bottom** | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. |
 
 #### JSON APIs (GET unless noted)
@@ -170,7 +170,7 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
-- **`playbackStatusHTML`**, **`playbackListHTML`** — server-rendered playback blocks (replace in-page without reload). **`On phone (playback)`** lists active export paths first; **`pcld_ios_media/archive/`** entries are sorted by archival timestamp **newest first** (parsed from the filename stamp). History logs are under **`pcld_ios_media/logs/`**.
+- **`playbackStatusHTML`**, **`playbackListHTML`**, **`exportLogsListHTML`** — server-rendered blocks (replace in-page without reload). **`playbackListHTML`** = media only (active paths first; **`pcld_ios_media/archive/`** sorted by archival stamp **newest first**). **`exportLogsListHTML`** = log paths sorted **newest first** (stamped `logs/export_*` name, unix infix, or file mtime). Logs live under **`pcld_ios_media/logs/`** (LAN also accepts legacy `/export_latest.txt` and `/logs/export_*.txt`).
 - **`lanLive`** — WAN Mbps / fill dashboard lines while export is active.
 - **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.
 - **`files`** — servable export paths with `bytes` / `modified`.
