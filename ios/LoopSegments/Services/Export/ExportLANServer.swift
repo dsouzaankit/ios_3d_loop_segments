@@ -1619,14 +1619,17 @@ enum ExportLANServer {
               window.refreshLANBookmarks().catch(function () {});
             }
             """
-        let autoPollStart = deferAutoPoll
-            ? ""
-            : """
+        let autoPollStart: String
+        if deferAutoPoll {
+            autoPollStart = ""
+        } else {
+            autoPollStart = """
           poll();
           setTimeout(pollLists, 5000);
           setInterval(poll, pollMs);
           setInterval(pollLists, listPollMs);
-            """
+          """
+        }
         return """
         <script>
         (function () {
