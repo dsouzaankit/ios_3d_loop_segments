@@ -678,9 +678,11 @@ enum ExportLANServer {
     private static let lanIndexSnapshotTTLIdle: TimeInterval = 30
     private static let lanIndexSnapshotTTLExport: TimeInterval = 45
     /// Browser poll interval for `status.json` (live metrics / export bar).
-    private static let lanStatusPollMs = 30_000
+    private static let lanStatusPollMs = 60_000
     /// Browser poll interval for `status_lists.json` (media + log link HTML).
-    private static let lanStatusListsPollMs = 60_000
+    private static let lanStatusListsPollMs = 120_000
+    private static var lastLANMetricsRefresh: Date?
+    private static let lanMetricsRefreshMinInterval: TimeInterval = 45
     private static let lanStatusFilesCap = 48
 
     private static var lanIndexSnapshotTTL: TimeInterval {
@@ -1309,7 +1311,7 @@ enum ExportLANServer {
                         modified: nil
                     )
                 )
-                for entry in listExportFiles() {
+                for entry in listExportFilesForPlaybackIndex() + listExportLogEntriesForLANIndex() {
                     responses.append(
                         propfindEntryXML(
                             href: davListingHref(path: "/\(entry.name)", isCollection: false),
@@ -1444,6 +1446,14 @@ enum ExportLANServer {
     private static func htmlPlaybackStatusLine(_ line: String) -> String {
         """
         <p><strong id="lan-playback-line">\(htmlEscape(line))</strong></p>
+        """
+    }
+
+    /// Empty shell filled by `status.json` → `lanLive` (avoids heavy HTML on index / poll).
+    private static func htmlPlaybackStatusShell() -> String {
+        """
+        <p><strong id="lan-playback-line">—</strong></p>
+        <ul id="lan-dashboard-stats"></ul>
         """
     }
 
@@ -1592,7 +1602,7 @@ enum ExportLANServer {
               .catch(function () {});
           }
           poll();
-          pollLists();
+          setTimeout(pollLists, 5000);
           setInterval(poll, pollMs);
           setInterval(pollLists, listPollMs);
         })();
@@ -1601,6 +1611,11 @@ enum ExportLANServer {
     }
 
     private static func refreshLANMetricsBeforeStatusResponse() {
+        if let last = lastLANMetricsRefresh,
+           Date().timeIntervalSince(last) < lanMetricsRefreshMinInterval {
+            return
+        }
+        lastLANMetricsRefresh = Date()
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
             return
         }
@@ -1754,8 +1769,7 @@ enum ExportLANServer {
     }
 
     private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        refreshLANMetricsBeforeStatusResponse()
-        let playbackStatusBlock = playbackStatusHTMLBlock()
+        let playbackStatusBlock = htmlPlaybackStatusShell()
         let mediaList = "<li><em>Loading playback links…</em></li>"
         let logList = "<li><em>Loading export logs…</em></li>"
         let html = """
@@ -2398,7 +2412,7 @@ enum ExportLANServer {
               }).catch(function (e) { setStatus(e.message || e, true); });
             }
           };
-          loadPins().then(function () { loadPCloud(); }).catch(function () { loadPCloud(); });
+          loadPins().catch(function () {});
           window.refreshLANBookmarks = loadPins;
         })();
         </script>
@@ -2449,31 +2463,32 @@ enum ExportLANServer {
             "port": Int(defaultPort),
             "listsDeferred": true,
         ]
-        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
-            var playback = ExportPlaybackState.shared.frozenStatusPayload
-            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-            playback["resumeTimelineReadable"] = startSec <= 0
-                || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
-            payload["vanillaDownloadPlayback"] = playback
-        } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
-            var playback = ExportPlaybackState.shared.frozenStatusPayload
-            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
-            payload["pcloudTranscodedPlayback"] = playback
-        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-                  !ExportPaths.shouldHideSparseWorkingFromLAN() {
-            var playback = ExportPlaybackState.shared.frozenStatusPayload
-            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
-            payload["workingSourcePlayback"] = playback
-        }
-        if exportActive {
+        if !exportActive {
+            if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
+                var playback = ExportPlaybackState.shared.frozenStatusPayload
+                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+                playback["resumeTimelineReadable"] = startSec <= 0
+                    || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
+                payload["vanillaDownloadPlayback"] = playback
+            } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
+                var playback = ExportPlaybackState.shared.frozenStatusPayload
+                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+                playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+                payload["pcloudTranscodedPlayback"] = playback
+            } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
+                      !ExportPaths.shouldHideSparseWorkingFromLAN() {
+                var playback = ExportPlaybackState.shared.frozenStatusPayload
+                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+                playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+                payload["workingSourcePlayback"] = playback
+            }
+            payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
+        } else {
             payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayload()
         }
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
         }
-        payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
         payload["phoneInteraction"] = LANPhoneInteractionState.statusPayload()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
@@ -2504,9 +2519,6 @@ enum ExportLANServer {
             == ExportPaths.workingSourceURL.standardizedFileURL.path
         let isTranscodedWorking = fileURL.standardizedFileURL.path
             == ExportPaths.workingTranscodedURL.standardizedFileURL.path
-        if isSparseWorkingSource {
-            WorkingSourceSparseCatalog.refreshPlaybackState(for: fileURL)
-        }
         let isWorkingSource = isSparseWorkingSource || isTranscodedWorking
         /// Only sparse/in-progress working copies are capped (Quest OOM). Dense `_vanilla_download.*` is always full-file Range/seek.
         let capResponseBody = isWorkingSource

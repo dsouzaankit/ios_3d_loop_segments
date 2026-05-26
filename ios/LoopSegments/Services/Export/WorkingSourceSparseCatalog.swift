@@ -424,7 +424,9 @@ enum WorkingSourceSparseCatalog {
         defer { try? handle.close() }
         do {
             try handle.seek(toOffset: UInt64(tailStart))
-            let data = handle.readDataToEndOfFile()
+            guard let data = try handle.read(upToCount: Int(tailLen)), !data.isEmpty else {
+                return false
+            }
             return data.range(of: Data("moov".utf8)) != nil
         } catch {
             return false
