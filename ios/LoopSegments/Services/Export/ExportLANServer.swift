@@ -1766,7 +1766,7 @@ enum ExportLANServer {
             } else if name.hasSuffix(".mp4") {
                 note = " — sparse in-progress source (seek in player to export start)"
             }
-            if omitVideoHrefOnLANIndex(name) {
+            if omitVideoHrefOnLANIndex(relativePath: name) {
                 items.append(
                     "<li><code>\(escaped)</code>\(sizeNote)\(note) — use WebDAV during export (no browser prefetch)</li>"
                 )
