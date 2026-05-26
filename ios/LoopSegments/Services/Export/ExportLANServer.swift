@@ -2965,7 +2965,7 @@ enum ExportLANServer {
     ) {
         let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
         let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
-        let durationSec = Int(ExportPlaybackState.shared.durationSeconds.rounded(.down))
+        let durationSec = Int(ExportPlaybackState.shared.exportDurationSeconds.rounded(.down))
         let active = ExportPlaybackState.shared.isLANExportActive
         let status = active ? 503 : 416
         let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(Double(startSec))
