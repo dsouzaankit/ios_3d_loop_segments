@@ -12,7 +12,7 @@ enum KeepAliveMediaSource {
     private static let label = "KeepAlive_silence.mp3"
     private static let minBytes: Int64 = 4_096
 
-    /// The one and only allowed Keep Alive loop source (bundle, then Application Support cache, then compile-time embed).
+    /// The one and only allowed Keep Alive loop source (app bundle, then Application Support cache).
     static func firstPlayable() -> Candidate? {
         switch resolve() {
         case .success(let candidate):
@@ -45,15 +45,16 @@ enum KeepAliveMediaSource {
             return .success(candidate)
         }
         do {
-            let url = try materializeEmbeddedSilence()
+            let url = try installFromBundle()
             guard let candidate = candidateIfPlayable(url) else {
                 let bytes = fileByteCount(url)
-                return .failure("embedded copy not playable (\(bytes) bytes at \(url.lastPathComponent))")
+                return .failure("cached copy not playable (\(bytes) bytes)")
             }
             return .success(candidate)
         } catch {
-            let bundleNote = bundleDiagnostic()
-            return .failure("not in app bundle; embed install failed — \(error.localizedDescription). \(bundleNote)")
+            return .failure(
+                "not in app bundle (\(error.localizedDescription)). \(bundleDiagnostic())"
+            )
         }
     }
 
@@ -71,11 +72,26 @@ enum KeepAliveMediaSource {
         }
         guard let resourcePath = bundle.resourcePath else { return nil }
         let root = URL(fileURLWithPath: resourcePath, isDirectory: true)
-        let direct = root.appendingPathComponent(label)
-        if FileManager.default.fileExists(atPath: direct.path) { return direct }
-        let nested = root.appendingPathComponent("Resources").appendingPathComponent(label)
-        if FileManager.default.fileExists(atPath: nested.path) { return nested }
+        for candidate in candidatePaths(in: root) {
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        if let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let file as URL in enumerator {
+                if file.lastPathComponent == label { return file }
+            }
+        }
         return nil
+    }
+
+    private static func candidatePaths(in root: URL) -> [URL] {
+        [
+            root.appendingPathComponent(label),
+            root.appendingPathComponent("Resources").appendingPathComponent(label),
+        ]
     }
 
     private static func installedSilenceURL() -> URL? {
@@ -84,32 +100,23 @@ enum KeepAliveMediaSource {
         return url
     }
 
-    private static func materializeEmbeddedSilence() throws -> URL {
+    private static func installFromBundle() throws -> URL {
         let dest = installDirectory().appendingPathComponent(label)
         let fm = FileManager.default
         if fm.fileExists(atPath: dest.path), fileByteCount(dest) >= minBytes {
             return dest
         }
-        if let bundle = bundleSilenceURL() {
-            try fm.createDirectory(at: installDirectory(), withIntermediateDirectories: true)
-            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-            try fm.copyItem(at: bundle, to: dest)
-            ExportRuntimeLog.mirror("Keep Alive: using bundle KeepAlive_silence.mp3")
-            return dest
-        }
-        let data = KeepAliveSilenceEmbed.mp3Data
-        guard data.count >= minBytes else {
+        guard let bundle = bundleSilenceURL() else {
             throw NSError(
                 domain: "KeepAliveMediaSource",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "embedded MP3 too small (\(data.count) bytes)"]
+                userInfo: [NSLocalizedDescriptionKey: "KeepAlive_silence.mp3 not found in app"]
             )
         }
         try fm.createDirectory(at: installDirectory(), withIntermediateDirectories: true)
-        try data.write(to: dest, options: .atomic)
-        ExportRuntimeLog.mirror(
-            "Keep Alive: installed embedded KeepAlive_silence.mp3 (\(data.count) bytes) — bundle resource was missing"
-        )
+        if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+        try fm.copyItem(at: bundle, to: dest)
+        ExportRuntimeLog.mirror("Keep Alive: cached \(label) from app bundle")
         return dest
     }
 
@@ -148,13 +155,19 @@ enum KeepAliveMediaSource {
             return "Bundle.main.resourcePath nil"
         }
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: resourcePath) else {
-            return "cannot list bundle resources"
+        var mp3s: [String] = []
+        if let names = try? fm.contentsOfDirectory(atPath: resourcePath) {
+            mp3s.append(contentsOf: names.filter { $0.lowercased().hasSuffix(".mp3") })
         }
-        let mp3s = names.filter { $0.lowercased().hasSuffix(".mp3") }.sorted()
-        if mp3s.isEmpty {
-            return "no .mp3 in bundle root (\(resourcePath))"
+        if let enumerator = fm.enumerator(atPath: resourcePath) {
+            for case let name as String in enumerator where name.lowercased().hasSuffix(".mp3") {
+                mp3s.append(name)
+            }
         }
-        return "bundle .mp3: \(mp3s.joined(separator: ", "))"
+        let unique = Array(Set(mp3s)).sorted()
+        if unique.isEmpty {
+            return "no .mp3 under \(resourcePath)"
+        }
+        return "bundle .mp3: \(unique.joined(separator: ", "))"
     }
 }
