@@ -197,7 +197,7 @@ enum ExportPaths {
         guard relativePath.hasPrefix(prefix), relativePath.hasSuffix(".txt") else { return false }
         let name = String(relativePath.dropFirst(prefix.count))
         if name == "export_latest.txt" || name == "export_progress.txt" { return true }
-        if name == "loop_segments_ok.txt" { return true }
+        if name == "search_debug.txt" || name == "loop_segments_ok.txt" { return true }
         return name.hasPrefix("export_")
     }
 
@@ -353,6 +353,17 @@ enum ExportPaths {
         return paths
     }
 
+    /// Optional LAN logs (not `export_*` history) — included in index when present on disk.
+    static func listLANAuxiliaryLogRelativePaths() -> [String] {
+        let fm = FileManager.default
+        var paths: [String] = []
+        for url in [searchDebugLogURL, loopSegmentsOkProbeURL] {
+            guard fm.fileExists(atPath: url.path) else { continue }
+            paths.append(pathRelativeToExports(url))
+        }
+        return paths
+    }
+
     /// Live + history log paths for the LAN index (`pcld_ios_media/logs/` only).
     static func listLANLogIndexRelativePaths(maxHistoryEntries: Int? = nil) -> [String] {
         var paths = [
@@ -364,7 +375,12 @@ enum ExportPaths {
             history = Array(history.prefix(maxHistoryEntries))
         }
         paths.append(contentsOf: history)
-        return dedupeLANLogIndexPaths(paths)
+        paths = dedupeLANLogIndexPaths(paths)
+        for aux in listLANAuxiliaryLogRelativePaths() where !paths.contains(aux) {
+            let insertAt = min(2, paths.count)
+            paths.insert(aux, at: insertAt)
+        }
+        return paths
     }
 
     /// Drop history rows that duplicate `export_latest.txt` (common after pause: finalized `*_paused.txt` + live copy).

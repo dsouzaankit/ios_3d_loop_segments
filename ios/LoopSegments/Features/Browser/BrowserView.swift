@@ -15,6 +15,7 @@ struct BrowserView: View {
     @State private var searchToken = 0
     @State private var searchModeNote = ""
     @State private var searchDebugStatus = ""
+    @State private var restAPISearchEnabled = PCloudSearchSettings.restAPISearchEnabled
     @State private var selectedPausedEntry: ResumeEntry?
     @State private var selectedPinnedEntry: ResumeEntry?
     @State private var pausedSidebarEntries: [ResumeEntry] = []
@@ -46,11 +47,13 @@ struct BrowserView: View {
                 } else {
                     List {
                         if isSearchActive, isSearching {
-                            HStack(spacing: 8) {
+                            HStack(alignment: .top, spacing: 8) {
                                 ProgressView()
-                                Text("Searching pCloud…")
+                                Text(searchModeNote.isEmpty ? "Searching pCloud…" : searchModeNote)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                    .lineLimit(4)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                         if !isSearchActive, #unavailable(iOS 26.0), currentPath != "/" {
@@ -152,16 +155,21 @@ struct BrowserView: View {
                                     .font(.footnote)
                             }
                         }
-                        if isSearchActive, !searchModeNote.isEmpty {
+                        if isSearchActive, !searchModeNote.isEmpty, !isSearching {
                             Text(searchModeNote)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         if isSearchActive {
+                            Toggle("pCloud REST search (account-wide)", isOn: $restAPISearchEnabled)
+                                .font(.footnote)
+                                .onChange(of: restAPISearchEnabled) { _, enabled in
+                                    PCloudSearchSettings.restAPISearchEnabled = enabled
+                                }
                             Text(searchDebugStatus)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
-                            Text("Files app → On My iPhone → Loop Segments → Exports → search_debug.txt")
+                            Text("Search trace: LAN → \(ExportPaths.pathRelativeToExports(ExportPaths.searchDebugLogURL))")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -214,6 +222,7 @@ struct BrowserView: View {
                 PausedExportDestinationView(
                     entry: entry,
                     browsing: items,
+                    browsePathStack: pathStack,
                     onSearchByName: { name in
                         searchText = name
                         searchToken += 1
@@ -224,6 +233,7 @@ struct BrowserView: View {
                 PausedExportDestinationView(
                     entry: entry,
                     browsing: items,
+                    browsePathStack: pathStack,
                     onSearchByName: { name in
                         searchText = name
                         searchToken += 1
@@ -600,26 +610,41 @@ private struct PausedExportDestinationView: View {
     @ObservedObject private var resumeStore = ResumeStore.shared
     let entry: ResumeEntry
     let browsing: [WebDAVItem]
+    /// Current Browse folder stack — merged with bookmarks inside `PCloudSearchService` (same as Browse search).
+    let browsePathStack: [String]
     let onSearchByName: (String) -> Void
 
     @State private var searchItem: WebDAVItem?
     @State private var isSearching = false
+    @State private var searchStatusLine = ""
+    @State private var resolveError: String?
 
     var body: some View {
         Group {
             if let item = resumeStore.resolveItem(for: entry, browsing: browsing + (searchItem.map { [$0] } ?? [])) {
                 ExportView(item: item)
             } else if isSearching {
-                ProgressView("Finding \(entry.displayName)…")
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Finding \(entry.displayName)…")
+                        .font(.subheadline)
+                    if !searchStatusLine.isEmpty {
+                        Text(searchStatusLine)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(4)
+                            .padding(.horizontal)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView {
-                    Label("File not in this folder", systemImage: "film")
+                    Label(notFoundTitle, systemImage: "film")
                 } description: {
-                    Text(
-                        "Search pCloud for “\(entry.displayName)” or open the folder that contains it, then tap the paused export again."
-                    )
+                    Text(notFoundDescription)
                 } actions: {
-                    Button("Search pCloud") {
+                    Button("Search in Browse") {
                         onSearchByName(entry.displayName)
                     }
                     Button("Try again") {
@@ -640,44 +665,75 @@ private struct PausedExportDestinationView: View {
         }
     }
 
+    private var notFoundTitle: String {
+        entry.pinnedCompleted ? "Source not found yet" : "File not in this folder"
+    }
+
+    private var notFoundDescription: String {
+        if let resolveError, !resolveError.isEmpty {
+            return resolveError
+        }
+        if entry.pinnedCompleted {
+            return """
+            Segment media is on disk; searching pCloud (bookmarks + Browse path, same as the search bar) to open Export for the source file. \
+            Tap Try again or Search in Browse.
+            """
+        }
+        return """
+        Uses the same pCloud search as Browse (bookmarks + current folder, optional REST search). \
+        Open the folder that contains the file or tap Search in Browse.
+        """
+    }
+
     private func resolveViaSearch() async {
         guard searchItem == nil else { return }
+        SearchDebugLog.ensureReady()
         isSearching = true
-        defer { isSearching = false }
-        guard let credentials = try? await session.prepareCredentialsForSearch() else { return }
-        let queries = searchQueries(for: entry)
-        for query in queries {
-            do {
-                let result = try await PCloudSearchService.search(
-                    query: query,
-                    credentials: credentials,
-                    browsePaths: [],
-                    status: nil
-                )
-                if let match = pickSearchMatch(in: result.items, for: entry) {
-                    searchItem = match
-                    resumeStore.backfillHrefs(from: [match])
-                    return
-                }
-            } catch {}
+        searchStatusLine = "Preparing pCloud search…"
+        resolveError = nil
+        defer {
+            isSearching = false
         }
-    }
-
-    private func searchQueries(for entry: ResumeEntry) -> [String] {
-        var queries: [String] = []
-        let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !name.isEmpty {
-            queries.append(name)
-            let base = (name as NSString).deletingPathExtension
-            if base != name, !base.isEmpty {
-                queries.append(base)
+        let credentials: WebDAVCredentials
+        do {
+            guard let prepared = try await session.prepareCredentialsForSearch() else {
+                SearchDebugLog.log("resume resolve UI: not signed in")
+                resolveError = "Sign in to search pCloud for this file."
+                return
             }
+            credentials = prepared
+        } catch is CancellationError {
+            return
+        } catch {
+            SearchDebugLog.log("resume resolve UI: prepare failed — \(error.localizedDescription)")
+            resolveError = error.localizedDescription
+            return
         }
-        return queries
-    }
-
-    private func pickSearchMatch(in items: [WebDAVItem], for entry: ResumeEntry) -> WebDAVItem? {
-        WebDAVRenameReconcile.matchResumeEntry(entry, in: items.filter(\.isVideo))
+        do {
+            if let match = try await PCloudSearchService.searchMatchingResumeEntry(
+                entry: entry,
+                credentials: credentials,
+                browsePaths: browsePathStack,
+                status: { note in
+                    Task { @MainActor in
+                        searchStatusLine = note
+                    }
+                }
+            ) {
+                searchItem = match
+                resumeStore.backfillHrefs(from: [match])
+                searchStatusLine = ""
+                return
+            }
+            resolveError = entry.pinnedCompleted
+                ? "No matching file in bookmarks or Browse path. Turn on pCloud REST search in Browse or open the source folder."
+                : "No matching file found. Try Search in Browse or enable pCloud REST search."
+        } catch is CancellationError {
+            SearchDebugLog.log("resume resolve UI: cancelled")
+        } catch {
+            SearchDebugLog.log("resume resolve UI: \(error.localizedDescription)")
+            resolveError = error.localizedDescription
+        }
     }
 }
 

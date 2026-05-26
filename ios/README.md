@@ -131,7 +131,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
-LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, `search_debug.txt`); legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
+LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, **`search_debug.txt`** when search has run); the LAN index lists **`search_debug.txt`** when on disk (legacy **`/search_debug.txt`** URL still works). Legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
 
 **PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** (Basic auth **`admin` / `iosadmin`**) can create nested folders and small files (e.g. `pcld_ios_media/scripts/run.ps1`, ≤ 2 MB per PUT). **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
 
@@ -529,6 +529,29 @@ Same toggles as **Settings that gate behavior** (above). **Full WebDAV download*
 
 The Photos import sub-workflow is **off** (`PhotosSegmentPublisher.workflowEnabled = false` in source). Re-enable there to restore the export UI and library sync.
 
+## Browse search (build 206–209)
+
+All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
+
+| Entry point | Behavior |
+|-------------|----------|
+| **Browse** search bar (`.searchable`) | Primary UI; optional **pCloud REST search (account-wide)** toggle (off by default). |
+| **Paused exports** (orange sidebar) | Auto-search on open via `searchMatchingResumeEntry` if the file is not in the current folder listing. |
+| **Pinned completed** (gray sidebar) | Same as paused — locates the pCloud source for Export settings while segment media stays on disk. |
+| **Search in Browse** (failed resume screen) | Fills the Browse search bar and runs the same pipeline. |
+
+**Default path (REST toggle off or `tokenSaved=false`):** WebDAV folder walk on **current Browse path + all folder bookmarks** (deduped). Timeout scales with root count: `min(10 + 2.5×(roots−1), 45)` seconds. Cap **80 folders** visited per search.
+
+**With REST on + token:** `search` API (~20 s) → shallow **folder index** (~15 s) → WebDAV fallback as above.
+
+**Live UI while WebDAV runs:** current folder (short path), `folders visited / 80`, queue depth, hit count, ETA (rate-based, capped by timeout). Same line is written periodically to **`pcld_ios_media/logs/search_debug.txt`** (listed on LAN `:8765` when the file exists; legacy **`/search_debug.txt`** URL works).
+
+**Empty results:** distinct messages for **WebDAV timeout** (not finished scanning), **no matches**, and **missing API token** (optional REST). Do not treat a 10 s timeout across many bookmarks as “login missing.”
+
+**Not global filename search:** Browse folder refresh (`reconcileWithBrowseListing`), export **404 rename repair** (re-list parent folder), **Alternate export** / LAN **random** pick (list videos in one folder or bookmark roots only), LAN **`/browse`** folder browser (no search box).
+
+Setting: **`PCloudSearchSettings.restAPISearchEnabled`** (`UserDefaults`, default `false`).
+
 ## pCloud REST API token limitation (Search, HLS, media metadata)
 
 The app uses **two different pCloud interfaces**:
@@ -556,7 +579,7 @@ If sign-in does not save `apiAuthToken` (logs: `tokenSaved=false`, `result=0 but
 
 | Feature | REST methods | Impact when no token |
 |---------|--------------|----------------------|
-| **Search** | `search`, `listfolder`, `getpath` | **No API search** — last-resort **WebDAV folder walk** still runs on the current browse path **plus all Browse bookmarks** (10 s cap); sign-in token message if that finds nothing |
+| **Search** | `search`, `listfolder`, `getpath` | **Browse search defaults to WebDAV only** (bookmarks + current path; timeout scales with root count, up to 45 s). While WebDAV runs, Browse shows **live folder path**, **folders visited / cap**, **queue depth**, **hit count**, and **ETA** (rate-based, capped by timeout). Turn on **pCloud REST search** for account-wide API search + folder index when a token is saved. Trace: **`pcld_ios_media/logs/search_debug.txt`** (periodic progress lines + LAN index when present) |
 | **HLS transcode fallback** | `gethlslink` | **Unavailable** — WMV/ASF (and failed sparse probe) cannot fall back to `_working_pcloud_transcode.mp4`; rely on **vanilla WebDAV download** or re-encode source to MP4 on PC |
 | **Media metadata (duration / bitrate)** | `stat` (not wired yet) / search hit fields `duration`, `videobitrate` | **Not available via REST** — LAN **Media duration** and **Media bitrate (est.)** for vanilla WMV/ASF use **AVFoundation on partial file** (often fails) then **Mbps guess from file size**; timeline can be wrong until probe succeeds |
 

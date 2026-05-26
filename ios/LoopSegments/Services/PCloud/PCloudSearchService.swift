@@ -1,6 +1,6 @@
 import Foundation
 
-/// Search order matches pCloud web: REST `search` first (~seconds), then catalog, then WebDAV walk (last, capped).
+/// Search: optional REST `search` + folder index (Browse toggle, off by default), then WebDAV walk (bookmarks + browse).
 enum PCloudSearchService {
     struct Result {
         let items: [WebDAVItem]
@@ -9,8 +9,15 @@ enum PCloudSearchService {
 
     private static let webSearchTimeoutSeconds: Double = 20
     private static let catalogTimeoutSeconds: Double = 15
-    private static let webDAVTimeoutSeconds: Double = 10
+    private static let webDAVTimeoutBaseSeconds: Double = 10
+    private static let webDAVTimeoutMaxSeconds: Double = 45
     private static let webDAVMaxFolders = 80
+
+    /// More bookmark/browse roots need more time; cap avoids multi-minute LAN stalls.
+    private static func webDAVTimeoutSeconds(rootCount: Int) -> Double {
+        let extra = max(0, rootCount - 1)
+        return min(webDAVTimeoutBaseSeconds + Double(extra) * 2.5, webDAVTimeoutMaxSeconds)
+    }
 
     /// Browse stack plus saved folder bookmarks — used for WebDAV folder walk (`extraRoots`).
     static func mergedBrowsePathsForSearch(pathStack: [String]) -> [String] {
@@ -51,30 +58,31 @@ enum PCloudSearchService {
             throw CancellationError()
         }
 
-        let bookmarkCount = FolderBookmarkStore.lanBookmarkEntries().count
         let hasToken = credentials.apiAuthToken?.isEmpty == false
+        SearchDebugLog.log(
+            "restAPISearchEnabled=\(PCloudSearchSettings.restAPISearchEnabled) tokenSaved=\(hasToken)"
+        )
+
         if !hasToken {
-            SearchDebugLog.log(
-                "search: tokenSaved=false — API skipped; WebDAV walk on browse + \(bookmarkCount) bookmark folder(s)"
-            )
-            status?("WebDAV folder walk (bookmarks + browse, \(Int(webDAVTimeoutSeconds))s max)…")
-            let webDAV = try await runWebDAVSearch(
+            SearchDebugLog.log("search: tokenSaved=false — API skipped; WebDAV only")
+            return try await webDAVOnlyResult(
                 query: trimmed,
                 credentials: credentials,
-                browsePaths: webDAVRoots
+                browsePaths: webDAVRoots,
+                status: status,
+                reason: .missingToken
             )
-            if !webDAV.items.isEmpty {
-                let note = "Found \(webDAV.items.count) match(es) via folder search (WebDAV, bookmarks + browse)."
-                SearchDebugLog.log("done: \(note)")
-                return Result(items: webDAV.items, statusNote: note)
-            }
-            let note = """
-            pCloud search login missing. Sign out, sign in again (correct US/Europe), then search. \
-            Browse still works; use 2FA app password if enabled. \
-            Also tried WebDAV on \(bookmarkCount) bookmark folder(s) and current browse path — no matches.
-            """
-            SearchDebugLog.log("done: \(note)")
-            return Result(items: [], statusNote: note)
+        }
+
+        if !PCloudSearchSettings.restAPISearchEnabled {
+            SearchDebugLog.log("search: REST API disabled in Browse — WebDAV only")
+            return try await webDAVOnlyResult(
+                query: trimmed,
+                credentials: credentials,
+                browsePaths: webDAVRoots,
+                status: status,
+                reason: .restDisabled
+            )
         }
 
         var tried: [String] = []
@@ -153,11 +161,14 @@ enum PCloudSearchService {
         }
 
         tried.append("folders (WebDAV)")
-        status?("WebDAV folder walk (bookmarks + browse, \(Int(webDAVTimeoutSeconds))s max)…")
+        let webDAVSeconds = webDAVTimeoutSeconds(rootCount: webDAVRoots.count)
+        status?("WebDAV folder walk (bookmarks + browse, \(Int(webDAVSeconds))s max)…")
         let webDAVPass = try await runWebDAVSearch(
             query: trimmed,
             credentials: credentials,
-            browsePaths: webDAVRoots
+            browsePaths: webDAVRoots,
+            timeoutSeconds: webDAVSeconds,
+            status: status
         )
         webDAVTimedOut = webDAVPass.timedOut
         let webDAV = webDAVPass.items
@@ -182,6 +193,85 @@ enum PCloudSearchService {
         return Result(items: [], statusNote: empty)
     }
 
+    private enum WebDAVOnlyReason {
+        case missingToken
+        case restDisabled
+    }
+
+    private static func webDAVOnlyResult(
+        query: String,
+        credentials: WebDAVCredentials,
+        browsePaths: [String],
+        status: (@Sendable (String) -> Void)?,
+        reason: WebDAVOnlyReason
+    ) async throws -> Result {
+        let bookmarkCount = FolderBookmarkStore.lanBookmarkEntries().count
+        let webDAVSeconds = webDAVTimeoutSeconds(rootCount: browsePaths.count)
+        status?("WebDAV folder walk (\(browsePaths.count) roots, \(Int(webDAVSeconds))s max)…")
+        let webDAV = try await runWebDAVSearch(
+            query: query,
+            credentials: credentials,
+            browsePaths: browsePaths,
+            timeoutSeconds: webDAVSeconds,
+            status: status
+        )
+        if !webDAV.items.isEmpty {
+            let note = "Found \(webDAV.items.count) match(es) via folder search (WebDAV, bookmarks + browse)."
+            SearchDebugLog.log("done: \(note)")
+            return Result(items: webDAV.items, statusNote: note)
+        }
+        let note = webDAVOnlyEmptyNote(
+            query: query,
+            reason: reason,
+            bookmarkCount: bookmarkCount,
+            rootCount: browsePaths.count,
+            timedOut: webDAV.timedOut,
+            timeoutSeconds: webDAVSeconds
+        )
+        SearchDebugLog.log("done: \(note)")
+        return Result(items: [], statusNote: note)
+    }
+
+    private static func webDAVOnlyEmptyNote(
+        query: String,
+        reason: WebDAVOnlyReason,
+        bookmarkCount: Int,
+        rootCount: Int,
+        timedOut: Bool,
+        timeoutSeconds: Double
+    ) -> String {
+        let limit = Int(timeoutSeconds)
+        if timedOut {
+            switch reason {
+            case .missingToken:
+                return """
+                Folder search timed out (\(limit)s) across \(rootCount) folder root(s) (\(bookmarkCount) bookmark(s)) — \
+                not every folder was scanned for “\(query)”. Try opening the folder in Browse first, fewer bookmarks, \
+                or sign in and turn on **pCloud REST search** for account-wide hits (see search_debug: tokenSaved). \
+                Browse and export still work without the API token.
+                """
+            case .restDisabled:
+                return """
+                Folder search timed out (\(limit)s) across \(rootCount) folder root(s) for “\(query)”. \
+                Turn on **pCloud REST search** in Browse for faster account-wide search, or open the target folder and search again.
+                """
+            }
+        }
+        switch reason {
+        case .missingToken:
+            return """
+            No matches for “\(query)” in \(bookmarkCount) bookmark folder(s) + current browse path. \
+            For account-wide search, sign in until search_debug shows tokenSaved=true, then enable **pCloud REST search**. \
+            Browse and export work without the API token.
+            """
+        case .restDisabled:
+            return """
+            No matches for “\(query)” (WebDAV on bookmarks + browse). Turn on **pCloud REST search** in Browse \
+            for account-wide web search and folder index.
+            """
+        }
+    }
+
     private static func timed<T>(
         _ operation: String,
         seconds: Double,
@@ -198,16 +288,31 @@ enum PCloudSearchService {
     private static func runWebDAVSearch(
         query: String,
         credentials: WebDAVCredentials,
-        browsePaths: [String]
+        browsePaths: [String],
+        timeoutSeconds: Double? = nil,
+        status: (@Sendable (String) -> Void)? = nil
     ) async throws -> WebDAVSearchPass {
+        let seconds = timeoutSeconds ?? webDAVTimeoutSeconds(rootCount: browsePaths.count)
+        let progressHandler: (@Sendable (WebDAVSearchProgress) -> Void)? = status.map { report in
+            { progress in
+                let line = progress.uiStatusLine()
+                report(line)
+                if progress.phase == .discoveringRoots
+                    || (progress.foldersVisited > 0 && progress.foldersVisited % 15 == 0) {
+                    SearchDebugLog.log(line)
+                }
+            }
+        }
         do {
-            let items = try await timed("WebDAV search", seconds: webDAVTimeoutSeconds) {
+            let items = try await timed("WebDAV search", seconds: seconds) {
                 try await WebDAVSearchClient.search(
                     query: query,
                     credentials: credentials,
                     extraRoots: browsePaths,
                     maxFoldersToVisit: webDAVMaxFolders,
-                    quickRootDiscovery: true
+                    quickRootDiscovery: true,
+                    timeoutSeconds: seconds,
+                    progress: progressHandler
                 )
             }
             return WebDAVSearchPass(items: items, timedOut: false)
@@ -215,7 +320,7 @@ enum PCloudSearchService {
             SearchDebugLog.log("WebDAV walk: cancelled")
             throw CancellationError()
         } catch is ExportAsyncTimeout.TimedOut {
-            SearchDebugLog.log("WebDAV walk: timed out after \(Int(webDAVTimeoutSeconds))s")
+            SearchDebugLog.log("WebDAV walk: timed out after \(Int(seconds))s (\(browsePaths.count) roots)")
             return WebDAVSearchPass(items: [], timedOut: true)
         } catch {
             SearchDebugLog.log("WebDAV walk failed: \(error.localizedDescription)")
@@ -251,5 +356,53 @@ enum PCloudSearchService {
             return "No matches for “\(query)” (\(methods))\(suffix). Try a shorter name or browse “\(folder)”."
         }
         return "No matches for “\(query)” (\(methods))\(suffix). Try a shorter fragment or sign out/in to refresh API login."
+    }
+
+    /// Same pipeline as Browse search (bookmarks + path stack, REST toggle, WebDAV progress) — for paused / pinned resume rows.
+    static func searchMatchingResumeEntry(
+        entry: ResumeEntry,
+        credentials: WebDAVCredentials,
+        browsePaths: [String],
+        status: (@Sendable (String) -> Void)? = nil
+    ) async throws -> WebDAVItem? {
+        SearchDebugLog.log(
+            "resume resolve start: \"\(entry.displayName)\" pinned=\(entry.pinnedCompleted) browseDepth=\(browsePaths.count)"
+        )
+        for query in resumeSearchQueries(for: entry) {
+            guard !Task.isCancelled else {
+                SearchDebugLog.log("resume resolve: cancelled")
+                throw CancellationError()
+            }
+            SearchDebugLog.log("resume resolve: query=\"\(query)\"")
+            let result = try await search(
+                query: query,
+                credentials: credentials,
+                browsePaths: browsePaths,
+                status: status
+            )
+            let videos = result.items.filter(\.isVideo)
+            if let item = WebDAVRenameReconcile.matchResumeEntry(entry, in: videos) {
+                SearchDebugLog.log("resume resolve: matched \"\(item.name)\" href=\(item.href)")
+                return item
+            }
+            SearchDebugLog.log(
+                "resume resolve: no reconcile match for query=\"\(query)\" (\(videos.count) video hit(s))"
+            )
+        }
+        SearchDebugLog.log("resume resolve: gave up — no match")
+        return nil
+    }
+
+    private static func resumeSearchQueries(for entry: ResumeEntry) -> [String] {
+        var queries: [String] = []
+        let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty {
+            queries.append(name)
+            let base = (name as NSString).deletingPathExtension
+            if base != name, !base.isEmpty {
+                queries.append(base)
+            }
+        }
+        return queries
     }
 }

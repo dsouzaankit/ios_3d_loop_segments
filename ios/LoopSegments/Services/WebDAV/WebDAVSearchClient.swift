@@ -10,10 +10,44 @@ enum WebDAVSearchClient {
         credentials: WebDAVCredentials,
         extraRoots: [String] = [],
         maxFoldersToVisit: Int = maxFoldersToVisitDefault,
-        quickRootDiscovery: Bool = false
+        quickRootDiscovery: Bool = false,
+        timeoutSeconds: Double = 0,
+        progress: (@Sendable (WebDAVSearchProgress) -> Void)? = nil
     ) async throws -> [WebDAVItem] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return [] }
+
+        let started = ContinuousClock.now
+        let folderLimit = max(1, maxFoldersToVisit)
+        var throttle = ProgressThrottle(minInterval: 0.2)
+
+        func elapsedSeconds() -> Double {
+            Double(ContinuousClock.now - started) / 1_000_000_000
+        }
+
+        func report(
+            phase: WebDAVSearchProgress.Phase,
+            folderPath: String? = nil,
+            foldersVisited: Int = 0,
+            queueDepth: Int = 0,
+            resultsFound: Int = 0,
+            force: Bool = false
+        ) {
+            guard let progress else { return }
+            let snapshot = WebDAVSearchProgress(
+                phase: phase,
+                folderPath: folderPath,
+                foldersVisited: foldersVisited,
+                folderLimit: folderLimit,
+                queueDepth: queueDepth,
+                resultsFound: resultsFound,
+                elapsedSeconds: elapsedSeconds(),
+                timeoutSeconds: timeoutSeconds
+            )
+            throttle.fire(snapshot, force: force, handler: progress)
+        }
+
+        report(phase: .discoveringRoots, force: true)
 
         let client = WebDAVClient(credentials: credentials)
         let roots = try await discoverSearchRoots(
@@ -22,7 +56,6 @@ enum WebDAVSearchClient {
             extraRoots: extraRoots,
             quick: quickRootDiscovery
         )
-        let folderLimit = max(1, maxFoldersToVisit)
         var results: [WebDAVItem] = []
         var queue = roots
         var visited = Set<String>()
@@ -37,6 +70,15 @@ enum WebDAVSearchClient {
             if visited.contains(listingPath) { continue }
             visited.insert(listingPath)
             foldersVisited += 1
+
+            report(
+                phase: .listingFolder,
+                folderPath: listingPath,
+                foldersVisited: foldersVisited,
+                queueDepth: queue.count,
+                resultsFound: results.count,
+                force: foldersVisited == 1
+            )
 
             let items: [WebDAVItem]
             do {
@@ -59,7 +101,24 @@ enum WebDAVSearchClient {
                     queue.append(item.href)
                 }
             }
+
+            report(
+                phase: .listingFolder,
+                folderPath: listingPath,
+                foldersVisited: foldersVisited,
+                queueDepth: queue.count,
+                resultsFound: results.count
+            )
         }
+
+        report(
+            phase: .listingFolder,
+            folderPath: nil,
+            foldersVisited: foldersVisited,
+            queueDepth: 0,
+            resultsFound: results.count,
+            force: true
+        )
 
         if results.isEmpty, foldersVisited > 0, listFailures == foldersVisited {
             throw WebDAVError.httpStatus(401)
@@ -119,5 +178,30 @@ enum WebDAVSearchClient {
             }
         }
         return userFiles + other
+    }
+
+    private struct ProgressThrottle: Sendable {
+        let minInterval: Double
+        private var lastAt: ContinuousClock.Instant?
+        private var lastVisited = 0
+
+        mutating func fire(
+            _ snapshot: WebDAVSearchProgress,
+            force: Bool,
+            handler: @Sendable (WebDAVSearchProgress) -> Void
+        ) {
+            let now = ContinuousClock.now
+            let visited = snapshot.foldersVisited
+            let intervalElapsed: Bool
+            if let lastAt {
+                intervalElapsed = Double(now - lastAt) / 1_000_000_000 >= minInterval
+            } else {
+                intervalElapsed = true
+            }
+            guard force || intervalElapsed || visited - lastVisited >= 4 else { return }
+            lastAt = now
+            lastVisited = visited
+            handler(snapshot)
+        }
     }
 }

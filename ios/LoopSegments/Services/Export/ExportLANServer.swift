@@ -1837,6 +1837,30 @@ enum ExportLANServer {
             : items.joined()
     }
 
+    private static func htmlLANExportLogListItems(relativePaths: [String]) -> String {
+        relativePaths.map { rel in
+            let escaped = htmlEscape(rel)
+            return "<li><a href=\"\(escaped)\">\(escaped)</a></li>"
+        }.joined()
+    }
+
+    /// During export: live log plus auxiliary traces (e.g. `search_debug.txt`) without scanning history.
+    private static func htmlLANMinimalExportLogLinks() -> String {
+        var paths = [ExportPaths.pathRelativeToExports(ExportPaths.latestLogTextURL)]
+        for aux in ExportPaths.listLANAuxiliaryLogRelativePaths() where !paths.contains(aux) {
+            paths.append(aux)
+        }
+        return htmlLANExportLogListItems(relativePaths: paths)
+    }
+
+    private static func htmlMonitorQuickLogLinks() -> String {
+        var links = [#"<a href="export_latest.txt">export_latest.txt</a>"#]
+        if FileManager.default.fileExists(atPath: ExportPaths.searchDebugLogURL.path) {
+            links.append(#"<a href="search_debug.txt">search_debug.txt</a>"#)
+        }
+        return links.joined(separator: " · ")
+    }
+
     private static func exportLogsFileListHTML() -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -2055,7 +2079,7 @@ enum ExportLANServer {
                 </style>
                 </head><body>
                 <h1>Loop Segments — LAN monitor</h1>
-                <p><a href="/browse">Open pCloud browser &amp; export controls</a> · <a href="export_latest.txt">export_latest.txt</a></p>
+                <p><a href="/browse">Open pCloud browser &amp; export controls</a> · \(htmlMonitorQuickLogLinks())</p>
                 <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status">
                   <strong id="lan-export-pending-title">Processing export request</strong>
                   <span id="lan-export-pending-detail">Keep Loop Segments open in the foreground on the phone.</span>
@@ -2073,7 +2097,7 @@ enum ExportLANServer {
                 </ul>
                 <h3>Export logs (newest first)</h3>
                 <div class="lan-playback-logs-scroll"><ul id="lan-export-logs">
-                <li><a href="export_latest.txt">export_latest.txt</a></li>
+                \(exportActive ? htmlLANMinimalExportLogLinks() : exportLogsFileListHTML())
                 </ul></div>
                 \(htmlMonitorManualRefreshScript())
                 </body></html>
@@ -2099,7 +2123,7 @@ enum ExportLANServer {
         let logList: String
         if exportActive {
             mediaList = "<li><em>File list deferred during export — tap Refresh file list or use WebDAV.</em></li>"
-            logList = "<li><a href=\"export_latest.txt\">export_latest.txt</a></li>"
+            logList = htmlLANMinimalExportLogLinks()
         } else {
             mediaList = playbackMediaFileListHTML()
             logList = exportLogsFileListHTML()
