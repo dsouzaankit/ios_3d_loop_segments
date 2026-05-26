@@ -147,7 +147,6 @@ struct ExportView: View {
                 Text("LAN page (`http://<phone-ip>:8765/`) can browse pCloud and start, pause, or stop export — keep the app open in the foreground.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                alternateExportSection
                 DisclosureGroup("Advanced fallback") {
                     Picker(
                         "pCloud HLS threshold",
