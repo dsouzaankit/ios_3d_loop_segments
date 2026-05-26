@@ -570,6 +570,10 @@ enum ExportLANServer {
             return
         }
         if normalized == "browse" {
+            if ExportPlaybackState.shared.isLANExportActive {
+                sendBrowseUnavailableDuringExport(connection: connection, done: done)
+                return
+            }
             if isBrowserLikeRequest(requestHeaders: requestHeaders) {
                 sendBrowseIndexHTML(connection, done: done)
                 return
@@ -711,6 +715,36 @@ enum ExportLANServer {
     private static var lastLANMetricsRefresh: Date?
     private static let lanMetricsRefreshMinInterval: TimeInterval = 45
     private static let lanStatusFilesCap = 48
+
+    /// Zero links, zero JS, zero filesystem — Chrome speculative prefetch of `/browse` or `.mp4` hrefs was jetsaming the phone.
+    private static let minimalMonitorHTMLDuringExport = Data(
+        """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="Cache-Control" content="no-store">
+        <title>Loop Segments — export running</title>
+        <style>
+        body { font: -apple-system-body; margin: 1.25rem; line-height: 1.45; max-width: 42rem; }
+        code { font-size: 0.92em; word-break: break-all; }
+        </style>
+        </head>
+        <body>
+        <h1>Export running</h1>
+        <p>This page intentionally has <strong>no hyperlinks</strong>. Chrome desktop was prefetching
+        <code>/browse</code> and video paths from the monitor and crashing the app during large exports.</p>
+        <p><strong>Live log</strong> — type in the address bar (same host, port 8765):</p>
+        <p><code>/export_latest.txt</code></p>
+        <p><strong>Progress tail</strong>:</p>
+        <p><code>/pcld_ios_media/logs/export_progress.txt</code></p>
+        <p><strong>Playback</strong> — PotPlayer / WebDAV on this host (unchanged).</p>
+        <p>When export is idle, reload <code>/</code> for the full monitor with refresh buttons.</p>
+        </body>
+        </html>
+        """.utf8
+    )
 
     private static var lanIndexSnapshotTTL: TimeInterval {
         ExportPlaybackState.shared.isLANExportActive
@@ -2008,8 +2042,33 @@ enum ExportLANServer {
             : items.joined()
     }
 
+    private static func sendBrowseUnavailableDuringExport(
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        sendResponse(
+            connection: connection,
+            status: 503,
+            contentType: "text/plain; charset=utf-8",
+            body: Data(
+                "pCloud browser (/browse) disabled during export — use WebDAV (PotPlayer) or open /export_latest.txt in the address bar.".utf8
+            ),
+            done: done
+        )
+    }
+
     /// Lightweight monitor page (playback + logs + pause/stop). No embedded pCloud browser.
     private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        if ExportPlaybackState.shared.isLANExportActive {
+            sendResponse(
+                connection: connection,
+                status: 200,
+                contentType: "text/html; charset=utf-8",
+                body: minimalMonitorHTMLDuringExport,
+                done: done
+            )
+            return
+        }
         autoreleasepool {
             let html = """
                 <!DOCTYPE html>
@@ -2071,6 +2130,10 @@ enum ExportLANServer {
 
     /// Full LAN page with pCloud folder browser (heavier — use `/` for monitor-only).
     private static func sendBrowseIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        if ExportPlaybackState.shared.isLANExportActive {
+            sendBrowseUnavailableDuringExport(connection: connection, done: done)
+            return
+        }
         let playbackStatusBlock = htmlPlaybackStatusShell()
         let mediaList = "<li><em>Loading playback links…</em></li>"
         let logList = "<li><em>Loading export logs…</em></li>"

@@ -188,7 +188,7 @@ The HTML index uses fixed JavaScript timers (embedded at page load; not configur
 | **Manual** | **`GET /status.json`** | Monitor **`/`** only — tap **Refresh status** (no timer). |
 | **Manual** | **`GET /status_lists.json`** | Monitor **`/`** — tap **Refresh file list**. |
 | **`/browse` only** | Auto **60 s** / **120 s** | Full page timers (heavier; avoid during 9 GB+ export). |
-| **On first open** | **`GET /`** | Static links (log, `loop/`, `_working*`) — **no** JSON, **no** archive scan, **no** background fetch until you tap refresh. Non-WebDAV clients (browser, Cursor, curl) get this HTML; Skybox/WebDAV still get a minimal DAV listing on `GET /`. **Chrome:** during export, video paths on `/` are plain text (no `href`) so the browser does not speculative-prefetch multi‑GB files; **PotPlayer/WebDAV** is unaffected. |
+| **On first open** | **`GET /`** | Idle: static links + manual refresh buttons. **During export:** a tiny HTML page with **no links and no JavaScript** (Chrome was prefetching `/browse` and video URLs from the monitor and jetsaming the phone). Type **`/export_latest.txt`** in the address bar for the log; use **WebDAV** for playback. **`/browse`** returns 503 while export runs. |
 | **Never auto** | **`GET /export_latest.txt`**, media files, WebDAV | Log/media bytes change on disk only; reload or follow a link to see updates. |
 
 **Every 60 s** (`status.json` while export active) — live export / playback metrics:
