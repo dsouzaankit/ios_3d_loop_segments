@@ -493,6 +493,20 @@ enum ExportLANServer {
         !isWebDAVClient(requestHeaders: requestHeaders)
     }
 
+    /// Chrome desktop may speculative-prefetch same-origin links on the monitor page (PotPlayer WebDAV does not).
+    private static func isBrowserPrefetchRequest(requestHeaders: String) -> Bool {
+        let lower = requestHeaders.lowercased()
+        if lower.contains("sec-purpose: prefetch") { return true }
+        if lower.contains("purpose: prefetch") { return true }
+        if lower.contains("x-moz: prefetch") { return true }
+        if lower.contains("sec-fetch-mode: prefetch") { return true }
+        if lower.contains("sec-fetch-mode: no-cors"),
+           lower.contains("sec-fetch-dest: video") || lower.contains("sec-fetch-dest: audio") {
+            return true
+        }
+        return false
+    }
+
     private static func lanWebDAVAuthHeaderLines() -> [String] {
         ["WWW-Authenticate: Basic realm=\"\(lanWebDAVRealm)\""]
     }
@@ -730,6 +744,7 @@ enum ExportLANServer {
     /// Static links for monitor `/` (no index scan on first paint).
     private static func htmlMonitorStaticPlaybackLinks() -> String {
         var items: [String] = []
+        let exportActive = ExportPlaybackState.shared.isLANExportActive
         items.append("<li><a href=\"export_latest.txt\">export_latest.txt</a> (live log)</li>")
         let progress = ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL)
         items.append("<li><a href=\"\(htmlEscape(progress))\">\(htmlEscape(progress))</a></li>")
@@ -738,20 +753,35 @@ enum ExportLANServer {
             let url = ExportPaths.segmentURL(index: index)
             guard fm.fileExists(atPath: url.path) else { continue }
             let rel = ExportPaths.pathRelativeToExports(url)
-            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a></li>")
+            items.append(htmlMonitorMediaListItem(relativePath: rel, note: nil))
         }
         if fm.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
             let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL)
-            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a> (growing transcode)</li>")
+            items.append(htmlMonitorMediaListItem(relativePath: rel, note: "growing transcode"))
         }
         if fm.fileExists(atPath: ExportPaths.workingSourceURL.path),
            !ExportPaths.shouldHideSparseWorkingFromLAN() {
             let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
-            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a> (sparse)</li>")
+            items.append(htmlMonitorMediaListItem(relativePath: rel, note: "sparse"))
+        }
+        if exportActive {
+            items.append(
+                "<li><em>Video paths are text-only during export (Chrome may prefetch &lt;a href&gt; and jetsam the phone). Use PotPlayer/WebDAV.</em></li>"
+            )
         }
         return items.isEmpty
             ? "<li><em>No media files yet.</em></li>"
             : items.joined()
+    }
+
+    /// During export, omit `href` on video paths so Chrome does not speculative-prefetch multi‑GB files.
+    private static func htmlMonitorMediaListItem(relativePath: String, note: String?) -> String {
+        let escaped = htmlEscape(relativePath)
+        let suffix = note.map { " (\(htmlEscape($0)))" } ?? ""
+        if ExportPlaybackState.shared.isLANExportActive {
+            return "<li><code>\(escaped)</code>\(suffix)</li>"
+        }
+        return "<li><a href=\"\(escaped)\">\(escaped)</a>\(suffix)</li>"
     }
 
     private static func currentLANIndexSnapshot() -> LANIndexSnapshot {
@@ -1986,6 +2016,8 @@ enum ExportLANServer {
                 <html lang="en"><head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
+                <meta http-equiv="Cache-Control" content="no-store">
+                <meta http-equiv="x-dns-prefetch-control" content="off">
                 <title>Loop Segments — LAN monitor</title>
                 <style>
                 body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
@@ -2778,6 +2810,20 @@ enum ExportLANServer {
         requestHeaders: String,
         done: @escaping () -> Void
     ) {
+        if ExportPlaybackState.shared.isLANExportActive,
+           isBrowserPrefetchRequest(requestHeaders: requestHeaders),
+           !isWebDAVClient(requestHeaders: requestHeaders) {
+            sendResponse(
+                connection: connection,
+                status: 503,
+                contentType: "text/plain; charset=utf-8",
+                body: Data(
+                    "Export active — browser prefetch disabled. Use WebDAV (PotPlayer) or open export_latest.txt only.".utf8
+                ),
+                done: done
+            )
+            return
+        }
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
               let sizeNum = attrs[.size] as? NSNumber,
