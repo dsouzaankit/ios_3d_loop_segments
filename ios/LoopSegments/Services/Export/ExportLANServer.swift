@@ -488,6 +488,21 @@ enum ExportLANServer {
         return false
     }
 
+    /// `GET /` monitor HTML for any non-WebDAV client (browser, curl, tools without `Accept: text/html`).
+    private static func shouldServeMinimalMonitorHTML(requestHeaders: String) -> Bool {
+        !isWebDAVClient(requestHeaders: requestHeaders)
+    }
+
+    /// Chrome desktop may speculative-prefetch same-origin links on the monitor page (PotPlayer WebDAV does not).
+    private static func isBrowserPrefetchRequest(requestHeaders: String) -> Bool {
+        let lower = requestHeaders.lowercased()
+        if lower.contains("sec-purpose: prefetch") { return true }
+        if lower.contains("purpose: prefetch") { return true }
+        if lower.contains("x-moz: prefetch") { return true }
+        if lower.contains("sec-fetch-mode: prefetch") { return true }
+        return false
+    }
+
     private static func lanWebDAVAuthHeaderLines() -> [String] {
         ["WWW-Authenticate: Basic realm=\"\(lanWebDAVRealm)\""]
     }
@@ -535,8 +550,8 @@ enum ExportLANServer {
     ) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
-            if isBrowserLikeRequest(requestHeaders: requestHeaders) {
-                sendIndexHTML(connection, done: done)
+            if shouldServeMinimalMonitorHTML(requestHeaders: requestHeaders) {
+                sendMinimalIndexHTML(connection, done: done)
                 return
             }
             // Skybox validates with GET / — use 200 + DAV XML (207 on GET confuses some clients).
@@ -550,8 +565,20 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "browse" {
+            if isBrowserLikeRequest(requestHeaders: requestHeaders) {
+                sendBrowseIndexHTML(connection, done: done)
+                return
+            }
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+            return
+        }
         if normalized == "status.json" {
             sendStatusJSON(connection, done: done)
+            return
+        }
+        if normalized == "status_lists.json" {
+            sendStatusListsJSON(connection, done: done)
             return
         }
         let (resourcePath, query) = splitPathAndQuery(normalized)
@@ -664,17 +691,82 @@ enum ExportLANServer {
         let modified: Date?
     }
 
-    private static func listExportFiles() -> [ExportFileEntry] {
+    private struct LANIndexSnapshot {
+        let playback: [ExportFileEntry]
+        let logs: [ExportFileEntry]
+        let builtAt: Date
+    }
+
+    private static var lanIndexSnapshot: LANIndexSnapshot?
+    private static let lanIndexSnapshotTTLIdle: TimeInterval = 30
+    private static let lanIndexSnapshotTTLExport: TimeInterval = 45
+    private static let lanStatusPollMs = 60_000
+    private static let lanStatusListsPollMs = 120_000
+    private static var lastLANMetricsRefresh: Date?
+    private static let lanMetricsRefreshMinInterval: TimeInterval = 45
+    private static let lanStatusFilesCap = 48
+
+    private static var lanIndexSnapshotTTL: TimeInterval {
+        ExportPlaybackState.shared.isLANExportActive
+            ? lanIndexSnapshotTTLExport
+            : lanIndexSnapshotTTLIdle
+    }
+
+    private static func exportFileEntry(relativePath: String) -> ExportFileEntry? {
+        guard let url = resolveExportFile(relativePath: relativePath) else { return nil }
         let fm = FileManager.default
-        var entries: [ExportFileEntry] = []
-        for rel in allowedServableRelativePaths().sorted() where rel != "status.json" {
-            guard let url = resolveExportFile(relativePath: rel) else { continue }
-            let attrs = try? fm.attributesOfItem(atPath: url.path)
-            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-            let modified = attrs?[.modificationDate] as? Date
-            entries.append(ExportFileEntry(name: rel, url: url, size: size, modified: modified))
+        let attrs = try? fm.attributesOfItem(atPath: url.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        let modified = attrs?[.modificationDate] as? Date
+        return ExportFileEntry(name: relativePath, url: url, size: size, modified: modified)
+    }
+
+    private static func buildLANIndexSnapshot() -> LANIndexSnapshot {
+        autoreleasepool {
+            let exportActive = ExportPlaybackState.shared.isLANExportActive
+            let archiveCap = exportActive ? 0 : ExportPaths.lanPlaybackArchiveIndexLimit
+            let playback = ExportPaths.listLANPlaybackIndexRelativePaths(maxArchiveEntries: archiveCap)
+                .compactMap { exportFileEntry(relativePath: $0) }
+            let logCap = exportActive ? 4 : 24
+            let logs = ExportPaths.listLANLogIndexRelativePaths(maxHistoryEntries: logCap)
+                .compactMap { exportFileEntry(relativePath: $0) }
+            return LANIndexSnapshot(playback: playback, logs: logs, builtAt: Date())
+        }
+    }
+
+    private static func currentLANIndexSnapshot() -> LANIndexSnapshot {
+        if let cached = lanIndexSnapshot,
+           Date().timeIntervalSince(cached.builtAt) < lanIndexSnapshotTTL {
+            return cached
+        }
+        let snapshot = buildLANIndexSnapshot()
+        lanIndexSnapshot = snapshot
+        return snapshot
+    }
+
+    private static func statusFilesJSONArray(from index: LANIndexSnapshot) -> [[String: Any]] {
+        var fileEntries = index.playback + index.logs
+        if fileEntries.count > lanStatusFilesCap {
+            fileEntries = Array(fileEntries.prefix(lanStatusFilesCap))
+        }
+        var entries: [[String: Any]] = []
+        entries.reserveCapacity(fileEntries.count)
+        for entry in fileEntries {
+            var dict: [String: Any] = ["name": entry.name]
+            if entry.size > 0 {
+                dict["bytes"] = entry.size
+            }
+            if let modified = entry.modified {
+                dict["modified"] = ISO8601DateFormatter().string(from: modified)
+            }
+            entries.append(dict)
         }
         return entries
+    }
+
+    private static func listExportFiles() -> [ExportFileEntry] {
+        let index = currentLANIndexSnapshot()
+        return index.playback + index.logs
     }
 
     private static let archivePlaybackPrefix = "\(ExportPaths.mediaExportFolderName)/archive/"
@@ -684,37 +776,16 @@ enum ExportLANServer {
             || ExportPaths.canonicalLANLogRelativePath(relativePath) != nil
     }
 
-    /// Playback/media paths (no logs); `archive/` entries newest archival stamp first.
+    /// Playback/media paths (active first, then capped `archive/` newest-first).
     private static func listExportFilesForPlaybackIndex() -> [ExportFileEntry] {
-        let all = listExportFiles().filter { !isLANExportLogRelativePath($0.name) }
-        var active: [ExportFileEntry] = []
-        var archived: [ExportFileEntry] = []
-        for entry in all {
-            if entry.name.hasPrefix(archivePlaybackPrefix) {
-                archived.append(entry)
-            } else {
-                active.append(entry)
-            }
-        }
-        archived.sort { lhs, rhs in
-            playbackArchiveSortKey(lhs) > playbackArchiveSortKey(rhs)
-        }
-        return active + archived
+        currentLANIndexSnapshot().playback
     }
 
     /// `pcld_ios_media/logs/export_*.txt` (live + history) — newest first.
     private static func listExportLogEntriesForLANIndex() -> [ExportFileEntry] {
-        let liveLatest = ExportPaths.pathRelativeToExports(ExportPaths.latestLogTextURL)
-        let liveProgress = ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL)
-        return listExportFiles()
-            .filter { entry in
-                entry.name == liveLatest
-                    || entry.name == liveProgress
-                    || ExportPaths.isLANExportHistoryLogRelativePath(entry.name)
-            }
-            .sorted { lhs, rhs in
-                exportLogSortKey(lhs) > exportLogSortKey(rhs)
-            }
+        currentLANIndexSnapshot().logs.sorted { lhs, rhs in
+            exportLogSortKey(lhs) > exportLogSortKey(rhs)
+        }
     }
 
     private static func exportLogSortKey(_ entry: ExportFileEntry) -> Date {
@@ -790,17 +861,39 @@ enum ExportLANServer {
 
     private static func allowedServableRelativePaths() -> Set<String> {
         var names = rootServableRelativePaths()
-        for rel in ExportPaths.lanBrowsableMediaRelativePaths() {
+        for rel in ExportPaths.listLANPlaybackIndexRelativePaths(
+            maxArchiveEntries: ExportPaths.lanPlaybackArchiveIndexLimit + 32
+        ) {
             names.insert(rel)
         }
-        for rel in ExportPaths.listExportHistoryLogRelativePaths() {
+        for rel in ExportPaths.listLANLogIndexRelativePaths() {
             names.insert(rel)
         }
         return names
     }
 
     private static func mediaPropfindChildDepthLimit(from depth: Int) -> Int {
-        depth == 2 ? 999 : depth
+        let requested = depth >= 2 ? 2 : max(0, depth)
+        if ExportPlaybackState.shared.isLANExportActive {
+            return min(requested, 1)
+        }
+        return min(requested, 3)
+    }
+
+    /// Root PROPFIND/GET-DAV children — light path during export (no archive scan / full log sort).
+    private static func propfindRootChildEntries() -> [ExportFileEntry] {
+        if ExportPlaybackState.shared.isLANExportActive {
+            return propfindRootChildEntriesDuringExport()
+        }
+        return listExportFilesForPlaybackIndex() + listExportLogEntriesForLANIndex()
+    }
+
+    private static func propfindRootChildEntriesDuringExport() -> [ExportFileEntry] {
+        autoreleasepool {
+            let paths = ExportPaths.listLANPlaybackIndexRelativePaths(maxArchiveEntries: 0)
+                + ExportPaths.listLANLogIndexRelativePaths(maxHistoryEntries: 4)
+            return paths.compactMap { exportFileEntry(relativePath: $0) }
+        }
     }
 
     private static func appendMediaDirectoryPropfind(
@@ -1276,7 +1369,7 @@ enum ExportLANServer {
                         modified: nil
                     )
                 )
-                for entry in listExportFiles() {
+                for entry in propfindRootChildEntries() {
                     responses.append(
                         propfindEntryXML(
                             href: davListingHref(path: "/\(entry.name)", isCollection: false),
@@ -1348,8 +1441,18 @@ enum ExportLANServer {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// During export, omit `href` on video paths so Chrome does not speculative-prefetch multi-GB files.
+    private static func omitVideoHrefOnLANIndex(relativePath: String) -> Bool {
+        ExportPlaybackState.shared.isLANExportActive
+            && ExportPaths.isLANBrowsableMediaRelativePath(relativePath)
+    }
+
     /// Plain `href` for WebDAV / PotPlayer; separate browser link with `#t=` when export seek &gt; 0.
-    private static func lanIndexPlaybackLinks(relativePath escaped: String, resumeStartSec: Int) -> String {
+    private static func lanIndexPlaybackLinks(relativePath name: String, resumeStartSec: Int) -> String {
+        let escaped = htmlEscape(name)
+        if omitVideoHrefOnLANIndex(name) {
+            return "<code>\(escaped)</code>"
+        }
         let primary = "<a href=\"\(escaped)\">\(escaped)</a>"
         guard resumeStartSec > 0 else { return primary }
         return """
@@ -1398,13 +1501,32 @@ enum ExportLANServer {
         """
     }
 
-    /// Poll `status.json` for export source + LAN playback stats.
-    private static func htmlLANLiveRefreshScript() -> String {
-        let pollMs = ExportPlaybackState.shared.isLANExportActive ? 3000 : 5000
+    /// Poll `status.json` for export source + LAN playback stats; lists on `status_lists.json`.
+    /// `monitorOnly` — skip pCloud bookmark fetch on list poll. `deferAutoPoll` — `/browse` during export.
+    private static func htmlLANLiveRefreshScript(
+        monitorOnly: Bool = false,
+        deferAutoPoll: Bool = false
+    ) -> String {
+        let bookmarkPoll = monitorOnly
+            ? ""
+            : """
+            if (typeof window.refreshLANBookmarks === "function") {
+              window.refreshLANBookmarks().catch(function () {});
+            }
+            """
+        let autoPollStart = deferAutoPoll
+            ? ""
+            : """
+          poll();
+          setTimeout(pollLists, 5000);
+          setInterval(poll, pollMs);
+          setInterval(pollLists, listPollMs);
+            """
         return """
         <script>
         (function () {
-          var pollMs = \(pollMs);
+          var pollMs = \(lanStatusPollMs);
+          var listPollMs = \(lanStatusListsPollMs);
           function esc(s) {
             return String(s)
               .replace(/&/g, "&amp;")
@@ -1479,27 +1601,50 @@ enum ExportLANServer {
               .then(function (r) { return r.json(); })
               .then(function (j) { applyPlaybackSection(j); return j; });
           };
-          function poll() {
-            if (typeof window.refreshLANBookmarks === "function") {
-              window.refreshLANBookmarks().catch(function () {});
+          function applyLists(j) {
+            if (!j) return;
+            if (typeof j.playbackListHTML === "string") {
+              var files = document.getElementById("lan-playback-files");
+              if (files) files.innerHTML = j.playbackListHTML;
             }
+            if (typeof j.exportLogsListHTML === "string") {
+              var logs = document.getElementById("lan-export-logs");
+              if (logs) logs.innerHTML = j.exportLogsListHTML;
+            }
+          }
+          function pollLists() {
+            fetch("status_lists.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(applyLists)
+              .catch(function () {});
+          }
+          function poll() {
+            \(bookmarkPoll)
             fetch("status.json", { cache: "no-store" })
               .then(function (r) { return r.json(); })
               .then(function (j) {
                 applyExportSource(j.exportSource);
                 applyLive(j.lanLive);
-                applyPlaybackSection(j);
+                if (typeof j.playbackStatusHTML === "string") {
+                  var status = document.getElementById("lan-playback-status");
+                  if (status) status.innerHTML = j.playbackStatusHTML;
+                }
               })
               .catch(function () {});
           }
-          poll();
-          setInterval(poll, pollMs);
+          \(autoPollStart)
         })();
         </script>
         """
     }
 
     private static func refreshLANMetricsBeforeStatusResponse() {
+        let now = Date()
+        if let last = lastLANMetricsRefresh,
+           now.timeIntervalSince(last) < lanMetricsRefreshMinInterval {
+            return
+        }
+        lastLANMetricsRefresh = now
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
             return
         }
@@ -1565,7 +1710,10 @@ enum ExportLANServer {
 
     private static func playbackMediaFileListHTML() -> String {
         var items: [String] = []
-        for entry in listExportFilesForPlaybackIndex() {
+        let entries = listExportFilesForPlaybackIndex()
+        let limit = ExportPaths.lanPlaybackArchiveIndexLimit + 12
+        let capped = entries.count > limit
+        for entry in entries.prefix(limit) {
             let name = entry.name
             var sizeNote = ""
             if entry.size > 0 {
@@ -1583,14 +1731,17 @@ enum ExportLANServer {
                     ? " — export seek \(formatLANClock(startSec)) (download from 0:00)"
                     : ""
                 items.append(
-                    "<li>\(lanIndexPlaybackLinks(relativePath: escaped, resumeStartSec: startSec))\(sizeNote)\(vanillaNote)\(seekNote)</li>"
+                    "<li>\(lanIndexPlaybackLinks(relativePath: name, resumeStartSec: startSec))\(sizeNote)\(vanillaNote)\(seekNote)</li>"
                 )
                 continue
             }
             if name == ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL) {
                 let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
+                let link = omitVideoHrefOnLANIndex(name)
+                    ? "<code>\(escaped)</code>"
+                    : "<a href=\"\(escaped)\">\(escaped)</a>"
                 items.append(
-                    "<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)" +
+                    "<li>\(link)\(sizeNote)" +
                         " — pCloud transcode (grows through ~\(formatLANClock(cursorSec)); not original file)</li>"
                 )
                 continue
@@ -1604,7 +1755,7 @@ enum ExportLANServer {
                     ? " — resume from \(formatLANClock(startSec)); LAN dense through ~\(formatLANClock(tillSec))"
                     : " — sparse partial copy; LAN dense through ~\(formatLANClock(tillSec))"
                 items.append(
-                    "<li>\(lanIndexPlaybackLinks(relativePath: escaped, resumeStartSec: startSec))\(sizeNote)\(startNote)</li>"
+                    "<li>\(lanIndexPlaybackLinks(relativePath: name, resumeStartSec: startSec))\(sizeNote)\(startNote)</li>"
                 )
                 continue
             } else if name.hasSuffix(".mp4"),
@@ -1615,7 +1766,23 @@ enum ExportLANServer {
             } else if name.hasSuffix(".mp4") {
                 note = " — sparse in-progress source (seek in player to export start)"
             }
-            items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
+            if omitVideoHrefOnLANIndex(name) {
+                items.append(
+                    "<li><code>\(escaped)</code>\(sizeNote)\(note) — use WebDAV during export (no browser prefetch)</li>"
+                )
+            } else {
+                items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
+            }
+        }
+        if capped {
+            items.append(
+                "<li><em>… \(entries.count - limit) more file(s) on phone — use WebDAV/rclone for full tree.</em></li>"
+            )
+        }
+        if ExportPlaybackState.shared.isLANExportActive {
+            items.append(
+                "<li><em>Video paths are text-only during export (Chrome may prefetch &lt;a href&gt; and jetsam the phone).</em></li>"
+            )
         }
         return items.isEmpty
             ? "<li><em>No export files yet — start export on the phone.</em></li>"
@@ -1644,11 +1811,218 @@ enum ExportLANServer {
             : items.joined()
     }
 
-    private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        refreshLANMetricsBeforeStatusResponse()
-        let playbackStatusBlock = playbackStatusHTMLBlock()
-        let mediaList = playbackMediaFileListHTML()
-        let logList = exportLogsFileListHTML()
+    private static func htmlPlaybackStatusShell() -> String {
+        """
+        <p><strong id="lan-playback-line">LAN playback</strong></p>
+        <ul id="lan-dashboard-stats"></ul>
+        """
+    }
+
+    private static func htmlExportSourceLineShell() -> String {
+        """
+        <div id="lan-export-source-wrap" class="export-source-line" style="display:none">
+          <div class="export-source-main">
+            <strong id="lan-export-source-label">Export source:</strong>
+            <span id="lan-export-source-name"></span>
+          </div>
+          <div class="export-source-actions" id="lan-export-source-actions" style="display:none">
+            <button type="button" id="export-resume" style="display:none">Start export</button>
+            <button type="button" id="export-pause" style="display:none">Pause export</button>
+            <button type="button" id="export-stop" style="display:none">Stop export</button>
+          </div>
+        </div>
+        """
+    }
+
+    private static func htmlMonitorStaticPlaybackLinks() -> String {
+        var items: [String] = []
+        items.append("<li><a href=\"export_latest.txt\">export_latest.txt</a> (live log)</li>")
+        let progress = ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL)
+        items.append("<li><a href=\"\(htmlEscape(progress))\">\(htmlEscape(progress))</a></li>")
+        let fm = FileManager.default
+        for index in 0 ..< ExportPaths.segmentFileCount {
+            let url = ExportPaths.segmentURL(index: index)
+            guard fm.fileExists(atPath: url.path) else { continue }
+            let rel = ExportPaths.pathRelativeToExports(url)
+            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a></li>")
+        }
+        if fm.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
+            let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL)
+            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a> (growing transcode)</li>")
+        }
+        if fm.fileExists(atPath: ExportPaths.workingSourceURL.path),
+           !ExportPaths.shouldHideSparseWorkingFromLAN() {
+            let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
+            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a> (sparse)</li>")
+        }
+        return items.isEmpty
+            ? "<li><em>No media files yet.</em></li>"
+            : items.joined()
+    }
+
+    private static func htmlMonitorManualRefreshScript() -> String {
+        """
+        <script>
+        (function () {
+          function esc(s) {
+            return String(s)
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/"/g, "&quot;");
+          }
+          function applyExportSource(src) {
+            var wrap = document.getElementById("lan-export-source-wrap");
+            if (!wrap || !src || !src.displayName) {
+              if (wrap) wrap.style.display = "none";
+              return;
+            }
+            wrap.style.display = "";
+            wrap.className = "export-source-line"
+              + (src.phase === "running" ? " is-active" : src.phase === "paused" ? " is-paused" : "");
+            var label = document.getElementById("lan-export-source-label");
+            var name = document.getElementById("lan-export-source-name");
+            if (label) label.textContent = (src.label || "Export source") + ":";
+            if (name) name.textContent = src.displayName;
+            var actions = document.getElementById("lan-export-source-actions");
+            var pauseBtn = document.getElementById("export-pause");
+            var resumeBtn = document.getElementById("export-resume");
+            var active = src.phase === "running" || src.phase === "paused";
+            if (actions) actions.style.display = active ? "" : "none";
+            if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
+            if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
+          }
+          function applyLive(live) {
+            if (!live) return;
+            var line = document.getElementById("lan-playback-line");
+            if (line && live.playableStatusLine) line.textContent = live.playableStatusLine;
+            var stats = document.getElementById("lan-dashboard-stats");
+            if (stats && live.dashboardLines && live.dashboardLines.length) {
+              stats.innerHTML = live.dashboardLines.map(function (l) {
+                return "<li>" + esc(l) + "</li>";
+              }).join("");
+            }
+          }
+          function applyLists(j) {
+            if (!j) return;
+            if (typeof j.playbackListHTML === "string") {
+              var files = document.getElementById("lan-playback-files");
+              if (files) files.innerHTML = j.playbackListHTML;
+            }
+            if (typeof j.exportLogsListHTML === "string") {
+              var logs = document.getElementById("lan-export-logs");
+              if (logs) logs.innerHTML = j.exportLogsListHTML;
+            }
+          }
+          function refreshStatus() {
+            var btn = document.getElementById("lan-refresh-status");
+            if (btn) btn.disabled = true;
+            return fetch("status.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(function (j) {
+                applyExportSource(j.exportSource);
+                applyLive(j.lanLive);
+                if (typeof j.playbackStatusHTML === "string") {
+                  var status = document.getElementById("lan-playback-status");
+                  if (status) status.innerHTML = j.playbackStatusHTML;
+                }
+              })
+              .catch(function () {})
+              .finally(function () { if (btn) btn.disabled = false; });
+          }
+          function refreshLists() {
+            var btn = document.getElementById("lan-refresh-lists");
+            if (btn) btn.disabled = true;
+            return fetch("status_lists.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(applyLists)
+              .catch(function () {})
+              .finally(function () { if (btn) btn.disabled = false; });
+          }
+          var statusBtn = document.getElementById("lan-refresh-status");
+          var listsBtn = document.getElementById("lan-refresh-lists");
+          if (statusBtn) statusBtn.onclick = refreshStatus;
+          if (listsBtn) listsBtn.onclick = refreshLists;
+        })();
+        </script>
+        """
+    }
+
+    /// Lightweight monitor at `/` (playback + logs + pause/stop). No embedded pCloud browser.
+    private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        autoreleasepool {
+            let html = """
+                <!DOCTYPE html>
+                <html lang="en"><head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <meta http-equiv="x-dns-prefetch-control" content="off">
+                <title>Loop Segments — LAN monitor</title>
+                <style>
+                body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
+                code { font-size: 0.9em; }
+                ul { padding-left: 1.25rem; }
+                .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
+                .export-source-line.is-active { background: #fffbea; border-color: #c8a415; }
+                .export-source-line.is-paused { background: #fff5f0; border-color: #d08050; }
+                .export-source-main { flex: 1 1 12rem; min-width: 0; }
+                .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+                .export-source-line #lan-export-source-name { word-break: break-all; }
+                .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; }
+                .lan-playback-logs-scroll { max-height: calc(5 * 1.75lh); overflow: auto; border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem 0.4rem; }
+                .muted { color: #666; font-size: 0.9em; }
+                button:disabled { opacity: 0.55; cursor: not-allowed; }
+                </style>
+                </head><body>
+                <h1>Loop Segments — LAN monitor</h1>
+                <p><a href="/browse">Open pCloud browser &amp; export controls</a> · <a href="export_latest.txt">export_latest.txt</a></p>
+                <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status">
+                  <strong id="lan-export-pending-title">Processing export request</strong>
+                  <span id="lan-export-pending-detail">Keep Loop Segments open in the foreground on the phone.</span>
+                </div>
+                \(htmlExportSourceLineShell())
+                <div id="lan-playback-status">\(htmlPlaybackStatusShell())</div>
+                <p class="muted">No auto-refresh (tap buttons). Use direct log link while export runs.</p>
+                <p>
+                  <button type="button" id="lan-refresh-status">Refresh status</button>
+                  <button type="button" id="lan-refresh-lists">Refresh file list</button>
+                </p>
+                <h2>On phone (playback)</h2>
+                <ul id="lan-playback-files">
+                \(htmlMonitorStaticPlaybackLinks())
+                </ul>
+                <h3>Export logs (newest first)</h3>
+                <div class="lan-playback-logs-scroll"><ul id="lan-export-logs">
+                <li><a href="export_latest.txt">export_latest.txt</a></li>
+                </ul></div>
+                \(htmlMonitorManualRefreshScript())
+                </body></html>
+                """
+            sendResponse(
+                connection: connection,
+                status: 200,
+                contentType: "text/html; charset=utf-8",
+                body: Data(html.utf8),
+                done: done
+            )
+        }
+    }
+
+    /// Full LAN page with pCloud folder browser — use `/browse` during large exports.
+    private static func sendBrowseIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        let exportActive = ExportPlaybackState.shared.isLANExportActive
+        if !exportActive {
+            refreshLANMetricsBeforeStatusResponse()
+        }
+        let playbackStatusBlock = exportActive ? htmlPlaybackStatusShell() : playbackStatusHTMLBlock()
+        let mediaList: String
+        let logList: String
+        if exportActive {
+            mediaList = "<li><em>File list deferred during export — tap Refresh file list or use WebDAV.</em></li>"
+            logList = "<li><a href=\"export_latest.txt\">export_latest.txt</a></li>"
+        } else {
+            mediaList = playbackMediaFileListHTML()
+            logList = exportLogsFileListHTML()
+        }
         let html = """
             <!DOCTYPE html>
             <html lang="en"><head>
@@ -1717,6 +2091,13 @@ enum ExportLANServer {
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             <div id="lan-playback-status">\(playbackStatusBlock)</div>
+            \(exportActive ? """
+            <p class="muted">Auto-refresh off during export (tap Refresh or use <a href="/">monitor</a>).</p>
+            <p>
+              <button type="button" id="lan-refresh-status">Refresh status</button>
+              <button type="button" id="lan-refresh-lists">Refresh file list</button>
+            </p>
+            """ : "")
             <h2>On phone (playback)</h2>
             <div class="lan-playback-section">
             <div id="lan-playback-media" class="lan-playback-media">
@@ -1734,7 +2115,9 @@ enum ExportLANServer {
             </div>
             </div>
             \(htmlExportControlPanel())
-            \(htmlLANLiveRefreshScript())
+            \(exportActive
+                ? htmlMonitorManualRefreshScript()
+                : htmlLANLiveRefreshScript(monitorOnly: false, deferAutoPoll: false))
             </body></html>
             """
         sendResponse(
@@ -2273,55 +2656,63 @@ enum ExportLANServer {
         """
     }
 
+    /// Playback/log link HTML + file index — polled less often than `status.json` (or manual refresh on `/`).
+    private static func sendStatusListsJSON(_ connection: NWConnection, done: @escaping () -> Void) {
+        var payload: [String: Any] = [:]
+        autoreleasepool {
+            let index = currentLANIndexSnapshot()
+            payload["playbackListHTML"] = playbackMediaFileListHTML()
+            payload["exportLogsListHTML"] = exportLogsFileListHTML()
+            payload["files"] = statusFilesJSONArray(from: index)
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
+            return
+        }
+        sendResponse(connection: connection, status: 200, contentType: "application/json", body: data, done: done)
+    }
+
     private static func sendStatusJSON(_ connection: NWConnection, done: @escaping () -> Void) {
-        refreshLANMetricsBeforeStatusResponse()
-        let fm = FileManager.default
-        var entries: [[String: Any]] = []
-        for rel in rootServableRelativePaths().union(Set(ExportPaths.lanBrowsableMediaRelativePaths())).sorted() {
-            guard let url = resolveExportFile(relativePath: rel) else { continue }
-            var dict: [String: Any] = ["name": rel]
-            if let attrs = try? fm.attributesOfItem(atPath: url.path) {
-                if let size = attrs[.size] as? NSNumber {
-                    dict["bytes"] = size.int64Value
-                }
-                if let modified = attrs[.modificationDate] as? Date {
-                    dict["modified"] = ISO8601DateFormatter().string(from: modified)
-                }
-            }
-            entries.append(dict)
+        let exportActive = ExportPlaybackState.shared.isLANExportActive
+        if !exportActive {
+            refreshLANMetricsBeforeStatusResponse()
         }
         var payload: [String: Any] = [
             "exportsDirectory": "Exports",
             "port": Int(defaultPort),
-            "files": entries,
+            "listsDeferred": true,
         ]
-        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
-            var playback = ExportPlaybackState.shared.frozenStatusPayload
-            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-            playback["resumeTimelineReadable"] = startSec <= 0
-                || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
-            payload["vanillaDownloadPlayback"] = playback
-        } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
-            var playback = ExportPlaybackState.shared.frozenStatusPayload
-            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
-            payload["pcloudTranscodedPlayback"] = playback
-        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-                  !ExportPaths.shouldHideSparseWorkingFromLAN() {
-            var playback = ExportPlaybackState.shared.frozenStatusPayload
-            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
-            payload["workingSourcePlayback"] = playback
+        if exportActive {
+            payload["manualRefresh"] = true
         }
-        if ExportPlaybackState.shared.isLANExportActive {
-            payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayload()
+        if !exportActive {
+            let index = currentLANIndexSnapshot()
+            payload["files"] = statusFilesJSONArray(from: index)
+            if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
+                var playback = ExportPlaybackState.shared.frozenStatusPayload
+                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+                playback["resumeTimelineReadable"] = startSec <= 0
+                    || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
+                payload["vanillaDownloadPlayback"] = playback
+            } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
+                var playback = ExportPlaybackState.shared.frozenStatusPayload
+                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+                playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+                payload["pcloudTranscodedPlayback"] = playback
+            } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
+                      !ExportPaths.shouldHideSparseWorkingFromLAN() {
+                var playback = ExportPlaybackState.shared.frozenStatusPayload
+                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+                playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+                payload["workingSourcePlayback"] = playback
+            }
+            payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
+        } else {
+            payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayloadSlim()
         }
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
         }
-        payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
-        payload["playbackListHTML"] = playbackMediaFileListHTML()
-        payload["exportLogsListHTML"] = exportLogsFileListHTML()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return
@@ -2336,6 +2727,21 @@ enum ExportLANServer {
         requestHeaders: String,
         done: @escaping () -> Void
     ) {
+        if ExportPlaybackState.shared.isLANExportActive,
+           isBrowserPrefetchRequest(requestHeaders: requestHeaders),
+           ExportPaths.isLANBrowsableMediaFile(fileName: fileURL.lastPathComponent) {
+            sendResponse(
+                connection: connection,
+                status: 503,
+                contentType: "text/plain",
+                body: Data(
+                    "Export active — browser prefetch disabled. Use WebDAV (PotPlayer) or open export_latest.txt on the monitor page."
+                        .utf8
+                ),
+                done: done
+            )
+            return
+        }
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
               let sizeNum = attrs[.size] as? NSNumber,

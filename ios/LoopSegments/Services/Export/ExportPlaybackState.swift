@@ -322,6 +322,36 @@ final class ExportPlaybackState: @unchecked Sendable {
         ]
     }
 
+    /// Tiny `lanLive` for monitor `status.json` during export (no dashboard rebuild).
+    func lanLiveStatusPayloadSlim() -> [String: Any] {
+        let snap = lock.withLock { snapshot }
+        let mode: String
+        if snap.vanillaDownloadActive {
+            mode = "vanilla"
+        } else if snap.pcloudTranscodedWorkingActive {
+            mode = "transcoded"
+        } else {
+            mode = "sparse"
+        }
+        return [
+            "exportMode": mode,
+            "playableStatusLine": Self.lanPlayableStatusLine(snap: snap),
+        ]
+    }
+
+    /// LAN poll during active export — refresh file size + head/tail probes only (keep in-memory spans).
+    func updateLANLiveFileSize(totalBytes: Int64, headOnDisk: Bool, tailOnDisk: Bool) {
+        lock.withLock {
+            snapshot.totalFileBytes = totalBytes
+            snapshot.headOnDisk = headOnDisk
+            snapshot.tailOnDisk = tailOnDisk
+            snapshot.indexTailStart = max(
+                0,
+                totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
+            )
+        }
+    }
+
     /// User-facing note for Export screen / logs.
     func pcloudTranscodedWorkingUserNotice() -> String? {
         lock.withLock {

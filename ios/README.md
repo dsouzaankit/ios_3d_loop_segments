@@ -126,7 +126,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (Export tab → **Export another file**, above **Exports folder**) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
-2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). The index **polls `status.json` every 5 s** (**3 s** while export is active) for export source, playback list, and WAN Mbps / fill stats (session metrics reset on each export start or resume).
+2. **URLs:** **`http://<phone-ip>:8765/`** — **light monitor** (playback, logs, pause/stop; **manual refresh only**). **`http://<phone-ip>:8765/browse`** — full page with pCloud folder browser (auto-refresh **60 s** / **120 s** when idle). Also **`status.json`**, **`status_lists.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). Use monitor **`/`** during large exports; open **`/browse`** only when you need LAN export-from-folder. Direct **`/export_latest.txt`** is always safe. mDNS: **`http://<iphone-name>.local:8765/`** (Bonjour **`loopsegments._http._tcp`**).
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
@@ -145,22 +145,28 @@ Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authoriz
 
 ### LAN HTTP page (browser control)
 
-Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Loop Segments must stay open in the foreground** — the app polls export triggers every ~2 s while active.
+Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Loop Segments must stay open in the foreground** — the app polls export triggers every ~2 s while active.
 
 #### Page layout
+
+| Page | Contents |
+|------|----------|
+| **`/` (monitor)** | Export source + pause/stop, static playback/log links, **Refresh status** / **Refresh file list** (no timers). Link to **`/browse`**. |
+| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, pCloud folder browser. Auto-refresh when export is idle; manual refresh only while export runs. |
 
 | Area | Contents |
 |------|----------|
 | **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
 | **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
-| **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, `archive/`), then **Export logs (newest first)** (`export_latest.txt`, `export_progress.txt`, `pcld_ios_media/logs/export_*.txt`) in a scroll panel (~5 rows tall). Auto-refreshed from `status.json`. Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
-| **Bottom** | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. |
+| **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
+| **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. |
 
 #### JSON APIs (GET unless noted)
 
 | Path | Purpose |
 |------|---------|
-| **`/status.json`** | Live state: file index, `exportSource`, playback HTML fragments, optional `lanLive` dashboard. |
+| **`/status.json`** | Live state: `exportSource`, optional `lanLive` (slim during export), `playbackStatusHTML` when idle. File lists deferred to **`status_lists.json`**. |
+| **`/status_lists.json`** | `playbackListHTML`, `exportLogsListHTML`, capped `files[]` (active + recent archive + logs). |
 | **`/pcloud_list.json?path=/Folder/`** | pCloud folder listing (directories + video files). |
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
@@ -170,8 +176,9 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
-- **`playbackStatusHTML`**, **`playbackListHTML`**, **`exportLogsListHTML`** — server-rendered blocks (replace in-page without reload). **`playbackListHTML`** = media only (active paths first; **`pcld_ios_media/archive/`** sorted by archival stamp **newest first**). **`exportLogsListHTML`** = log paths sorted **newest first** (stamped `logs/export_*` name, unix infix, or file mtime). Logs live under **`pcld_ios_media/logs/`** (LAN also accepts legacy `/export_latest.txt` and `/logs/export_*.txt`).
-- **`lanLive`** — WAN Mbps / fill dashboard lines while export is active.
+- **`playbackStatusHTML`**, **`playbackListHTML`**, **`exportLogsListHTML`** — on **`status_lists.json`** (or manual refresh on `/`). **`playbackListHTML`** = media only (capped archive, newest first). **`exportLogsListHTML`** = logs sorted **newest first**. During export, video rows on lists are **text-only** (no `href`) so Chrome cannot prefetch multi‑GB files.
+- **`lanLive`** — while export is active, slim `playableStatusLine` only (no full dashboard rebuild every poll). Idle **`/browse`** includes full dashboard in **`playbackStatusHTML`**.
+- **`listsDeferred`** — `true` on **`status.json`**; fetch lists via **`status_lists.json`**.
 - **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.
 - **`files`** — servable export paths with `bytes` / `modified`.
 
