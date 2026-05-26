@@ -22,12 +22,9 @@ struct RootView: View {
                 .frame(width: 0, height: 0)
         }
         .onAppear {
-            ExportLANServer.warmCachesOnMainActor()
-            LANPhoneInteractionState.update(scenePhase: scenePhase)
             syncLANServices()
         }
-        .onChange(of: scenePhase) { _, newPhase in
-            LANPhoneInteractionState.update(scenePhase: newPhase)
+        .onChange(of: scenePhase) { _, _ in
             syncLANServices()
         }
         .onChange(of: session.isExportSessionActive) { _, _ in

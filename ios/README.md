@@ -49,23 +49,20 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 | Location on phone | Visible in **Files** / **USB** | Served on **LAN :8765** |
 |-------------------|--------------------------------|-------------------------|
-| **`Documents/Exports/`** | Empty after upgrade (safe to delete in Files) | — |
-| **`Library/Application Support/pcld_ios_media/`** — media, **`logs/`** (export logs + `loop_segments_ok.txt` probe) | **No** (sandbox) | Yes as **`/pcld_ios_media/...`** (legacy **`/export_latest.txt`**, **`/loop_segments_ok.txt`**, etc.) |
+| **`Documents/Exports/`** — `export_latest.txt`, **`logs/export_*.txt`** (history), `loop_segments_ok.txt` | Yes (`UIFileSharingEnabled`) | Yes (`export_latest.txt` + **`logs/export_*.txt`** on LAN) |
+| **`Library/Application Support/pcld_ios_media/`** — `_working.mp4`, `loop/op_*.mp4`, `_vanilla_*`, retained suffixed copies | **No** (sandbox) | Yes as **`/pcld_ios_media/...`** (same URLs for rclone / Skybox) |
 
 ### Export logs (live vs history)
 
 | File | Purpose |
 |------|---------|
-| **`pcld_ios_media/logs/export_latest.txt`** | **Current run only** — full live log (LAN). Cleared when the next export starts. |
-| **`pcld_ios_media/logs/export_progress.txt`** | Last ~12 lines of the current run (small file for PC polling). |
-| **`pcld_ios_media/logs/export_<basename>_<local-time>_<status>.txt`** | **Saved history** when a run ends (`completed`, `interrupted`, `paused`, …). Kept across exports (last **40** runs; oldest pruned). |
-| **`pcld_ios_media/logs/loop_segments_ok.txt`** | Launch probe (app version + timestamp); refreshed each launch. |
+| **`export_latest.txt`** | **Current run only** — full live log (LAN/USB). Cleared when the next export starts. |
+| **`export_progress.txt`** | Last ~12 lines of the current run (small file for PC polling). |
+| **`logs/export_<basename>_<local-time>_<status>.txt`** | **Saved history** when a run ends (`completed`, `interrupted`, `paused`, …). Kept across exports (last **40** runs; oldest pruned). |
 
-On disk under **Application Support** (not in the Files app). LAN also accepts legacy URLs **`/export_latest.txt`**, **`/export_progress.txt`**, and **`/logs/export_…txt`** (same files).
+While a run is active there are **two** live copies (`export_latest.txt` + a temporary `logs/export_<unix>.txt`); when the run finishes the `logs/` copy is **renamed** to the descriptive name above. There is **no** `.log` duplicate (legacy `export_latest.log` / `export_session_*` are removed on upgrade).
 
-While a run is active there are **two** live copies (`export_latest.txt` + a temporary `export_<unix>.txt` in the same folder); when the run finishes the unix copy is **renamed** to the descriptive name above. There is **no** `.log` duplicate (legacy `export_latest.log` / `export_session_*` are removed on upgrade).
-
-**Start export** archives any finished live log, clears live pointers, and **keeps** history. **Clear logs** (Export tab) deletes all log files. Copy from LAN **`http://<ip>:8765/pcld_ios_media/logs/…`** (or legacy **`/export_latest.txt`**). On upgrade, logs move automatically out of **Documents/Exports/**.
+**Start export** archives any finished `export_latest.txt`, clears live files, and **keeps** `logs/export_*.txt` history. **Clear logs** (Export tab) deletes everything including history. Copy history from **Files → Loop Segments → Exports → logs/** or LAN **`http://<ip>:8765/logs/export_…txt`**.
 
 On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** is moved into Application Support automatically. **rclone** and **WebDAV** paths are unchanged (`L:\pcld_ios_media\...`). Copy **segment MP4s** from the PC via LAN/rclone, not Apple Devices USB.
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
@@ -126,12 +123,12 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (Export tab → **Export another file**, above **Exports folder**) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
-2. **URLs:** **`http://<phone-ip>:8765/`** — **monitor** (static file links, **no auto-refresh** — tap **Refresh status** / **Refresh file list**). **`http://<phone-ip>:8765/browse`** — full UI (auto-refresh + pCloud browser). Direct **`/export_latest.txt`** is safest during large exports. Do not open **`/browse`** while testing crash fixes unless you need folder export.
+2. **URLs:** **`http://<phone-ip>:8765/`** (from Export screen — best on **Windows**) or **`http://<iphone-name>.local:8765/`** (mDNS; same as **Settings → General → About → Name**). Bonjour advertises service **`loopsegments._http._tcp`**, not hostname `loopsegments.local`. HTML index, **`status.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). The index **polls `status.json` every 5 s** (**3 s** while export is active) for export source, playback list, and WAN Mbps / fill stats (session metrics reset on each export start or resume).
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
-LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, `search_debug.txt`); legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
+LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Root **logs** (`export_latest.txt`, …) and **`logs/export_*.txt`** history are served; **`search_debug.txt`** is not served. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
 
 **PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** (Basic auth **`admin` / `iosadmin`**) can create nested folders and small files (e.g. `pcld_ios_media/scripts/run.ps1`, ≤ 2 MB per PUT). **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
 
@@ -145,23 +142,22 @@ Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authoriz
 
 ### LAN HTTP page (browser control)
 
-Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (pCloud UI) on the same Wi‑Fi. Monitor does not call pCloud APIs. **`/browse`** uses the phone’s pCloud sign-in (not the PC’s). **Loop Segments must stay open in the foreground** — export triggers poll every ~2 s while active.
+Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Loop Segments must stay open in the foreground** — the app polls export triggers every ~2 s while active.
 
 #### Page layout
 
 | Area | Contents |
 |------|----------|
-| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. **Pause** / **Stop** are **disabled** while the phone is **locked**, **inactive**, or the app is **backgrounded** — orange hint explains why; triggers are **rejected** on the phone until foreground returns. |
+| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
 | **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
-| **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, `archive/`), then **Export logs (newest first)** (`pcld_ios_media/logs/export_*.txt`) in a scroll panel (~5 rows tall, scrollbar when more). Auto-refresh intervals — see **LAN index auto-refresh** below. |
+| **Middle** | Playback status + **On phone (playback)** file list (auto-refreshed from `status.json`). |
 | **Bottom** | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. |
 
 #### JSON APIs (GET unless noted)
 
 | Path | Purpose |
 |------|---------|
-| **`/status.json`** | Live state every **60 s** while export runs: `exportSource`, `phoneInteraction`, `lanLive` JSON only (no heavy HTML). Idle adds `playbackStatusHTML` + mode JSON. Always `listsDeferred: true` — lists/`files` on **`status_lists.json`**. |
-| **`/status_lists.json`** | Heavier index every **120 s**: `playbackListHTML`, `exportLogsListHTML`, capped **`files`**. PC scripts should merge this with `status.json` (see `Sync-FromPhoneLAN.ps1`). |
+| **`/status.json`** | Live state: file index, `exportSource`, playback HTML fragments, optional `lanLive` dashboard. |
 | **`/pcloud_list.json?path=/Folder/`** | pCloud folder listing (directories + video files). |
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
@@ -171,48 +167,10 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (pCloud UI) on the
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
-- **`playbackStatusHTML`** — playback panel notes + dashboard bullets (in **`status.json`** every 30 s). List HTML is only in **`status_lists.json`**.
-- **`listsDeferred`** — always `true`: browser polls **`status_lists.json`** for **`playbackListHTML`**, **`exportLogsListHTML`**, and **`files`**.
-- **`phoneInteraction`** — `{ "pauseStopEnabled", "pauseStopDisabledReason" }` — LAN **Pause** / **Stop** follow foreground state (`scenePhase == .active` on the phone).
-- **`lanLive`** — only while export is active: `{ "exportMode", "dashboardLines", "playableStatusLine" }`.
-- **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific numeric hints (cursor, till, WAN Mbps, fill %, etc.).
-
-**`status_lists.json` fields:** **`playbackListHTML`** (media; **`archive/`** newest first), **`exportLogsListHTML`** (`pcld_ios_media/logs/`, newest first), **`files`** (capped path index).
-
-#### LAN index auto-refresh (what updates when)
-
-The HTML index uses fixed JavaScript timers (embedded at page load; not configurable in the UI). **Export active** = `lanExportActive` on the phone (running or paused export).
-
-| Interval | Request | What updates on the page |
-|----------|---------|---------------------------|
-| **Manual** | **`GET /status.json`** | Monitor **`/`** only — tap **Refresh status** (no timer). |
-| **Manual** | **`GET /status_lists.json`** | Monitor **`/`** — tap **Refresh file list**. |
-| **`/browse` only** | Auto **60 s** / **120 s** | Full page timers (heavier; avoid during 9 GB+ export). |
-| **On first open** | **`GET /`** | Browsers always get **prebuilt HTML** (no Swift assembly, no disk scan, no `href` links). **During export:** text-only instructions. **Idle:** refresh buttons fetch `status.json` / `status_lists.json` on tap only. Type **`/export_latest.txt`** in the address bar for the log; **WebDAV** for playback. **`/browse`** returns 503 while export runs. |
-| **Never auto** | **`GET /export_latest.txt`**, media files, WebDAV | Log/media bytes change on disk only; reload or follow a link to see updates. |
-
-**Every 60 s** (`status.json` while export active) — live export / playback metrics:
-
-| Updates | Does **not** update |
-|---------|---------------------|
-| Top **export source** bar (`exportSource`: phase, filename, pause/resume/stop) | Media / log **link lists** (KB sizes, new `export_*.txt` rows) |
-| **`lanLive`** (while export active): **`playableStatusLine`**, **`dashboardLines`** — playable till, exported/started clocks, transcode MB, cursor, elapsed, est. bitrate, WAN peak/avg Mbps, vanilla %, sparse prefetch % / dense-on-disk % | **`files`** JSON |
-| **`playbackStatusHTML`** — only when export **idle** (same dashboard + mode notes) | pCloud **folder grid** / **file list** (tap **Refresh**) |
-| **`phoneInteraction`** — pause/stop vs locked/background | **Trim** / **Clear** / trigger ack (phone ~2 s loop, separate) |
-| Optional **`pcloudTranscodedPlayback`** / **`vanillaDownloadPlayback`** / **`workingSourcePlayback`** JSON | |
-
-Before each **`status.json`** response the server may **stat** `_working_pcloud_transcode.mp4` or refresh sparse **`_working.mp4`** metrics — not a full media-tree scan.
-
-**Every 120 s** (`status_lists.json`) — file index + link HTML:
-
-| Updates | Does **not** update |
-|---------|---------------------|
-| **`playbackListHTML`** — `loop/`, `_working*`, `_vanilla_*`, capped **`archive/`** (paths + KB) | Export source bar, WAN dashboard, playable-till line |
-| **`exportLogsListHTML`** — `pcld_ios_media/logs/export_*.txt` | **`playbackStatusHTML`** / **`lanLive`** |
-| **`files`** — capped servable paths with `bytes` / `modified` | |
-| **pCloud bookmark pins** (same request as lists poll) | |
-
-**pCloud panel:** folder/file listings load only on **Refresh** (not on page open); bookmark pins refresh on the 120 s lists timer.
+- **`playbackStatusHTML`**, **`playbackListHTML`** — server-rendered playback blocks (replace in-page without reload). **`On phone (playback)`** lists active export paths first; **`pcld_ios_media/archive/`** entries are sorted by archival timestamp **newest first** (parsed from the filename stamp).
+- **`lanLive`** — WAN Mbps / fill dashboard lines while export is active.
+- **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.
+- **`files`** — servable export paths with `bytes` / `modified`.
 
 #### Export trigger protocol
 
@@ -234,8 +192,8 @@ Before each **`status.json`** response the server may **stat** `_working_pcloud_
 | **`start_export`** | Export `href` from `seekMs`. **Auto-stops** any running export first (no manual stop required). |
 | **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). |
-| **`pause_export`** | Pause the running export (checkpoint kept on phone). **Rejected** if the app is not in the **foreground** (locked / backgrounded). |
-| **`stop_export`** | Same as in-app **Stop** — removes `loop/`, archives root copies, clears checkpoint. **Rejected** if not in the **foreground**. |
+| **`pause_export`** | Pause the running export (checkpoint kept on phone). |
+| **`stop_export`** | Same as in-app **Stop** — removes `loop/`, archives root copies, clears checkpoint. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
 | **`clear_media`** | Same as **Clear media** — deletes active + `archive/` (rejected while export running). |
 
@@ -647,7 +605,7 @@ Until a token is saved, treat **Search**, **HLS transcode**, and **REST-backed m
 | Step | PowerShell / action |
 |------|------------------------|
 | Phone **media** → PC | **`http://<ip>:8765/pcld_ios_media/`**, **`Invoke-WebRequest`**, **[`../windows/archive/Sync-FromPhoneLAN.ps1`](../windows/archive/Sync-FromPhoneLAN.ps1)**, or **[`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md)** |
-| Phone **logs** → PC | **`http://<ip>:8765/pcld_ios_media/logs/export_latest.txt`** (or legacy **`/export_latest.txt`**) — not in Files app |
+| Phone **logs** → PC | **`http://<ip>:8765/`** (`export_latest.txt`, …) or **Apple Devices** → Loop Segments → **Exports** (logs only; media not in Files) |
 | rclone+WinFsp mount on PC (optional; can be sluggish) | **[`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md)** — Skybox WebDAV to the phone does not need this |
 
 ```powershell

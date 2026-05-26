@@ -3,14 +3,12 @@ import Foundation
 import Network
 import UIKit
 
-/// Serves export logs and media from private `Application Support/pcld_ios_media/` on the LAN (HTTP + WebDAV).
+/// Serves export logs from `Documents/Exports/` and media from private `Application Support/pcld_ios_media/` on the LAN (HTTP + WebDAV).
 /// `pcld_ios_media/` accepts authenticated PUT/MKCOL for PC scripts and nested folders; export pipeline paths stay read-only.
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
     /// Per-response cap — open-ended `Range: bytes=0-` must not ship multi-GB (Quest browser / Safari OOM).
     private static let maxResponseBodyBytes: Int64 = 32 * 1024 * 1024
-    /// Cap full-file browser GET of logs during export (Safari/Chrome may prefetch `export_latest.txt`).
-    private static let maxBrowserTextBytesDuringExport: Int64 = 512 * 1024
     /// PC script uploads via WebDAV PUT (Basic auth required).
     private static let maxWebDAVPutBytes: Int = 2 * 1024 * 1024
     /// LAN WebDAV Basic auth (Skybox, mapped drives). GET without auth still works for PC sync.
@@ -77,41 +75,16 @@ enum ExportLANServer {
     private static var listener: NWListener?
     private static var connections: [ObjectIdentifier: NWConnection] = [:]
     private static let queue = DispatchQueue(label: "com.loopsegments.lan-server")
-    /// Mirrors export session for browser HTML only — read on LAN queue without `ExportPlaybackState` lock.
-    private static var exportSessionActiveForBrowser = false
-    private static var cachedMDNSHostLabel: String?
     /// Bonjour service name (`loopsegments._http._tcp.local` in browsers) — not a pingable hostname.
     static let bonjourServiceName = "loopsegments"
     /// Settings → General → About → Name (e.g. `John's iPhone` → `http://johns-iphone.local:8765/`, not `iphone.local` unless named "iPhone").
-    @MainActor
     static var deviceAboutName: String {
         UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Call from the main actor (e.g. `RootView.onAppear`) — `UIDevice` is unsafe on the LAN server queue.
-    @MainActor
-    static func warmCachesOnMainActor() {
-        let label = deviceMDNSHostLabel()
-        lock.lock()
-        cachedMDNSHostLabel = label
-        lock.unlock()
-    }
-
-    static func setExportSessionActiveForBrowser(_ active: Bool) {
-        lock.lock()
-        exportSessionActiveForBrowser = active
-        lock.unlock()
-    }
-
-    private static var isExportSessionActiveForBrowser: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return exportSessionActiveForBrowser
-    }
-
     /// mDNS host label from this iPhone (Settings → General → About → Name → `<name>.local`).
     static var deviceMDNSHostName: String {
-        "\(resolvedMDNSHostName()).local"
+        "\(deviceMDNSHostLabel()).local"
     }
     /// @deprecated Misleading; use `deviceMDNSHostName`. Kept for call-site compatibility.
     static var bonjourHostName: String { deviceMDNSHostName }
@@ -171,7 +144,7 @@ enum ExportLANServer {
                     switch state {
                     case .ready:
                         let ip = Self.primaryLANIPv4Address()
-                        let hostURL = "http://\(Self.resolvedMDNSHostName()).local:\(defaultPort)/"
+                        let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
                         let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
                         lock.lock()
                         advertisedBaseURL = hostURL
@@ -515,25 +488,6 @@ enum ExportLANServer {
         return false
     }
 
-    /// `GET /` monitor HTML for any non-WebDAV client (Cursor fetch, curl, browsers without `Accept: text/html`).
-    private static func shouldServeMinimalMonitorHTML(requestHeaders: String) -> Bool {
-        !isWebDAVClient(requestHeaders: requestHeaders)
-    }
-
-    /// Chrome desktop may speculative-prefetch same-origin links on the monitor page (PotPlayer WebDAV does not).
-    private static func isBrowserPrefetchRequest(requestHeaders: String) -> Bool {
-        let lower = requestHeaders.lowercased()
-        if lower.contains("sec-purpose: prefetch") { return true }
-        if lower.contains("purpose: prefetch") { return true }
-        if lower.contains("x-moz: prefetch") { return true }
-        if lower.contains("sec-fetch-mode: prefetch") { return true }
-        if lower.contains("sec-fetch-mode: no-cors"),
-           lower.contains("sec-fetch-dest: video") || lower.contains("sec-fetch-dest: audio") {
-            return true
-        }
-        return false
-    }
-
     private static func lanWebDAVAuthHeaderLines() -> [String] {
         ["WWW-Authenticate: Basic realm=\"\(lanWebDAVRealm)\""]
     }
@@ -581,8 +535,8 @@ enum ExportLANServer {
     ) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized.isEmpty {
-            if shouldServeMinimalMonitorHTML(requestHeaders: requestHeaders) {
-                sendBrowserMonitorHTML(connection, done: done)
+            if isBrowserLikeRequest(requestHeaders: requestHeaders) {
+                sendIndexHTML(connection, done: done)
                 return
             }
             // Skybox validates with GET / — use 200 + DAV XML (207 on GET confuses some clients).
@@ -596,24 +550,8 @@ enum ExportLANServer {
             )
             return
         }
-        if normalized == "browse" {
-            if isExportSessionActiveForBrowser {
-                sendBrowseUnavailableDuringExport(connection: connection, done: done)
-                return
-            }
-            if isBrowserLikeRequest(requestHeaders: requestHeaders) {
-                sendBrowseIndexHTML(connection, done: done)
-                return
-            }
-            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
-            return
-        }
         if normalized == "status.json" {
             sendStatusJSON(connection, done: done)
-            return
-        }
-        if normalized == "status_lists.json" {
-            sendStatusListsJSON(connection, done: done)
             return
         }
         let (resourcePath, query) = splitPathAndQuery(normalized)
@@ -726,201 +664,6 @@ enum ExportLANServer {
         let modified: Date?
     }
 
-    private struct LANIndexSnapshot {
-        let playback: [ExportFileEntry]
-        let logs: [ExportFileEntry]
-        let builtAt: Date
-    }
-
-    private static var lanIndexSnapshot: LANIndexSnapshot?
-    private static let lanIndexSnapshotTTLIdle: TimeInterval = 30
-    private static let lanIndexSnapshotTTLExport: TimeInterval = 45
-    /// Browser poll interval for `status.json` (live metrics / export bar).
-    private static let lanStatusPollMs = 60_000
-    /// Browser poll interval for `status_lists.json` (media + log link HTML).
-    private static let lanStatusListsPollMs = 120_000
-    private static var lastLANMetricsRefresh: Date?
-    private static let lanMetricsRefreshMinInterval: TimeInterval = 45
-    private static let lanStatusFilesCap = 48
-
-    /// Zero links, zero JS, zero filesystem — Chrome speculative prefetch of `/browse` or `.mp4` hrefs was jetsaming the phone.
-    private static let minimalMonitorHTMLDuringExport = Data(
-        """
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="Cache-Control" content="no-store">
-        <title>Loop Segments — export running</title>
-        <style>
-        body { font: -apple-system-body; margin: 1.25rem; line-height: 1.45; max-width: 42rem; }
-        code { font-size: 0.92em; word-break: break-all; }
-        </style>
-        </head>
-        <body>
-        <h1>Export running</h1>
-        <p>This page intentionally has <strong>no hyperlinks</strong>. Browsers (Chrome, Safari) were prefetching
-        <code>/browse</code> and video paths from the monitor and crashing the app during large exports.</p>
-        <p><strong>Live log</strong> — type in the address bar (same host, port 8765):</p>
-        <p><code>/export_latest.txt</code></p>
-        <p><strong>Progress tail</strong>:</p>
-        <p><code>/pcld_ios_media/logs/export_progress.txt</code></p>
-        <p><strong>Playback</strong> — PotPlayer / WebDAV on this host (unchanged).</p>
-        <p>When export is idle, reload <code>/</code> for refresh buttons (still no prefetchable links).</p>
-        </body>
-        </html>
-        """.utf8
-    )
-
-    /// Idle browser monitor — static HTML + manual fetch only (no hrefs; no Swift string build on GET /).
-    private static let minimalMonitorHTMLIdle = Data(
-        """
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="Cache-Control" content="no-store">
-        <title>Loop Segments — LAN monitor</title>
-        <style>
-        body { font: -apple-system-body; margin: 1.25rem; line-height: 1.45; max-width: 42rem; }
-        code { font-size: 0.92em; word-break: break-all; }
-        button { font: inherit; padding: 0.4rem 0.75rem; margin: 0.25rem 0.5rem 0.25rem 0; }
-        #lan-status { margin-top: 0.75rem; font-size: 0.92em; max-height: 40vh; overflow: auto; }
-        </style>
-        </head>
-        <body>
-        <h1>Loop Segments — LAN monitor</h1>
-        <p>No links on this page (browsers prefetch them and can jetsam the phone during export).</p>
-        <p><strong>Live log:</strong> <code>/export_latest.txt</code> · <strong>Progress:</strong> <code>/pcld_ios_media/logs/export_progress.txt</code></p>
-        <p><strong>pCloud UI:</strong> type <code>/browse</code> in the address bar when export is idle.</p>
-        <p><strong>Playback:</strong> WebDAV on this host (PotPlayer, Skybox).</p>
-        <button type="button" id="lan-refresh-status">Refresh status</button>
-        <button type="button" id="lan-refresh-lists">Refresh file list</button>
-        <div id="lan-status"></div>
-        <script>
-        (function () {
-          var out = document.getElementById("lan-status");
-          document.getElementById("lan-refresh-status").onclick = function () {
-            if (out) out.textContent = "Loading status…";
-            fetch("status.json", { cache: "no-store" })
-              .then(function (r) { return r.json(); })
-              .then(function (j) {
-                if (!out) return;
-                var lines = [];
-                if (j.exportSource && j.exportSource.displayName) {
-                  lines.push((j.exportSource.label || "Export") + ": " + j.exportSource.displayName);
-                }
-                if (j.lanLive && j.lanLive.playableStatusLine) {
-                  lines.push(j.lanLive.playableStatusLine);
-                } else if (j.playbackStatusHTML) {
-                  out.innerHTML = j.playbackStatusHTML;
-                  return;
-                }
-                out.textContent = lines.length ? lines.join("\\n") : "status.json OK (see console)";
-              })
-              .catch(function () { if (out) out.textContent = "status.json failed"; });
-          };
-          document.getElementById("lan-refresh-lists").onclick = function () {
-            if (out) out.textContent = "Loading lists…";
-            fetch("status_lists.json", { cache: "no-store" })
-              .then(function (r) { return r.json(); })
-              .then(function (j) {
-                if (!out) return;
-                out.innerHTML = (j.playbackListHTML || "") + (j.exportLogsListHTML || "");
-              })
-              .catch(function () { if (out) out.textContent = "status_lists.json failed"; });
-          };
-        })();
-        </script>
-        </body>
-        </html>
-        """.utf8
-    )
-
-    private static var lanIndexSnapshotTTL: TimeInterval {
-        ExportPlaybackState.shared.isLANExportActive
-            ? lanIndexSnapshotTTLExport
-            : lanIndexSnapshotTTLIdle
-    }
-
-    private static func exportFileEntry(relativePath: String) -> ExportFileEntry? {
-        guard let url = resolveExportFile(relativePath: relativePath) else { return nil }
-        let fm = FileManager.default
-        let attrs = try? fm.attributesOfItem(atPath: url.path)
-        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        let modified = attrs?[.modificationDate] as? Date
-        return ExportFileEntry(name: relativePath, url: url, size: size, modified: modified)
-    }
-
-    private static func buildLANIndexSnapshot() -> LANIndexSnapshot {
-        autoreleasepool {
-            let exportActive = ExportPlaybackState.shared.isLANExportActive
-            let archiveCap = exportActive ? 0 : ExportPaths.lanPlaybackArchiveIndexLimit
-            let playback = ExportPaths.listLANPlaybackIndexRelativePaths(maxArchiveEntries: archiveCap)
-                .compactMap { exportFileEntry(relativePath: $0) }
-            let logCap = exportActive ? 4 : 24
-            let logs = ExportPaths.listLANLogIndexRelativePaths(maxHistoryEntries: logCap)
-                .prefix(logCap)
-                .compactMap { exportFileEntry(relativePath: $0) }
-            return LANIndexSnapshot(playback: playback, logs: logs, builtAt: Date())
-        }
-    }
-
-    /// Static links for monitor `/` (no index scan on first paint).
-    private static func htmlMonitorStaticPlaybackLinks() -> String {
-        var items: [String] = []
-        let exportActive = ExportPlaybackState.shared.isLANExportActive
-        items.append("<li><a href=\"export_latest.txt\">export_latest.txt</a> (live log)</li>")
-        let progress = ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL)
-        items.append("<li><a href=\"\(htmlEscape(progress))\">\(htmlEscape(progress))</a></li>")
-        let fm = FileManager.default
-        for index in 0 ..< ExportPaths.segmentFileCount {
-            let url = ExportPaths.segmentURL(index: index)
-            guard fm.fileExists(atPath: url.path) else { continue }
-            let rel = ExportPaths.pathRelativeToExports(url)
-            items.append(htmlMonitorMediaListItem(relativePath: rel, note: nil))
-        }
-        if fm.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
-            let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL)
-            items.append(htmlMonitorMediaListItem(relativePath: rel, note: "growing transcode"))
-        }
-        if fm.fileExists(atPath: ExportPaths.workingSourceURL.path),
-           !ExportPaths.shouldHideSparseWorkingFromLAN() {
-            let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
-            items.append(htmlMonitorMediaListItem(relativePath: rel, note: "sparse"))
-        }
-        if exportActive {
-            items.append(
-                "<li><em>Video paths are text-only during export (Chrome may prefetch &lt;a href&gt; and jetsam the phone). Use PotPlayer/WebDAV.</em></li>"
-            )
-        }
-        return items.isEmpty
-            ? "<li><em>No media files yet.</em></li>"
-            : items.joined()
-    }
-
-    /// During export, omit `href` on video paths so Chrome does not speculative-prefetch multi‑GB files.
-    private static func htmlMonitorMediaListItem(relativePath: String, note: String?) -> String {
-        let escaped = htmlEscape(relativePath)
-        let suffix = note.map { " (\(htmlEscape($0)))" } ?? ""
-        if ExportPlaybackState.shared.isLANExportActive {
-            return "<li><code>\(escaped)</code>\(suffix)</li>"
-        }
-        return "<li><a href=\"\(escaped)\">\(escaped)</a>\(suffix)</li>"
-    }
-
-    private static func currentLANIndexSnapshot() -> LANIndexSnapshot {
-        if let cached = lanIndexSnapshot,
-           Date().timeIntervalSince(cached.builtAt) < lanIndexSnapshotTTL {
-            return cached
-        }
-        let snapshot = buildLANIndexSnapshot()
-        lanIndexSnapshot = snapshot
-        return snapshot
-    }
-
     private static func listExportFiles() -> [ExportFileEntry] {
         let fm = FileManager.default
         var entries: [ExportFileEntry] = []
@@ -936,29 +679,22 @@ enum ExportLANServer {
 
     private static let archivePlaybackPrefix = "\(ExportPaths.mediaExportFolderName)/archive/"
 
-    private static func isLANExportLogRelativePath(_ relativePath: String) -> Bool {
-        ExportPaths.isLANExportLogRelativePath(relativePath)
-            || ExportPaths.canonicalLANLogRelativePath(relativePath) != nil
-    }
-
-    /// Playback/media paths (no logs); active first, then `archive/` newest-first (capped).
+    /// Active export paths first (path order); `archive/` entries newest archival stamp first.
     private static func listExportFilesForPlaybackIndex() -> [ExportFileEntry] {
-        currentLANIndexSnapshot().playback
-    }
-
-    /// `pcld_ios_media/logs/export_*.txt` (live + history) — newest first.
-    private static func listExportLogEntriesForLANIndex() -> [ExportFileEntry] {
-        currentLANIndexSnapshot().logs.sorted { lhs, rhs in
-            exportLogSortKey(lhs) > exportLogSortKey(rhs)
+        let all = listExportFiles()
+        var active: [ExportFileEntry] = []
+        var archived: [ExportFileEntry] = []
+        for entry in all {
+            if entry.name.hasPrefix(archivePlaybackPrefix) {
+                archived.append(entry)
+            } else {
+                active.append(entry)
+            }
         }
-    }
-
-    private static func exportLogSortKey(_ entry: ExportFileEntry) -> Date {
-        let fileName = (entry.name as NSString).lastPathComponent
-        if entry.name.hasPrefix("\(ExportPaths.exportLogsLANPrefix)/") {
-            return ExportPaths.exportLogFileSortDate(fileName: fileName)
+        archived.sort { lhs, rhs in
+            playbackArchiveSortKey(lhs) > playbackArchiveSortKey(rhs)
         }
-        return entry.modified ?? .distantPast
+        return active + archived
     }
 
     private static func playbackArchiveSortKey(_ entry: ExportFileEntry) -> Date {
@@ -1018,47 +754,25 @@ enum ExportLANServer {
 
     private static func rootServableRelativePaths() -> Set<String> {
         [
-            ExportPaths.pathRelativeToExports(ExportPaths.latestLogTextURL),
-            ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL),
+            ExportPaths.latestLogTextURL.lastPathComponent,
+            ExportPaths.exportProgressURL.lastPathComponent,
             "status.json",
         ]
     }
 
     private static func allowedServableRelativePaths() -> Set<String> {
         var names = rootServableRelativePaths()
-        for rel in ExportPaths.listLANPlaybackIndexRelativePaths(
-            maxArchiveEntries: ExportPaths.lanPlaybackArchiveIndexLimit + 32
-        ) {
+        for rel in ExportPaths.lanBrowsableMediaRelativePaths() {
             names.insert(rel)
         }
-        for rel in ExportPaths.listLANLogIndexRelativePaths() {
+        for rel in ExportPaths.listExportHistoryLogRelativePaths() {
             names.insert(rel)
         }
         return names
     }
 
     private static func mediaPropfindChildDepthLimit(from depth: Int) -> Int {
-        let requested = depth >= 2 ? 2 : max(0, depth)
-        if ExportPlaybackState.shared.isLANExportActive {
-            return min(requested, 1)
-        }
-        return min(requested, 3)
-    }
-
-    /// Root PROPFIND/GET-DAV children — light path during export (no archive scan / full log sort).
-    private static func propfindRootChildEntries() -> [ExportFileEntry] {
-        if ExportPlaybackState.shared.isLANExportActive {
-            return propfindRootChildEntriesDuringExport()
-        }
-        return listExportFilesForPlaybackIndex() + listExportLogEntriesForLANIndex()
-    }
-
-    private static func propfindRootChildEntriesDuringExport() -> [ExportFileEntry] {
-        autoreleasepool {
-            let paths = ExportPaths.listLANPlaybackIndexRelativePaths(maxArchiveEntries: 0)
-                + ExportPaths.listLANLogIndexRelativePaths(maxHistoryEntries: 4)
-            return paths.compactMap { exportFileEntry(relativePath: $0) }
-        }
+        depth == 2 ? 999 : depth
     }
 
     private static func appendMediaDirectoryPropfind(
@@ -1534,8 +1248,7 @@ enum ExportLANServer {
                         modified: nil
                     )
                 )
-                let entries = propfindRootChildEntries()
-                for entry in entries {
+                for entry in listExportFiles() {
                     responses.append(
                         propfindEntryXML(
                             href: davListingHref(path: "/\(entry.name)", isCollection: false),
@@ -1587,8 +1300,7 @@ enum ExportLANServer {
     private static func resolveExportFile(relativePath: String) -> URL? {
         guard !relativePath.contains("..") else { return nil }
         if relativePath == "status.json" { return nil }
-        let resolvedPath = ExportPaths.canonicalLANLogRelativePath(relativePath) ?? relativePath
-        for candidate in lanMediaRelativePathCandidates(resolvedPath) {
+        for candidate in lanMediaRelativePathCandidates(relativePath) {
             let allowed = ExportPaths.isLANBrowsableMediaRelativePath(candidate)
                 || ExportPaths.isLANMediaTreeServableRelativePath(candidate)
                 || ExportPaths.isLANExportHistoryLogRelativePath(candidate)
@@ -1605,15 +1317,6 @@ enum ExportLANServer {
         text.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
-    }
-
-    /// JSON string literal safe to embed in generated `<script>` blocks.
-    private static func jsonStringLiteral(_ text: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: text),
-              let encoded = String(data: data, encoding: .utf8) else {
-            return "\"\""
-        }
-        return encoded
     }
 
     /// Plain `href` for WebDAV / PotPlayer; separate browser link with `#t=` when export seek &gt; 0.
@@ -1645,41 +1348,16 @@ enum ExportLANServer {
         let phaseClass = phase == "running" ? " is-active" : (phase == "paused" ? " is-paused" : "")
         let pauseHidden = phase == "running" ? "" : " style=\"display:none\""
         let resumeHidden = phase == "paused" ? "" : " style=\"display:none\""
-        let pauseStopEnabled = LANPhoneInteractionState.acceptsPauseStopTriggers
-        let pauseStopReason = htmlEscape(LANPhoneInteractionState.pauseStopDisabledReason)
-        let pauseStopDisabledAttr = pauseStopEnabled ? "" : " disabled"
-        let pauseStopTitleAttr = pauseStopEnabled ? "" : " title=\"\(pauseStopReason)\""
-        let pauseStopHintHidden = pauseStopEnabled ? " style=\"display:none\"" : ""
-        let pauseStopHintText = pauseStopEnabled ? "" : pauseStopReason
         return """
         <div id="lan-export-source-wrap" class="export-source-line\(phaseClass)"\(hidden)>
           <div class="export-source-main">
             <strong id="lan-export-source-label">\(label):</strong>
             <span id="lan-export-source-name">\(name)</span>
-            <p id="lan-pause-stop-hint" class="lan-pause-stop-hint"\(pauseStopHintHidden)>\(pauseStopHintText)</p>
           </div>
           <div class="export-source-actions" id="lan-export-source-actions"\(actionsHidden)>
             <button type="button" id="export-resume"\(resumeHidden)>Start export</button>
-            <button type="button" id="export-pause"\(pauseHidden)\(pauseStopDisabledAttr)\(pauseStopTitleAttr)>Pause export</button>
-            <button type="button" id="export-stop"\(pauseStopDisabledAttr)\(pauseStopTitleAttr)>Stop export</button>
-          </div>
-        </div>
-        """
-    }
-
-    /// Empty export-source bar for `GET /` (filled only via manual **Refresh status** → `status.json`).
-    private static func htmlExportSourceLineShell() -> String {
-        """
-        <div id="lan-export-source-wrap" class="export-source-line" style="display:none">
-          <div class="export-source-main">
-            <strong id="lan-export-source-label">Export source:</strong>
-            <span id="lan-export-source-name"></span>
-            <p id="lan-pause-stop-hint" class="lan-pause-stop-hint" style="display:none"></p>
-          </div>
-          <div class="export-source-actions" id="lan-export-source-actions" style="display:none">
-            <button type="button" id="export-resume" style="display:none">Start export</button>
-            <button type="button" id="export-pause" style="display:none">Pause export</button>
-            <button type="button" id="export-stop" style="display:none">Stop export</button>
+            <button type="button" id="export-pause"\(pauseHidden)>Pause export</button>
+            <button type="button" id="export-stop">Stop export</button>
           </div>
         </div>
         """
@@ -1691,151 +1369,13 @@ enum ExportLANServer {
         """
     }
 
-    /// Empty shell filled by `status.json` → `lanLive` (avoids heavy HTML on index / poll).
-    private static func htmlPlaybackStatusShell() -> String {
-        """
-        <p><strong id="lan-playback-line">—</strong></p>
-        <ul id="lan-dashboard-stats"></ul>
-        """
-    }
-
-    /// Monitor `/` — manual refresh only (no timers; avoids jetsam during large exports).
-    private static func htmlMonitorManualRefreshScript() -> String {
-        """
-        <script>
-        (function () {
-          function esc(s) {
-            return String(s)
-              .replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/"/g, "&quot;");
-          }
-          window._phonePauseStopEnabled = \(LANPhoneInteractionState.acceptsPauseStopTriggers ? "true" : "false");
-          window._phonePauseStopReason = \(jsonStringLiteral(LANPhoneInteractionState.pauseStopDisabledReason));
-          function updatePauseStopButtons() {
-            var enabled = window._phonePauseStopEnabled !== false;
-            var reason = window._phonePauseStopReason || "";
-            ["export-pause", "export-stop"].forEach(function (id) {
-              var btn = document.getElementById(id);
-              if (!btn) return;
-              btn.disabled = !enabled;
-              btn.title = !enabled && reason ? reason : "";
-            });
-            var hint = document.getElementById("lan-pause-stop-hint");
-            if (hint) {
-              hint.textContent = enabled ? "" : reason;
-              hint.style.display = enabled ? "none" : "";
-            }
-          }
-          updatePauseStopButtons();
-          function applyExportSource(src) {
-            var wrap = document.getElementById("lan-export-source-wrap");
-            if (!wrap || !src || !src.displayName) {
-              if (wrap) wrap.style.display = "none";
-              return;
-            }
-            wrap.style.display = "";
-            wrap.className = "export-source-line"
-              + (src.phase === "running" ? " is-active" : src.phase === "paused" ? " is-paused" : "");
-            var label = document.getElementById("lan-export-source-label");
-            var name = document.getElementById("lan-export-source-name");
-            if (label) label.textContent = (src.label || "Export source") + ":";
-            if (name) name.textContent = src.displayName;
-            var actions = document.getElementById("lan-export-source-actions");
-            var pauseBtn = document.getElementById("export-pause");
-            var resumeBtn = document.getElementById("export-resume");
-            var active = src.phase === "running" || src.phase === "paused";
-            if (actions) actions.style.display = active ? "" : "none";
-            if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
-            if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
-            updatePauseStopButtons();
-          }
-          function applyLive(live) {
-            if (!live) return;
-            var line = document.getElementById("lan-playback-line");
-            if (line && live.playableStatusLine) line.textContent = live.playableStatusLine;
-            var stats = document.getElementById("lan-dashboard-stats");
-            if (stats && live.dashboardLines && live.dashboardLines.length) {
-              stats.innerHTML = live.dashboardLines.map(function (l) {
-                return "<li>" + esc(l) + "</li>";
-              }).join("");
-            }
-          }
-          function applyLists(j) {
-            if (!j) return;
-            if (typeof j.playbackListHTML === "string") {
-              var files = document.getElementById("lan-playback-files");
-              if (files) files.innerHTML = j.playbackListHTML;
-            }
-            if (typeof j.exportLogsListHTML === "string") {
-              var logs = document.getElementById("lan-export-logs");
-              if (logs) logs.innerHTML = j.exportLogsListHTML;
-            }
-          }
-          function refreshStatus() {
-            var btn = document.getElementById("lan-refresh-status");
-            if (btn) btn.disabled = true;
-            return fetch("status.json", { cache: "no-store" })
-              .then(function (r) { return r.json(); })
-              .then(function (j) {
-                applyExportSource(j.exportSource);
-                applyLive(j.lanLive);
-                if (typeof j.phoneInteraction === "object") {
-                  window._phonePauseStopEnabled = j.phoneInteraction.pauseStopEnabled !== false;
-                  window._phonePauseStopReason = j.phoneInteraction.pauseStopDisabledReason || "";
-                  updatePauseStopButtons();
-                }
-              })
-              .catch(function () {})
-              .finally(function () { if (btn) btn.disabled = false; });
-          }
-          function refreshLists() {
-            var btn = document.getElementById("lan-refresh-lists");
-            if (btn) btn.disabled = true;
-            return fetch("status_lists.json", { cache: "no-store" })
-              .then(function (r) { return r.json(); })
-              .then(applyLists)
-              .catch(function () {})
-              .finally(function () { if (btn) btn.disabled = false; });
-          }
-          var statusBtn = document.getElementById("lan-refresh-status");
-          var listsBtn = document.getElementById("lan-refresh-lists");
-          if (statusBtn) statusBtn.onclick = refreshStatus;
-          if (listsBtn) listsBtn.onclick = refreshLists;
-        })();
-        </script>
-        """
-    }
-
-    /// Poll `status.json` for export source + LAN playback stats; lists on `status_lists.json`.
-    /// `monitorOnly` — `/browse` page: no pCloud bookmark fetch on list poll.
-    private static func htmlLANLiveRefreshScript(
-        monitorOnly: Bool = false,
-        deferAutoPoll: Bool = false
-    ) -> String {
-        let bookmarkPoll = monitorOnly
-            ? ""
-            : """
-            if (typeof window.refreshLANBookmarks === "function") {
-              window.refreshLANBookmarks().catch(function () {});
-            }
-            """
-        let autoPollStart: String
-        if deferAutoPoll {
-            autoPollStart = ""
-        } else {
-            autoPollStart = """
-          poll();
-          setTimeout(pollLists, 5000);
-          setInterval(poll, pollMs);
-          setInterval(pollLists, listPollMs);
-          """
-        }
+    /// Poll `status.json` for export source + LAN playback stats.
+    private static func htmlLANLiveRefreshScript() -> String {
+        let pollMs = ExportPlaybackState.shared.isLANExportActive ? 3000 : 5000
         return """
         <script>
         (function () {
-          var pollMs = \(lanStatusPollMs);
-          var listPollMs = \(lanStatusListsPollMs);
+          var pollMs = \(pollMs);
           function esc(s) {
             return String(s)
               .replace(/&/g, "&amp;")
@@ -1847,30 +1387,6 @@ enum ExportLANServer {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !enabled;
             });
-          }
-          window._phonePauseStopEnabled = \(LANPhoneInteractionState.acceptsPauseStopTriggers ? "true" : "false");
-          window._phonePauseStopReason = \(jsonStringLiteral(LANPhoneInteractionState.pauseStopDisabledReason));
-          function updatePauseStopButtons() {
-            var enabled = window._phonePauseStopEnabled !== false;
-            var reason = window._phonePauseStopReason || "";
-            var pending = !!window._exportSourcePending;
-            var hint = document.getElementById("lan-pause-stop-hint");
-            if (hint) {
-              hint.textContent = enabled ? "" : reason;
-              hint.style.display = enabled ? "none" : "";
-            }
-            ["export-pause", "export-stop"].forEach(function (id) {
-              var btn = document.getElementById(id);
-              if (!btn) return;
-              btn.disabled = pending || !enabled;
-              btn.title = !enabled && reason ? reason : "";
-            });
-          }
-          function applyPhoneInteraction(pi) {
-            if (!pi) return;
-            window._phonePauseStopEnabled = pi.pauseStopEnabled !== false;
-            window._phonePauseStopReason = pi.pauseStopDisabledReason || "";
-            updatePauseStopButtons();
           }
           function applyExportSource(src) {
             if (window._exportSourcePending) return;
@@ -1896,10 +1412,7 @@ enum ExportLANServer {
             if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
             if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
             setMediaMaintenanceEnabled(src.phase !== "running");
-            updatePauseStopButtons();
           }
-          window.updatePauseStopButtons = updatePauseStopButtons;
-          updatePauseStopButtons();
           window.updateExportSourceLine = function (phase, displayName) {
             var labels = { running: "Exporting", paused: "Paused export", finished: "Last export" };
             applyExportSource({ phase: phase, displayName: displayName, label: labels[phase] || "Export source" });
@@ -1924,65 +1437,36 @@ enum ExportLANServer {
               if (status) status.innerHTML = j.playbackStatusHTML;
             }
             if (typeof j.playbackListHTML === "string") {
-              var files = document.getElementById("lan-playback-files");
-              if (files) files.innerHTML = j.playbackListHTML;
+              var list = document.getElementById("lan-playback-files");
+              if (list) list.innerHTML = j.playbackListHTML;
             }
-            if (typeof j.exportLogsListHTML === "string") {
-              var logs = document.getElementById("lan-export-logs");
-              if (logs) logs.innerHTML = j.exportLogsListHTML;
-            }
-            applyPhoneInteraction(j.phoneInteraction);
-          }
-          function pollLists() {
-            \(bookmarkPoll)
-            return fetch("status_lists.json", { cache: "no-store" })
-              .then(function (r) { return r.json(); })
-              .then(function (j) {
-                if (typeof j.playbackListHTML === "string") {
-                  var files = document.getElementById("lan-playback-files");
-                  if (files) files.innerHTML = j.playbackListHTML;
-                }
-                if (typeof j.exportLogsListHTML === "string") {
-                  var logs = document.getElementById("lan-export-logs");
-                  if (logs) logs.innerHTML = j.exportLogsListHTML;
-                }
-              })
-              .catch(function () {});
           }
           window.refreshLANPlayback = function () {
             return fetch("status.json", { cache: "no-store" })
               .then(function (r) { return r.json(); })
-              .then(function (j) {
-                applyExportSource(j.exportSource);
-                applyLive(j.lanLive);
-                applyPhoneInteraction(j.phoneInteraction);
-                applyPlaybackSection(j);
-                return pollLists().then(function () { return j; });
-              });
+              .then(function (j) { applyPlaybackSection(j); return j; });
           };
           function poll() {
+            if (typeof window.refreshLANBookmarks === "function") {
+              window.refreshLANBookmarks().catch(function () {});
+            }
             fetch("status.json", { cache: "no-store" })
               .then(function (r) { return r.json(); })
               .then(function (j) {
                 applyExportSource(j.exportSource);
                 applyLive(j.lanLive);
-                applyPhoneInteraction(j.phoneInteraction);
                 applyPlaybackSection(j);
               })
               .catch(function () {});
           }
-          \(autoPollStart)
+          poll();
+          setInterval(poll, pollMs);
         })();
         </script>
         """
     }
 
     private static func refreshLANMetricsBeforeStatusResponse() {
-        if let last = lastLANMetricsRefresh,
-           Date().timeIntervalSince(last) < lanMetricsRefreshMinInterval {
-            return
-        }
-        lastLANMetricsRefresh = Date()
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
             return
         }
@@ -2046,12 +1530,9 @@ enum ExportLANServer {
         return ""
     }
 
-    private static func playbackMediaFileListHTML() -> String {
+    private static func playbackFileListHTML() -> String {
         var items: [String] = []
-        let entries = listExportFilesForPlaybackIndex()
-        let limit = ExportPaths.lanPlaybackArchiveIndexLimit + 12
-        let capped = entries.count > limit
-        for entry in entries.prefix(limit) {
+        for entry in listExportFilesForPlaybackIndex() {
             let name = entry.name
             var sizeNote = ""
             if entry.size > 0 {
@@ -2103,76 +1584,15 @@ enum ExportLANServer {
             }
             items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
         }
-        if capped {
-            items.append(
-                "<li><em>… \(entries.count - limit) more file(s) on phone — use WebDAV/rclone for full tree.</em></li>"
-            )
-        }
         return items.isEmpty
             ? "<li><em>No export files yet — start export on the phone.</em></li>"
             : items.joined()
     }
 
-    private static func exportLogsFileListHTML() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        var items: [String] = []
-        for entry in listExportLogEntriesForLANIndex() {
-            let escaped = htmlEscape(entry.name)
-            var meta = ""
-            if entry.size > 0 {
-                meta += " (\(entry.size / 1024) KB)"
-            }
-            if let modified = entry.modified {
-                meta += " — \(htmlEscape(formatter.string(from: modified)))"
-            }
-            items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(meta)</li>")
-        }
-        return items.isEmpty
-            ? "<li><em>No export logs yet.</em></li>"
-            : items.joined()
-    }
-
-    private static func sendBrowseUnavailableDuringExport(
-        connection: NWConnection,
-        done: @escaping () -> Void
-    ) {
-        sendResponse(
-            connection: connection,
-            status: 503,
-            contentType: "text/plain; charset=utf-8",
-            body: Data(
-                "pCloud browser (/browse) disabled during export — use WebDAV (PotPlayer) or open /export_latest.txt in the address bar.".utf8
-            ),
-            done: done
-        )
-    }
-
-    /// Browser `GET /` — prebuilt bytes only (no filesystem, no `ExportPlaybackState`, no dynamic Swift HTML).
-    private static func sendBrowserMonitorHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        let body = isExportSessionActiveForBrowser
-            ? minimalMonitorHTMLDuringExport
-            : minimalMonitorHTMLIdle
-        sendResponse(
-            connection: connection,
-            status: 200,
-            contentType: "text/html; charset=utf-8",
-            body: body,
-            done: done
-        )
-    }
-
-    /// Full LAN page with pCloud folder browser (heavier — use `/` for monitor-only).
-    private static func sendBrowseIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
-        if isExportSessionActiveForBrowser {
-            sendBrowseUnavailableDuringExport(connection: connection, done: done)
-            return
-        }
-        let playbackStatusBlock = htmlPlaybackStatusShell()
-        let mediaList = "<li><em>Loading playback links…</em></li>"
-        let logList = "<li><em>Loading export logs…</em></li>"
+    private static func sendIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        refreshLANMetricsBeforeStatusResponse()
+        let playbackStatusBlock = playbackStatusHTMLBlock()
+        let fileList = playbackFileListHTML()
         let html = """
             <!DOCTYPE html>
             <html lang="en"><head>
@@ -2209,62 +1629,25 @@ enum ExportLANServer {
             #pcloud-files li { margin: 0.35rem 0; display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
             .file-meta { color: #666; font-size: 0.85em; }
             .muted { color: #666; font-size: 0.9em; }
-            .lan-playback-section { display: flex; flex-direction: column; }
-            .lan-playback-media { order: 1; margin: 0 0 0.25rem; }
-            .lan-playback-media ul { margin: 0; padding-left: 1.25rem; }
-            .lan-playback-logs-block { order: 2; margin: 0; }
-            .lan-playback-subhead { margin: 1rem 0 0.35rem; font-size: 1em; font-weight: 600; }
-            .lan-playback-logs-scroll {
-              max-height: calc(5 * 1.75lh);
-              overflow-x: auto;
-              overflow-y: auto;
-              -webkit-overflow-scrolling: touch;
-              overscroll-behavior: contain;
-              margin: 0 0 0.5rem;
-              padding: 0.2rem 0.4rem 0.2rem 0;
-              border: 1px solid #ddd;
-              border-radius: 6px;
-              background: #fafafa;
-            }
-            .lan-playback-logs-scroll ul { margin: 0; padding-left: 1.25rem; }
-            #lan-export-logs li { word-break: break-all; }
-            .lan-pause-stop-hint { margin: 0.35rem 0 0; font-size: 0.88em; color: #8a4b00; line-height: 1.35; max-width: 36rem; }
-            button:disabled[title] { cursor: not-allowed; }
             #trigger-status { min-height: 1.2em; }
             </style>
             </head><body>
             <h1>Loop Segments — LAN export</h1>
-            <p><a href="/">← Light monitor</a> (playback + logs only)</p>
             <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status" aria-live="polite">
               <strong id="lan-export-pending-title">Processing export request</strong>
               <span id="lan-export-pending-detail">Please wait — keep Loop Segments open in the foreground on the phone.</span>
             </div>
             \(htmlExportSourceLineBlock())
-            <p>Serving on port \(defaultPort): logs and media under <code>pcld_ios_media/</code> (private on phone, not in Files app). Legacy URLs <code>/export_latest.txt</code> and <code>/logs/export_*.txt</code> still work.</p>
+            <p>Serving on port \(defaultPort): logs under <code>Documents/Exports/</code>; media under <code>pcld_ios_media/</code> (private on phone, not in Files app).</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             <div id="lan-playback-status">\(playbackStatusBlock)</div>
             <h2>On phone (playback)</h2>
-            <div class="lan-playback-section">
-            <div id="lan-playback-media" class="lan-playback-media">
             <ul id="lan-playback-files">
-            \(mediaList)
+            \(fileList)
             </ul>
-            </div>
-            <div id="lan-playback-logs" class="lan-playback-logs-block">
-            <h3 class="lan-playback-subhead">Export logs (newest first)</h3>
-            <div class="lan-playback-logs-scroll" aria-label="Export log files">
-            <ul id="lan-export-logs">
-            \(logList)
-            </ul>
-            </div>
-            </div>
-            </div>
             \(htmlExportControlPanel())
-            \(htmlLANLiveRefreshScript(
-                monitorOnly: false,
-                deferAutoPoll: ExportPlaybackState.shared.isLANExportActive
-            ))
+            \(htmlLANLiveRefreshScript())
             </body></html>
             """
         sendResponse(
@@ -2624,29 +2007,16 @@ enum ExportLANServer {
             var detailEl = document.getElementById("lan-export-pending-detail");
             if (titleEl && title) titleEl.textContent = title;
             if (detailEl && detail) detailEl.textContent = detail;
-            ["export-resume", "export-random", "export-trim-media", "export-clear-media"].forEach(function (id) {
+            ["export-resume", "export-pause", "export-stop", "export-random", "export-trim-media", "export-clear-media"].forEach(function (id) {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !!active;
             });
-            if (window.updatePauseStopButtons) {
-              window.updatePauseStopButtons();
-            } else {
-              ["export-pause", "export-stop"].forEach(function (id) {
-                var btn = document.getElementById(id);
-                if (btn) btn.disabled = !!active;
-              });
-            }
             document.querySelectorAll(".export-file").forEach(function (btn) {
               btn.disabled = !!active;
             });
           }
           window.setExportPending = setExportPending;
           async function putTrigger(body) {
-            if ((body.command === "pause_export" || body.command === "stop_export")
-                && window._phonePauseStopEnabled === false) {
-              setStatus(window._phonePauseStopReason || "Pause and stop require the app in the foreground on the phone.", true);
-              return;
-            }
             var pending = exportPendingMessage(body.command, body);
             setExportPending(true, pending.title, pending.detail);
             try {
@@ -2683,7 +2053,10 @@ enum ExportLANServer {
                   var j = await ack.json();
                   setStatus((j.status || "?") + ": " + (j.message || ""), j.status === "rejected");
                   if (j.status === "accepted" && window.refreshLANPlayback) {
-                    try { await window.refreshLANPlayback(); } catch (e) {}
+                    for (var p = 0; p < 6; p++) {
+                      await new Promise(function (res) { setTimeout(res, 500); });
+                      try { await window.refreshLANPlayback(); } catch (e) {}
+                    }
                   }
                   return;
                 }
@@ -2764,18 +2137,10 @@ enum ExportLANServer {
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("export-pause").onclick = function () {
-            if (window._phonePauseStopEnabled === false) {
-              setStatus(window._phonePauseStopReason || "Pause requires the app in the foreground on the phone.", true);
-              return;
-            }
             putTrigger({ version: 1, command: "pause_export", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("export-stop").onclick = function () {
-            if (window._phonePauseStopEnabled === false) {
-              setStatus(window._phonePauseStopReason || "Stop requires the app in the foreground on the phone.", true);
-              return;
-            }
             putTrigger({ version: 1, command: "stop_export", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
@@ -2814,87 +2179,61 @@ enum ExportLANServer {
               }).catch(function (e) { setStatus(e.message || e, true); });
             }
           };
-          loadPins().catch(function () {});
+          loadPins().then(function () { loadPCloud(); }).catch(function () { loadPCloud(); });
           window.refreshLANBookmarks = loadPins;
         })();
         </script>
         """
     }
 
-    private static func statusFilesJSONArray(from index: LANIndexSnapshot) -> [[String: Any]] {
-        var fileEntries: [ExportFileEntry] = index.playback + index.logs
-        if fileEntries.count > lanStatusFilesCap {
-            fileEntries = Array(fileEntries.prefix(lanStatusFilesCap))
-        }
+    private static func sendStatusJSON(_ connection: NWConnection, done: @escaping () -> Void) {
+        refreshLANMetricsBeforeStatusResponse()
+        let fm = FileManager.default
         var entries: [[String: Any]] = []
-        entries.reserveCapacity(fileEntries.count)
-        for entry in fileEntries {
-            var dict: [String: Any] = ["name": entry.name]
-            if entry.size > 0 {
-                dict["bytes"] = entry.size
-            }
-            if let modified = entry.modified {
-                dict["modified"] = ISO8601DateFormatter().string(from: modified)
+        for rel in rootServableRelativePaths().union(Set(ExportPaths.lanBrowsableMediaRelativePaths())).sorted() {
+            guard let url = resolveExportFile(relativePath: rel) else { continue }
+            var dict: [String: Any] = ["name": rel]
+            if let attrs = try? fm.attributesOfItem(atPath: url.path) {
+                if let size = attrs[.size] as? NSNumber {
+                    dict["bytes"] = size.int64Value
+                }
+                if let modified = attrs[.modificationDate] as? Date {
+                    dict["modified"] = ISO8601DateFormatter().string(from: modified)
+                }
             }
             entries.append(dict)
-        }
-        return entries
-    }
-
-    /// Playback/log link HTML + file index — polled less often than `status.json`.
-    private static func sendStatusListsJSON(_ connection: NWConnection, done: @escaping () -> Void) {
-        var payload: [String: Any] = [:]
-        autoreleasepool {
-            let index = currentLANIndexSnapshot()
-            payload["playbackListHTML"] = playbackMediaFileListHTML()
-            payload["exportLogsListHTML"] = exportLogsFileListHTML()
-            payload["files"] = statusFilesJSONArray(from: index)
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
-            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
-            return
-        }
-        sendResponse(connection: connection, status: 200, contentType: "application/json", body: data, done: done)
-    }
-
-    private static func sendStatusJSON(_ connection: NWConnection, done: @escaping () -> Void) {
-        let exportActive = ExportPlaybackState.shared.isLANExportActive
-        if !exportActive {
-            refreshLANMetricsBeforeStatusResponse()
         }
         var payload: [String: Any] = [
             "exportsDirectory": "Exports",
             "port": Int(defaultPort),
-            "listsDeferred": true,
-            "manualRefresh": true,
+            "files": entries,
         ]
-        if !exportActive {
-            if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
-                var playback = ExportPlaybackState.shared.frozenStatusPayload
-                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-                playback["resumeTimelineReadable"] = startSec <= 0
-                    || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
-                payload["vanillaDownloadPlayback"] = playback
-            } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
-                var playback = ExportPlaybackState.shared.frozenStatusPayload
-                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-                playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
-                payload["pcloudTranscodedPlayback"] = playback
-            } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-                      !ExportPaths.shouldHideSparseWorkingFromLAN() {
-                var playback = ExportPlaybackState.shared.frozenStatusPayload
-                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-                playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
-                payload["workingSourcePlayback"] = playback
-            }
-            payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
-        } else {
-            payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayloadSlim()
+        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
+            var playback = ExportPlaybackState.shared.frozenStatusPayload
+            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+            playback["resumeTimelineReadable"] = startSec <= 0
+                || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
+            payload["vanillaDownloadPlayback"] = playback
+        } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
+            var playback = ExportPlaybackState.shared.frozenStatusPayload
+            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+            payload["pcloudTranscodedPlayback"] = playback
+        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
+                  !ExportPaths.shouldHideSparseWorkingFromLAN() {
+            var playback = ExportPlaybackState.shared.frozenStatusPayload
+            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+            payload["workingSourcePlayback"] = playback
+        }
+        if ExportPlaybackState.shared.isLANExportActive {
+            payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayload()
         }
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
         }
-        payload["phoneInteraction"] = LANPhoneInteractionState.statusPayload()
+        payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
+        payload["playbackListHTML"] = playbackFileListHTML()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return
@@ -2909,20 +2248,6 @@ enum ExportLANServer {
         requestHeaders: String,
         done: @escaping () -> Void
     ) {
-        if isExportSessionActiveForBrowser,
-           isBrowserPrefetchRequest(requestHeaders: requestHeaders),
-           !isWebDAVClient(requestHeaders: requestHeaders) {
-            sendResponse(
-                connection: connection,
-                status: 503,
-                contentType: "text/plain; charset=utf-8",
-                body: Data(
-                    "Export active — browser prefetch disabled. Use WebDAV (PotPlayer) or open export_latest.txt only.".utf8
-                ),
-                done: done
-            )
-            return
-        }
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
               let sizeNum = attrs[.size] as? NSNumber,
@@ -2938,6 +2263,9 @@ enum ExportLANServer {
             == ExportPaths.workingSourceURL.standardizedFileURL.path
         let isTranscodedWorking = fileURL.standardizedFileURL.path
             == ExportPaths.workingTranscodedURL.standardizedFileURL.path
+        if isSparseWorkingSource {
+            WorkingSourceSparseCatalog.refreshPlaybackState(for: fileURL)
+        }
         let isWorkingSource = isSparseWorkingSource || isTranscodedWorking
         /// Only sparse/in-progress working copies are capped (Quest OOM). Dense `_vanilla_download.*` is always full-file Range/seek.
         let capResponseBody = isWorkingSource
@@ -2947,12 +2275,6 @@ enum ExportLANServer {
         let status: Int
         let phrase: String
         let hasRangeHeader = requestHeaders.split(separator: "\r\n").contains { $0.lowercased().hasPrefix("range:") }
-        let capBrowserTextDuringExport = isExportSessionActiveForBrowser
-            && !isWebDAVClient(requestHeaders: requestHeaders)
-            && method == "GET"
-            && contentType.hasPrefix("text/")
-            && !hasRangeHeader
-            && fileSize > maxBrowserTextBytesDuringExport
 
         if let range = parseByteRange(requestHeaders: requestHeaders, fileSize: fileSize) {
             byteStart = range.start
@@ -2975,7 +2297,7 @@ enum ExportLANServer {
         } else if hasRangeHeader {
             sendResponse(connection: connection, status: 416, contentType: "text/plain", body: Data("Range not satisfiable".utf8), done: done)
             return
-        } else if isSparseWorkingSource, method == "GET", fileSize <= 256 * 1024 * 1024 {
+        } else if isSparseWorkingSource, method == "GET" {
             let tailStart = ExportPlaybackState.shared.indexTailStartByte
             let moovInHead = MP4NetworkOptimize.moovPresentInFirstBytes(
                 of: fileURL,
@@ -3026,18 +2348,11 @@ enum ExportLANServer {
         } else {
             byteStart = 0
             byteEnd = fileSize - 1
-            if capBrowserTextDuringExport {
-                byteEnd = maxBrowserTextBytesDuringExport - 1
-                status = 206
-                phrase = "Partial Content"
-            } else if capResponseBody {
+            if capResponseBody {
                 byteEnd = clampResponseEnd(byteStart: 0, byteEnd: byteEnd, fileSize: fileSize)
-                status = byteEnd >= fileSize - 1 ? 200 : 206
-                phrase = status == 206 ? "Partial Content" : "OK"
-            } else {
-                status = byteEnd >= fileSize - 1 ? 200 : 206
-                phrase = status == 206 ? "Partial Content" : "OK"
             }
+            status = byteEnd >= fileSize - 1 ? 200 : 206
+            phrase = status == 206 ? "Partial Content" : "OK"
         }
 
         let bodyLength = byteEnd - byteStart + 1
@@ -3167,15 +2482,16 @@ enum ExportLANServer {
         connection: NWConnection,
         done: @escaping () -> Void
     ) {
-        let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
-        let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
-        let durationSec = Int(ExportPlaybackState.shared.exportDurationSeconds.rounded(.down))
+        let snap = ExportPlaybackState.shared.frozenStatusPayload
+        let startSec = (snap["playbackStartSeconds"] as? Double) ?? 0
+        let cursorSec = (snap["exportCursorSeconds"] as? Double) ?? 0
+        let durationSec = (snap["durationSeconds"] as? Double) ?? 0
         let active = ExportPlaybackState.shared.isLANExportActive
         let status = active ? 503 : 416
-        let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(Double(startSec))
+        let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
         let hint = active
             ? "Range not on disk yet. Export is still filling this part of the file; retry in a few seconds."
-            : "Range not on disk. Open http://<phone-ip>:8765/ and use the index link to pcld_ios_media/_working.mp4 (not a typed URL). Resume at \(formatLANClock(startSec)) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(cursorSec)) of ~\(formatLANClock(durationSec)). For playback now use pcld_ios_media/loop/op_00.mp4 on the same page, or VLC/ffplay on _working.mp4."
+            : "Range not on disk. Open http://<phone-ip>:8765/ and use the index link to pcld_ios_media/_working.mp4 (not a typed URL). Resume at \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))) of ~\(formatLANClock(Int(durationSec.rounded(.down)))). For playback now use pcld_ios_media/loop/op_00.mp4 on the same page, or VLC/ffplay on _working.mp4."
         sendResponse(
             connection: connection,
             status: status,
@@ -3251,25 +2567,13 @@ enum ExportLANServer {
 
     // MARK: - IPv4
 
-    private static func resolvedMDNSHostName() -> String {
-        lock.lock()
-        let cached = cachedMDNSHostLabel
-        lock.unlock()
-        if let cached, !cached.isEmpty { return cached }
-        return deviceMDNSHostLabelFromPOSIX()
-    }
-
-    /// User-visible device label for mDNS (Settings → General → About → Name). Main actor only.
+    /// User-visible device label for mDNS (Settings → General → About → Name).
     private static func deviceMDNSHostLabel() -> String {
         let deviceName = UIDevice.current.name
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
         if !deviceName.isEmpty {
             return sanitizeMDNSHostLabel(deviceName)
         }
-        return deviceMDNSHostLabelFromPOSIX()
-    }
-
-    private static func deviceMDNSHostLabelFromPOSIX() -> String {
         var buffer = [CChar](repeating: 0, count: 256)
         if gethostname(&buffer, buffer.count) == 0 {
             let host = String(cString: buffer)

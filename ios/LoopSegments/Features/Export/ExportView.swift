@@ -194,14 +194,12 @@ struct ExportView: View {
                 Text(item.href).font(.caption).foregroundStyle(.secondary)
             }
             Section("Output files") {
-                Text("Logs + media (LAN only): Application Support/\(ExportPaths.mediaExportFolderName)/")
+                Text("Logs (Files/USB): \(ExportPaths.exportsDirectory.path)")
+                Text("Media (LAN only): Application Support/\(ExportPaths.mediaExportFolderName)/")
                     .font(.caption)
-                Text("Documents/Exports/ is unused after upgrade — safe to delete the whole folder in Files.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
                 Text("Segments: pcld_ios_media/loop/op_00|01.mp4")
                 Text("Working copy: pcld_ios_media/_working.mp4 (sparse while export runs)")
-                Text(logHint.isEmpty ? "Logs: pcld_ios_media/logs/export_latest.txt" : logHint)
+                Text(logHint.isEmpty ? "Logs: export_latest.txt · export_progress.txt" : logHint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if !liveLogTail.isEmpty {
@@ -360,26 +358,18 @@ struct ExportView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 if ExportBackgroundKeepAlive.shared.isActive {
-                    Text(
-                        exportKeepAlivePreferControls
-                            ? "Keep Alive is playing — lock the phone to see it on the lock screen."
-                            : "Keep Alive is playing — export and LAN stay active when locked (mix mode: no Keep Alive card on the lock screen by default)."
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
+                    Text("Keep Alive is playing — lock the phone to see Now Playing.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 } else if session.isExportActive(for: item),
                           let err = ExportBackgroundKeepAlive.shared.lastStartError {
                     Text("Keep Alive failed: \(err)")
                         .font(.footnote)
                         .foregroundStyle(.red)
                 } else if exportKeepAliveEnabled {
-                    Text(
-                        exportKeepAlivePreferControls
-                            ? "Turn on before Start export, then lock the phone to see Keep Alive on the lock screen."
-                            : "Turn on before Start export, then lock the phone — mix mode keeps export/LAN alive without a Keep Alive lock-screen card."
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    Text("Turn on before Start export. After export starts, lock the phone — check Control Center if the lock screen card is hidden.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             } else {
                 Text(
@@ -750,14 +740,14 @@ struct ExportView: View {
     private func refreshLogHint() {
         let latest = ExportPaths.latestLogTextURL
         let progress = ExportPaths.exportProgressURL
-        let probe = ExportPaths.loopSegmentsOkProbeURL
+        let probe = ExportPaths.exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
         let latestBytes = fileByteCount(latest)
         let progressBytes = fileByteCount(progress)
         let probeBytes = fileByteCount(probe)
         let historyCount = ExportPaths.listExportHistoryLogRelativePaths().count
         logHint =
-            "pcld_ios_media/logs/export_latest.txt \(latestBytes) B · export_progress \(progressBytes) B · " +
-            "\(historyCount) saved run(s) · ok probe \(probeBytes) B"
+            "export_latest.txt \(latestBytes) B · export_progress.txt \(progressBytes) B · " +
+            "logs/ \(historyCount) saved run(s) · ok.txt \(probeBytes) B"
     }
 
     private func fileByteCount(_ url: URL) -> Int64 {

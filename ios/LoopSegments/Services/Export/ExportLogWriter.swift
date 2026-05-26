@@ -1,6 +1,6 @@
 import Foundation
 
-/// Append-only export log under `pcld_ios_media/logs/`. Rewrites whole file atomically each line for LAN/PC polling.
+/// Append-only export log under `Exports/`. Rewrites whole file atomically each line so USB/Files always see a complete snapshot.
 final class ExportLogWriter: @unchecked Sendable {
     private static let progressLineCount = 12
 
@@ -74,7 +74,7 @@ final class ExportLogWriter: @unchecked Sendable {
     }
 
     var historyLogFileName: String {
-        ExportPaths.pathRelativeToExports(historyURL)
+        "logs/\(historyURL.lastPathComponent)"
     }
 
     // MARK: - Private

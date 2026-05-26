@@ -322,23 +322,6 @@ final class ExportPlaybackState: @unchecked Sendable {
         ]
     }
 
-    /// Tiny `lanLive` for monitor `status.json` during export (no dashboard rebuild).
-    func lanLiveStatusPayloadSlim() -> [String: Any] {
-        let snap = lock.withLock { snapshot }
-        let mode: String
-        if snap.vanillaDownloadActive {
-            mode = "vanilla"
-        } else if snap.pcloudTranscodedWorkingActive {
-            mode = "transcoded"
-        } else {
-            mode = "sparse"
-        }
-        return [
-            "exportMode": mode,
-            "playableStatusLine": Self.lanPlayableStatusLine(snap: snap),
-        ]
-    }
-
     /// User-facing note for Export screen / logs.
     func pcloudTranscodedWorkingUserNotice() -> String? {
         lock.withLock {
@@ -484,9 +467,6 @@ final class ExportPlaybackState: @unchecked Sendable {
             prefetch += snap.backgroundDownloadActive ? " — active now" : " — paused (minute dense fill)"
             lines.append("LAN sequential prefetch: \(prefetch)")
         }
-        if snap.lanExportActive, lines.count > 10 {
-            return Array(lines.prefix(10))
-        }
         return lines
     }
 
@@ -621,19 +601,6 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock {
             snapshot.totalFileBytes = totalBytes
             snapshot.filledSpans = filledSpans
-            snapshot.headOnDisk = headOnDisk
-            snapshot.tailOnDisk = tailOnDisk
-            snapshot.indexTailStart = max(
-                0,
-                totalBytes - WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalBytes)
-            )
-        }
-    }
-
-    /// LAN poll during active export — refresh file size + head/tail probes only (keep in-memory spans).
-    func updateLANLiveFileSize(totalBytes: Int64, headOnDisk: Bool, tailOnDisk: Bool) {
-        lock.withLock {
-            snapshot.totalFileBytes = totalBytes
             snapshot.headOnDisk = headOnDisk
             snapshot.tailOnDisk = tailOnDisk
             snapshot.indexTailStart = max(

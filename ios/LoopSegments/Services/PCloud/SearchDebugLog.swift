@@ -1,15 +1,15 @@
 import Foundation
 
-/// Append-only search trace under `pcld_ios_media/logs/search_debug.txt` (private; LAN when served).
+/// Append-only search trace under `Exports/search_debug.txt` (USB / Files on device).
 enum SearchDebugLog {
     private static let queue = DispatchQueue(label: "com.loopsegments.search-debug")
     private static let maxBytes = 256 * 1024
 
     static var logURL: URL {
-        ExportPaths.searchDebugLogURL
+        ExportPaths.exportsDirectory.appendingPathComponent("search_debug.txt")
     }
 
-    /// Creates the search debug log at launch (before any search runs).
+    /// Creates `Exports/search_debug.txt` at launch (before any search runs).
     static func ensureReady() {
         queue.sync {
             ensureDirectoryLocked()
@@ -30,7 +30,7 @@ enum SearchDebugLog {
                 return "search_debug.txt — not on disk yet (search once or reinstall build 82+)"
             }
             let bytes = fileByteCount(url)
-            return "\(ExportPaths.pathRelativeToExports(url)) — \(bytes) bytes (LAN only)"
+            return "search_debug.txt — \(bytes) bytes in Exports/"
         }
     }
 
