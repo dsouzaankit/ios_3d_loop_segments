@@ -156,7 +156,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 
 | Area | Contents |
 |------|----------|
-| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
+| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. **Pause** / **Stop** only work when Loop Segments is **open in the foreground** on the phone (locked or background → buttons disabled + hint). |
 | **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
 | **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
 | **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. |
@@ -165,7 +165,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 
 | Path | Purpose |
 |------|---------|
-| **`/status.json`** | Live state: `exportSource`, optional `lanLive` (slim during export), `playbackStatusHTML` when idle. File lists deferred to **`status_lists.json`**. |
+| **`/status.json`** | Live state: `exportSource`, `phoneInteraction`, optional `lanLive` during export, `playbackStatusHTML` when idle. File lists deferred to **`status_lists.json`**. |
 | **`/status_lists.json`** | `playbackListHTML`, `exportLogsListHTML`, capped `files[]` (active + recent archive + logs). |
 | **`/pcloud_list.json?path=/Folder/`** | pCloud folder listing (directories + video files). |
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
@@ -176,8 +176,9 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
+- **`phoneInteraction`** — `{ "pauseStopEnabled", "pauseStopDisabledReason" }` — LAN **Pause** / **Stop** and matching triggers are rejected when the app is not **active** in the foreground.
 - **`playbackStatusHTML`**, **`playbackListHTML`**, **`exportLogsListHTML`** — on **`status_lists.json`** (or manual refresh on `/`). **`playbackListHTML`** = media only (capped archive, newest first). **`exportLogsListHTML`** = logs sorted **newest first**. During export, video rows on lists are **text-only** (no `href`) so Chrome cannot prefetch multi‑GB files.
-- **`lanLive`** — while export is active, slim `playableStatusLine` only (no full dashboard rebuild every poll). Idle **`/browse`** includes full dashboard in **`playbackStatusHTML`**.
+- **`lanLive`** — while export is active: `playableStatusLine` + **`dashboardLines`** (duration, elapsed, bitrate, WAN Mbps, dense-fill %, …). Update via **Refresh status** on **`/`** (no auto-poll). Idle **`/browse`** includes the same metrics inside **`playbackStatusHTML`**.
 - **`listsDeferred`** — `true` on **`status.json`**; fetch lists via **`status_lists.json`**.
 - **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.
 - **`files`** — servable export paths with `bytes` / `modified`.

@@ -322,7 +322,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         ]
     }
 
-    /// Tiny `lanLive` for monitor `status.json` during export (no dashboard rebuild).
+    /// `lanLive` for monitor `status.json` during export (`dashboardLines` + playable line; no full `playbackStatusHTML`).
     func lanLiveStatusPayloadSlim() -> [String: Any] {
         let snap = lock.withLock { snapshot }
         let mode: String
@@ -335,6 +335,7 @@ final class ExportPlaybackState: @unchecked Sendable {
         }
         return [
             "exportMode": mode,
+            "dashboardLines": lanDashboardLines(),
             "playableStatusLine": Self.lanPlayableStatusLine(snap: snap),
         ]
     }
