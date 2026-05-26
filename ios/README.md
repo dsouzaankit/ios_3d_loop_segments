@@ -62,7 +62,18 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 
 ### Background / lock screen (iOS limits)
 
-**Initial testing (builds before Keep Alive bundle fix):** with the screen locked and export running, iOS often **stopped the app after about 30 minutes** — export showed **interrupted** in **`export_latest.txt`**, and Keep Alive audio stopped. That matches iOS suspending a normal background app; it is **not** something the app can fix by “asking for another 30 minutes.”
+**Do not confuse “export finished” with “iOS killed the app.”** When export **reaches end of file** (or finishes the run), the app calls **`endExportSession()`** — **Keep Alive audio stops on purpose**, the orange **Exporting** bar goes away, and finished root media is moved under **`pcld_ios_media/archive/`**. A run of **~34 minutes** that **plays fully from archive** on LAN is consistent with **success**, not background preemption.
+
+**How to tell in `export_latest.txt`:**
+
+| Log / status | Meaning |
+|--------------|---------|
+| **`completed (end of file)`** / **Reached end of file** | Normal finish — audio stopping afterward is expected. |
+| **`Export interrupted`** / status **`interrupted`** | Reader cancelled mid-run (Wi‑Fi drop, app killed, etc.) — resume with **Start export**. |
+| **`Auto-pause: 2h reached`** | In-app 2 h cap. |
+| **`Keep Alive: failed`** / missing MP3 | Bundling bug (fixed **build 190+**), not iOS. |
+
+**Locked-screen risk (still real, but unproven at exactly ~30 min):** iOS *can* suspend apps that are not playing background audio. Early tests *looked* like a ~30 min cutoff when Keep Alive was broken (MP3 not in the bundle) or logs were read as **interrupted** without checking archive playback. Treat **~30 min** as a rough watchpoint, not a confirmed iOS timer.
 
 | Mechanism | What it does | Multi-hour locked export? |
 |-----------|----------------|---------------------------|
@@ -72,7 +83,7 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 
 **There is no API to request “another 30 minutes” of generic background time.** iOS does not grant stacked 30-minute extensions via `beginBackgroundTask`. Long runs depend on **Keep Alive audio** (and stable Wi‑Fi for WebDAV reads), not on background-task renewal.
 
-**Practical guidance:** enable **Keep Alive**; use **build 190+** so **`KeepAlive_silence.mp3`** is in the IPA; stay on **Wi‑Fi**; avoid **Low Power Mode**; if export interrupts after ~30 min locked, unlock briefly or leave the app in the foreground for a few minutes, then **Start export** to resume from the checkpoint. Check **`export_latest.txt`** for **`Export interrupted`** vs **`Keep Alive: watchdog`** vs **`Auto-pause: 2h`**.
+**Practical guidance:** enable **Keep Alive**; use **build 190+** so **`KeepAlive_silence.mp3`** is in the IPA; stay on **Wi‑Fi**; avoid **Low Power Mode**. After a long locked run, confirm **`completed (end of file)`** and archive playback before assuming iOS preemption. If truly interrupted, **Start export** resumes from the checkpoint.
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
