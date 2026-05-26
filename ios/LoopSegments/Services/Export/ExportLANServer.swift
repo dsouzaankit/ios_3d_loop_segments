@@ -457,6 +457,24 @@ enum ExportLANServer {
         return true
     }
 
+    /// Protect LAN proxy endpoints (pCloud list + bookmarks) with the same Basic auth as WebDAV.
+    @discardableResult
+    private static func enforceLANProxyAuth(
+        requestHeaders: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) -> Bool {
+        guard headerValue(named: "Authorization", in: requestHeaders) != nil else {
+            sendUnauthorized(connection: connection, done: done)
+            return false
+        }
+        guard lanWebDAVAuthorizationOK(requestHeaders: requestHeaders) else {
+            sendUnauthorized(connection: connection, done: done)
+            return false
+        }
+        return true
+    }
+
     /// Browsers get the HTML index; WebDAV clients (Skybox, Windows `net use`) get DAV listings.
     private static func isBrowserLikeRequest(requestHeaders: String) -> Bool {
         if isWebDAVClient(requestHeaders: requestHeaders) { return false }
@@ -538,10 +556,12 @@ enum ExportLANServer {
         }
         let (resourcePath, query) = splitPathAndQuery(normalized)
         if resourcePath == "pcloud_list.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
             sendPCloudListJSON(folderPath: query["path"] ?? "/", connection: connection, done: done)
             return
         }
         if resourcePath == "pcloud_bookmarks.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
             sendPCloudBookmarksJSON(connection: connection, done: done)
             return
         }
@@ -947,6 +967,7 @@ enum ExportLANServer {
     ) {
         let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if normalized == "pcloud_bookmarks.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
             handlePCloudBookmarksPUT(
                 requestHeaders: requestHeaders,
                 bodyPrefix: bodyPrefix,

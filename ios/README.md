@@ -58,6 +58,7 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse** and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. **Paused exports** sidebar hides the file that is actively exporting.
 - **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. **Only** loops bundled **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). If the file is missing/unplayable, Keep Alive fails and logs the error to **`export_latest.txt`**. Lock screen **Play** / **Pause** / **Stop**; export continues until in-app stop. **LAN :8765** while export runs (locked OK). Not reliable in Low Power Mode.
+  - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin` / `iosadmin`**), since they expose pCloud folder/file names.
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
