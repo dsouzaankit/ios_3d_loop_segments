@@ -148,9 +148,9 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 
 | Area | Contents |
 |------|----------|
-| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
+| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. **Pause** / **Stop** are **disabled** while the phone is **locked**, **inactive**, or the app is **backgrounded** — orange hint explains why; triggers are **rejected** on the phone until foreground returns. |
 | **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
-| **Middle** | Playback status + **On phone (playback)** file list (auto-refreshed from `status.json`). |
+| **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, `archive/`), then **Export logs (newest first)** (`export_latest.txt`, `export_progress.txt`, `logs/export_*.txt`) in a scroll panel (~5 rows tall, scrollbar when more). Auto-refreshed from `status.json`. |
 | **Bottom** | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. |
 
 #### JSON APIs (GET unless noted)
@@ -167,7 +167,8 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).
-- **`playbackStatusHTML`**, **`playbackListHTML`** — server-rendered playback blocks (replace in-page without reload). **`On phone (playback)`** lists active export paths first; **`pcld_ios_media/archive/`** entries are sorted by archival timestamp **newest first** (parsed from the filename stamp).
+- **`playbackStatusHTML`**, **`playbackListHTML`**, **`exportLogsListHTML`** — server-rendered blocks (replace in-page without reload). **`playbackListHTML`** = media only (active paths first; **`pcld_ios_media/archive/`** sorted by archival stamp **newest first**). **`exportLogsListHTML`** = log paths sorted **newest first** (stamped `logs/export_*` name, unix infix, or file mtime).
+- **`phoneInteraction`** — `{ "pauseStopEnabled", "pauseStopDisabledReason" }` — LAN **Pause** / **Stop** follow foreground state (`scenePhase == .active` on the phone).
 - **`lanLive`** — WAN Mbps / fill dashboard lines while export is active.
 - **`workingSourcePlayback`** \| **`vanillaDownloadPlayback`** \| **`pcloudTranscodedPlayback`** — mode-specific sparse/vanilla/HLS hints.
 - **`files`** — servable export paths with `bytes` / `modified`.
@@ -192,8 +193,8 @@ Open **`http://<phone-ip>:8765/`** in a browser on the same Wi‑Fi. Uses the ph
 | **`start_export`** | Export `href` from `seekMs`. **Auto-stops** any running export first (no manual stop required). |
 | **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). |
-| **`pause_export`** | Pause the running export (checkpoint kept on phone). |
-| **`stop_export`** | Same as in-app **Stop** — removes `loop/`, archives root copies, clears checkpoint. |
+| **`pause_export`** | Pause the running export (checkpoint kept on phone). **Rejected** if the app is not in the **foreground** (locked / backgrounded). |
+| **`stop_export`** | Same as in-app **Stop** — removes `loop/`, archives root copies, clears checkpoint. **Rejected** if not in the **foreground**. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
 | **`clear_media`** | Same as **Clear media** — deletes active + `archive/` (rejected while export running). |
 
