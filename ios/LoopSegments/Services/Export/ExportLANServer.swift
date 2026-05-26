@@ -804,10 +804,12 @@ enum ExportLANServer {
 
     private static func allowedServableRelativePaths() -> Set<String> {
         var names = rootServableRelativePaths()
-        for rel in ExportPaths.lanBrowsableMediaRelativePaths() {
+        for rel in ExportPaths.listLANPlaybackIndexRelativePaths(
+            maxArchiveEntries: ExportPaths.lanPlaybackArchiveIndexLimit + 32
+        ) {
             names.insert(rel)
         }
-        for rel in ExportPaths.listExportHistoryLogRelativePaths() {
+        for rel in ExportPaths.listLANLogIndexRelativePaths() {
             names.insert(rel)
         }
         return names

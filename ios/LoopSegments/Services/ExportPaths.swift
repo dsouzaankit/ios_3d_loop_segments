@@ -336,12 +336,8 @@ enum ExportPaths {
         if fm.fileExists(atPath: archiveDir.path),
            let names = try? fm.contentsOfDirectory(atPath: archiveDir.path) {
             let videos = names.filter { isLANBrowsableMediaFile(fileName: $0) }
-            let sorted = videos.sorted { lhs, rhs in
-                let l = ExportMediaArchive.archivedMediaSortDate(fileName: lhs) ?? .distantPast
-                let r = ExportMediaArchive.archivedMediaSortDate(fileName: rhs) ?? .distantPast
-                return l > r
-            }
-            for name in sorted.prefix(max(0, maxArchiveEntries)) {
+            let capped = cappedNewestArchiveFileNames(in: archiveDir, names: videos, limit: maxArchiveEntries)
+            for name in capped {
                 appendFileIfPresent(archiveDir.appendingPathComponent(name))
             }
         }
@@ -772,16 +768,51 @@ enum ExportPaths {
         return removed
     }
 
-    /// Relative paths under `Exports/` for retained per-run logs (`logs/export_<unix>.txt`), newest first.
+    /// Relative paths for retained per-run logs (`pcld_ios_media/logs/export_*.txt`), newest first.
     static func listExportHistoryLogRelativePaths() -> [String] {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) else { return [] }
         let filtered = names.filter { $0.hasPrefix("export_") && $0.hasSuffix(".txt") }
-        return filtered
-            .sorted { lhs, rhs in
-                exportLogFileSortDate(fileName: lhs) > exportLogFileSortDate(fileName: rhs)
+        return sortedExportHistoryLogFileNames(filtered).map { "\(exportLogsLANPrefix)/\($0)" }
+    }
+
+    /// Avoid O(n log n) on huge `logs/` directories — sort at most ~80 names for the LAN index.
+    private static func sortedExportHistoryLogFileNames(_ names: [String]) -> [String] {
+        let cap = exportLogRetentionCount + 40
+        guard names.count > cap else {
+            return names.sorted { exportLogFileSortDate(fileName: $0) > exportLogFileSortDate(fileName: $1) }
+        }
+        let ranked = names.map { name -> (String, Date) in
+            let url = logsDirectory.appendingPathComponent(name)
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))
+                .flatMap(\.contentModificationDate)
+            let stamped = exportLogFileSortDate(fileName: name)
+            return (name, stamped ?? modified ?? .distantPast)
+        }
+        return ranked.sorted { $0.1 > $1.1 }.prefix(cap).map(\.0)
+    }
+
+    private static func cappedNewestArchiveFileNames(
+        in archiveDir: URL,
+        names: [String],
+        limit: Int
+    ) -> [String] {
+        guard limit > 0 else { return [] }
+        guard names.count > limit else {
+            return names.sorted { lhs, rhs in
+                let l = ExportMediaArchive.archivedMediaSortDate(fileName: lhs) ?? .distantPast
+                let r = ExportMediaArchive.archivedMediaSortDate(fileName: rhs) ?? .distantPast
+                return l > r
             }
-            .map { "\(exportLogsLANPrefix)/\($0)" }
+        }
+        let ranked = names.map { name -> (String, Date) in
+            let url = archiveDir.appendingPathComponent(name)
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))
+                .flatMap(\.contentModificationDate)
+            let stamped = ExportMediaArchive.archivedMediaSortDate(fileName: name)
+            return (name, stamped ?? modified ?? .distantPast)
+        }
+        return ranked.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
 
     /// Newest-first sort key for `logs/export_*.txt` (stamped name, unix infix, else file mtime).
@@ -1078,7 +1109,7 @@ enum ExportPaths {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             parts.append("\(label) \(formatter.string(fromByteCount: size))")
         }
-        for rel in lanBrowsableMediaRelativePaths() {
+        for rel in listLANPlaybackIndexRelativePaths(maxArchiveEntries: 12) {
             let url = urlUnderExports(relativePath: rel)
             appendFile(at: url, label: rel)
         }
@@ -1088,18 +1119,38 @@ enum ExportPaths {
         return "Media on disk (private, LAN only): " + parts.joined(separator: "; ")
     }
 
-    /// Call at launch so export dirs exist; refreshes private launch probe under `pcld_ios_media/logs/`.
+    private static let heavySetupQueue = DispatchQueue(
+        label: "com.loopsegments.export-paths-setup",
+        qos: .utility
+    )
+    private static let heavySetupLock = NSLock()
+    private static var heavySetupScheduled = false
+
+    /// Creates export dirs synchronously; migrations + probe run once on a background queue (not on app launch main thread).
     static func ensureExportDirectories() {
-        migrateMediaFromDocumentsExports()
         _ = mediaExportDirectory
         _ = segmentLoopDirectory
         _ = lanExportScriptsDirectory
         _ = logsDirectory
-        migrateExportLogsFromDocumentsExports()
-        migrateLegacyExportFilenames()
-        migrateLegacyExportLogDuplicates()
-        SearchDebugLog.ensureReady()
-        writeLoopSegmentsOkProbe()
+        scheduleHeavyExportPathsSetupIfNeeded()
+    }
+
+    private static func scheduleHeavyExportPathsSetupIfNeeded() {
+        heavySetupLock.lock()
+        guard !heavySetupScheduled else {
+            heavySetupLock.unlock()
+            return
+        }
+        heavySetupScheduled = true
+        heavySetupLock.unlock()
+        heavySetupQueue.async {
+            migrateMediaFromDocumentsExports()
+            migrateExportLogsFromDocumentsExports()
+            migrateLegacyExportFilenames()
+            migrateLegacyExportLogDuplicates()
+            SearchDebugLog.ensureReady()
+            writeLoopSegmentsOkProbe()
+        }
     }
 
     static func writeLoopSegmentsOkProbe() {
