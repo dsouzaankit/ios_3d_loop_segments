@@ -651,7 +651,7 @@ private struct PausedExportDestinationView: View {
                 let result = try await PCloudSearchService.search(
                     query: query,
                     credentials: credentials,
-                    browsePaths: ["/"],
+                    browsePaths: [],
                     status: nil
                 )
                 if let match = pickSearchMatch(in: result.items, for: entry) {
