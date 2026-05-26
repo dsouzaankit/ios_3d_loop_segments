@@ -19,9 +19,18 @@ enum PCloudSearchService {
         return min(webDAVTimeoutBaseSeconds + Double(extra) * 2.5, webDAVTimeoutMaxSeconds)
     }
 
-    /// Browse stack plus saved folder bookmarks — used for WebDAV folder walk (`extraRoots`).
+    /// WebDAV walk roots for search.
+    ///
+    /// Restrict scope to **bookmarks + current folder only** (not the whole browse stack),
+    /// and always exclude `/` (root).
     static func mergedBrowsePathsForSearch(pathStack: [String]) -> [String] {
-        var paths = pathStack
+        var paths: [String] = []
+        if let current = pathStack.last {
+            let normalized = WebDAVURLBuilder.directoryListingPath(current)
+            if normalized != "/" {
+                paths.append(normalized)
+            }
+        }
         for bookmark in FolderBookmarkStore.lanBookmarkEntries() {
             paths.append(bookmark.listingPath)
         }
@@ -50,6 +59,16 @@ enum PCloudSearchService {
             return Result(items: [], statusNote: "Enter a file or folder name to search.")
         }
 
+        let rawCurrentPath = browsePaths.last ?? "/"
+        let normalizedCurrentPath = WebDAVURLBuilder.directoryListingPath(rawCurrentPath)
+        let initiatedFromRoot = normalizedCurrentPath == "/"
+
+        let scopedStatus: (@Sendable (String) -> Void)? = initiatedFromRoot
+            ? status.map { upstream in
+                { note in upstream("Root excluded (bookmarks-only): \(note)") }
+            }
+            : status
+
         let webDAVRoots = mergedBrowsePathsForSearch(pathStack: browsePaths)
         SearchDebugLog.beginSearch(query: trimmed, credentials: credentials, browsePaths: webDAVRoots)
 
@@ -62,6 +81,11 @@ enum PCloudSearchService {
         SearchDebugLog.log(
             "restAPISearchEnabled=\(PCloudSearchSettings.restAPISearchEnabled) tokenSaved=\(hasToken)"
         )
+        if initiatedFromRoot {
+            let note = "Search started at / — root excluded; WebDAV scope = bookmarks only."
+            SearchDebugLog.log(note)
+            status?(note)
+        }
 
         if !hasToken {
             SearchDebugLog.log("search: tokenSaved=false — API skipped; WebDAV only")
@@ -69,7 +93,7 @@ enum PCloudSearchService {
                 query: trimmed,
                 credentials: credentials,
                 browsePaths: webDAVRoots,
-                status: status,
+                status: scopedStatus,
                 reason: .missingToken
             )
         }
@@ -80,7 +104,7 @@ enum PCloudSearchService {
                 query: trimmed,
                 credentials: credentials,
                 browsePaths: webDAVRoots,
-                status: status,
+                status: scopedStatus,
                 reason: .restDisabled
             )
         }
@@ -93,7 +117,7 @@ enum PCloudSearchService {
         let api = PCloudAPIClient(credentials: credentials)
 
         tried.append("pCloud web search")
-        status?("pCloud web search…")
+        scopedStatus?("pCloud web search…")
         do {
             let apiResult = try await timed("pCloud web search", seconds: webSearchTimeoutSeconds) {
                 try await api.search(query: trimmed)
@@ -130,7 +154,7 @@ enum PCloudSearchService {
         }
 
         tried.append("pCloud folder index")
-        status?("pCloud folder index (shallow)…")
+        scopedStatus?("pCloud folder index (shallow)…")
         do {
             let catalog = try await timed("pCloud folder index", seconds: catalogTimeoutSeconds) {
                 try await PCloudAPIFolderSearch.search(
@@ -162,13 +186,13 @@ enum PCloudSearchService {
 
         tried.append("folders (WebDAV)")
         let webDAVSeconds = webDAVTimeoutSeconds(rootCount: webDAVRoots.count)
-        status?("WebDAV folder walk (bookmarks + browse, \(Int(webDAVSeconds))s max)…")
+        scopedStatus?("WebDAV folder walk (\(Int(webDAVSeconds))s max)…")
         let webDAVPass = try await runWebDAVSearch(
             query: trimmed,
             credentials: credentials,
             browsePaths: webDAVRoots,
             timeoutSeconds: webDAVSeconds,
-            status: status
+            status: scopedStatus
         )
         webDAVTimedOut = webDAVPass.timedOut
         let webDAV = webDAVPass.items

@@ -540,7 +540,7 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 | **Pinned completed** (gray sidebar) | Same as paused — locates the pCloud source for Export settings while segment media stays on disk. |
 | **Search in Browse** (failed resume screen) | Fills the Browse search bar and runs the same pipeline. |
 
-**Default path (REST toggle off or `tokenSaved=false`):** WebDAV folder walk on **current Browse path + all folder bookmarks** (deduped). Timeout scales with root count: `min(10 + 2.5×(roots−1), 45)` seconds. Cap **80 folders** visited per search.
+**Default path (REST toggle off or `tokenSaved=false`):** WebDAV folder walk on **bookmarks + current folder only** (deduped), always **excluding `/`**. Timeout scales with root count: `min(10 + 2.5×(roots−1), 45)` seconds. Cap **80 folders** visited per search. If search starts from `/`, UI + `search_debug.txt` note that root is excluded (bookmarks-only scan).
 
 **With REST on + token:** `search` API (~20 s) → shallow **folder index** (~15 s) → WebDAV fallback as above.
 
@@ -579,7 +579,7 @@ If sign-in does not save `apiAuthToken` (logs: `tokenSaved=false`, `result=0 but
 
 | Feature | REST methods | Impact when no token |
 |---------|--------------|----------------------|
-| **Search** | `search`, `listfolder`, `getpath` | **Browse search defaults to WebDAV only** (bookmarks + current path; timeout scales with root count, up to 45 s). While WebDAV runs, Browse shows **live folder path**, **folders visited / cap**, **queue depth**, **hit count**, and **ETA** (rate-based, capped by timeout). Turn on **pCloud REST search** for account-wide API search + folder index when a token is saved. Trace: **`pcld_ios_media/logs/search_debug.txt`** (periodic progress lines + LAN index when present) |
+| **Search** | `search`, `listfolder`, `getpath` | **Browse search defaults to WebDAV only** (bookmarks + current folder, excluding `/`; timeout scales with root count, up to 45 s). While WebDAV runs, Browse shows **live folder path**, **folders visited / cap**, **queue depth**, **hit count**, and **ETA** (rate-based, capped by timeout). Turn on **pCloud REST search** for account-wide API search + folder index when a token is saved. Trace: **`pcld_ios_media/logs/search_debug.txt`** (periodic progress lines + LAN index when present) |
 | **HLS transcode fallback** | `gethlslink` | **Unavailable** — WMV/ASF (and failed sparse probe) cannot fall back to `_working_pcloud_transcode.mp4`; rely on **vanilla WebDAV download** or re-encode source to MP4 on PC |
 | **Media metadata (duration / bitrate)** | `stat` (not wired yet) / search hit fields `duration`, `videobitrate` | **Not available via REST** — LAN **Media duration** and **Media bitrate (est.)** for vanilla WMV/ASF use **AVFoundation on partial file** (often fails) then **Mbps guess from file size**; timeline can be wrong until probe succeeds |
 

@@ -572,7 +572,8 @@ struct BrowserView: View {
         }
         SearchDebugLog.log("UI: search started for \"\(query)\"")
         refreshSearchDebugStatus()
-        searchModeNote = "pCloud web search…"
+        // Let the search service publish the first status line (e.g. root-excluded scope note).
+        searchModeNote = "Searching…"
         do {
             let result = try await PCloudSearchService.search(
                 query: query,
