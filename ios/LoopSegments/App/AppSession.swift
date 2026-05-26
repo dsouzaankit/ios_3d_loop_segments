@@ -198,11 +198,11 @@ final class AppSession: ObservableObject {
         activeExportItem = item
         LANExportSourceDisplay.setRunning(item.name)
         let priorResume = ResumeStore.shared.resumeStatus(for: item)
-        let continueLANExport = priorResume.isPaused
-            && priorResume.effectiveMs > 250
-            && abs(priorResume.effectiveMs - seekMs) < 5_000
+        // Paused checkpoint resume (incl. 2h auto-pause): keep on-disk media/logs; ignore UI seek drift.
+        let continueLANExport = priorResume.isPaused && priorResume.effectiveMs > 250
+        let seekMsForRun = continueLANExport ? priorResume.effectiveMs : seekMs
         let resumeCursorMs = continueLANExport ? priorResume.effectiveMs : nil
-        ResumeStore.shared.beginExport(for: item, seekMs: seekMs)
+        ResumeStore.shared.beginExport(for: item, seekMs: seekMsForRun)
         isExportRunning = true
         syncExportSessionActive()
         ExportAutoLockCoordinator.exportDidStart()
@@ -239,7 +239,7 @@ final class AppSession: ObservableObject {
             let result = try await exportCoordinator.run(
                 item: item,
                 credentials: credentials,
-                seekMs: seekMs,
+                seekMs: seekMsForRun,
                 continueLANExport: continueLANExport,
                 resumeCursorMs: resumeCursorMs,
                 onMediaProgress: onProgress

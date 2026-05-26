@@ -18,7 +18,7 @@ final class ExportLogWriter: @unchecked Sendable {
         return f
     }()
 
-    init(itemName: String, seekMs: Int64, href: String) throws {
+    init(itemName: String, seekMs: Int64, href: String, appendResumeMarker: Bool = false) throws {
         ExportPaths.ensureExportDirectories()
         let stamp = Int(Date().timeIntervalSince1970)
         sourceItemName = itemName
@@ -26,7 +26,7 @@ final class ExportLogWriter: @unchecked Sendable {
         historyURL = ExportPaths.logsDirectory.appendingPathComponent("export_\(stamp).txt")
         progressURL = ExportPaths.exportProgressURL
 
-        text = """
+        var body = """
         Loop Segments export log
         Started: \(isoFormatter.string(from: Date()))
         File: \(itemName)
@@ -34,6 +34,10 @@ final class ExportLogWriter: @unchecked Sendable {
         Seek ms: \(seekMs)
 
         """
+        if appendResumeMarker {
+            body += "\(isoFormatter.string(from: Date())) --- resumed from paused checkpoint (\(seekMs) ms) ---\n"
+        }
+        text = body
 
         try queue.sync {
             try flushLocked()

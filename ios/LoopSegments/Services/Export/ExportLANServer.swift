@@ -1945,9 +1945,6 @@ enum ExportLANServer {
 
     private static func htmlMonitorStaticPlaybackLinks() -> String {
         var items: [String] = []
-        items.append("<li><a href=\"export_latest.txt\">export_latest.txt</a> (live log)</li>")
-        let progress = ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL)
-        items.append("<li><a href=\"\(htmlEscape(progress))\">\(htmlEscape(progress))</a></li>")
         let fm = FileManager.default
         for index in 0 ..< ExportPaths.segmentFileCount {
             let url = ExportPaths.segmentURL(index: index)

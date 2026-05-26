@@ -63,9 +63,9 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 On disk under **Application Support** (not in the Files app). LAN also accepts legacy URLs **`/export_latest.txt`**, **`/export_progress.txt`**, and **`/logs/export_…txt`** (same files).
 
-While a run is active there are **two** live copies (`export_latest.txt` + a temporary `export_<unix>.txt` in the same folder); when the run finishes the unix copy is **renamed** to the descriptive name above. There is **no** `.log` duplicate (legacy `export_latest.log` / `export_session_*` are removed on upgrade).
+While a run is active there are **two** live copies (`export_latest.txt` + a temporary `export_<unix>.txt` in the same folder); when the run finishes the unix copy is **renamed** to the descriptive name above. There is **no** `.log` duplicate (legacy `export_latest.log` / `export_session_*` are removed on upgrade). After **pause** (including **2h auto-pause**), the LAN log list hides duplicate `*_paused.txt` rows that match `export_latest.txt` byte-for-byte.
 
-**Start export** archives any finished live log, clears live pointers, and **keeps** history. **Clear logs** (Export tab) deletes all log files. Copy from LAN **`http://<ip>:8765/pcld_ios_media/logs/…`** (or legacy **`/export_latest.txt`**). On upgrade, logs move automatically out of **Documents/Exports/**.
+**Start export** archives any finished live log, clears live pointers, and **keeps** history. **Resume** after pause keeps history and on-disk media (no log wipe); checkpoint seek is used even if the Export screen seek UI drifted. **Clear logs** (Export tab) deletes all log files. Copy from LAN **`http://<ip>:8765/pcld_ios_media/logs/…`** (or legacy **`/export_latest.txt`**). On upgrade, logs move automatically out of **Documents/Exports/**.
 
 On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** is moved into Application Support automatically. **rclone** and **WebDAV** paths are unchanged (`L:\pcld_ios_media\...`). Copy **segment MP4s** from the PC via LAN/rclone, not Apple Devices USB.
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
@@ -557,7 +557,7 @@ If sign-in does not save `apiAuthToken` (logs: `tokenSaved=false`, `result=0 but
 
 | Feature | REST methods | Impact when no token |
 |---------|--------------|----------------------|
-| **Search** | `search`, `listfolder`, `getpath` | **No API search** — use WebDAV folder browse only; search UI may show a login/token message |
+| **Search** | `search`, `listfolder`, `getpath` | **No API search** — last-resort **WebDAV folder walk** still runs on the current browse path **plus all Browse bookmarks** (10 s cap); sign-in token message if that finds nothing |
 | **HLS transcode fallback** | `gethlslink` | **Unavailable** — WMV/ASF (and failed sparse probe) cannot fall back to `_working_pcloud_transcode.mp4`; rely on **vanilla WebDAV download** or re-encode source to MP4 on PC |
 | **Media metadata (duration / bitrate)** | `stat` (not wired yet) / search hit fields `duration`, `videobitrate` | **Not available via REST** — LAN **Media duration** and **Media bitrate (est.)** for vanilla WMV/ASF use **AVFoundation on partial file** (often fails) then **Mbps guess from file size**; timeline can be wrong until probe succeeds |
 

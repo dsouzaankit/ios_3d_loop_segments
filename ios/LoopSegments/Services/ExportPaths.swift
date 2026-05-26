@@ -364,7 +364,46 @@ enum ExportPaths {
             history = Array(history.prefix(maxHistoryEntries))
         }
         paths.append(contentsOf: history)
-        return paths
+        return dedupeLANLogIndexPaths(paths)
+    }
+
+    /// Drop history rows that duplicate `export_latest.txt` (common after pause: finalized `*_paused.txt` + live copy).
+    private static func dedupeLANLogIndexPaths(_ paths: [String]) -> [String] {
+        guard !ExportPlaybackState.shared.isLANExportActive else { return paths }
+        let fm = FileManager.default
+        let latestRel = pathRelativeToExports(latestLogTextURL)
+        guard paths.contains(latestRel) else { return paths }
+        let latestURL = latestLogTextURL
+        guard fm.fileExists(atPath: latestURL.path),
+              let latestSize = try? latestURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              latestSize > 512 else {
+            return paths
+        }
+        return paths.filter { rel in
+            if rel == latestRel || rel.hasSuffix("/export_progress.txt") { return true }
+            guard rel.hasPrefix("\(exportLogsLANPrefix)/export_"), rel.hasSuffix(".txt") else { return true }
+            let name = (rel as NSString).lastPathComponent
+            guard isFinalizedExportHistoryLogFileName(name) else { return true }
+            let url = urlUnderExports(relativePath: rel)
+            guard fm.fileExists(atPath: url.path),
+                  let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+                return true
+            }
+            return size != latestSize
+        }
+    }
+
+    private static func isFinalizedExportHistoryLogFileName(_ name: String) -> Bool {
+        guard name.hasPrefix("export_"), name.hasSuffix(".txt") else { return false }
+        if name == "export_latest.txt" || name == "export_progress.txt" { return false }
+        if exportLogUnixTimestamp(fromFileName: name) != nil { return false }
+        return exportLogStampedDate(fromFileName: name) != nil
+            || name.contains("_paused")
+            || name.contains("_interrupted")
+            || name.contains("_completed")
+            || name.contains("_cancelled")
+            || name.contains("_stopped")
+            || name.contains("_failed")
     }
 
     /// All playable media under `pcld_ios_media/` (recursive). New files appear on LAN without allowlist updates.

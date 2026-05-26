@@ -56,11 +56,16 @@ final class ExportCoordinator {
         }
         ExportRetentionSourceCatalog.save(sourceFileName: item.name, fileKey: item.fileKey)
 
-        ExportPaths.clearLogsForNewExport()
+        if continueLANExport {
+            ExportPaths.ensureExportDirectories()
+        } else {
+            ExportPaths.clearLogsForNewExport()
+        }
         let logWriter = try ExportLogWriter(
             itemName: item.name,
             seekMs: seekMs,
-            href: item.href
+            href: item.href,
+            appendResumeMarker: continueLANExport
         )
 
         let logHandler: (String) -> Void = { line in
