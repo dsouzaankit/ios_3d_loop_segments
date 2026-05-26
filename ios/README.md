@@ -126,7 +126,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (Export tab → **Export another file**, above **Exports folder**) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
-2. **URLs:** **`http://<phone-ip>:8765/`** — **light monitor** (playback, logs, pause/stop; no pCloud JS). **`http://<phone-ip>:8765/browse`** — full page with pCloud folder browser (phone must be signed in to pCloud). **`status.json`** every **60 s**, **`status_lists.json`** every **120 s**. Direct **`/export_latest.txt`** is always safe. Use monitor **`/`** during large exports to avoid crashes; open **`/browse`** only when you need LAN export-from-folder.
+2. **URLs:** **`http://<phone-ip>:8765/`** — **monitor** (static file links, **no auto-refresh** — tap **Refresh status** / **Refresh file list**). **`http://<phone-ip>:8765/browse`** — full UI (auto-refresh + pCloud browser). Direct **`/export_latest.txt`** is safest during large exports. Do not open **`/browse`** while testing crash fixes unless you need folder export.
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
@@ -185,9 +185,10 @@ The HTML index uses fixed JavaScript timers (embedded at page load; not configur
 
 | Interval | Request | What updates on the page |
 |----------|---------|---------------------------|
-| **60 s** | **`GET /status.json`** | See **Every 60 s** below (while export active). Idle: same interval + `playbackStatusHTML`. |
-| **120 s** | **`GET /status_lists.json`** | See **Every 120 s** below. Also **`refreshLANBookmarks()`** (pCloud bookmark strip). |
-| **On first open** | **`GET /`** then **`status.json`**; lists **~5 s** later | Light page shell; lists show *Loading…* until first **`status_lists.json`**. pCloud files: **Refresh** only. |
+| **Manual** | **`GET /status.json`** | Monitor **`/`** only — tap **Refresh status** (no timer). |
+| **Manual** | **`GET /status_lists.json`** | Monitor **`/`** — tap **Refresh file list**. |
+| **`/browse` only** | Auto **60 s** / **120 s** | Full page timers (heavier; avoid during 9 GB+ export). |
+| **On first open** | **`GET /`** | Static links (log, `loop/`, `_working*`) — **no** background fetch until you tap refresh. |
 | **Never auto** | **`GET /export_latest.txt`**, media files, WebDAV | Log/media bytes change on disk only; reload or follow a link to see updates. |
 
 **Every 60 s** (`status.json` while export active) — live export / playback metrics:

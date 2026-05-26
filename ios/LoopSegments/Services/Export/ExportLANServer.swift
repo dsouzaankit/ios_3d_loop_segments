@@ -710,12 +710,43 @@ enum ExportLANServer {
 
     private static func buildLANIndexSnapshot() -> LANIndexSnapshot {
         autoreleasepool {
-            let playback = ExportPaths.listLANPlaybackIndexRelativePaths().compactMap { exportFileEntry(relativePath: $0) }
+            let exportActive = ExportPlaybackState.shared.isLANExportActive
+            let archiveCap = exportActive ? 0 : ExportPaths.lanPlaybackArchiveIndexLimit
+            let playback = ExportPaths.listLANPlaybackIndexRelativePaths(maxArchiveEntries: archiveCap)
+                .compactMap { exportFileEntry(relativePath: $0) }
+            let logCap = exportActive ? 4 : 24
             let logs = ExportPaths.listLANLogIndexRelativePaths()
-                .prefix(24)
+                .prefix(logCap)
                 .compactMap { exportFileEntry(relativePath: $0) }
             return LANIndexSnapshot(playback: playback, logs: logs, builtAt: Date())
         }
+    }
+
+    /// Static links for monitor `/` (no index scan on first paint).
+    private static func htmlMonitorStaticPlaybackLinks() -> String {
+        var items: [String] = []
+        items.append("<li><a href=\"export_latest.txt\">export_latest.txt</a> (live log)</li>")
+        let progress = ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL)
+        items.append("<li><a href=\"\(htmlEscape(progress))\">\(htmlEscape(progress))</a></li>")
+        let fm = FileManager.default
+        for index in 0 ..< ExportPaths.segmentFileCount {
+            let url = ExportPaths.segmentURL(index: index)
+            guard fm.fileExists(atPath: url.path) else { continue }
+            let rel = ExportPaths.pathRelativeToExports(url)
+            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a></li>")
+        }
+        if fm.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
+            let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL)
+            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a> (growing transcode)</li>")
+        }
+        if fm.fileExists(atPath: ExportPaths.workingSourceURL.path),
+           !ExportPaths.shouldHideSparseWorkingFromLAN() {
+            let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
+            items.append("<li><a href=\"\(htmlEscape(rel))\">\(htmlEscape(rel))</a> (sparse)</li>")
+        }
+        return items.isEmpty
+            ? "<li><em>No media files yet.</em></li>"
+            : items.joined()
     }
 
     private static func currentLANIndexSnapshot() -> LANIndexSnapshot {
@@ -1467,15 +1498,134 @@ enum ExportLANServer {
         """
     }
 
+    /// Monitor `/` — manual refresh only (no timers; avoids jetsam during large exports).
+    private static func htmlMonitorManualRefreshScript() -> String {
+        """
+        <script>
+        (function () {
+          function esc(s) {
+            return String(s)
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/"/g, "&quot;");
+          }
+          window._phonePauseStopEnabled = \(LANPhoneInteractionState.acceptsPauseStopTriggers ? "true" : "false");
+          window._phonePauseStopReason = \(jsonStringLiteral(LANPhoneInteractionState.pauseStopDisabledReason));
+          function updatePauseStopButtons() {
+            var enabled = window._phonePauseStopEnabled !== false;
+            var reason = window._phonePauseStopReason || "";
+            ["export-pause", "export-stop"].forEach(function (id) {
+              var btn = document.getElementById(id);
+              if (!btn) return;
+              btn.disabled = !enabled;
+              btn.title = !enabled && reason ? reason : "";
+            });
+            var hint = document.getElementById("lan-pause-stop-hint");
+            if (hint) {
+              hint.textContent = enabled ? "" : reason;
+              hint.style.display = enabled ? "none" : "";
+            }
+          }
+          updatePauseStopButtons();
+          function applyExportSource(src) {
+            var wrap = document.getElementById("lan-export-source-wrap");
+            if (!wrap || !src || !src.displayName) {
+              if (wrap) wrap.style.display = "none";
+              return;
+            }
+            wrap.style.display = "";
+            wrap.className = "export-source-line"
+              + (src.phase === "running" ? " is-active" : src.phase === "paused" ? " is-paused" : "");
+            var label = document.getElementById("lan-export-source-label");
+            var name = document.getElementById("lan-export-source-name");
+            if (label) label.textContent = (src.label || "Export source") + ":";
+            if (name) name.textContent = src.displayName;
+            var actions = document.getElementById("lan-export-source-actions");
+            var pauseBtn = document.getElementById("export-pause");
+            var resumeBtn = document.getElementById("export-resume");
+            var active = src.phase === "running" || src.phase === "paused";
+            if (actions) actions.style.display = active ? "" : "none";
+            if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
+            if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
+            updatePauseStopButtons();
+          }
+          function applyLive(live) {
+            if (!live) return;
+            var line = document.getElementById("lan-playback-line");
+            if (line && live.playableStatusLine) line.textContent = live.playableStatusLine;
+            var stats = document.getElementById("lan-dashboard-stats");
+            if (stats && live.dashboardLines && live.dashboardLines.length) {
+              stats.innerHTML = live.dashboardLines.map(function (l) {
+                return "<li>" + esc(l) + "</li>";
+              }).join("");
+            }
+          }
+          function applyLists(j) {
+            if (!j) return;
+            if (typeof j.playbackListHTML === "string") {
+              var files = document.getElementById("lan-playback-files");
+              if (files) files.innerHTML = j.playbackListHTML;
+            }
+            if (typeof j.exportLogsListHTML === "string") {
+              var logs = document.getElementById("lan-export-logs");
+              if (logs) logs.innerHTML = j.exportLogsListHTML;
+            }
+          }
+          function refreshStatus() {
+            var btn = document.getElementById("lan-refresh-status");
+            if (btn) btn.disabled = true;
+            return fetch("status.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(function (j) {
+                applyExportSource(j.exportSource);
+                applyLive(j.lanLive);
+                if (typeof j.phoneInteraction === "object") {
+                  window._phonePauseStopEnabled = j.phoneInteraction.pauseStopEnabled !== false;
+                  window._phonePauseStopReason = j.phoneInteraction.pauseStopDisabledReason || "";
+                  updatePauseStopButtons();
+                }
+              })
+              .catch(function () {})
+              .finally(function () { if (btn) btn.disabled = false; });
+          }
+          function refreshLists() {
+            var btn = document.getElementById("lan-refresh-lists");
+            if (btn) btn.disabled = true;
+            return fetch("status_lists.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(applyLists)
+              .catch(function () {})
+              .finally(function () { if (btn) btn.disabled = false; });
+          }
+          var statusBtn = document.getElementById("lan-refresh-status");
+          var listsBtn = document.getElementById("lan-refresh-lists");
+          if (statusBtn) statusBtn.onclick = refreshStatus;
+          if (listsBtn) listsBtn.onclick = refreshLists;
+        })();
+        </script>
+        """
+    }
+
     /// Poll `status.json` for export source + LAN playback stats; lists on `status_lists.json`.
-    /// `monitorOnly` — default `/` page: no pCloud bookmark fetch on list poll.
-    private static func htmlLANLiveRefreshScript(monitorOnly: Bool = false) -> String {
+    /// `monitorOnly` — `/browse` page: no pCloud bookmark fetch on list poll.
+    private static func htmlLANLiveRefreshScript(
+        monitorOnly: Bool = false,
+        deferAutoPoll: Bool = false
+    ) -> String {
         let bookmarkPoll = monitorOnly
             ? ""
             : """
             if (typeof window.refreshLANBookmarks === "function") {
               window.refreshLANBookmarks().catch(function () {});
             }
+            """
+        let autoPollStart = deferAutoPoll
+            ? ""
+            : """
+          poll();
+          setTimeout(pollLists, 5000);
+          setInterval(poll, pollMs);
+          setInterval(pollLists, listPollMs);
             """
         return """
         <script>
@@ -1617,10 +1767,7 @@ enum ExportLANServer {
               })
               .catch(function () {});
           }
-          poll();
-          setTimeout(pollLists, 5000);
-          setInterval(poll, pollMs);
-          setInterval(pollLists, listPollMs);
+          \(autoPollStart)
         })();
         </script>
         """
@@ -1816,11 +1963,20 @@ enum ExportLANServer {
             </div>
             \(htmlExportSourceLineBlock())
             <div id="lan-playback-status">\(htmlPlaybackStatusShell())</div>
+            <p class="muted">No auto-refresh (tap buttons). Use direct log link while export runs.</p>
+            <p>
+              <button type="button" id="lan-refresh-status">Refresh status</button>
+              <button type="button" id="lan-refresh-lists">Refresh file list</button>
+            </p>
             <h2>On phone (playback)</h2>
-            <ul id="lan-playback-files"><li><em>Loading playback links…</em></li></ul>
+            <ul id="lan-playback-files">
+            \(htmlMonitorStaticPlaybackLinks())
+            </ul>
             <h3>Export logs</h3>
-            <div class="lan-playback-logs-scroll"><ul id="lan-export-logs"><li><em>Loading…</em></li></ul></div>
-            \(htmlLANLiveRefreshScript(monitorOnly: true))
+            <div class="lan-playback-logs-scroll"><ul id="lan-export-logs">
+            <li><a href="export_latest.txt">export_latest.txt</a></li>
+            </ul></div>
+            \(htmlMonitorManualRefreshScript())
             </body></html>
             """
         sendResponse(
@@ -1925,7 +2081,10 @@ enum ExportLANServer {
             </div>
             </div>
             \(htmlExportControlPanel())
-            \(htmlLANLiveRefreshScript(monitorOnly: false))
+            \(htmlLANLiveRefreshScript(
+                monitorOnly: false,
+                deferAutoPoll: ExportPlaybackState.shared.isLANExportActive
+            ))
             </body></html>
             """
         sendResponse(
@@ -2519,12 +2678,15 @@ enum ExportLANServer {
     }
 
     private static func sendStatusJSON(_ connection: NWConnection, done: @escaping () -> Void) {
-        refreshLANMetricsBeforeStatusResponse()
         let exportActive = ExportPlaybackState.shared.isLANExportActive
+        if !exportActive {
+            refreshLANMetricsBeforeStatusResponse()
+        }
         var payload: [String: Any] = [
             "exportsDirectory": "Exports",
             "port": Int(defaultPort),
             "listsDeferred": true,
+            "manualRefresh": true,
         ]
         if !exportActive {
             if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
@@ -2547,7 +2709,7 @@ enum ExportLANServer {
             }
             payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
         } else {
-            payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayload()
+            payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayloadSlim()
         }
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
@@ -2798,16 +2960,15 @@ enum ExportLANServer {
         connection: NWConnection,
         done: @escaping () -> Void
     ) {
-        let snap = ExportPlaybackState.shared.frozenStatusPayload
-        let startSec = (snap["playbackStartSeconds"] as? Double) ?? 0
-        let cursorSec = (snap["exportCursorSeconds"] as? Double) ?? 0
-        let durationSec = (snap["durationSeconds"] as? Double) ?? 0
+        let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
+        let cursorSec = Int(ExportPlaybackState.shared.exportCursorSeconds.rounded(.down))
+        let durationSec = Int(ExportPlaybackState.shared.durationSeconds.rounded(.down))
         let active = ExportPlaybackState.shared.isLANExportActive
         let status = active ? 503 : 416
-        let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+        let resumeReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(Double(startSec))
         let hint = active
             ? "Range not on disk yet. Export is still filling this part of the file; retry in a few seconds."
-            : "Range not on disk. Open http://<phone-ip>:8765/ and use the index link to pcld_ios_media/_working.mp4 (not a typed URL). Resume at \(formatLANClock(Int(startSec.rounded(.down)))) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(Int(cursorSec.rounded(.down)))) of ~\(formatLANClock(Int(durationSec.rounded(.down)))). For playback now use pcld_ios_media/loop/op_00.mp4 on the same page, or VLC/ffplay on _working.mp4."
+            : "Range not on disk. Open http://<phone-ip>:8765/ and use the index link to pcld_ios_media/_working.mp4 (not a typed URL). Resume at \(formatLANClock(startSec)) \(resumeReadable ? "is dense" : "is NOT dense yet"); export filled through ~\(formatLANClock(cursorSec)) of ~\(formatLANClock(durationSec)). For playback now use pcld_ios_media/loop/op_00.mp4 on the same page, or VLC/ffplay on _working.mp4."
         sendResponse(
             connection: connection,
             status: status,

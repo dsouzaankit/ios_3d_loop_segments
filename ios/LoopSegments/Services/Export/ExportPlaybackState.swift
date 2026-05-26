@@ -322,6 +322,23 @@ final class ExportPlaybackState: @unchecked Sendable {
         ]
     }
 
+    /// Tiny `lanLive` for monitor `status.json` during export (no dashboard rebuild).
+    func lanLiveStatusPayloadSlim() -> [String: Any] {
+        let snap = lock.withLock { snapshot }
+        let mode: String
+        if snap.vanillaDownloadActive {
+            mode = "vanilla"
+        } else if snap.pcloudTranscodedWorkingActive {
+            mode = "transcoded"
+        } else {
+            mode = "sparse"
+        }
+        return [
+            "exportMode": mode,
+            "playableStatusLine": Self.lanPlayableStatusLine(snap: snap),
+        ]
+    }
+
     /// User-facing note for Export screen / logs.
     func pcloudTranscodedWorkingUserNotice() -> String? {
         lock.withLock {
