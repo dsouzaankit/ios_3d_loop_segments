@@ -196,7 +196,7 @@ struct ExportView: View {
             Section("Output files") {
                 Text("Logs + media (LAN only): Application Support/\(ExportPaths.mediaExportFolderName)/")
                     .font(.caption)
-                Text("Files app: Exports/loop_segments_ok.txt only (safe to delete rest of Exports/)")
+                Text("Documents/Exports/ is unused after upgrade — safe to delete the whole folder in Files.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text("Segments: pcld_ios_media/loop/op_00|01.mp4")
@@ -750,14 +750,14 @@ struct ExportView: View {
     private func refreshLogHint() {
         let latest = ExportPaths.latestLogTextURL
         let progress = ExportPaths.exportProgressURL
-        let probe = ExportPaths.exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
+        let probe = ExportPaths.loopSegmentsOkProbeURL
         let latestBytes = fileByteCount(latest)
         let progressBytes = fileByteCount(progress)
         let probeBytes = fileByteCount(probe)
         let historyCount = ExportPaths.listExportHistoryLogRelativePaths().count
         logHint =
             "pcld_ios_media/logs/export_latest.txt \(latestBytes) B · export_progress \(progressBytes) B · " +
-            "\(historyCount) saved run(s) · Files ok.txt \(probeBytes) B"
+            "\(historyCount) saved run(s) · ok probe \(probeBytes) B"
     }
 
     private func fileByteCount(_ url: URL) -> Int64 {

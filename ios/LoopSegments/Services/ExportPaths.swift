@@ -162,6 +162,11 @@ enum ExportPaths {
         logsDirectory.appendingPathComponent("search_debug.txt")
     }
 
+    /// Launch health probe (private; LAN `pcld_ios_media/logs/loop_segments_ok.txt`, legacy `/loop_segments_ok.txt`).
+    static var loopSegmentsOkProbeURL: URL {
+        logsDirectory.appendingPathComponent("loop_segments_ok.txt")
+    }
+
     /// Map legacy LAN paths (`export_latest.txt`, `logs/export_*.txt`) → `pcld_ios_media/logs/…`.
     static func canonicalLANLogRelativePath(_ relativePath: String) -> String? {
         let trimmed = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -173,6 +178,8 @@ enum ExportPaths {
             return pathRelativeToExports(exportProgressURL)
         case "search_debug.txt":
             return pathRelativeToExports(searchDebugLogURL)
+        case "loop_segments_ok.txt":
+            return pathRelativeToExports(loopSegmentsOkProbeURL)
         default:
             break
         }
@@ -190,6 +197,7 @@ enum ExportPaths {
         guard relativePath.hasPrefix(prefix), relativePath.hasSuffix(".txt") else { return false }
         let name = String(relativePath.dropFirst(prefix.count))
         if name == "export_latest.txt" || name == "export_progress.txt" { return true }
+        if name == "loop_segments_ok.txt" { return true }
         return name.hasPrefix("export_")
     }
 
@@ -564,7 +572,10 @@ enum ExportPaths {
             }
         }
 
-        for name in ["export_latest.txt", "export_progress.txt", "export_latest.log", "search_debug.txt"] {
+        for name in [
+            "export_latest.txt", "export_progress.txt", "export_latest.log", "search_debug.txt",
+            "loop_segments_ok.txt",
+        ] {
             let src = exportsDirectory.appendingPathComponent(name)
             let dst = logsDirectory.appendingPathComponent(name)
             moveFile(from: src, to: dst, label: name)
@@ -947,7 +958,7 @@ enum ExportPaths {
         return removed
     }
 
-    /// Export + search logs under `Exports/` (keeps `loop_segments_ok.txt`).
+    /// Export + search logs under `pcld_ios_media/logs/` (not in Files).
     @discardableResult
     static func clearExportLogs(log: ((String) -> Void)? = nil) -> Int {
         _ = exportsDirectory
@@ -1021,9 +1032,8 @@ enum ExportPaths {
         return "Media on disk (private, LAN only): " + parts.joined(separator: "; ")
     }
 
-    /// Call at launch so export dirs exist; writes a tiny probe file in shared `Exports/` (visible in Files).
+    /// Call at launch so export dirs exist; refreshes private launch probe under `pcld_ios_media/logs/`.
     static func ensureExportDirectories() {
-        _ = exportsDirectory
         migrateMediaFromDocumentsExports()
         _ = mediaExportDirectory
         _ = segmentLoopDirectory
@@ -1033,10 +1043,16 @@ enum ExportPaths {
         migrateLegacyExportFilenames()
         migrateLegacyExportLogDuplicates()
         SearchDebugLog.ensureReady()
-        let probe = exportsDirectory.appendingPathComponent("loop_segments_ok.txt")
-        let text = "Loop Segments \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") \(ISO8601DateFormatter().string(from: Date()))\n"
+        writeLoopSegmentsOkProbe()
+    }
+
+    static func writeLoopSegmentsOkProbe() {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        let text =
+            "Loop Segments \(version) build \(build) \(ISO8601DateFormatter().string(from: Date()))\n"
         if let data = text.data(using: .utf8) {
-            try? data.write(to: probe, options: .atomic)
+            try? data.write(to: loopSegmentsOkProbeURL, options: .atomic)
         }
     }
 }

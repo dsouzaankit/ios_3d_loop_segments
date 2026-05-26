@@ -704,8 +704,14 @@ enum ExportLANServer {
 
     /// `pcld_ios_media/logs/export_*.txt` (live + history) — newest first.
     private static func listExportLogEntriesForLANIndex() -> [ExportFileEntry] {
-        listExportFiles()
-            .filter { isLANExportLogRelativePath($0.name) }
+        let liveLatest = ExportPaths.pathRelativeToExports(ExportPaths.latestLogTextURL)
+        let liveProgress = ExportPaths.pathRelativeToExports(ExportPaths.exportProgressURL)
+        return listExportFiles()
+            .filter { entry in
+                entry.name == liveLatest
+                    || entry.name == liveProgress
+                    || ExportPaths.isLANExportHistoryLogRelativePath(entry.name)
+            }
             .sorted { lhs, rhs in
                 exportLogSortKey(lhs) > exportLogSortKey(rhs)
             }
