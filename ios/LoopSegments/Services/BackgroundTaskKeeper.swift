@@ -1,6 +1,9 @@
 import UIKit
 
-/// Extends allowed runtime while segment export runs (screen can lock briefly).
+/// Short `beginBackgroundTask` grace while export runs (tens of seconds per task, not hours).
+///
+/// iOS does not allow apps to request repeated 30-minute background extensions via this API.
+/// Multi-hour locked export relies on **Keep Alive** (`UIBackgroundModes` audio + playing silence), not on task renewal.
 enum BackgroundTaskKeeper {
     private static var taskId: UIBackgroundTaskIdentifier = .invalid
     private static var renewalTask: Task<Void, Never>?

@@ -10,7 +10,7 @@ Notes:
 LAN: below Mbps cutoff → preload/full file only; at/above → op_*.mp4 when codec allows (LAN server optional).
 _working.mp4: full-timeline LAN play is reliable at seek=0:00; seek>0 see “Seek > 0” below.
 Av1 is not supported, prefer h.265!
-phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-screen audio; **build 187+** renews background while locked):
+phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-screen audio; see **Background / lock screen** below):
   Optional: Settings > Display & Brightness > Auto-Lock > Never!
 
 
@@ -57,8 +57,22 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse** and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. **Paused exports** sidebar hides the file that is actively exporting.
-- **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Build 190+:** MP3 is in Copy Bundle Resources plus a pre-build copy (CI verifies it in the IPA). If missing at runtime, **`export_latest.txt`** lists bundle diagnostics. **Build 187+:** background-task renewal + silence-loop watchdog while locked. Lock screen **Play** / **Pause** / **Stop** (optional **Prefer lock screen controls** takes over Now Playing; default **mix** keeps other apps’ lock-screen player). Export continues until in-app stop. **LAN :8765** while export runs (locked OK). **Build 187+:** renews background tasks during export and restarts the silence loop if iOS stalls audio after long lock (without a Now Playing card in mix mode). If export still pauses after ~15–30 min locked, check **`export_latest.txt`** for **interrupted** / **Keep Alive: watchdog** — stay on Wi‑Fi, disable Low Power Mode, or leave the app foreground briefly. Not reliable in Low Power Mode.
+- **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Build 190+:** MP3 is in the app bundle (CI verifies the IPA). Lock screen **Play** / **Pause** / **Stop** (optional **Prefer lock screen controls** takes over Now Playing; default **mix** keeps other apps’ lock-screen player). **Build 187+:** restarts the silence loop if playback stalls. Export continues until in-app stop. **LAN :8765** while export runs (locked OK). Not reliable in Low Power Mode. See **Background / lock screen** below for the ~30 minute limit.
   - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin` / `iosadmin`**), since they expose pCloud folder/file names.
+
+### Background / lock screen (iOS limits)
+
+**Initial testing (builds before Keep Alive bundle fix):** with the screen locked and export running, iOS often **stopped the app after about 30 minutes** — export showed **interrupted** in **`export_latest.txt`**, and Keep Alive audio stopped. That matches iOS suspending a normal background app; it is **not** something the app can fix by “asking for another 30 minutes.”
+
+| Mechanism | What it does | Multi-hour locked export? |
+|-----------|----------------|---------------------------|
+| **`beginBackgroundTask` / renewal** (`BackgroundTaskKeeper`) | Short grace when the app moves to background (~**tens of seconds** per task; Apple discourages chaining). Used so export can finish a slice of work after lock, **not** to extend runtime by 30+ minutes. | **No** — do not rely on this past a brief transition. |
+| **`UIBackgroundModes` → `audio`** + **Keep Alive** | While the app is **actually playing audio** (muted silence loop) with an active **playback** audio session, iOS treats the app like a music player and may keep it running **much longer** than an idle background app. | **Best effort** — this is the intended path for lock-screen export; still not a guarantee (Low Power Mode, memory pressure, audio interrupted by another app, system kill). |
+| **2 h auto-pause** (in-app) | Deliberate cap: **`Auto-pause: 2h reached`** in **`export_latest.txt`**. | N/A (by design). |
+
+**There is no API to request “another 30 minutes” of generic background time.** iOS does not grant stacked 30-minute extensions via `beginBackgroundTask`. Long runs depend on **Keep Alive audio** (and stable Wi‑Fi for WebDAV reads), not on background-task renewal.
+
+**Practical guidance:** enable **Keep Alive**; use **build 190+** so **`KeepAlive_silence.mp3`** is in the IPA; stay on **Wi‑Fi**; avoid **Low Power Mode**; if export interrupts after ~30 min locked, unlock briefly or leave the app in the foreground for a few minutes, then **Start export** to resume from the checkpoint. Check **`export_latest.txt`** for **`Export interrupted`** vs **`Keep Alive: watchdog`** vs **`Auto-pause: 2h`**.
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
