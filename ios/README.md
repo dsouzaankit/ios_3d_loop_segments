@@ -546,7 +546,7 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 
 **With REST on + token:** `search` API (~20 s) → shallow **folder index** (~15 s) → WebDAV fallback as above.
 
-**Live UI while WebDAV runs:** current folder (short path), `folders visited / 80`, queue depth, hit count, ETA (rate-based, capped by timeout). Same line is written periodically to **`pcld_ios_media/logs/search_debug.txt`** (capped at **64 KB** on disk; listed on LAN `:8765` when the file exists; legacy **`/search_debug.txt`** URL works).
+**Live UI while WebDAV runs:** current folder (short path), `folders visited / 80`, queue depth, hit count, ETA (rate-based, capped by timeout). Same line is written periodically to **`pcld_ios_media/logs/search_debug.txt`** (newest lines at **top**; capped at **64 KB** on disk; listed on LAN `:8765` when the file exists; legacy **`/search_debug.txt`** URL works).
 
 **Empty results:** distinct messages for **WebDAV timeout** (not finished scanning), **no matches**, and **missing API token** (optional REST). Do not treat a 10 s timeout across many bookmarks as “login missing.”
 
