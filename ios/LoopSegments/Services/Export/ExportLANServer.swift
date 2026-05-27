@@ -506,7 +506,11 @@ enum ExportLANServer {
     /// Top-level navigation (address bar, `window.open`, `target=_blank` to media) — not speculative prefetch.
     /// Chrome sends `Sec-Fetch-Mode: navigate` on that first GET, which would otherwise hit the large file no-Range block and return 503.
     private static func isBrowserUserNavigationMediaGET(requestHeaders: String) -> Bool {
-        requestHeaders.lowercased().contains("sec-fetch-mode: navigate")
+        let lower = requestHeaders.lowercased()
+        if lower.contains("sec-fetch-mode: navigate") { return true }
+        // Chrome adds this for user-activated navigations; helps distinguish from speculative fetches.
+        if lower.contains("sec-fetch-user: ?1") { return true }
+        return false
     }
 
     /// Block browser full-file GET of large media during export (prefetch / accidental navigation). WebDAV and Range GET stay allowed.
