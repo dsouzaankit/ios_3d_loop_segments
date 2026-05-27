@@ -431,7 +431,8 @@ enum PCloudSearchService {
                 continue
             }
             SearchLocationCache.recordListingWarmup(from: items)
-            if let warmed = SearchLocationCache.matchSearchQuery(query), !warmed.isEmpty {
+            let warmed = SearchLocationCache.matchSearchQuery(query)
+            if !warmed.isEmpty {
                 SearchLocationCache.recordHits(from: warmed)
                 SearchDebugLog.log(
                     "search: \(warmed.count) file cache hit(s) after listing \(path) — continuing bookmark + browse walk"
