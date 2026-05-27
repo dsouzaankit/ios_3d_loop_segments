@@ -1461,11 +1461,11 @@ enum ExportLANServer {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    /// Click-only anchor during export (no real `href` → Chrome cannot speculative-prefetch multi-GB URLs).
+    /// Media/archive anchor during export: real `href` (copy link, middle-click) + new tab so the LAN page stays open.
     private static func lanMediaClickAnchor(relativePath: String, innerHTML: String, extraClass: String = "") -> String {
         let pathAttr = htmlEscape(relativePath)
         let cls = extraClass.isEmpty ? "lan-media-link" : "lan-media-link \(extraClass)"
-        return "<a href=\"#\" class=\"\(cls)\" data-lan-media-href=\"\(pathAttr)\">\(innerHTML)</a>"
+        return "<a href=\"\(pathAttr)\" class=\"\(cls)\" target=\"_blank\" rel=\"noopener noreferrer\">\(innerHTML)</a>"
     }
 
     private static func lanMediaListUsesClickOnly(relativePath: String) -> Bool {
@@ -1473,7 +1473,7 @@ enum ExportLANServer {
             && ExportPaths.isLANBrowsableMediaRelativePath(relativePath)
     }
 
-    /// Playback list link — direct `href` when idle; click-only during export. Separate browser `#t=` when seek &gt; 0.
+    /// Playback list link — direct `href` when idle; new-tab `href` during export. Separate browser `#t=` when seek &gt; 0.
     private static func lanIndexPlaybackLinks(relativePath name: String, resumeStartSec: Int) -> String {
         let escaped = htmlEscape(name)
         if lanMediaListUsesClickOnly(relativePath: name) {
@@ -1490,21 +1490,6 @@ enum ExportLANServer {
         return """
             \(primary) · <a href="\(escaped)#t=\(resumeStartSec)" class="lan-browser-resume">browser #t=\(formatLANClock(resumeStartSec))</a>
             """
-    }
-
-    /// Opens `data-lan-media-href` in a new tab (capture) — no real `href` (no Chrome prefetch); LAN page stays open.
-    private static func htmlLANMediaClickScript() -> String {
-        """
-          document.addEventListener("click", function (e) {
-            var a = e.target && e.target.closest ? e.target.closest("a.lan-media-link") : null;
-            if (!a) return;
-            var url = a.getAttribute("data-lan-media-href");
-            if (!url) return;
-            if (e.button !== 0 && e.button !== 1) return;
-            e.preventDefault();
-            window.open(url, "_blank", "noopener,noreferrer");
-          }, true);
-        """
     }
 
     private static func htmlDashboardStatsBlock() -> String {
@@ -1572,7 +1557,6 @@ enum ExportLANServer {
         return """
         <script>
         (function () {
-          \(htmlLANMediaClickScript())
           var pollMs = \(lanStatusPollMs);
           var listPollMs = \(lanStatusListsPollMs);
           function esc(s) {
@@ -1829,7 +1813,7 @@ enum ExportLANServer {
         }
         if ExportPlaybackState.shared.isLANExportActive {
             items.append(
-                "<li><em>Media/archive links open in a new tab on click (LAN page stays open; blocks Chrome prefetch). WebDAV unchanged.</em></li>"
+                "<li><em>Media/archive links use real URLs and open in a new tab during export (LAN page stays open). Large browser GETs without Range are blocked during export. WebDAV unchanged.</em></li>"
             )
         }
         return items.isEmpty
@@ -1964,7 +1948,6 @@ enum ExportLANServer {
         """
         <script>
         (function () {
-          \(htmlLANMediaClickScript())
           function esc(s) {
             return String(s)
               .replace(/&/g, "&amp;")
