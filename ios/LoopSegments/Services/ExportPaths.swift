@@ -231,6 +231,61 @@ enum ExportPaths {
         return mediaExportDirectory.appendingPathComponent("_vanilla_download.\(suffix)")
     }
 
+    static func fileByteSize(at url: URL) -> Int64 {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let number = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber else {
+            return 0
+        }
+        return number.int64Value
+    }
+
+    /// `URL !=` can treat the same on-disk file as different; use for prune keep comparisons.
+    static func vanillaDownloadPathsEqual(_ a: URL, _ b: URL) -> Bool {
+        a.path.caseInsensitiveCompare(b.path) == .orderedSame
+    }
+
+    static func listVanillaDownloadMediaURLs() -> [URL] {
+        guard let listed = try? FileManager.default.contentsOfDirectory(
+            at: mediaExportDirectory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return []
+        }
+        return listed.filter { isVanillaDownloadMediaCopy(fileName: $0.lastPathComponent) }
+    }
+
+    /// Move a lone partial `_vanilla_download.<ext>` onto the preferred path when extensions differ.
+    @discardableResult
+    static func reconcileVanillaPartialToPreferredDestination(
+        preferred: URL,
+        log: ((String) -> Void)? = nil
+    ) -> Int64 {
+        let fm = FileManager.default
+        var onDisk = fileByteSize(at: preferred)
+        if onDisk > 0 { return onDisk }
+        let partials = listVanillaDownloadMediaURLs().filter { fileByteSize(at: $0) > 0 }
+        guard partials.count == 1, let partial = partials.first else { return onDisk }
+        guard !vanillaDownloadPathsEqual(partial, preferred) else { return fileByteSize(at: preferred) }
+        do {
+            if fm.fileExists(atPath: preferred.path) {
+                try fm.removeItem(at: preferred)
+            }
+            try fm.moveItem(at: partial, to: preferred)
+            onDisk = fileByteSize(at: preferred)
+            log?(
+                "Vanilla resume — moved \(pathRelativeToExports(partial)) → " +
+                    "\(pathRelativeToExports(preferred)) (\(onDisk) bytes on disk)"
+            )
+        } catch {
+            log?(
+                "Could not move vanilla partial \(partial.lastPathComponent) → \(preferred.lastPathComponent): " +
+                    "\(error.localizedDescription)"
+            )
+            onDisk = fileByteSize(at: partial)
+        }
+        return onDisk
+    }
+
     /// Faststart MP4 derived from vanilla download (separate file; vanilla bytes unchanged).
     static var vanillaFastStartURL: URL {
         mediaExportDirectory.appendingPathComponent("_vanilla_faststart.mp4")
@@ -626,10 +681,7 @@ enum ExportPaths {
             }
         }
 
-        if totalLength > 0,
-           onDisk > 0,
-           VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength)
-               || VanillaDownloadResumeCatalog.matchesAfterRename(item: item, totalLength: totalLength) {
+        if totalLength > 0, onDisk > 0, vanillaManifestMatchesItem(item, totalLength) {
             pruneVanillaDownloadCopies(keepingDestination: destination, log: log)
             return
         }
@@ -644,7 +696,8 @@ enum ExportPaths {
         }
         for url in listed {
             let name = url.lastPathComponent
-            guard isVanillaDownloadMediaCopy(fileName: name), url != keep else { continue }
+            guard isVanillaDownloadMediaCopy(fileName: name),
+                  !vanillaDownloadPathsEqual(url, keep) else { continue }
             do {
                 try fm.removeItem(at: url)
                 log?("Removed stale \(pathRelativeToExports(url))")

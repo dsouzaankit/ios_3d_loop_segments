@@ -83,7 +83,14 @@ enum VanillaDownloadResumeCatalog {
             return faststartOnlyCompletePlan(fileKey: fileKey, totalLength: totalLength)
         }
         if fm.fileExists(atPath: destinationURL.path) {
-            let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+            let onDisk = ExportPaths.fileByteSize(at: destinationURL)
+            if onDisk > totalLength { return .startFresh }
+            if onDisk >= totalLength { return .alreadyComplete }
+            if onDisk > 0 { return .resume(offset: onDisk) }
+        }
+        for url in ExportPaths.listVanillaDownloadMediaURLs()
+            where !ExportPaths.vanillaDownloadPathsEqual(url, destinationURL) {
+            let onDisk = ExportPaths.fileByteSize(at: url)
             if onDisk > totalLength { return .startFresh }
             if onDisk >= totalLength { return .alreadyComplete }
             if onDisk > 0 { return .resume(offset: onDisk) }
