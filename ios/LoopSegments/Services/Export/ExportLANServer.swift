@@ -1521,11 +1521,9 @@ enum ExportLANServer {
         let label = htmlEscape(resolved.map { LANExportSourceDisplay.label(for: $0.phase) } ?? "Export source")
         let name = htmlEscape(resolved?.displayName ?? "")
         let phase = resolved?.phase ?? ""
-        let showActions = phase == "running" || phase == "paused"
-        let actionsHidden = showActions ? "" : " style=\"display:none\""
+        let showResume = phase == "paused"
+        let actionsHidden = showResume ? "" : " style=\"display:none\""
         let phaseClass = phase == "running" ? " is-active" : (phase == "paused" ? " is-paused" : "")
-        let pauseHidden = phase == "running" ? "" : " style=\"display:none\""
-        let resumeHidden = phase == "paused" ? "" : " style=\"display:none\""
         return """
         <div id="lan-export-source-wrap" class="export-source-line\(phaseClass)"\(hidden)>
           <div class="export-source-main">
@@ -1533,9 +1531,7 @@ enum ExportLANServer {
             <span id="lan-export-source-name">\(name)</span>
           </div>
           <div class="export-source-actions" id="lan-export-source-actions"\(actionsHidden)>
-            <button type="button" id="export-resume"\(resumeHidden)>Start export</button>
-            <button type="button" id="export-pause"\(pauseHidden)>Pause export</button>
-            <button type="button" id="export-stop">Stop export</button>
+            <button type="button" id="export-resume">Start export</button>
           </div>
         </div>
         """
@@ -1602,12 +1598,7 @@ enum ExportLANServer {
             if (label) label.textContent = (src.label || "Export source") + ":";
             if (name) name.textContent = src.displayName;
             var actions = document.getElementById("lan-export-source-actions");
-            var pauseBtn = document.getElementById("export-pause");
-            var resumeBtn = document.getElementById("export-resume");
-            var active = src.phase === "running" || src.phase === "paused";
-            if (actions) actions.style.display = active ? "" : "none";
-            if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
-            if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
+            if (actions) actions.style.display = src.phase === "paused" ? "" : "none";
             setMediaMaintenanceEnabled(src.phase !== "running");
           }
           window.updateExportSourceLine = function (phase, displayName) {
@@ -1905,9 +1896,7 @@ enum ExportLANServer {
             <span id="lan-export-source-name"></span>
           </div>
           <div class="export-source-actions" id="lan-export-source-actions" style="display:none">
-            <button type="button" id="export-resume" style="display:none">Start export</button>
-            <button type="button" id="export-pause" style="display:none">Pause export</button>
-            <button type="button" id="export-stop" style="display:none">Stop export</button>
+            <button type="button" id="export-resume">Start export</button>
           </div>
         </div>
         """
@@ -1982,12 +1971,7 @@ enum ExportLANServer {
             if (label) label.textContent = (src.label || "Export source") + ":";
             if (name) name.textContent = src.displayName;
             var actions = document.getElementById("lan-export-source-actions");
-            var pauseBtn = document.getElementById("export-pause");
-            var resumeBtn = document.getElementById("export-resume");
-            var active = src.phase === "running" || src.phase === "paused";
-            if (actions) actions.style.display = active ? "" : "none";
-            if (pauseBtn) pauseBtn.style.display = src.phase === "running" ? "" : "none";
-            if (resumeBtn) resumeBtn.style.display = src.phase === "paused" ? "" : "none";
+            if (actions) actions.style.display = src.phase === "paused" ? "" : "none";
           }
           function applyLive(live) {
             if (!live) return;
@@ -2045,7 +2029,7 @@ enum ExportLANServer {
         """
     }
 
-    /// Lightweight monitor at `/` (playback + logs + pause/stop). No embedded pCloud browser.
+    /// Lightweight monitor at `/` (playback + logs + resume when paused). No embedded pCloud browser.
     private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         autoreleasepool {
             let exportActive = ExportPlaybackState.shared.isLANExportActive
@@ -2540,20 +2524,10 @@ enum ExportLANServer {
                   title: "Switching export source",
                   detail: "Please wait while the phone picks and starts a new export in this folder." + foreground
                 };
-              case "pause_export":
-                return {
-                  title: "Pausing export",
-                  detail: "Please wait while the phone pauses the current export." + foreground
-                };
               case "resume_export":
                 return {
                   title: "Starting export",
                   detail: "Please wait while the phone resumes the paused export." + foreground
-                };
-              case "stop_export":
-                return {
-                  title: "Stopping export",
-                  detail: "Please wait while the phone stops export, removes loop/ segments, and archives working copies." + foreground
                 };
               case "clear_media":
                 return {
@@ -2580,7 +2554,7 @@ enum ExportLANServer {
             var detailEl = document.getElementById("lan-export-pending-detail");
             if (titleEl && title) titleEl.textContent = title;
             if (detailEl && detail) detailEl.textContent = detail;
-            ["export-resume", "export-pause", "export-stop", "export-random", "export-trim-media", "export-clear-media"].forEach(function (id) {
+            ["export-resume", "export-random", "export-trim-media", "export-clear-media"].forEach(function (id) {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !!active;
             });
@@ -2598,15 +2572,9 @@ enum ExportLANServer {
               window.updateExportSourceLine("running", body.displayName);
             } else if (body.command === "start_export_random" && window.updateExportSourceLine) {
               window.updateExportSourceLine("running", "Random in " + pcloudPath);
-            } else if (body.command === "pause_export" && window.updateExportSourceLine) {
-              var cur = document.getElementById("lan-export-source-name");
-              if (cur && cur.textContent) window.updateExportSourceLine("paused", cur.textContent);
             } else if (body.command === "resume_export" && window.updateExportSourceLine) {
               var curName = document.getElementById("lan-export-source-name");
               if (curName && curName.textContent) window.updateExportSourceLine("running", curName.textContent);
-            } else if (body.command === "stop_export" && window.updateExportSourceLine) {
-              var last = document.getElementById("lan-export-source-name");
-              if (last && last.textContent) window.updateExportSourceLine("finished", last.textContent);
             }
             var r = await fetch(triggerUrl, {
               method: "PUT",
@@ -2707,14 +2675,6 @@ enum ExportLANServer {
           };
           document.getElementById("export-resume").onclick = function () {
             putTrigger({ version: 1, command: "resume_export", id: uuid() })
-              .catch(function (e) { setStatus(e.message || e, true); });
-          };
-          document.getElementById("export-pause").onclick = function () {
-            putTrigger({ version: 1, command: "pause_export", id: uuid() })
-              .catch(function (e) { setStatus(e.message || e, true); });
-          };
-          document.getElementById("export-stop").onclick = function () {
-            putTrigger({ version: 1, command: "stop_export", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("export-trim-media").onclick = function () {

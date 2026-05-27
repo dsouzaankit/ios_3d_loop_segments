@@ -362,6 +362,8 @@ struct ExportView: View {
                         ExportBackgroundKeepAlive.shared.prepareAudioSessionIfEnabled()
                         if session.isExportActive(for: item) {
                             ExportBackgroundKeepAlive.shared.startIfEnabled(exportTitle: item.name)
+                        } else {
+                            ExportBackgroundKeepAlive.shared.beginAppForegroundSession()
                         }
                     } else {
                         ExportBackgroundKeepAlive.shared.stopForUserSettingOff()
@@ -374,6 +376,8 @@ struct ExportView: View {
                         ExportBackgroundKeepAlive.shared.prepareAudioSessionIfEnabled()
                         if session.isExportActive(for: item) {
                             ExportBackgroundKeepAlive.shared.startIfEnabled(exportTitle: item.name)
+                        } else if ExportBackgroundKeepAlive.shared.isActive {
+                            ExportBackgroundKeepAlive.shared.beginAppForegroundSession()
                         }
                     }
                 Picker("Keep Alive duration", selection: $exportKeepAliveTimeoutHours) {
@@ -386,13 +390,17 @@ struct ExportView: View {
                 }
                 Text(
                     exportKeepAlivePreferControls
-                        ? "Keeps export alive and shows Keep Alive on lock screen / Control Center (may stop other audio apps). Play/Pause on that card controls the silence loop."
-                        : "Keeps export alive without owning lock screen while other apps play. After another app stops, Keep Alive reclaims the card and resumes the loop. Turn on “Prefer lock screen controls” for Play/Pause on the card at all times."
+                        ? "Exclusive lock screen: Keep Alive card and Play/Pause control the loop (may stop other audio). 60 minutes when foregrounded (resets on return) and after export stops."
+                        : "Mix mode (default): plays alongside other audio. 60 minutes when foregrounded (resets on return) and after export stops; lock the phone to keep LAN alive. Reclaims Now Playing after other apps stop."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 if ExportBackgroundKeepAlive.shared.isActive {
-                    Text("Keep Alive is playing — lock the phone to see Now Playing.")
+                    Text(
+                        exportKeepAlivePreferControls
+                            ? "Keep Alive is playing — lock the phone to see Now Playing."
+                            : "Keep Alive is playing — lock the phone (Now Playing card may appear after other apps stop)."
+                    )
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 } else if session.isExportActive(for: item),
@@ -401,7 +409,7 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.red)
                 } else if exportKeepAliveEnabled {
-                    Text("Turn on before Start export. After export starts, lock the phone — check Control Center if the lock screen card is hidden.")
+                    Text("Opens the app or return to it to start the 60-minute loop. For export, tap Start export — then you can lock the phone.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

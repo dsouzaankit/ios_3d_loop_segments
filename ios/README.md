@@ -72,29 +72,31 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse** and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. **Paused exports** sidebar hides the file that is actively exporting.
-- **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Build 190+:** MP3 in the app bundle (CI verifies IPA). **Build 187+:** background-task renewal + silence-loop watchdog. **Build 193+:** lock-screen Play/Pause logging, minimal Now Playing text (no pCloud filename), reclaim card after another app stops. See **Keep Alive: mix vs lock screen** and **Background / lock screen** below. Not reliable in Low Power Mode.
+- **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Mix mode** (default) or **Prefer lock screen controls** (exclusive). **Build 225+:** **60-minute** sessions when foregrounded and after export stops; LAN stays up while the loop runs. See **Keep Alive: mix vs lock screen** and **Background / lock screen** below. Not reliable in Low Power Mode.
   - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin` / `iosadmin`**), since they expose pCloud folder/file names.
 
 ### Keep Alive: mix vs lock screen
 
-Both modes run the **same silent MP3 loop in the background** during export. The toggle only changes how the app shares iOS audio / Now Playing with other apps (e.g. Evermusic).
+**Settings scope:** **Keep Alive (lock screen)**, **Prefer lock screen controls**, and **Keep Alive duration** are **app-wide** (`UserDefaults`) — not per export file. Changing them on any Export screen applies to the next foreground session, export, and post-export wind-down.
 
-| Setting | Audio session | Lock screen / Control Center | Other music apps (Evermusic) |
-|---------|---------------|------------------------------|------------------------------|
-| **Keep Alive on**, **Prefer lock screen controls** **off** (**mix mode**, default) | `.playback` + **mix with others** | Usually **no** Keep Alive card; Play/Pause may **not** control our loop | Can play **alongside** export; long playlists can **pause** our loop and risk iOS suspending export/LAN |
-| **Prefer lock screen controls** **on** | `.playback` **exclusive** | **Keep Alive** card; Play/Pause should stop/start the silence loop | May **stop or duck** other audio; better for unattended locked export |
+Both modes run the **same silent MP3 loop** (export, **60-minute** foreground sessions, post-export wind-down). The **Prefer lock screen controls** toggle changes how the app shares iOS audio / Now Playing.
 
-**Mix mode is not “background only.”** It means “keep export alive **without** taking the lock screen from other apps.” After another app **stops** playing, **build 193+** tries to **resume the loop** and **reclaim** the Keep Alive card once (`Keep Alive: reclaimed lock screen Now Playing` in **`export_latest.txt`**).
+| Setting | Audio session | Lock screen / Control Center | Other music apps |
+|---------|---------------|------------------------------|------------------|
+| **Keep Alive on** (default, **mix mode**) | `.playback` + **mix with others** | Usually **no** Keep Alive card; Play/Pause may **not** control our loop until reclaimed | Can play **alongside** export/LAN |
+| **Prefer lock screen controls** **on** | `.playback` **exclusive** | **Keep Alive** card; Play/Pause stop/start the silence loop | May **stop or duck** other audio; better for unattended locked export |
 
-**Long Evermusic (or any music) during export:** if our loop stays interrupted, iOS may no longer treat Loop Segments as a background **audio** app → export can **interrupt** and **LAN** can drop after ~15–30+ minutes. For long locked exports, avoid long other-app playback, or use **Prefer lock screen controls** (and accept that other music may not run).
+**Mix mode is not “background only.”** After another app **stops** playing, the app **resumes the loop** and may **reclaim** the Keep Alive card once (`Keep Alive: reclaimed lock screen Now Playing` in **`export_latest.txt`**).
 
-**Lock screen Now Playing text:** **Title** `Keep Alive`, **Artist** `Loop Segments`, short subtitle (`Export running` / `Paused`) — not the pCloud file name.
+**Long other-app playback (mix mode):** if our loop stays interrupted, export/LAN can drop after ~15–30+ minutes. For long locked exports, enable **Prefer lock screen controls** or avoid long playback in other music apps.
+
+**Lock screen Now Playing text:** **Title** `Keep Alive`, **Artist** `Loop Segments`, short subtitle (`App open` / `Export running` / `Paused` / `Export finished`) — not the pCloud file name.
 
 **Remote control logs in `export_latest.txt`:** `pause from lock screen — loop stopped`, `play — already looping`, `play from lock screen`, `resuming after interruption`, `reclaimed lock screen Now Playing`.
 
 ### Background / lock screen (iOS limits)
 
-**Do not confuse “export finished” with “iOS killed the app.”** When export **reaches end of file** (or finishes the run), the app calls **`endExportSession()`** — **Keep Alive audio stops on purpose**, the orange **Exporting** bar goes away, and finished root media is moved under **`pcld_ios_media/archive/`**. A run of **~34 minutes** that **plays fully from archive** on LAN is consistent with **success**, not background preemption.
+**Do not confuse “export finished” with “iOS killed the app.”** When export **reaches end of file** (or finishes the run), the orange **Exporting** bar goes away and finished root media is moved under **`pcld_ios_media/archive/`**. With **Keep Alive** on, silent audio starts for **60 minutes** whenever the app is **foregrounded** (timer resets each return), and for another **60 minutes** after export leaves the running state (`Keep Alive: session ended (60 min)` in **`export_latest.txt`**). A run of **~34 minutes** that **plays fully from archive** on LAN is consistent with **success**, not background preemption.
 
 **How to tell in `export_latest.txt`:**
 
@@ -114,7 +116,7 @@ Both modes run the **same silent MP3 loop in the background** during export. The
 | Mechanism | What it does | Multi-hour locked export? |
 |-----------|----------------|---------------------------|
 | **`beginBackgroundTask` / renewal** (`BackgroundTaskKeeper`) | Short grace when the app moves to background (~**tens of seconds** per task; Apple discourages chaining). Used so export can finish a slice of work after lock, **not** to extend runtime by 30+ minutes. | **No** — do not rely on this past a brief transition. |
-| **`UIBackgroundModes` → `audio`** + **Keep Alive** | While the app is **actually playing audio** (muted silence loop) with an active **playback** audio session, iOS treats the app like a music player and may keep it running **much longer** than an idle background app. | **Best effort** — this is the intended path for lock-screen export; still not a guarantee (Low Power Mode, memory pressure, audio interrupted by another app, system kill). |
+| **`UIBackgroundModes` → `audio`** + **Keep Alive** | While the app is **actually playing audio** (muted silence loop) with an active **playback** audio session, iOS treats the app like a music player and may keep it running **much longer** than an idle background app. **Keep Alive** starts a **60-minute** loop when the app is foregrounded (toggle on). The **LAN server** (`:8765`) and **export trigger** polling stay up while that loop is playing (including after lock until the timer ends). | **Best effort** — this is the intended path for lock-screen export; still not a guarantee (Low Power Mode, memory pressure, audio interrupted by another app, system kill). |
 | **Export auto-pause** (in-app) | Deliberate cap: pauses at checkpoint after the chosen duration (default **2 h**; Export screen picker: 3, 5, 15, 30, 60, 90, 120, 150 min). Log: **`Auto-pause: … reached`** in **`export_latest.txt`**. | N/A (by design). |
 
 **There is no API to request “another 30 minutes” of generic background time.** iOS does not grant stacked 30-minute extensions via `beginBackgroundTask`. Long runs depend on **Keep Alive audio** (and stable Wi‑Fi for WebDAV reads), not on background-task renewal.
@@ -126,7 +128,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (Export tab → **Export another file**, above **Exports folder**) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
-2. **URLs:** **`http://<phone-ip>:8765/`** — **light monitor** (playback, logs, pause/stop; **manual refresh only**). **`http://<phone-ip>:8765/browse`** — full page with pCloud folder browser (auto-refresh **60 s** / **120 s** when idle). Also **`status.json`**, **`status_lists.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). Use monitor **`/`** during large exports; open **`/browse`** only when you need LAN export-from-folder. Direct **`/export_latest.txt`** is always safe. mDNS: **`http://<iphone-name>.local:8765/`** (Bonjour **`loopsegments._http._tcp`**).
+2. **URLs:** **`http://<phone-ip>:8765/`** — **light monitor** (playback, logs, resume when paused; **manual refresh only**). **`http://<phone-ip>:8765/browse`** — full page with pCloud folder browser (auto-refresh **60 s** / **120 s** when idle). Also **`status.json`**, **`status_lists.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). Use monitor **`/`** during large exports; open **`/browse`** only when you need LAN export-from-folder. Direct **`/export_latest.txt`** is always safe. mDNS: **`http://<iphone-name>.local:8765/`** (Bonjour **`loopsegments._http._tcp`**).
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). **PC DLNA:** usually copy or sync into a local folder; mounting the phone with **`rclone`** is **optional** and often **slow** vs playing from Skybox or using direct HTTP links — see [`../windows/RCLONE-PHONE-MOUNT.md`](../windows/RCLONE-PHONE-MOUNT.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
@@ -145,19 +147,21 @@ Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authoriz
 
 ### LAN HTTP page (browser control)
 
-Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Loop Segments must stay open in the foreground** — the app polls export triggers every ~2 s while active.
+Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Keep Alive** on → **60-minute** audio session when the app is open (and after export ends); lock the phone to keep LAN + trigger polling for the rest of that timer. Without Keep Alive, keep the app in the foreground for reliable LAN while locked.
 
 #### Page layout
 
 | Page | Contents |
 |------|----------|
-| **`/` (monitor)** | Export source + pause/stop, static playback/log links, **Refresh status** / **Refresh file list** (no timers). Link to **`/browse`**. |
-| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, pCloud folder browser. Auto-refresh when export is idle; manual refresh only while export runs. |
+| **`/` (monitor)** | Export source + resume when paused, static playback/log links, **Refresh status** / **Refresh file list** (no timers). Link to **`/browse`**. Browsers always get this HTML at **`GET /`** — not an in-page WebDAV folder tree. |
+| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
+
+**Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 
 | Area | Contents |
 |------|----------|
-| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Pause** + **Stop** while running; **Start export** + **Stop** while paused. |
-| **Pending banner** | Shown while a trigger is in flight (switching source, pause, resume, stop). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
+| **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Start export** while paused (resume). Pause/stop are in-app only — not on the LAN page. |
+| **Pending banner** | Shown while a trigger is in flight (switching source, resume, random, trim, clear). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
 | **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
 | **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. |
 
@@ -201,13 +205,11 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 |-----------|----------|
 | **`start_export`** | Export `href` from `seekMs`. **Auto-stops** any running export first (no manual stop required). |
 | **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
-| **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). |
-| **`pause_export`** | Pause the running export (checkpoint kept on phone). |
-| **`stop_export`** | Same as in-app **Stop** — removes `loop/`, archives root copies, clears checkpoint. |
+| **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). LAN page **Start export** button only. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
 | **`clear_media`** | Same as **Clear media** — deletes active + `archive/` (rejected while export running). |
 
-Triggers are polled only while **Loop Segments is open in the foreground** (~2s). Optional fields: **`pool`**, **`folderPath`** (for random), **`id`** (UUID — duplicate ids are ignored).
+Triggers are polled while the app is **foreground**, **exporting**, or **Keep Alive** is playing (~2s). Optional fields: **`pool`**, **`folderPath`** (for random), **`id`** (UUID — duplicate ids are ignored).
 
 **Ack** (`export_trigger.ack.json`): `{ "receivedAt", "command", "status", "message", "triggerId" }` where **`status`** is `accepted` \| `rejected` \| `ignored`.
 
@@ -265,7 +267,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 |------|----------------|
 | **New export** | Prior active root files **moved** into `archive/`; auto-prune keeps **10** newest batches |
 | **Export finished** | **Copy** to `archive/` (root `_working*` / `_vanilla_*` / transcode **stay on LAN**); `loop/` unchanged. Same root slot is **not** copied again on Stop or fresh Start — only removed from root if already retained. |
-| **Stop / `stop_export`** | `loop/` removed (+ Photos when enabled); active root files **moved** into `archive/` |
+| **Stop** (in-app only) | `loop/` removed (+ Photos when enabled); active root files **moved** into `archive/` |
 | **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
 | **Clear media** / **`clear_media`** | Removes active root files, all `archive/` retains, and `loop/` segments |
 

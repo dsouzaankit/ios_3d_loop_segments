@@ -3,6 +3,13 @@ import Foundation
 import MediaPlayer
 import UIKit
 
+extension Notification.Name {
+    /// Posted when Keep Alive playback starts or fully stops (RootView refreshes LAN services).
+    static let exportBackgroundKeepAliveActiveDidChange = Notification.Name(
+        "ExportBackgroundKeepAlive.activeDidChange"
+    )
+}
+
 /// Loops muted local media (or synthetic tone) during export for lock-screen / background audio.
 @MainActor
 final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
@@ -13,6 +20,9 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private var playbackBackend = ""
     private var loopSourceLabel = ""
     private var timeoutTask: Task<Void, Never>?
+    private var sessionAutoStopTask: Task<Void, Never>?
+    private var sessionAutoStopEndsAt: Date?
+    private var sessionAutoStopSubtitle: String?
     private var nowPlayingRefreshTask: Task<Void, Never>?
     private var playbackWatchdogTask: Task<Void, Never>?
     private var sessionObserversInstalled = false
@@ -51,13 +61,37 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
 
     func beginExportSession(exportTitle: String) {
         installSessionObserversIfNeeded()
+        cancelSessionAutoStop()
         exportSessionEligible = true
         startIfEnabled(exportTitle: exportTitle)
     }
 
     func endExportSession() {
         exportSessionEligible = false
-        stopFully()
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        scheduleSessionAutoStopAfterExportIfNeeded()
+    }
+
+    /// Starts or extends silent audio for **sessionDurationSeconds** while the app is in the foreground (toggle on).
+    func beginAppForegroundSession() {
+        guard ExportKeepAliveSettings.isEnabled else { return }
+        installSessionObserversIfNeeded()
+        guard !exportSessionEligible else { return }
+        if !isActive {
+            startedAt = Date()
+            startPlayback()
+            guard isActive else { return }
+        } else if let queue = queuePlayer, !userPausedFromLockScreen, !isQueuePlaying {
+            try? configureAudioSession()
+            queue.play()
+            syncLoopPlayingFromQueue()
+        }
+        let minutes = ExportKeepAliveSettings.sessionDurationSeconds / 60
+        scheduleSessionAutoStop(
+            logMessage: String(format: "Keep Alive: app foreground — continuing %.0f min", minutes),
+            albumHint: "App open"
+        )
     }
 
     func startIfEnabled(exportTitle: String) {
@@ -68,6 +102,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
 
     func stopForUserSettingOff() {
         let keepEligible = exportSessionEligible
+        cancelSessionAutoStop()
         tearDownPlayback()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         unregisterRemoteCommands()
@@ -79,6 +114,12 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     var isActive: Bool { queuePlayer != nil }
 
     var isLoopPlaying: Bool { loopPlaying }
+
+    private var hasSessionAutoStop: Bool { sessionAutoStopTask != nil }
+
+    private var keepAliveSessionActive: Bool {
+        exportSessionEligible || hasSessionAutoStop
+    }
 
     // MARK: - Playback
 
@@ -114,6 +155,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             logKeepAlive(
                 "Keep Alive: started via \(playbackBackend)\(sourceNote) (otherAudio=\(otherAudio))"
             )
+            postActiveDidChange()
         } catch {
             lastStartError = Self.describeError(error)
             logKeepAlive("Keep Alive: failed — \(lastStartError!)")
@@ -151,11 +193,64 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func stopFully() {
+        let wasActive = isActive
+        cancelSessionAutoStop()
         tearDownPlayback()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         unregisterRemoteCommands()
         NowPlayingFirstResponder.deactivate()
         deactivateAudioSessionIfIdle()
+        if wasActive {
+            postActiveDidChange()
+        }
+    }
+
+    private func postActiveDidChange() {
+        NotificationCenter.default.post(name: .exportBackgroundKeepAliveActiveDidChange, object: nil)
+    }
+
+    private func scheduleSessionAutoStopAfterExportIfNeeded() {
+        guard ExportKeepAliveSettings.isEnabled, isActive else {
+            stopFully()
+            return
+        }
+        let minutes = ExportKeepAliveSettings.sessionDurationSeconds / 60
+        scheduleSessionAutoStop(
+            logMessage: String(format: "Keep Alive: export ended — continuing %.0f min", minutes),
+            albumHint: "Export finished"
+        )
+    }
+
+    private func scheduleSessionAutoStop(logMessage: String, albumHint: String) {
+        guard ExportKeepAliveSettings.isEnabled else {
+            if !exportSessionEligible { stopFully() }
+            return
+        }
+        let seconds = ExportKeepAliveSettings.sessionDurationSeconds
+        cancelSessionAutoStop()
+        sessionAutoStopEndsAt = Date().addingTimeInterval(seconds)
+        sessionAutoStopSubtitle = albumHint
+        if isActive {
+            applyNowPlayingInfo(
+                playbackRate: loopPlaying ? 1 : 0,
+                elapsedSeconds: Date().timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 60),
+                albumHint: albumHint
+            )
+        }
+        logKeepAlive(logMessage)
+        sessionAutoStopTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            logKeepAlive("Keep Alive: session ended (60 min)")
+            stopFully()
+        }
+    }
+
+    private func cancelSessionAutoStop() {
+        sessionAutoStopTask?.cancel()
+        sessionAutoStopTask = nil
+        sessionAutoStopEndsAt = nil
+        sessionAutoStopSubtitle = nil
     }
 
     private func configureAudioSession() throws {
@@ -191,9 +286,20 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         albumHint: String? = nil,
         forceLockScreenCard: Bool = false
     ) {
-        let subtitle = albumHint ?? (playbackRate > 0 ? "Export running" : "Paused")
+        let subtitle: String
+        if let albumHint {
+            subtitle = albumHint
+        } else if let sessionAutoStopSubtitle {
+            subtitle = sessionAutoStopSubtitle
+        } else if exportSessionEligible {
+            subtitle = playbackRate > 0 ? "Export running" : "Paused"
+        } else {
+            subtitle = playbackRate > 0 ? "Playing" : "Paused"
+        }
         var duration: Double = 60
-        if let timeout = ExportKeepAliveSettings.timeoutSeconds {
+        if let autoStopEnds = sessionAutoStopEndsAt {
+            duration = max(60, autoStopEnds.timeIntervalSinceNow)
+        } else if let timeout = ExportKeepAliveSettings.timeoutSeconds {
             duration = max(60, timeout - Date().timeIntervalSince(startedAt))
         }
         let info: [String: Any] = [
@@ -297,7 +403,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func handleAudioSessionRouteChange(_ notification: Notification) {
-        guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else { return }
+        guard keepAliveSessionActive, ExportKeepAliveSettings.isEnabled else { return }
         guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
         else { return }
@@ -312,7 +418,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func handleAudioSessionInterruption(_ notification: Notification) {
-        guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else { return }
+        guard keepAliveSessionActive, ExportKeepAliveSettings.isEnabled else { return }
         guard let userInfo = notification.userInfo,
               let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeValue)
@@ -337,7 +443,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             logKeepAlive("Keep Alive: resuming after interruption\(note)")
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 900_000_000) // let the other player fully deactivate
-                guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else { return }
+                guard keepAliveSessionActive, ExportKeepAliveSettings.isEnabled else { return }
                 resumeAfterSessionDisruption(reclaimLockScreen: true)
             }
         @unknown default:
@@ -346,7 +452,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func handleMediaServicesReset() {
-        guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else { return }
+        guard keepAliveSessionActive, ExportKeepAliveSettings.isEnabled else { return }
         logKeepAlive("Keep Alive: media services reset — restarting loop")
         startPlayback()
     }
@@ -437,8 +543,8 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     private func playFromLockScreen() {
-        guard exportSessionEligible, ExportKeepAliveSettings.isEnabled else {
-            logKeepAlive("Keep Alive: play ignored — no export session")
+        guard keepAliveSessionActive, ExportKeepAliveSettings.isEnabled else {
+            logKeepAlive("Keep Alive: play ignored — no active session")
             return
         }
         if let queue = queuePlayer {

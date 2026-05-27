@@ -4,9 +4,11 @@ struct RootView: View {
     @EnvironmentObject private var session: AppSession
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Foreground, or export still running (Keep Alive / background task) — keep LAN server + trigger polling.
+    /// Foreground, export in flight, or Keep Alive audio playing — keep LAN server + trigger polling.
     private var lanServicesActive: Bool {
-        scenePhase == .active || session.isExportSessionActive
+        scenePhase == .active
+            || session.isExportSessionActive
+            || ExportBackgroundKeepAlive.shared.isActive
     }
 
     var body: some View {
@@ -22,12 +24,25 @@ struct RootView: View {
                 .frame(width: 0, height: 0)
         }
         .onAppear {
+            if scenePhase == .active {
+                ExportBackgroundKeepAlive.shared.beginAppForegroundSession()
+            }
             syncLANServices()
         }
-        .onChange(of: scenePhase) { _, _ in
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                ExportBackgroundKeepAlive.shared.beginAppForegroundSession()
+            }
             syncLANServices()
         }
         .onChange(of: session.isExportSessionActive) { _, _ in
+            syncLANServices()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .exportBackgroundKeepAliveActiveDidChange
+            )
+        ) { _ in
             syncLANServices()
         }
     }

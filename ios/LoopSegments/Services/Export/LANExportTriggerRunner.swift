@@ -1,6 +1,6 @@
 import Foundation
 
-/// Polls `export_trigger.json` while the app is in the foreground (HTTP LAN page PUTs triggers).
+/// Polls `export_trigger.json` while the app is foreground, exporting, or Keep Alive is playing (LAN page PUTs triggers).
 @MainActor
 enum LANExportTriggerRunner {
     private static var task: Task<Void, Never>?

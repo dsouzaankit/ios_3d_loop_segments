@@ -12,7 +12,7 @@ enum ExportKeepAliveSettings {
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 
-    /// `0` = no timeout (loops until export ends or user stops **Keep Alive** on the lock screen).
+    /// `0` = no timeout during export (loops until user stops **Keep Alive** on the lock screen, then up to **sessionDurationSeconds** when export ends or the app is foregrounded).
     static var timeoutHours: Double {
         get {
             let stored = UserDefaults.standard.object(forKey: timeoutHoursKey) as? Double
@@ -27,11 +27,14 @@ enum ExportKeepAliveSettings {
         return hours * 3600
     }
 
-    /// Default `false`: mix with other audio (e.g. Evermusic) and don't try to own lock-screen controls.
+    /// Default `false` (**mix mode**): `.playback` + mix with others. When `true`, exclusive playback and lock-screen Now Playing card.
     static var preferLockScreenControls: Bool {
         get { UserDefaults.standard.bool(forKey: preferLockScreenControlsKey) }
         set { UserDefaults.standard.set(newValue, forKey: preferLockScreenControlsKey) }
     }
+
+    /// Auto-stop after the app is foregrounded or export leaves the running state (finish, pause, cancel).
+    static let sessionDurationSeconds: TimeInterval = 60 * 60
 
     static let timeoutOptions: [(label: String, hours: Double)] = [
         ("Until export ends", 0),
