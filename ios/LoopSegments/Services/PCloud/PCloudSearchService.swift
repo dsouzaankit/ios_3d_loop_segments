@@ -354,11 +354,15 @@ enum PCloudSearchService {
             let note = fileCacheEarlyResultsNote(count: fileHits.count, strong: SearchLocationCache.hasStrongFileMatch(for: query))
             SearchDebugLog.log("search: \(fileHits.count) file cache hit(s) (path/name) — continuing bookmark + browse walk")
             onPartialResults?(fileHits, note)
+        } else {
+            SearchDebugLog.log(
+                "search: 0 file cache match(es) for \"\(query)\" (\(SearchLocationCache.savedFileCount()) saved files)"
+            )
         }
 
         let folderHits: [WebDAVItem]
-        if SearchLocationCache.hasStrongFileMatch(for: query) {
-            SearchDebugLog.log("search: strong file cache match — skipping cached-folder PROPFIND")
+        if !fileHits.isEmpty {
+            SearchDebugLog.log("search: file cache satisfied — skipping cached-folder PROPFIND")
             folderHits = []
         } else {
             folderHits = try await searchQueryInCachedFolders(
@@ -426,6 +430,15 @@ enum PCloudSearchService {
                 SearchDebugLog.log("search: list failed \(path) — \(error.localizedDescription)")
                 continue
             }
+            SearchLocationCache.recordListingWarmup(from: items)
+            if let warmed = SearchLocationCache.matchSearchQuery(query), !warmed.isEmpty {
+                SearchLocationCache.recordHits(from: warmed)
+                SearchDebugLog.log(
+                    "search: \(warmed.count) file cache hit(s) after listing \(path) — continuing bookmark + browse walk"
+                )
+                onFirstHits?(warmed)
+                return warmed
+            }
             var folderHits: [WebDAVItem] = []
             for item in items {
                 let haystack = "\(item.href)/\(item.name)".lowercased()
@@ -435,6 +448,7 @@ enum PCloudSearchService {
                 folderHits.append(item)
             }
             guard folderHits.isEmpty else {
+                SearchLocationCache.recordHits(from: folderHits)
                 results.append(contentsOf: folderHits)
                 let merged = mergeSearchItems([results])
                 onFirstHits?(merged)

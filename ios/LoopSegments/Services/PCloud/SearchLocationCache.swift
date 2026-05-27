@@ -48,6 +48,23 @@ enum SearchLocationCache {
             .filter { WebDAVURLBuilder.directoryListingPath($0) != "/" }
     }
 
+    static func savedFileCount() -> Int {
+        loadStore().files.count
+    }
+
+    /// Remember every video seen in a cached-folder PROPFIND (no log spam) so the next search can hit file cache.
+    static func recordListingWarmup(from items: [WebDAVItem]) {
+        guard !items.isEmpty else { return }
+        var store = loadStore()
+        for item in items where item.isVideo {
+            recordFile(item, store: &store)
+        }
+        if store.files.count > maxFileEntries {
+            store.files = Array(store.files.prefix(maxFileEntries))
+        }
+        saveStore(store)
+    }
+
     /// Local match on cached file paths/names (no WebDAV). Strongest: full `href` path, then exact filename, then substring.
     static func matchSearchQuery(_ query: String) -> [WebDAVItem] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
