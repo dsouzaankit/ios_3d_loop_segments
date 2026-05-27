@@ -605,15 +605,22 @@ enum ExportPaths {
         removeVanillaDownloadCopies(log: log)
     }
 
-    /// Remove other `_vanilla_download.<ext>` files; keep the destination for the current export.
+    /// `_vanilla_download.meta.json` is a sidecar, not a second media copy.
+    static func isVanillaDownloadMediaCopyFileName(_ fileName: String) -> Bool {
+        let lower = fileName.lowercased()
+        guard lower.hasPrefix("_vanilla_download.") else { return false }
+        return lower != "_vanilla_download.meta.json"
+    }
+
+    /// Remove other `_vanilla_download.<ext>` media copies; keep the destination for the current export.
     static func pruneVanillaDownloadCopies(keepingDestination keep: URL, log: ((String) -> Void)? = nil) {
         let fm = FileManager.default
         guard let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) else {
             return
         }
         for url in listed {
-            let name = url.lastPathComponent.lowercased()
-            guard name.hasPrefix("_vanilla_download."), url != keep else { continue }
+            let name = url.lastPathComponent
+            guard isVanillaDownloadMediaCopyFileName(name), url != keep else { continue }
             do {
                 try fm.removeItem(at: url)
                 log?("Removed stale \(pathRelativeToExports(url))")
@@ -631,8 +638,7 @@ enum ExportPaths {
         var urls: [URL] = [vanillaFastStartURL]
         if let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) {
             for url in listed {
-                let name = url.lastPathComponent.lowercased()
-                guard name.hasPrefix("_vanilla_download.") else { continue }
+                guard isVanillaDownloadMediaCopyFileName(url.lastPathComponent) else { continue }
                 urls.append(url)
             }
         }

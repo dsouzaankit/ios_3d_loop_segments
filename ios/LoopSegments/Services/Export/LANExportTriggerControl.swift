@@ -125,6 +125,22 @@ enum LANExportTriggerControl {
             if isExportRunning {
                 onStop()
             }
+            if let paused = ResumeStore.mostRecentPausedExport(),
+               paused.fileKey == item.fileKey,
+               let pausedItem = webDAVItem(from: paused) {
+                var seekMs = max(paused.lastSeekMs, paused.checkpointMediaMs ?? 0)
+                if let cap = paused.sourceDurationMs, cap > 500 {
+                    seekMs = min(seekMs, max(0, cap - 250))
+                }
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "accepted",
+                    message: "Resuming paused \(pausedItem.name) at \(ResumeTimeFormat.formatMs(seekMs))",
+                    triggerId: trigger.id
+                )
+                onStartExport(pausedItem, seekMs)
+                return "LAN trigger — resume paused \(pausedItem.name)"
+            }
             await prepareForFreshStart()
             let seek = max(0, trigger.seekMs ?? 0)
             writeAck(

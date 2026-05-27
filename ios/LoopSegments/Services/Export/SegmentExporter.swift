@@ -118,6 +118,31 @@ final class SegmentExporter {
             log: logHandler
         )
 
+        if continueLANExport,
+           ExportPaths.hasResumableVanillaDownload(for: item),
+           !vanillaOnlyContainer {
+            logHandler(
+                "Resuming partial vanilla WebDAV download — skipping sparse probe " +
+                    "(keeps _vanilla_download.* byte offset)"
+            )
+            return try await attemptRecoveryExport(
+                probeError: SegmentExporterError.containerProbeFailed(containerFormat),
+                item: item,
+                inputURL: inputURL,
+                credentials: credentials,
+                containerFormat: containerFormat,
+                fileBytes: fileSize,
+                seekMs: seekMs,
+                continueLANExport: continueLANExport,
+                resumeCursorMs: resumeCursorMs,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                isCancelled: cancelCheck,
+                logHandler: logHandler,
+                onMediaProgress: onMediaProgress
+            )
+        }
+
         if vanillaOnlyContainer {
             logHandler(
                 "\(containerFormat.displayName) — 60s segment export not supported on device; " +
