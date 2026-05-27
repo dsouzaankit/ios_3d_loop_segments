@@ -39,12 +39,49 @@ enum VanillaDownloadResumeCatalog {
 
     static func matches(fileKey: String, totalLength: Int64) -> Bool {
         guard let manifest = readManifest() else { return false }
-        return manifest.fileKey == fileKey && manifest.totalLength == totalLength
+        guard manifest.fileKey == fileKey else { return false }
+        if manifest.totalLength == totalLength { return true }
+        let delta = abs(manifest.totalLength - totalLength)
+        return delta <= max(1, manifest.totalLength / 10_000)
+    }
+
+    /// HEAD size can differ slightly between sessions; keep byte resume when the same `fileKey`.
+    static func reconcileManifestTotalLengthIfNeeded(
+        fileKey: String,
+        totalLength: Int64,
+        href: String?,
+        log: ((String) -> Void)? = nil
+    ) {
+        guard totalLength > 0, let manifest = readManifest(), manifest.fileKey == fileKey else { return }
+        guard manifest.totalLength != totalLength else { return }
+        let delta = abs(manifest.totalLength - totalLength)
+        guard delta <= max(1, manifest.totalLength / 10_000) else { return }
+        save(fileKey: fileKey, totalLength: totalLength, href: href ?? manifest.href)
+        log?(
+            "Vanilla resume — updated manifest size \(formatBytes(manifest.totalLength)) " +
+                "→ \(formatBytes(totalLength)) (HEAD drift; partial bytes kept)"
+        )
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        if bytes >= 1_073_741_824 {
+            return String(format: "%.2f GB", Double(bytes) / 1_073_741_824.0)
+        }
+        if bytes >= 1_048_576 {
+            return String(format: "%.1f MB", Double(bytes) / 1_048_576.0)
+        }
+        return "\(bytes) B"
+    }
+
+    private static func lengthsCompatible(manifestLength: Int64, totalLength: Int64) -> Bool {
+        if manifestLength == totalLength { return true }
+        return abs(manifestLength - totalLength) <= max(1, manifestLength / 10_000)
     }
 
     /// Keep partial `_vanilla_download.*` when the same pCloud file was renamed (`fileKey` changed).
     static func matchesAfterRename(item: WebDAVItem, totalLength: Int64) -> Bool {
-        guard totalLength > 0, let manifest = readManifest(), manifest.totalLength == totalLength else {
+        guard totalLength > 0, let manifest = readManifest(),
+              lengthsCompatible(manifestLength: manifest.totalLength, totalLength: totalLength) else {
             return false
         }
         if manifest.fileKey == item.fileKey { return true }
@@ -77,9 +114,7 @@ enum VanillaDownloadResumeCatalog {
     ) -> ResumePlan {
         guard totalLength > 0 else { return .startFresh }
         let fm = FileManager.default
-        guard let manifest = readManifest(),
-              manifest.fileKey == fileKey,
-              manifest.totalLength == totalLength else {
+        guard let manifest = readManifest(), matches(fileKey: fileKey, totalLength: totalLength) else {
             return faststartOnlyCompletePlan(fileKey: fileKey, totalLength: totalLength)
         }
         if fm.fileExists(atPath: destinationURL.path) {
@@ -103,7 +138,7 @@ enum VanillaDownloadResumeCatalog {
         guard totalLength > 0,
               let manifest = readManifest(),
               manifest.fileKey == fileKey,
-              manifest.totalLength == totalLength else {
+              lengthsCompatible(manifestLength: manifest.totalLength, totalLength: totalLength) else {
             return .startFresh
         }
         let fast = ExportPaths.vanillaFastStartURL

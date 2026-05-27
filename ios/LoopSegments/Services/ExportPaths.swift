@@ -239,9 +239,18 @@ enum ExportPaths {
         return number.int64Value
     }
 
-    /// `URL !=` can treat the same on-disk file as different; use for prune keep comparisons.
+    /// Same on-disk file — `URL !=` and raw `path` can disagree across directory listings on iOS.
     static func vanillaDownloadPathsEqual(_ a: URL, _ b: URL) -> Bool {
-        a.path.caseInsensitiveCompare(b.path) == .orderedSame
+        if a.path.caseInsensitiveCompare(b.path) == .orderedSame { return true }
+        let resolvedA = a.resolvingSymlinksInPath()
+        let resolvedB = b.resolvingSymlinksInPath()
+        if resolvedA.path.caseInsensitiveCompare(resolvedB.path) == .orderedSame { return true }
+        if let idA = try? a.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier,
+           let idB = try? b.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier,
+           idA.isEqual(idB) {
+            return true
+        }
+        return false
     }
 
     static func listVanillaDownloadMediaURLs() -> [URL] {
@@ -650,9 +659,19 @@ enum ExportPaths {
     static func syncVanillaDownloadWithExportItem(
         item: WebDAVItem,
         totalLength: Int64,
+        continueLANExport: Bool = false,
         log: ((String) -> Void)? = nil
     ) {
         let destination = vanillaDownloadURL(preservingExtensionFrom: item.name)
+
+        if totalLength > 0 {
+            VanillaDownloadResumeCatalog.reconcileManifestTotalLengthIfNeeded(
+                fileKey: item.fileKey,
+                totalLength: totalLength,
+                href: item.href,
+                log: log
+            )
+        }
 
         if totalLength > 0, vanillaManifestMatchesItem(item, totalLength: totalLength) {
             _ = reconcileVanillaPartialToPreferredDestination(preferred: destination, log: log)
@@ -687,7 +706,14 @@ enum ExportPaths {
         }
 
         if totalLength > 0, onDisk > 0, vanillaManifestMatchesItem(item, totalLength: totalLength) {
-            pruneVanillaDownloadCopies(keepingDestination: destination, log: log)
+            if continueLANExport {
+                log?(
+                    "Vanilla resume — kept \(pathRelativeToExports(destination)) on disk " +
+                        "(skipped stale prune during LAN resume)"
+                )
+            } else {
+                pruneVanillaDownloadCopies(keepingDestination: destination, log: log)
+            }
             return
         }
         removeVanillaDownloadCopies(log: log)
