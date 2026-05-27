@@ -195,5 +195,52 @@ enum SearchLocationCache {
     private static func saveStore(_ store: Store) {
         guard let data = try? JSONEncoder().encode(store) else { return }
         UserDefaults.standard.set(data, forKey: storageKeyV2)
+        writeLANSnapshot(store)
+    }
+
+    private struct LANCacheSnapshot: Codable {
+        struct File: Codable {
+            var href: String
+            var name: String
+            var contentLength: Int64?
+            var listingPath: String
+            var recordedAt: Date
+        }
+        struct Folder: Codable {
+            var listingPath: String
+            var recordedAt: Date
+        }
+        var version: Int
+        var generatedAt: Date
+        var fileCount: Int
+        var folderCount: Int
+        var files: [File]
+        var folders: [Folder]
+    }
+
+    private static func writeLANSnapshot(_ store: Store) {
+        let snapshot = LANCacheSnapshot(
+            version: 1,
+            generatedAt: Date(),
+            fileCount: store.files.count,
+            folderCount: store.folders.count,
+            files: store.files.map {
+                LANCacheSnapshot.File(
+                    href: $0.href,
+                    name: $0.name,
+                    contentLength: $0.contentLength,
+                    listingPath: $0.listingPath,
+                    recordedAt: $0.recordedAt
+                )
+            },
+            folders: store.folders.map {
+                LANCacheSnapshot.Folder(listingPath: $0.listingPath, recordedAt: $0.recordedAt)
+            }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(snapshot) else { return }
+        try? data.write(to: ExportPaths.searchCacheSnapshotURL, options: [.atomic])
     }
 }

@@ -1935,6 +1935,9 @@ enum ExportLANServer {
         if FileManager.default.fileExists(atPath: ExportPaths.searchDebugLogURL.path) {
             links.append(#"<a href="search_debug.txt">search_debug.txt</a>"#)
         }
+        if FileManager.default.fileExists(atPath: ExportPaths.searchCacheSnapshotURL.path) {
+            links.append(#"<a href="search_cache.json">search_cache.json</a>"#)
+        }
         return links.joined(separator: " · ")
     }
 

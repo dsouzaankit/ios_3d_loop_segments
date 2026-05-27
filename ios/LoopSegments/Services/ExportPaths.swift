@@ -162,6 +162,11 @@ enum ExportPaths {
         logsDirectory.appendingPathComponent("search_debug.txt")
     }
 
+    /// Browse/search cache snapshot (private; LAN via `pcld_ios_media/logs/search_cache.json`).
+    static var searchCacheSnapshotURL: URL {
+        logsDirectory.appendingPathComponent("search_cache.json")
+    }
+
     /// Launch health probe (private; LAN `pcld_ios_media/logs/loop_segments_ok.txt`, legacy `/loop_segments_ok.txt`).
     static var loopSegmentsOkProbeURL: URL {
         logsDirectory.appendingPathComponent("loop_segments_ok.txt")
@@ -178,6 +183,8 @@ enum ExportPaths {
             return pathRelativeToExports(exportProgressURL)
         case "search_debug.txt":
             return pathRelativeToExports(searchDebugLogURL)
+        case "search_cache.json":
+            return pathRelativeToExports(searchCacheSnapshotURL)
         case "loop_segments_ok.txt":
             return pathRelativeToExports(loopSegmentsOkProbeURL)
         default:
@@ -197,7 +204,7 @@ enum ExportPaths {
         guard relativePath.hasPrefix(prefix), relativePath.hasSuffix(".txt") else { return false }
         let name = String(relativePath.dropFirst(prefix.count))
         if name == "export_latest.txt" || name == "export_progress.txt" { return true }
-        if name == "search_debug.txt" || name == "loop_segments_ok.txt" { return true }
+        if name == "search_debug.txt" || name == "search_cache.json" || name == "loop_segments_ok.txt" { return true }
         return name.hasPrefix("export_")
     }
 
@@ -453,7 +460,7 @@ enum ExportPaths {
     static func listLANAuxiliaryLogRelativePaths() -> [String] {
         let fm = FileManager.default
         var paths: [String] = []
-        for url in [searchDebugLogURL, loopSegmentsOkProbeURL] {
+        for url in [searchDebugLogURL, searchCacheSnapshotURL, loopSegmentsOkProbeURL] {
             guard fm.fileExists(atPath: url.path) else { continue }
             paths.append(pathRelativeToExports(url))
         }
