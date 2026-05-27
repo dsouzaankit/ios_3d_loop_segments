@@ -542,7 +542,7 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 | **Pinned completed** (gray sidebar) | Same as paused — locates the pCloud source for Export settings while segment media stays on disk. |
 | **Search in Browse** (failed resume screen) | Fills the Browse search bar and runs the same pipeline. |
 
-**Default path (REST toggle off or `tokenSaved=false`):** WebDAV folder walk on **last 100 search-hit folders** (cached from prior successful searches), then **current Browse folder** + **bookmarks** (deduped), always **excluding `/`**. Timeout scales with root count: `min(10 + 2.5×(roots−1), 45)` seconds. Cap **80 folders** visited per search. If search starts from `/`, UI + `search_debug.txt` note that root is excluded (bookmarks-only scan unless recent-hit cache has paths).
+**Default path (REST toggle off or `tokenSaved=false`):** WebDAV folder walk on **last 100 search-hit folders** (cached from prior successful searches), then **current Browse folder** + **bookmarks** (deduped), always **excluding `/`**. Cached/bookmark roots are visited **before** the pCloud user-files tree (build **232+**). **Paused/pinned resume** lists each cached folder directly first (one PROPFIND per folder) before the full walk. Timeout scales with root count: `min(10 + 2.5×(roots−1), 45)` seconds. Cap **80 folders** visited per search. If search starts from `/`, UI + `search_debug.txt` note that root is excluded (bookmarks-only scan unless recent-hit cache has paths).
 
 **With REST on + token:** `search` API (~20 s) → shallow **folder index** (~15 s) → WebDAV fallback as above.
 

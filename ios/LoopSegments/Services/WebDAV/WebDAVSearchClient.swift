@@ -130,37 +130,52 @@ enum WebDAVSearchClient {
     }
 
     /// pCloud WebDAV root is often `/remote.php/dav/files/<user>/`, not flat children of `/`.
+    /// `extraRoots` (recent search folders, bookmarks, browse path) stay **first** — not moved after user files root.
     private static func discoverSearchRoots(
         client: WebDAVClient,
         credentials: WebDAVCredentials,
         extraRoots: [String],
         quick: Bool
     ) async throws -> [String] {
-        var roots: [String] = extraRoots.map { WebDAVURLBuilder.directoryListingPath($0) }
+        let pinned = dedupePreserveOrder(
+            extraRoots.map { WebDAVURLBuilder.directoryListingPath($0) }
+        )
+        var supplemental: [String] = []
         if let stored = credentials.webDAVFilesRoot, !stored.isEmpty {
-            roots.append(WebDAVURLBuilder.directoryListingPath(stored))
+            supplemental.append(WebDAVURLBuilder.directoryListingPath(stored))
         }
         if let userRoot = try? await PCloudWebDAVRootResolver.filesRoot(credentials: credentials) {
-            roots.append(userRoot)
+            supplemental.append(userRoot)
         }
         guard !quick else {
-            return prioritizeUserRoot(roots)
+            return pinned + prioritizeUserRoot(supplemental)
         }
-        roots.append("/")
+        supplemental.append("/")
         let top = try await client.list(path: "/")
         for dir in top where dir.isDirectory {
             let path = WebDAVURLBuilder.directoryListingPath(dir.href)
-            roots.append(path)
+            supplemental.append(path)
             let lower = path.lowercased()
             if lower.contains("remote.php") || lower.hasSuffix("/dav/") {
                 if let children = try? await client.list(path: path) {
                     for child in children where child.isDirectory {
-                        roots.append(WebDAVURLBuilder.directoryListingPath(child.href))
+                        supplemental.append(WebDAVURLBuilder.directoryListingPath(child.href))
                     }
                 }
             }
         }
-        return prioritizeUserRoot(roots)
+        return pinned + prioritizeUserRoot(supplemental)
+    }
+
+    private static func dedupePreserveOrder(_ paths: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for path in paths {
+            let normalized = WebDAVURLBuilder.directoryListingPath(path)
+            guard seen.insert(normalized).inserted else { continue }
+            out.append(normalized)
+        }
+        return out
     }
 
     private static func prioritizeUserRoot(_ paths: [String]) -> [String] {

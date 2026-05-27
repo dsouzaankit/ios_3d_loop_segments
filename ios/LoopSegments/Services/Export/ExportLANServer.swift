@@ -73,6 +73,10 @@ enum ExportLANServer {
 
     private static let lock = NSLock()
     private static var listener: NWListener?
+    private static var listenerIsReady = false
+    private static var startInFlight = false
+    private static var addressInUseRetryCount = 0
+    private static let maxAddressInUseRetries = 2
     private static var connections: [ObjectIdentifier: NWConnection] = [:]
     private static let queue = DispatchQueue(label: "com.loopsegments.lan-server")
     /// Bonjour service name (`loopsegments._http._tcp.local` in browsers) — not a pingable hostname.
@@ -107,96 +111,180 @@ enum ExportLANServer {
     /// Start the listener when the user preference is on (idempotent).
     static func ensureRunning(log: @escaping (String) -> Void = { _ in }) {
         guard isEnabled else { return }
-        start(log: log)
+        lock.lock()
+        let running = listenerIsReady && listener != nil
+        lock.unlock()
+        if !running {
+            start(log: log)
+        }
     }
 
     static func start(log: @escaping (String) -> Void) {
         guard isEnabled else { return }
         lock.lock()
-        if listener != nil {
+        if listenerIsReady, listener != nil {
             lock.unlock()
             return
         }
+        if startInFlight {
+            lock.unlock()
+            return
+        }
+        startInFlight = true
         lock.unlock()
 
         queue.async {
-            do {
-                let port = NWEndpoint.Port(rawValue: defaultPort)!
-                let params = NWParameters.tcp
-                params.allowLocalEndpointReuse = true
-                let nwListener = try NWListener(using: params, on: port)
-                let ipForTXT = Self.primaryLANIPv4Address()
-                var txtRecord: Data?
-                if let ipForTXT, !ipForTXT.isEmpty {
-                    let txt = NetService.data(fromTXTRecord: ["ip": Data(ipForTXT.utf8)])
-                    txtRecord = txt
-                }
-                nwListener.service = NWListener.Service(
-                    name: bonjourServiceName,
-                    type: "_http._tcp",
-                    txtRecord: txtRecord
-                )
+            defer {
                 lock.lock()
-                listener = nwListener
+                startInFlight = false
                 lock.unlock()
-
-                nwListener.stateUpdateHandler = { state in
-                    switch state {
-                    case .ready:
-                        let ip = Self.primaryLANIPv4Address()
-                        let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
-                        let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
-                        lock.lock()
-                        advertisedBaseURL = hostURL
-                        advertisedIPAddressURL = ipURL
-                        lock.unlock()
-                        log(
-                            "LAN export: \(hostURL)\(ip.map { " · IP \($0)" } ?? "") — Bonjour \(bonjourServiceName)._http._tcp"
-                        )
-                        log(
-                            "LAN: Windows often cannot resolve .local — use IP above; ping may fail even when HTTP works"
-                        )
-                        log("LAN: HTTP + WebDAV — pcld_ios_media/ (read + auth PUT/MKCOL for scripts), loop/op_*, logs (not SMB)")
-                    case .failed(let error):
-                        log("LAN export server failed: \(error.localizedDescription)")
-                        Self.stopOnQueue(log: nil)
-                    case .cancelled:
-                        break
-                    default:
-                        break
-                    }
-                }
-
-                nwListener.newConnectionHandler = { connection in
-                    connection.start(queue: queue)
-                    let id = ObjectIdentifier(connection)
-                    lock.lock()
-                    connections[id] = connection
-                    lock.unlock()
-                    Self.receiveRequest(on: connection) { [id] in
-                        lock.lock()
-                        connections.removeValue(forKey: id)
-                        lock.unlock()
-                    }
-                }
-
-                nwListener.start(queue: queue)
-            } catch {
-                log("LAN export server could not start: \(error.localizedDescription)")
             }
+            beginListenAttempt(log: log)
         }
+    }
+
+    private static func beginListenAttempt(log: @escaping (String) -> Void, delaySeconds: TimeInterval = 0) {
+        guard isEnabled else { return }
+        if delaySeconds > 0 {
+            queue.asyncAfter(deadline: .now() + delaySeconds) {
+                beginListenAttempt(log: log)
+            }
+            return
+        }
+
+        lock.lock()
+        if listenerIsReady, listener != nil {
+            lock.unlock()
+            return
+        }
+        let stale = listener
+        listener = nil
+        listenerIsReady = false
+        lock.unlock()
+        stale?.cancel()
+
+        do {
+            let port = NWEndpoint.Port(rawValue: defaultPort)!
+            let params = NWParameters.tcp
+            params.allowLocalEndpointReuse = true
+            let nwListener = try NWListener(using: params, on: port)
+            let ipForTXT = Self.primaryLANIPv4Address()
+            var txtRecord: Data?
+            if let ipForTXT, !ipForTXT.isEmpty {
+                let txt = NetService.data(fromTXTRecord: ["ip": Data(ipForTXT.utf8)])
+                txtRecord = txt
+            }
+            nwListener.service = NWListener.Service(
+                name: bonjourServiceName,
+                type: "_http._tcp",
+                txtRecord: txtRecord
+            )
+            lock.lock()
+            listener = nwListener
+            lock.unlock()
+
+            nwListener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    let ip = Self.primaryLANIPv4Address()
+                    let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
+                    let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
+                    lock.lock()
+                    listenerIsReady = true
+                    addressInUseRetryCount = 0
+                    advertisedBaseURL = hostURL
+                    advertisedIPAddressURL = ipURL
+                    lock.unlock()
+                    log(
+                        "LAN export: \(hostURL)\(ip.map { " · IP \($0)" } ?? "") — Bonjour \(bonjourServiceName)._http._tcp"
+                    )
+                    log(
+                        "LAN: Windows often cannot resolve .local — use IP above; ping may fail even when HTTP works"
+                    )
+                    log("LAN: HTTP + WebDAV — pcld_ios_media/ (read + auth PUT/MKCOL for scripts), loop/op_*, logs (not SMB)")
+                case .failed(let error):
+                    log("LAN export server failed: \(error.localizedDescription)")
+                    lock.lock()
+                    let retries = addressInUseRetryCount
+                    lock.unlock()
+                    stopOnQueue(log: nil, resetAddressInUseRetries: false)
+                    scheduleListenRetryIfNeeded(log: log, error: error, priorRetries: retries)
+                case .cancelled:
+                    lock.lock()
+                    listenerIsReady = false
+                    lock.unlock()
+                default:
+                    break
+                }
+            }
+
+            nwListener.newConnectionHandler = { connection in
+                connection.start(queue: queue)
+                let id = ObjectIdentifier(connection)
+                lock.lock()
+                connections[id] = connection
+                lock.unlock()
+                Self.receiveRequest(on: connection) { [id] in
+                    lock.lock()
+                    connections.removeValue(forKey: id)
+                    lock.unlock()
+                }
+            }
+
+            nwListener.start(queue: queue)
+        } catch {
+            log("LAN export server could not start: \(error.localizedDescription)")
+            lock.lock()
+            let retries = addressInUseRetryCount
+            lock.unlock()
+            scheduleListenRetryIfNeeded(log: log, error: error, priorRetries: retries)
+        }
+    }
+
+    private static func scheduleListenRetryIfNeeded(
+        log: @escaping (String) -> Void,
+        error: Error,
+        priorRetries: Int
+    ) {
+        guard isEnabled, isAddressAlreadyInUse(error), priorRetries < maxAddressInUseRetries else { return }
+        lock.lock()
+        addressInUseRetryCount = priorRetries + 1
+        let attempt = addressInUseRetryCount
+        lock.unlock()
+        log(
+            "LAN export: port \(defaultPort) in use — retry \(attempt)/\(maxAddressInUseRetries) in 0.5s (close other app using :8765)"
+        )
+        beginListenAttempt(log: log, delaySeconds: 0.5)
+    }
+
+    private static func isAddressAlreadyInUse(_ error: Error) -> Bool {
+        if containsAddressInUseCode(error as NSError) { return true }
+        let ns = error as NSError
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError, containsAddressInUseCode(underlying) {
+            return true
+        }
+        return error.localizedDescription.localizedCaseInsensitiveContains("already in use")
+    }
+
+    private static func containsAddressInUseCode(_ ns: NSError) -> Bool {
+        ns.code == 48
+            || (ns.domain == NSPOSIXErrorDomain && ns.code == EADDRINUSE)
     }
 
     static func stop(log: ((String) -> Void)? = nil) {
         queue.async {
-            stopOnQueue(log: log)
+            stopOnQueue(log: log, resetAddressInUseRetries: true)
         }
     }
 
-    private static func stopOnQueue(log: ((String) -> Void)?) {
+    private static func stopOnQueue(log: ((String) -> Void)?, resetAddressInUseRetries: Bool = true) {
         lock.lock()
         let nwListener = listener
         listener = nil
+        listenerIsReady = false
+        if resetAddressInUseRetries {
+            addressInUseRetryCount = 0
+        }
         advertisedBaseURL = nil
         advertisedIPAddressURL = nil
         let open = connections.values

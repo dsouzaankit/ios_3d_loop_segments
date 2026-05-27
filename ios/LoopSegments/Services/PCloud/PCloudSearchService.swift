@@ -411,6 +411,14 @@ enum PCloudSearchService {
         SearchDebugLog.log(
             "resume resolve start: \"\(entry.displayName)\" pinned=\(entry.pinnedCompleted) browseDepth=\(browsePaths.count)"
         )
+        if let cached = try await matchResumeEntryInCachedFolders(
+            entry: entry,
+            credentials: credentials,
+            status: status
+        ) {
+            SearchDebugLog.log("resume resolve: matched in cached folder \"\(cached.name)\"")
+            return cached
+        }
         for query in resumeSearchQueries(for: entry) {
             guard !Task.isCancelled else {
                 SearchDebugLog.log("resume resolve: cancelled")
@@ -433,6 +441,37 @@ enum PCloudSearchService {
             )
         }
         SearchDebugLog.log("resume resolve: gave up — no match")
+        return nil
+    }
+
+    /// One PROPFIND per recent search-hit folder — avoids walking 80 bookmark trees first.
+    private static func matchResumeEntryInCachedFolders(
+        entry: ResumeEntry,
+        credentials: WebDAVCredentials,
+        status: (@Sendable (String) -> Void)?
+    ) async throws -> WebDAVItem? {
+        let folders = SearchLocationCache.listingPaths()
+        guard !folders.isEmpty else { return nil }
+        let client = WebDAVClient(credentials: credentials)
+        for path in folders {
+            guard !Task.isCancelled else { throw CancellationError() }
+            let short = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let label = short.isEmpty ? path : short
+            status?("Recent folder: \(label)…")
+            SearchDebugLog.log("resume resolve: list cached folder \(path)")
+            let items: [WebDAVItem]
+            do {
+                items = try await client.list(path: path)
+            } catch {
+                SearchDebugLog.log("resume resolve: list failed \(path) — \(error.localizedDescription)")
+                continue
+            }
+            let videos = items.filter(\.isVideo)
+            if let match = WebDAVRenameReconcile.matchResumeEntry(entry, in: videos) {
+                SearchLocationCache.recordHits(from: [match])
+                return match
+            }
+        }
         return nil
     }
 
