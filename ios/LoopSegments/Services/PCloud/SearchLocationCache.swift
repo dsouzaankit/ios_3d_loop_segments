@@ -35,7 +35,7 @@ enum SearchLocationCache {
         var files: [FileEntry] = []
     }
 
-    private enum FileMatchRank: Int, Comparable {
+    private enum FileMatchRank: Int {
         case fullHref = 0
         case exactName = 1
         case substring = 2
@@ -62,7 +62,7 @@ enum SearchLocationCache {
             }
         }
         ranked.sort { lhs, rhs in
-            if lhs.1 != rhs.1 { return lhs.1 < rhs.1 }
+            if lhs.1.rawValue != rhs.1.rawValue { return lhs.1.rawValue < rhs.1.rawValue }
             return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
         }
         return dedupeItems(ranked.map(\.0))
@@ -76,7 +76,7 @@ enum SearchLocationCache {
             let item = entry.webDAVItem()
             guard item.isDirectory || item.isVideo else { return false }
             guard let rank = fileMatchRank(needle: needle, item: item) else { return false }
-            return rank <= .exactName
+            return rank.rawValue <= FileMatchRank.exactName.rawValue
         }
     }
 
