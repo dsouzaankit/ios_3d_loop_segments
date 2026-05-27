@@ -11,6 +11,7 @@ enum WebDAVSearchClient {
         extraRoots: [String] = [],
         maxFoldersToVisit: Int = maxFoldersToVisitDefault,
         quickRootDiscovery: Bool = false,
+        pinnedRootsOnly: Bool = false,
         timeoutSeconds: Double = 0,
         progress: (@Sendable (WebDAVSearchProgress) -> Void)? = nil
     ) async throws -> [WebDAVItem] {
@@ -54,7 +55,8 @@ enum WebDAVSearchClient {
             client: client,
             credentials: credentials,
             extraRoots: extraRoots,
-            quick: quickRootDiscovery
+            quick: quickRootDiscovery,
+            pinnedOnly: pinnedRootsOnly
         )
         var results: [WebDAVItem] = []
         var queue = roots
@@ -135,11 +137,15 @@ enum WebDAVSearchClient {
         client: WebDAVClient,
         credentials: WebDAVCredentials,
         extraRoots: [String],
-        quick: Bool
+        quick: Bool,
+        pinnedOnly: Bool = false
     ) async throws -> [String] {
         let pinned = dedupePreserveOrder(
             extraRoots.map { WebDAVURLBuilder.directoryListingPath($0) }
         )
+        if pinnedOnly {
+            return pinned
+        }
         var supplemental: [String] = []
         if let stored = credentials.webDAVFilesRoot, !stored.isEmpty {
             supplemental.append(WebDAVURLBuilder.directoryListingPath(stored))
