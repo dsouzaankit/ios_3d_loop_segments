@@ -552,7 +552,7 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 
 **Not global filename search:** Browse folder refresh (`reconcileWithBrowseListing`), export **404 rename repair** (re-list parent folder), **Alternate export** / LAN **random** pick (list videos in one folder or bookmark roots only), LAN **`/browse`** folder browser (no search box).
 
-Setting: **`PCloudSearchSettings.restAPISearchEnabled`** (`UserDefaults`, default `false`).
+Setting: **`PCloudSearchSettings.restAPISearchEnabled`** (`UserDefaults`, default `false`). With REST off, **search/resume does not call** `userinfo` / token fetch (no `search prepare: fetching pCloud API token` delay); sign-in may still try once in the background for HLS.
 
 ## pCloud REST API token limitation (Search, HLS, media metadata)
 

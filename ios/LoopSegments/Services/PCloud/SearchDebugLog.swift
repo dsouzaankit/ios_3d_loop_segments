@@ -111,10 +111,8 @@ enum SearchDebugLog {
         ensureDirectoryLocked()
         do {
             if FileManager.default.fileExists(atPath: url.path) {
-                let handle = try FileHandle(forUpdating: url)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
+                let existing = try Data(contentsOf: url)
+                try (data + existing).write(to: url, options: .atomic)
             } else {
                 try data.write(to: url, options: .atomic)
             }

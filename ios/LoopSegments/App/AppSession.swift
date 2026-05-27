@@ -102,21 +102,27 @@ final class AppSession: ObservableObject {
         PCloudWebDAVRootResolver.clearCache()
     }
 
-    /// Refreshes API token / WebDAV files root before search (updates keychain + published credentials).
+    /// Refreshes WebDAV files root before search; API token only when REST search is enabled.
     func prepareCredentialsForSearch() async throws -> WebDAVCredentials? {
         guard var stored = credentials else { return nil }
         let needsToken = stored.apiAuthToken?.isEmpty != false
         let needsRoot = !PCloudWebDAVRootResolver.isValidFilesRoot(stored.webDAVFilesRoot)
         if needsToken {
-            SearchDebugLog.log("search prepare: fetching pCloud API token (max 45s)…")
-            do {
-                stored = try await ExportAsyncTimeout.run(seconds: 45, operation: "pCloud API login") {
-                    try await self.enrichWithAPIAccess(stored)
+            if PCloudSearchSettings.restAPISearchEnabled {
+                SearchDebugLog.log("search prepare: fetching pCloud API token (max 45s)…")
+                do {
+                    stored = try await ExportAsyncTimeout.run(seconds: 45, operation: "pCloud API login") {
+                        try await self.enrichWithAPIAccess(stored)
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    SearchDebugLog.log("search prepare: API token failed — \(error.localizedDescription)")
                 }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                SearchDebugLog.log("search prepare: API token failed — \(error.localizedDescription)")
+            } else {
+                SearchDebugLog.log(
+                    "search prepare: REST search off — skipping API token (WebDAV search / resume)"
+                )
             }
         } else if needsRoot {
             PCloudWebDAVRootResolver.clearCache()
