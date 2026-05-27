@@ -64,7 +64,8 @@ enum PCloudSearchService {
         query: String,
         credentials: WebDAVCredentials,
         browsePaths: [String] = [],
-        status: (@Sendable (String) -> Void)? = nil
+        status: (@Sendable (String) -> Void)? = nil,
+        onPartialResults: (@Sendable (_ items: [WebDAVItem], _ statusNote: String) -> Void)? = nil
     ) async throws -> Result {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -112,7 +113,8 @@ enum PCloudSearchService {
                 credentials: credentials,
                 browsePaths: webDAVRoots,
                 status: scopedStatus,
-                reason: .missingToken
+                reason: .missingToken,
+                onPartialResults: onPartialResults
             )
         }
 
@@ -123,7 +125,8 @@ enum PCloudSearchService {
                 credentials: credentials,
                 browsePaths: webDAVRoots,
                 status: scopedStatus,
-                reason: .restDisabled
+                reason: .restDisabled,
+                onPartialResults: onPartialResults
             )
         }
 
@@ -205,12 +208,13 @@ enum PCloudSearchService {
         tried.append("folders (WebDAV)")
         let webDAVSeconds = webDAVTimeoutSeconds(rootCount: webDAVRoots.count)
         scopedStatus?("WebDAV folder walk (\(Int(webDAVSeconds))s max)…")
-        let webDAVPass = try await runWebDAVSearch(
+        let webDAVPass = try await runWebDAVSearchWithCacheFirst(
             query: trimmed,
             credentials: credentials,
             browsePaths: webDAVRoots,
             timeoutSeconds: webDAVSeconds,
-            status: scopedStatus
+            status: scopedStatus,
+            onPartialResults: onPartialResults
         )
         webDAVTimedOut = webDAVPass.timedOut
         let webDAV = webDAVPass.items
@@ -245,17 +249,19 @@ enum PCloudSearchService {
         credentials: WebDAVCredentials,
         browsePaths: [String],
         status: (@Sendable (String) -> Void)?,
-        reason: WebDAVOnlyReason
+        reason: WebDAVOnlyReason,
+        onPartialResults: (@Sendable (_ items: [WebDAVItem], _ statusNote: String) -> Void)?
     ) async throws -> Result {
         let bookmarkCount = FolderBookmarkStore.lanBookmarkEntries().count
         let webDAVSeconds = webDAVTimeoutSeconds(rootCount: browsePaths.count)
         status?("WebDAV folder walk (\(browsePaths.count) roots, \(Int(webDAVSeconds))s max)…")
-        let webDAV = try await runWebDAVSearch(
+        let webDAV = try await runWebDAVSearchWithCacheFirst(
             query: query,
             credentials: credentials,
             browsePaths: browsePaths,
             timeoutSeconds: webDAVSeconds,
-            status: status
+            status: status,
+            onPartialResults: onPartialResults
         )
         if !webDAV.items.isEmpty {
             let recent = SearchLocationCache.listingPaths().count
@@ -326,6 +332,92 @@ enum PCloudSearchService {
     private struct WebDAVSearchPass {
         var items: [WebDAVItem]
         var timedOut: Bool
+    }
+
+    /// Lists each recent search-hit folder first (like paused-export resolve), publishes hits early, then walks bookmarks + browse.
+    private static func runWebDAVSearchWithCacheFirst(
+        query: String,
+        credentials: WebDAVCredentials,
+        browsePaths: [String],
+        timeoutSeconds: Double? = nil,
+        status: (@Sendable (String) -> Void)? = nil,
+        onPartialResults: (@Sendable (_ items: [WebDAVItem], _ statusNote: String) -> Void)? = nil
+    ) async throws -> WebDAVSearchPass {
+        let cacheHits = try await searchQueryInCachedFolders(
+            query: query,
+            credentials: credentials,
+            status: status
+        )
+        if !cacheHits.isEmpty {
+            let note = cacheEarlyResultsNote(count: cacheHits.count)
+            SearchDebugLog.log(
+                "search: \(cacheHits.count) hit(s) in recent folder(s) — continuing bookmark + browse walk"
+            )
+            onPartialResults?(cacheHits, note)
+        }
+        let pass = try await runWebDAVSearch(
+            query: query,
+            credentials: credentials,
+            browsePaths: browsePaths,
+            timeoutSeconds: timeoutSeconds,
+            status: status
+        )
+        let merged = mergeSearchItems([cacheHits, pass.items])
+        return WebDAVSearchPass(items: merged, timedOut: pass.timedOut)
+    }
+
+    private static func cacheEarlyResultsNote(count: Int) -> String {
+        let n = count == 1 ? "1 match" : "\(count) matches"
+        return "Found \(n) in recent folders (still searching bookmarks + browse)…"
+    }
+
+    private static func searchQueryInCachedFolders(
+        query: String,
+        credentials: WebDAVCredentials,
+        status: (@Sendable (String) -> Void)?
+    ) async throws -> [WebDAVItem] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return [] }
+        let folders = SearchLocationCache.listingPaths()
+        guard !folders.isEmpty else { return [] }
+
+        let client = WebDAVClient(credentials: credentials)
+        var results: [WebDAVItem] = []
+        for path in folders {
+            guard !Task.isCancelled else { throw CancellationError() }
+            let short = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let label = short.isEmpty ? path : short
+            status?("Recent folder: \(label)…")
+            SearchDebugLog.log("search: list cached folder \(path)")
+            let items: [WebDAVItem]
+            do {
+                items = try await client.list(path: path)
+            } catch {
+                SearchDebugLog.log("search: list failed \(path) — \(error.localizedDescription)")
+                continue
+            }
+            for item in items {
+                let haystack = "\(item.href)/\(item.name)".lowercased()
+                let nameMatch = item.name.lowercased().contains(needle)
+                guard haystack.contains(needle) || nameMatch else { continue }
+                guard item.isDirectory || item.isVideo else { continue }
+                results.append(item)
+            }
+        }
+        return mergeSearchItems([results])
+    }
+
+    private static func mergeSearchItems(_ groups: [[WebDAVItem]]) -> [WebDAVItem] {
+        var seen = Set<String>()
+        var out: [WebDAVItem] = []
+        for item in groups.flatMap({ $0 }) {
+            guard seen.insert(item.fileKey).inserted else { continue }
+            out.append(item)
+        }
+        return out.sorted { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory && !rhs.isDirectory }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
     }
 
     private static func runWebDAVSearch(

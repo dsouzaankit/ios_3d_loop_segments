@@ -586,6 +586,15 @@ struct BrowserView: View {
                         }
                         searchModeNote = note
                     }
+                },
+                onPartialResults: { items, note in
+                    Task { @MainActor in
+                        guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
+                            return
+                        }
+                        searchResults = items
+                        searchModeNote = note
+                    }
                 }
             )
             guard !Task.isCancelled else { return }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Search trace under `pcld_ios_media/logs/search_debug.txt` (newest lines at top; LAN when served).
+/// Append-only search trace under `pcld_ios_media/logs/search_debug.txt` (like export_latest.txt; LAN when served).
 enum SearchDebugLog {
     private static let queue = DispatchQueue(label: "com.loopsegments.search-debug")
     private static let maxBytes = 64 * 1024
@@ -111,8 +111,10 @@ enum SearchDebugLog {
         ensureDirectoryLocked()
         do {
             if FileManager.default.fileExists(atPath: url.path) {
-                let existing = try Data(contentsOf: url)
-                try (data + existing).write(to: url, options: .atomic)
+                let handle = try FileHandle(forUpdating: url)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
             } else {
                 try data.write(to: url, options: .atomic)
             }
@@ -135,8 +137,8 @@ enum SearchDebugLog {
             try? FileManager.default.removeItem(at: url)
             return
         }
-        let keep = String(text.prefix(maxBytes / 2))
-        try? (keep + "\n… truncated (oldest lines removed) …\n").write(to: url, atomically: true, encoding: .utf8)
+        let keep = String(text.suffix(maxBytes / 2))
+        try? ("… truncated …\n" + keep).write(to: url, atomically: true, encoding: .utf8)
     }
 
     private static func fileByteCount(_ url: URL) -> Int64 {
