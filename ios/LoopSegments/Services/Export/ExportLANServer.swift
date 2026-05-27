@@ -503,6 +503,12 @@ enum ExportLANServer {
         return false
     }
 
+    /// Top-level navigation (address bar, `window.open`, `target=_blank` to media) — not speculative prefetch.
+    /// Chrome sends `Sec-Fetch-Mode: navigate` on that first GET, which would otherwise hit the large file no-Range block and return 503.
+    private static func isBrowserUserNavigationMediaGET(requestHeaders: String) -> Bool {
+        requestHeaders.lowercased().contains("sec-fetch-mode: navigate")
+    }
+
     /// Block browser full-file GET of large media during export (prefetch / accidental navigation). WebDAV and Range GET stay allowed.
     private static func shouldRejectBrowserMediaGETDuringExport(
         requestHeaders: String,
@@ -514,6 +520,8 @@ enum ExportLANServer {
         if isBrowserPrefetchRequest(requestHeaders: requestHeaders) { return true }
         guard isBrowserLikeRequest(requestHeaders: requestHeaders) else { return false }
         guard !isWebDAVClient(requestHeaders: requestHeaders) else { return false }
+        /// User opened the media URL in a tab (`window.open`, middle-click tab, pasted URL); allow first-byte response without forcing Range.
+        if isBrowserUserNavigationMediaGET(requestHeaders: requestHeaders) { return false }
         let hasRange = requestHeaders.split(separator: "\r\n").contains { $0.lowercased().hasPrefix("range:") }
         if hasRange { return false }
         let name = fileURL.lastPathComponent.lowercased()
@@ -733,9 +741,9 @@ enum ExportLANServer {
     private static func exportFileEntry(relativePath: String) -> ExportFileEntry? {
         guard let url = resolveExportFile(relativePath: relativePath) else { return nil }
         let fm = FileManager.default
-        let attrs = try? fm.attributesOfItem(atPath: url.path)
-        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        let modified = attrs?[.modificationDate] as? Date
+            let attrs = try? fm.attributesOfItem(atPath: url.path)
+            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            let modified = attrs?[.modificationDate] as? Date
         return ExportFileEntry(name: relativePath, url: url, size: size, modified: modified)
     }
 
@@ -1450,7 +1458,7 @@ enum ExportLANServer {
             guard allowed else { continue }
             let url = ExportPaths.urlUnderExports(relativePath: candidate)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
-            return url
+        return url
         }
         return nil
     }
@@ -1803,7 +1811,7 @@ enum ExportLANServer {
                     "<li>\(lanMediaClickAnchor(relativePath: name, innerHTML: escaped))\(sizeNote)\(note)</li>"
                 )
             } else {
-                items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
+            items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
             }
         }
         if capped {
@@ -2099,7 +2107,7 @@ enum ExportLANServer {
     private static func sendBrowseIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         let exportActive = ExportPlaybackState.shared.isLANExportActive
         if !exportActive {
-            refreshLANMetricsBeforeStatusResponse()
+        refreshLANMetricsBeforeStatusResponse()
         }
         let playbackStatusBlock = exportActive ? htmlPlaybackStatusLiveShell() : playbackStatusHTMLBlock()
         let mediaList: String
@@ -2777,24 +2785,24 @@ enum ExportLANServer {
         if !exportActive {
             let index = currentLANIndexSnapshot()
             payload["files"] = statusFilesJSONArray(from: index)
-            if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
-                var playback = ExportPlaybackState.shared.frozenStatusPayload
-                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-                playback["resumeTimelineReadable"] = startSec <= 0
-                    || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
-                payload["vanillaDownloadPlayback"] = playback
-            } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
-                var playback = ExportPlaybackState.shared.frozenStatusPayload
-                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-                playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
-                payload["pcloudTranscodedPlayback"] = playback
-            } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-                      !ExportPaths.shouldHideSparseWorkingFromLAN() {
-                var playback = ExportPlaybackState.shared.frozenStatusPayload
-                let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
-                playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
-                payload["workingSourcePlayback"] = playback
-            }
+        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
+            var playback = ExportPlaybackState.shared.frozenStatusPayload
+            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+            playback["resumeTimelineReadable"] = startSec <= 0
+                || ((playback["lanPlayableTillSeconds"] as? Double) ?? 0) >= startSec
+            payload["vanillaDownloadPlayback"] = playback
+        } else if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
+            var playback = ExportPlaybackState.shared.frozenStatusPayload
+            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+            payload["pcloudTranscodedPlayback"] = playback
+        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
+                  !ExportPaths.shouldHideSparseWorkingFromLAN() {
+            var playback = ExportPlaybackState.shared.frozenStatusPayload
+            let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
+            playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
+            payload["workingSourcePlayback"] = playback
+        }
             payload["playbackStatusHTML"] = playbackStatusHTMLBlock()
         } else {
             payload["lanLive"] = ExportPlaybackState.shared.lanLiveStatusPayloadSlim()
