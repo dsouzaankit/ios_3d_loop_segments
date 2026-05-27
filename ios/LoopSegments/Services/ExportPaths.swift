@@ -215,6 +215,15 @@ enum ExportPaths {
         mediaExportDirectory.appendingPathComponent("_working_pcloud_transcode.mp4")
     }
 
+    static let vanillaDownloadManifestFileName = "_vanilla_download.meta.json"
+
+    /// `_vanilla_download.<ext>` media bytes — not the resume manifest (`_vanilla_download.meta.json`).
+    static func isVanillaDownloadMediaCopy(fileName: String) -> Bool {
+        let lower = fileName.lowercased()
+        guard lower.hasPrefix("_vanilla_download.") else { return false }
+        return lower != vanillaDownloadManifestFileName.lowercased()
+    }
+
     /// Full WebDAV copy with original extension (`_vanilla_download.wmv`, etc.).
     static func vanillaDownloadURL(preservingExtensionFrom filename: String) -> URL {
         let ext = (filename as NSString).pathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -255,7 +264,7 @@ enum ExportPaths {
         let fm = FileManager.default
         if fm.fileExists(atPath: vanillaFastStartURL.path) { return true }
         guard let names = try? fm.contentsOfDirectory(atPath: mediaExportDirectory.path) else { return false }
-        return names.contains { $0.lowercased().hasPrefix("_vanilla_download.") }
+        return names.contains { isVanillaDownloadMediaCopy(fileName: $0) }
     }
 
     /// Paused export can resume WebDAV byte offset via `_vanilla_download.meta.json` (even when media checkpoint is 0:00).
@@ -294,10 +303,10 @@ enum ExportPaths {
     static func replaceVanillaDownloadWithFaststartSidecar(log: ((String) -> Void)? = nil) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: vanillaFastStartURL.path) else { return }
+        VanillaDownloadResumeCatalog.remove()
         if let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) {
             for url in listed {
-                let name = url.lastPathComponent.lowercased()
-                guard name.hasPrefix("_vanilla_download.") else { continue }
+                guard isVanillaDownloadMediaCopy(fileName: url.lastPathComponent) else { continue }
                 do {
                     try fm.removeItem(at: url)
                     log?("Removed \(pathRelativeToExports(url)) — using faststart sidecar on LAN")
@@ -352,7 +361,7 @@ enum ExportPaths {
         appendFileIfPresent(vanillaFastStartURL)
 
         if let names = try? fm.contentsOfDirectory(atPath: mediaExportDirectory.path) {
-            for name in names.sorted() where name.lowercased().hasPrefix("_vanilla_download.") {
+            for name in names.sorted() where isVanillaDownloadMediaCopy(fileName: name) {
                 guard isLANBrowsableMediaFile(fileName: name) else { continue }
                 appendFileIfPresent(mediaExportDirectory.appendingPathComponent(name))
             }
@@ -584,35 +593,50 @@ enum ExportPaths {
         log: ((String) -> Void)? = nil
     ) {
         let destination = vanillaDownloadURL(preservingExtensionFrom: item.name)
-        if totalLength > 0,
-           FileManager.default.fileExists(atPath: destination.path),
-           VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength)
-               || VanillaDownloadResumeCatalog.matchesAfterRename(item: item, totalLength: totalLength) {
-            if !VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength) {
+        let fm = FileManager.default
+        let onDisk: Int64 = {
+            guard fm.fileExists(atPath: destination.path) else { return 0 }
+            return (try? fm.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?.int64Value ?? 0
+        }()
+
+        if totalLength > 0, onDisk > 0 {
+            if VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength)
+                || VanillaDownloadResumeCatalog.matchesAfterRename(item: item, totalLength: totalLength) {
+                if !VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength) {
+                    VanillaDownloadResumeCatalog.save(
+                        fileKey: item.fileKey,
+                        totalLength: totalLength,
+                        href: item.href
+                    )
+                    log?(
+                        "Vanilla resume — same file after pCloud rename " +
+                            "(updated manifest for \(item.name))"
+                    )
+                }
+            } else if VanillaDownloadResumeCatalog.readManifest() == nil {
                 VanillaDownloadResumeCatalog.save(
                     fileKey: item.fileKey,
                     totalLength: totalLength,
                     href: item.href
                 )
                 log?(
-                    "Vanilla resume — same file after pCloud rename " +
-                        "(updated manifest for \(item.name))"
+                    "Vanilla resume — restored manifest for partial " +
+                        "\(pathRelativeToExports(destination))"
                 )
             }
+        }
+
+        if totalLength > 0,
+           onDisk > 0,
+           VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength)
+               || VanillaDownloadResumeCatalog.matchesAfterRename(item: item, totalLength: totalLength) {
             pruneVanillaDownloadCopies(keepingDestination: destination, log: log)
             return
         }
         removeVanillaDownloadCopies(log: log)
     }
 
-    /// `_vanilla_download.meta.json` is a sidecar, not a second media copy.
-    static func isVanillaDownloadMediaCopyFileName(_ fileName: String) -> Bool {
-        let lower = fileName.lowercased()
-        guard lower.hasPrefix("_vanilla_download.") else { return false }
-        return lower != "_vanilla_download.meta.json"
-    }
-
-    /// Remove other `_vanilla_download.<ext>` media copies; keep the destination for the current export.
+    /// Remove other `_vanilla_download.<ext>` files; keep the destination for the current export.
     static func pruneVanillaDownloadCopies(keepingDestination keep: URL, log: ((String) -> Void)? = nil) {
         let fm = FileManager.default
         guard let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) else {
@@ -620,7 +644,7 @@ enum ExportPaths {
         }
         for url in listed {
             let name = url.lastPathComponent
-            guard isVanillaDownloadMediaCopyFileName(name), url != keep else { continue }
+            guard isVanillaDownloadMediaCopy(fileName: name), url != keep else { continue }
             do {
                 try fm.removeItem(at: url)
                 log?("Removed stale \(pathRelativeToExports(url))")
@@ -638,7 +662,7 @@ enum ExportPaths {
         var urls: [URL] = [vanillaFastStartURL]
         if let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) {
             for url in listed {
-                guard isVanillaDownloadMediaCopyFileName(url.lastPathComponent) else { continue }
+                guard isVanillaDownloadMediaCopy(fileName: url.lastPathComponent) else { continue }
                 urls.append(url)
             }
         }

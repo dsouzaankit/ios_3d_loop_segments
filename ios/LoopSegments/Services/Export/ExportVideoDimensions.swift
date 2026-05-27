@@ -63,7 +63,7 @@ enum ExportVideoDimensions {
             let name = url.lastPathComponent.lowercased()
             if name == "_working.mp4" { return 0 }
             if name == "_working_pcloud_transcode.mp4" { return 1 }
-            if name.hasPrefix("_vanilla_download.") { return 2 }
+            if ExportPaths.isVanillaDownloadMediaCopy(fileName: name) { return 2 }
             if name == "_vanilla_faststart.mp4" { return 3 }
             if name.hasSuffix(".mp4") || name.hasSuffix(".mov") || name.hasSuffix(".m4v") { return 4 }
             return 5
