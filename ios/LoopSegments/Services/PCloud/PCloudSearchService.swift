@@ -21,10 +21,10 @@ enum PCloudSearchService {
 
     /// WebDAV walk roots for search.
     ///
-    /// Restrict scope to **bookmarks + current folder only** (not the whole browse stack),
-    /// and always exclude `/` (root).
+    /// Order: **recent search-hit folders** (last 100), then **current Browse folder**, then **bookmarks**.
+    /// Excludes `/` (root). Not the whole browse stack — only `pathStack.last` for current folder.
     static func mergedBrowsePathsForSearch(pathStack: [String]) -> [String] {
-        var paths: [String] = []
+        var paths: [String] = SearchLocationCache.listingPaths()
         if let current = pathStack.last {
             let normalized = WebDAVURLBuilder.directoryListingPath(current)
             if normalized != "/" {
@@ -35,6 +35,18 @@ enum PCloudSearchService {
             paths.append(bookmark.listingPath)
         }
         return dedupeListingPaths(paths)
+    }
+
+    private static func finishResult(items: [WebDAVItem], statusNote: String) -> Result {
+        SearchLocationCache.recordHits(from: items)
+        return Result(items: items, statusNote: statusNote)
+    }
+
+    private static func webDAVSuccessNote(count: Int, recentRootCount: Int) -> String {
+        if recentRootCount > 0 {
+            return "Found \(count) match(es) via folder search (WebDAV, recent folders + bookmarks + browse)."
+        }
+        return "Found \(count) match(es) via folder search (WebDAV, bookmarks + browse)."
     }
 
     private static func dedupeListingPaths(_ paths: [String]) -> [String] {
@@ -70,6 +82,12 @@ enum PCloudSearchService {
             : status
 
         let webDAVRoots = mergedBrowsePathsForSearch(pathStack: browsePaths)
+        let recentRootCount = SearchLocationCache.listingPaths().count
+        if recentRootCount > 0 {
+            SearchDebugLog.log(
+                "search: \(recentRootCount) recent hit folder(s) preferred before bookmarks + browse"
+            )
+        }
         SearchDebugLog.beginSearch(query: trimmed, credentials: credentials, browsePaths: webDAVRoots)
 
         guard !Task.isCancelled else {
@@ -167,7 +185,7 @@ enum PCloudSearchService {
             if !catalog.isEmpty {
                 let note = "Found \(catalog.count) match(es) via pCloud folder index."
                 SearchDebugLog.log("done: \(note)")
-                return Result(items: catalog, statusNote: note)
+                return finishResult(items: catalog, statusNote: note)
             }
         } catch is CancellationError {
             SearchDebugLog.log("folder index: cancelled")
@@ -200,9 +218,9 @@ enum PCloudSearchService {
         SearchDebugLog.log("WebDAV walk matches=\(webDAV.count)")
 
         if !webDAV.isEmpty {
-            let note = "Found \(webDAV.count) match(es) via folder search (WebDAV, bookmarks + browse)."
+            let note = webDAVSuccessNote(count: webDAV.count, recentRootCount: recentRootCount)
             SearchDebugLog.log("done: \(note)")
-            return Result(items: webDAV, statusNote: note)
+            return finishResult(items: webDAV, statusNote: note)
         }
 
         let empty = emptyMessage(
@@ -240,9 +258,10 @@ enum PCloudSearchService {
             status: status
         )
         if !webDAV.items.isEmpty {
-            let note = "Found \(webDAV.items.count) match(es) via folder search (WebDAV, bookmarks + browse)."
+            let recent = SearchLocationCache.listingPaths().count
+            let note = webDAVSuccessNote(count: webDAV.items.count, recentRootCount: recent)
             SearchDebugLog.log("done: \(note)")
-            return Result(items: webDAV.items, statusNote: note)
+            return finishResult(items: webDAV.items, statusNote: note)
         }
         let note = webDAVOnlyEmptyNote(
             query: query,
