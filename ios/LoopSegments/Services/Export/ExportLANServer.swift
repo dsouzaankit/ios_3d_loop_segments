@@ -510,6 +510,8 @@ enum ExportLANServer {
         if lower.contains("sec-fetch-mode: navigate") { return true }
         // Chrome adds this for user-activated navigations; helps distinguish from speculative fetches.
         if lower.contains("sec-fetch-user: ?1") { return true }
+        // Fallback when Sec-Fetch headers are missing (some Chrome setups/extensions): typical on top-level navigations.
+        if lower.contains("upgrade-insecure-requests: 1") { return true }
         return false
     }
 
