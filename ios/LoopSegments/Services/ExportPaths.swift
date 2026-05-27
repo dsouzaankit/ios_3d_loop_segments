@@ -641,6 +641,11 @@ enum ExportPaths {
         return pathRelativeToExports(workingSourceURL)
     }
 
+    private static func vanillaManifestMatchesItem(_ item: WebDAVItem, totalLength: Int64) -> Bool {
+        VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength)
+            || VanillaDownloadResumeCatalog.matchesAfterRename(item: item, totalLength: totalLength)
+    }
+
     /// Drop stale vanilla files when the export item changed; keep partial/complete copy for the same `fileKey` + size.
     static func syncVanillaDownloadWithExportItem(
         item: WebDAVItem,
@@ -648,15 +653,15 @@ enum ExportPaths {
         log: ((String) -> Void)? = nil
     ) {
         let destination = vanillaDownloadURL(preservingExtensionFrom: item.name)
-        let fm = FileManager.default
-        let onDisk: Int64 = {
-            guard fm.fileExists(atPath: destination.path) else { return 0 }
-            return (try? fm.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?.int64Value ?? 0
-        }()
+
+        if totalLength > 0, vanillaManifestMatchesItem(item, totalLength) {
+            _ = reconcileVanillaPartialToPreferredDestination(preferred: destination, log: log)
+        }
+
+        var onDisk = fileByteSize(at: destination)
 
         if totalLength > 0, onDisk > 0 {
-            if VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength)
-                || VanillaDownloadResumeCatalog.matchesAfterRename(item: item, totalLength: totalLength) {
+            if vanillaManifestMatchesItem(item, totalLength) {
                 if !VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength) {
                     VanillaDownloadResumeCatalog.save(
                         fileKey: item.fileKey,
