@@ -654,14 +654,14 @@ enum ExportPaths {
     ) {
         let destination = vanillaDownloadURL(preservingExtensionFrom: item.name)
 
-        if totalLength > 0, vanillaManifestMatchesItem(item, totalLength) {
+        if totalLength > 0, vanillaManifestMatchesItem(item, totalLength: totalLength) {
             _ = reconcileVanillaPartialToPreferredDestination(preferred: destination, log: log)
         }
 
         var onDisk = fileByteSize(at: destination)
 
         if totalLength > 0, onDisk > 0 {
-            if vanillaManifestMatchesItem(item, totalLength) {
+            if vanillaManifestMatchesItem(item, totalLength: totalLength) {
                 if !VanillaDownloadResumeCatalog.matches(fileKey: item.fileKey, totalLength: totalLength) {
                     VanillaDownloadResumeCatalog.save(
                         fileKey: item.fileKey,
@@ -686,7 +686,7 @@ enum ExportPaths {
             }
         }
 
-        if totalLength > 0, onDisk > 0, vanillaManifestMatchesItem(item, totalLength) {
+        if totalLength > 0, onDisk > 0, vanillaManifestMatchesItem(item, totalLength: totalLength) {
             pruneVanillaDownloadCopies(keepingDestination: destination, log: log)
             return
         }
