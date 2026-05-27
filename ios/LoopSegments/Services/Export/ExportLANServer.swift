@@ -111,11 +111,12 @@ enum ExportLANServer {
     /// Start the listener when the user preference is on (idempotent).
     static func ensureRunning(log: @escaping (String) -> Void = { _ in }) {
         guard isEnabled else { return }
+        SearchLocationCache.refreshLANSnapshot()
         lock.lock()
         let running = listenerIsReady && listener != nil
         lock.unlock()
         if !running {
-            start(log: log)
+        start(log: log)
         }
     }
 
@@ -163,77 +164,77 @@ enum ExportLANServer {
         lock.unlock()
         stale?.cancel()
 
-        do {
-            let port = NWEndpoint.Port(rawValue: defaultPort)!
-            let params = NWParameters.tcp
-            params.allowLocalEndpointReuse = true
-            let nwListener = try NWListener(using: params, on: port)
-            let ipForTXT = Self.primaryLANIPv4Address()
-            var txtRecord: Data?
-            if let ipForTXT, !ipForTXT.isEmpty {
-                let txt = NetService.data(fromTXTRecord: ["ip": Data(ipForTXT.utf8)])
-                txtRecord = txt
-            }
-            nwListener.service = NWListener.Service(
-                name: bonjourServiceName,
-                type: "_http._tcp",
-                txtRecord: txtRecord
-            )
-            lock.lock()
-            listener = nwListener
-            lock.unlock()
+            do {
+                let port = NWEndpoint.Port(rawValue: defaultPort)!
+                let params = NWParameters.tcp
+                params.allowLocalEndpointReuse = true
+                let nwListener = try NWListener(using: params, on: port)
+                let ipForTXT = Self.primaryLANIPv4Address()
+                var txtRecord: Data?
+                if let ipForTXT, !ipForTXT.isEmpty {
+                    let txt = NetService.data(fromTXTRecord: ["ip": Data(ipForTXT.utf8)])
+                    txtRecord = txt
+                }
+                nwListener.service = NWListener.Service(
+                    name: bonjourServiceName,
+                    type: "_http._tcp",
+                    txtRecord: txtRecord
+                )
+                lock.lock()
+                listener = nwListener
+                lock.unlock()
 
-            nwListener.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    let ip = Self.primaryLANIPv4Address()
-                    let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
-                    let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
-                    lock.lock()
+                nwListener.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:
+                        let ip = Self.primaryLANIPv4Address()
+                        let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
+                        let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
+                        lock.lock()
                     listenerIsReady = true
                     addressInUseRetryCount = 0
-                    advertisedBaseURL = hostURL
-                    advertisedIPAddressURL = ipURL
-                    lock.unlock()
-                    log(
-                        "LAN export: \(hostURL)\(ip.map { " · IP \($0)" } ?? "") — Bonjour \(bonjourServiceName)._http._tcp"
-                    )
-                    log(
-                        "LAN: Windows often cannot resolve .local — use IP above; ping may fail even when HTTP works"
-                    )
-                    log("LAN: HTTP + WebDAV — pcld_ios_media/ (read + auth PUT/MKCOL for scripts), loop/op_*, logs (not SMB)")
-                case .failed(let error):
-                    log("LAN export server failed: \(error.localizedDescription)")
+                        advertisedBaseURL = hostURL
+                        advertisedIPAddressURL = ipURL
+                        lock.unlock()
+                        log(
+                            "LAN export: \(hostURL)\(ip.map { " · IP \($0)" } ?? "") — Bonjour \(bonjourServiceName)._http._tcp"
+                        )
+                        log(
+                            "LAN: Windows often cannot resolve .local — use IP above; ping may fail even when HTTP works"
+                        )
+                        log("LAN: HTTP + WebDAV — pcld_ios_media/ (read + auth PUT/MKCOL for scripts), loop/op_*, logs (not SMB)")
+                    case .failed(let error):
+                        log("LAN export server failed: \(error.localizedDescription)")
                     lock.lock()
                     let retries = addressInUseRetryCount
                     lock.unlock()
                     stopOnQueue(log: nil, resetAddressInUseRetries: false)
                     scheduleListenRetryIfNeeded(log: log, error: error, priorRetries: retries)
-                case .cancelled:
+                    case .cancelled:
                     lock.lock()
                     listenerIsReady = false
                     lock.unlock()
-                default:
-                    break
+                    default:
+                        break
+                    }
                 }
-            }
 
-            nwListener.newConnectionHandler = { connection in
-                connection.start(queue: queue)
-                let id = ObjectIdentifier(connection)
-                lock.lock()
-                connections[id] = connection
-                lock.unlock()
-                Self.receiveRequest(on: connection) { [id] in
+                nwListener.newConnectionHandler = { connection in
+                    connection.start(queue: queue)
+                    let id = ObjectIdentifier(connection)
                     lock.lock()
-                    connections.removeValue(forKey: id)
+                    connections[id] = connection
                     lock.unlock()
+                    Self.receiveRequest(on: connection) { [id] in
+                        lock.lock()
+                        connections.removeValue(forKey: id)
+                        lock.unlock()
+                    }
                 }
-            }
 
-            nwListener.start(queue: queue)
-        } catch {
-            log("LAN export server could not start: \(error.localizedDescription)")
+                nwListener.start(queue: queue)
+            } catch {
+                log("LAN export server could not start: \(error.localizedDescription)")
             lock.lock()
             let retries = addressInUseRetryCount
             lock.unlock()
@@ -1547,6 +1548,7 @@ enum ExportLANServer {
         for candidate in lanMediaRelativePathCandidates(resolvedPath) {
             let allowed = ExportPaths.isLANBrowsableMediaRelativePath(candidate)
                 || ExportPaths.isLANMediaTreeServableRelativePath(candidate)
+                || ExportPaths.isLANExportLogRelativePath(candidate)
                 || ExportPaths.isLANExportHistoryLogRelativePath(candidate)
                 || rootServableRelativePaths().contains(candidate)
             guard allowed else { continue }
@@ -2883,12 +2885,29 @@ enum ExportLANServer {
     ) {
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
-              let sizeNum = attrs[.size] as? NSNumber,
-              sizeNum.int64Value > 0 else {
-            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Empty or missing".utf8), done: done)
+              let sizeNum = attrs[.size] as? NSNumber else {
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
         }
         let fileSize = sizeNum.int64Value
+        if fileSize == 0 {
+            let rel = ExportPaths.pathRelativeToExports(fileURL)
+            let isAuxLog = ExportPaths.isLANExportLogRelativePath(rel)
+                || ExportPaths.canonicalLANLogRelativePath(rel) != nil
+            guard isAuxLog else {
+                sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Empty or missing".utf8), done: done)
+                return
+            }
+            let contentType = mimeType(for: fileURL)
+            sendResponse(
+                connection: connection,
+                status: 200,
+                contentType: contentType,
+                body: Data(),
+                done: done
+            )
+            return
+        }
         if ExportPlaybackState.shared.isLANExportActive,
            ExportPaths.isLANBrowsableMediaFile(fileName: fileURL.lastPathComponent),
            shouldRejectBrowserMediaGETDuringExport(

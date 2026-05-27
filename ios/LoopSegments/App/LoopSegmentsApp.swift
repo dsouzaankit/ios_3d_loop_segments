@@ -6,6 +6,7 @@ struct LoopSegmentsApp: App {
 
     init() {
         ExportPaths.ensureExportDirectories()
+        SearchLocationCache.refreshLANSnapshot()
     }
 
     var body: some Scene {

@@ -201,10 +201,12 @@ enum ExportPaths {
 
     static func isLANExportLogRelativePath(_ relativePath: String) -> Bool {
         let prefix = "\(exportLogsLANPrefix)/"
-        guard relativePath.hasPrefix(prefix), relativePath.hasSuffix(".txt") else { return false }
+        guard relativePath.hasPrefix(prefix) else { return false }
         let name = String(relativePath.dropFirst(prefix.count))
+        guard !name.contains("/") else { return false }
         if name == "export_latest.txt" || name == "export_progress.txt" { return true }
         if name == "search_debug.txt" || name == "search_cache.json" || name == "loop_segments_ok.txt" { return true }
+        guard name.hasSuffix(".txt") else { return false }
         return name.hasPrefix("export_")
     }
 

@@ -41,6 +41,11 @@ enum SearchLocationCache {
         case substring = 2
     }
 
+    /// Writes `pcld_ios_media/logs/search_cache.json` from UserDefaults (LAN monitor / GET).
+    static func refreshLANSnapshot() {
+        writeLANSnapshot(loadStore())
+    }
+
     static func listingPaths() -> [String] {
         loadStore()
             .folders
