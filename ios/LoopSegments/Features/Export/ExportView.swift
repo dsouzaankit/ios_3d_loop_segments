@@ -16,7 +16,6 @@ struct ExportView: View {
     @State private var liveLogTail = ""
     @State private var lanHostURL: String?
     @State private var lanIPURL: String?
-    @State private var showAutoLockHelp = false
     @State private var copiedLANURL = false
     @State private var clearMediaAcknowledged = false
     @State private var clearMediaAckTrigger = 0
@@ -42,13 +41,12 @@ struct ExportView: View {
             exportControlsSection
             exportAutoPauseSection
             keepAliveSection
+            Section("File") {
+                Text(item.name)
+                Text(item.href).font(.caption).foregroundStyle(.secondary)
+            }
             randomExportTriggerSection
             exportsFolderSection
-            if !status.isEmpty {
-                Section("Status") {
-                    Text(status).font(.caption)
-                }
-            }
             Section("LAN export") {
                 Toggle(ExportLANServer.lanServerToggleTitle, isOn: Binding(
                     get: { ExportLANServer.isEnabled },
@@ -130,7 +128,7 @@ struct ExportView: View {
                 Text("WebDAV auth: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword)")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("PC: Mount-LoopSegmentsRclone.ps1 maps pcld_ios_media/ over Wi‑Fi (use the LAN IP above).")
+                Text("PC: windows/Mount-PhoneL.cmd (or windows/Mount-LoopSegmentsRclone.ps1) maps pcld_ios_media/ over Wi‑Fi; use the LAN IP above.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text(inProgressLANFootnote)
@@ -147,7 +145,7 @@ struct ExportView: View {
                 )
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("LAN page (`http://<phone-ip>:8765/`) can browse pCloud and start, pause, or stop export — keep the app open in the foreground.")
+                Text("LAN page (`http://<phone-ip>:8765/`) can browse pCloud and start, pause, or stop export.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 DisclosureGroup("Advanced fallback") {
@@ -183,7 +181,7 @@ struct ExportView: View {
             Section("Network (pCloud)") {
                 Text(network.interfaceLabel)
                 if network.usesCellular {
-                    Text("pCloud uses cellular — connection drops retry automatically (up to ~2 min). Keep the app open. “Network connection lost” usually recovers; try seek 0 min.")
+                    Text("pCloud uses cellular — connection drops retry automatically (up to ~2 min). “Network connection lost” usually recovers; try seek 0 min.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -191,14 +189,10 @@ struct ExportView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            Section("File") {
-                Text(item.name)
-                Text(item.href).font(.caption).foregroundStyle(.secondary)
-            }
             Section("Output files") {
                 Text("Logs + media (LAN only): Application Support/\(ExportPaths.mediaExportFolderName)/")
                     .font(.caption)
-                Text("Files app: Documents/Exports/ can be empty after upgrade (safe to delete)")
+                Text("Files app: Documents/Exports/ may be empty; active media/logs are under pcld_ios_media and served on LAN.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text("Segments: pcld_ios_media/loop/op_00|01.mp4")
@@ -295,14 +289,6 @@ struct ExportView: View {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
-        }
-        .alert("Auto-Lock", isPresented: $showAutoLockHelp) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(
-                "If Settings did not open to Auto-Lock, go to \(ExportAutoLockCoordinator.manualPath). " +
-                    "On recent iOS versions Apple often only opens the Settings app — the path above is required."
-            )
         }
     }
 
@@ -420,13 +406,7 @@ struct ExportView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             }
-            Button("Open Display in Settings") {
-                Task {
-                    _ = await ExportAutoLockCoordinator.openAutoLockSettings()
-                    showAutoLockHelp = true
-                }
-            }
-            Text("Screen stays on while Loop Segments is open in the foreground. Path: \(ExportAutoLockCoordinator.manualPath).")
+            Text("Screen stays on while Loop Segments is open in the foreground.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -762,7 +742,7 @@ struct ExportView: View {
         }
         refreshLogFromDisk()
         if fileByteCount(ExportPaths.latestLogTextURL) == 0 {
-            logHint += " · log empty — open Files → Loop Segments → Exports on phone"
+            logHint += " · log empty — check LAN /export_latest.txt"
         }
     }
 
