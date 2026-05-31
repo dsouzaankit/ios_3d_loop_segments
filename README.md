@@ -37,7 +37,7 @@ Copy segment files into your DLNA folder (or use [WORKFLOW.md](WORKFLOW.md)). Se
 
 ## iPhone app (no Mac on your desk)
 
-Sources: [`ios/`](ios/). Install on your phone: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md)** — **$0** (free Apple ID + Sideloadly on Windows) or paid TestFlight.
+Sources: [`ios/`](ios/). Install on your phone: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md)** — **$0** (free Apple ID + **AltStore** on Windows; Sideloadly fallback) or paid TestFlight.
 
 Export uses **AVFoundation** on device (no embedded ffmpeg). **iOS 26.x:** **1.0.5+** to launch; **1.1.0** for export and fixed logs. Rebuild IPA from GitHub Actions if the phone still shows 1.0.5.
 

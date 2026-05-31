@@ -18,6 +18,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 **Cellular → pCloud WebDAV → segment export → LAN (or USB) → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
 
+**Install on iPhone (no Mac):** [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) — **AltStore** (recommended on Windows), Sideloadly fallback, or paid TestFlight.
+
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
 ## Open in Xcode (requires macOS or cloud CI)

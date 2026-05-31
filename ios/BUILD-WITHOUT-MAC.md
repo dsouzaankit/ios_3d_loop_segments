@@ -22,11 +22,11 @@ You still need **something running macOS once** (or in the cloud) to **compile**
 
 ### What you need
 
-1. **Free Apple ID** ([appleid.apple.com](https://appleid.apple.com)) — not the paid Developer Program
-2. **Windows PC** on the same Wi‑Fi as the phone (for `Sync-FromPhoneLAN.ps1`)
-3. **iTunes** from Apple’s website (required for **Sideloadly** — see below; not the Microsoft Store app)
-4. A signed **`.ipa`** file (see [Get an IPA without a Mac](#get-an-ipa-without-a-mac) below)
-5. **Sideloadly** or **AltStore** on Windows
+1. **Free Apple ID** ([appleid.apple.com](https://appleid.apple.com)) — not the paid Developer Program; sign in at [developer.apple.com](https://developer.apple.com) once and **accept the free developer agreement** (no $99)
+2. **Windows PC** on the **same Wi‑Fi** as the phone (AltStore + `Sync-FromPhoneLAN.ps1`)
+3. A **`.ipa`** file (see [Get an IPA without a Mac](#get-an-ipa-without-a-mac) below)
+4. **[AltServer + AltStore](#2-install-with-altstore-recommended-on-windows)** (recommended) — no iTunes required
+5. **Optional:** [Sideloadly](#4-or-sideloadly-fallback-on-windows) + **iTunes** (USB) if AltStore does not work for you
 
 ### 1. Get an IPA without a Mac
 
@@ -38,13 +38,13 @@ Pick one:
 2. Open the repo → **Actions** → **ios-build** → **Run workflow** (manual run builds the IPA; pushes only run the simulator smoke test).
 3. When the run finishes, open the run → **Artifacts** → download **`LoopSegments-ipa`** → unzip → `LoopSegments.ipa`.  
    On this PC you can keep it at `ios\build artifacts\ipa\LoopSegments.ipa` (see [Refresh the IPA later](#refresh-the-ipa-later)).
-4. Install on Windows with [Sideloadly](#3-install-with-sideloadly-simple-on-windows) (install [iTunes](#2-install-itunes-on-windows-before-sideloadly) first).
+4. Install on Windows with [AltStore](#2-install-with-altstore-recommended-on-windows) (or [Sideloadly](#4-or-sideloadly-fallback-on-windows) if needed).
 
 **Signing on GitHub (optional)**
 
 | Mode | Secrets | Use when |
 |------|---------|----------|
-| **Unsigned IPA** (default) | none | You will re-sign in Sideloadly with your own Apple ID |
+| **Unsigned IPA** (default) | none | You will re-sign in **AltStore** or Sideloadly with your own Apple ID |
 | **Signed IPA** | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | You want the IPA already signed with the same Apple ID used in CI |
 
 For **signed** builds, add [repository secrets](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions):
@@ -63,9 +63,37 @@ Connect the repo, use [codemagic.yaml](../codemagic.yaml). In Codemagic → Code
 **C — One cloud Mac session**  
 Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, sign with **Personal Team** (free Apple ID), **Product → Archive → Distribute → Development**, export IPA.
 
-### 2. Install iTunes on Windows (before Sideloadly)
+### 2. Install with AltStore (recommended on Windows)
 
-Sideloadly uses Apple’s USB drivers from **iTunes**. Without it, login often fails (“incorrect password”) or the phone won’t appear.
+**Preferred** on Windows: Wi‑Fi + AltServer, no iTunes/USB signing dance.
+
+1. Install [AltServer for Windows](https://altstore.io) — keep the tray app running.
+2. iPhone and PC on the **same Wi‑Fi** (USB optional per [AltStore docs](https://faq.altstore.io)).
+3. Install **AltStore** on the phone from AltServer (follow AltServer’s first-time prompts).
+4. Sign in to AltStore with your **free Apple ID** (same email as [appleid.apple.com](https://appleid.apple.com)).
+5. Copy **`LoopSegments.ipa`** to the phone (AirDrop, iCloud Drive, Files, etc.) and **Open in AltStore**, or use AltStore’s install-from-file flow.
+6. After install: **Settings → General → VPN & Device Management → Trust** the developer profile.
+7. **Before ~7 days:** open AltStore → **Refresh** (PC on same Wi‑Fi, AltServer running). For a newer app build, install the new IPA again.
+
+**AltStore install fails?** Confirm [developer.apple.com](https://developer.apple.com) agreement accepted, personal (non-work) Apple ID, VPN off, AltServer tray icon active. Use a fresh IPA from [Get an IPA](#1-get-an-ipa-without-a-mac) (build **241+** / **1.2.6+**). Then try [Sideloadly](#4-or-sideloadly-fallback-on-windows).
+
+### 3. On the phone after install
+
+- **Settings → Cellular → Loop Segments → On** (cellular pCloud export).
+- **Settings → General → VPN & Device Management → Trust** the developer profile if the app won’t open.
+- **iOS 17 or newer** required (app won’t run on iOS 16). **iOS 26.x:** use a recent IPA (**1.2.6+** / build **241+** on the sign-in screen — no embedded FFmpeg).
+
+**App opens then closes immediately (no sign-in screen)?** Reinstall a **1.0.5+** IPA (not 1.0.4 or older with ffmpeg-kit).
+
+**Still shows an old build?** Run **Actions → ios-build → Run workflow** on `main`, download **`LoopSegments-ipa`**, reinstall via AltStore.
+
+Then follow [WORKFLOW.md](../WORKFLOW.md): export → `Sync-FromPhoneLAN.ps1 -Watch` → DLNA on WLAN.
+
+### 4. Or: Sideloadly (fallback on Windows)
+
+Use this if AltStore is unavailable or keeps failing. Sideloadly uses Apple’s USB drivers from **iTunes**. Without it, login often fails (“incorrect password”) or the phone won’t appear.
+
+#### iTunes setup (Sideloadly only)
 
 1. Download **iTunes for Windows** from Apple (pick one):
    - [64-bit Windows](https://www.apple.com/itunes/download/win64) (most PCs)
@@ -94,9 +122,9 @@ If folders are missing or error persists: uninstall iTunes (and **Apple Mobile D
 
 You do **not** need to buy anything in the Store — sign-in only checks that the PC accepts your Apple ID.
 
-**Later:** For USB file copy in [WORKFLOW.md](../WORKFLOW.md), Windows may use **Apple Devices** instead of iTunes — that’s separate. Sideloadly still needs classic iTunes drivers from step 1–2.
+**Later:** For USB file copy in [WORKFLOW.md](../WORKFLOW.md), Windows may use **Apple Devices** instead of iTunes — that’s separate. Sideloadly still needs classic iTunes drivers from the steps above.
 
-### 3. Install with Sideloadly (simple on Windows)
+#### Install with Sideloadly
 
 1. Connect iPhone (USB), unlock, **Trust** the computer (again if asked).
 2. On iPhone: **Settings → General → VPN & Device Management** — you will trust the app here after install.
@@ -124,7 +152,7 @@ The browser only checks your password. Sideloadly also talks to Apple’s **deve
 | Hide My Email (`@privaterelay.appleid.com`) | Use the real Apple ID email in Sideloadly |
 | Work/school / child Apple ID | Won’t work — use a personal adult account |
 | Windows Defender | Allow Sideloadly; it may quarantine the IPA cache |
-| **Plan B** | [AltStore](#4-or-altstore-windows) on Windows (same 7-day refresh idea) |
+| **Prefer AltStore** | [AltStore](#2-install-with-altstore-recommended-on-windows) — usually simpler than Sideloadly on Windows |
 
 Quick reference:
 
@@ -135,27 +163,7 @@ Quick reference:
 | iTunes | Web installer + **sign in inside iTunes** once |
 | Developer site | [developer.apple.com](https://developer.apple.com) — accept agreement |
 
-**Sideloadly “Guru Meditation” / `CFBundleIdentifier`:** The IPA must contain `CFBundleIdentifier` and `CFBundleExecutable` in the app’s `Info.plist`. Older CI builds before May 2026 omitted these — **rebuild** (Actions → **ios-build** → **Run workflow**) and download a new `LoopSegments.ipa`. If the error persists with a new IPA, in Sideloadly **Advanced → Anisette → Remote** (not Local) and retry.
-
-### 4. Or: AltStore (Windows)
-
-1. Install [AltServer for Windows](https://altstore.io) (tray app on PC).
-2. iPhone and PC on the **same Wi‑Fi** (or USB per AltStore docs).
-3. Install **AltStore** on the phone from AltServer.
-4. Copy the IPA to the phone (Files / cloud) and open with AltStore, or use AltStore’s install flow for IPAs.
-5. Refresh in AltStore **before the 7-day expiry** (PC with AltServer running).
-
-### 5. On the phone after install
-
-- **Settings → Cellular → Loop Segments → On** (cellular pCloud export).
-- **Settings → General → VPN & Device Management → Trust** the developer profile if the app won’t open.
-- **iOS 17 or newer** required (app won’t run on iOS 16). **iOS 26.x** (including **26.5**): use IPA **1.0.5+** to launch (no embedded FFmpeg). For **export + logs**, sideload **1.1.0** (see version on sign-in screen).
-
-**App opens then closes immediately (no sign-in screen)?** Sideload **1.0.5+** (not 1.0.4 or older with ffmpeg-kit).
-
-**Still shows Build 1.0.5?** GitHub IPA was not rebuilt — push latest `main` and run **Actions → ios-build → Run workflow**, then reinstall the new artifact.
-
-Then follow [WORKFLOW.md](../WORKFLOW.md): export → `Sync-FromPhoneLAN.ps1 -Watch` → DLNA on WLAN.
+**Sideloadly “Guru Meditation” / `CFBundleIdentifier`:** The IPA must contain `CFBundleIdentifier` and `CFBundleExecutable` in the app’s `Info.plist`. Older CI builds before May 2026 omitted these — **rebuild** (Actions → **ios-build** → **Run workflow**) and download a new `LoopSegments.ipa`. If the error persists with a new IPA, in Sideloadly **Advanced → Anisette → Remote** (not Local) and retry, or install via [AltStore](#2-install-with-altstore-recommended-on-windows).
 
 ---
 
@@ -180,7 +188,7 @@ gh run list --workflow=ios-build.yml --limit 1
 gh run download <RUN_ID> -n LoopSegments-ipa
 ```
 
-Use the newest successful **workflow_dispatch** run ID from `gh run list`. Then install with Sideloadly.
+Use the newest successful **workflow_dispatch** run ID from `gh run list`. Then install with **AltStore** (or Sideloadly).
 
 ---
 
@@ -191,7 +199,7 @@ Worth it if you want:
 | Benefit | Free Apple ID | Paid ($99/yr) |
 |---------|---------------|---------------|
 | Certificate lifetime | ~7 days | ~1 year |
-| TestFlight (install link, no Sideloadly) | No | Yes |
+| TestFlight (install link, no AltStore/Sideloadly) | No | Yes |
 | Cloud CI signing | Awkward | Straightforward |
 | More devices / apps for dev | Tight limits | Higher limits |
 
@@ -202,6 +210,43 @@ Worth it if you want:
 3. Upload to **TestFlight**, install from the TestFlight app on your iPhone.
 
 Details: Codemagic [iOS code signing](https://docs.codemagic.io/yaml-code-signing/signing-ios/), same [codemagic.yaml](../codemagic.yaml).
+
+---
+
+## Build options (all paths)
+
+### Codemagic
+
+1. [codemagic.io](https://codemagic.io) → connect repo.
+2. [codemagic.yaml](../codemagic.yaml) runs `xcodegen` (no ffmpeg SPM on iOS 26).
+3. Code signing: **free Apple ID** *or* paid team.
+4. Download IPA (free/sideload) or publish TestFlight (paid).
+
+### GitHub Actions
+
+[`.github/workflows/ios-build.yml`](../.github/workflows/ios-build.yml) — **push** runs a simulator smoke build; **Run workflow** produces a device **IPA** artifact (unsigned by default, or signed with Apple ID secrets).
+
+### Cloud Mac (one session)
+
+```bash
+brew install xcodegen
+cd ios && xcodegen generate && open LoopSegments.xcodeproj
+```
+
+**Signing & Capabilities** → Team: your **Personal Team** (free). Archive → export IPA.
+
+---
+
+## Export note
+
+Segment export uses **AVFoundation** on the phone, not embedded ffmpeg (ffmpeg-kit does not load on iOS 26). The Windows side only copies finished `op_*.mp4` files — see [../WORKFLOW.md](../WORKFLOW.md).
+
+---
+
+## After install
+
+[WORKFLOW.md](../WORKFLOW.md): cellular export → `..\windows\Sync-FromPhoneLAN.ps1` → DLNA on WLAN.
+ic.io/yaml-code-signing/signing-ios/), same [codemagic.yaml](../codemagic.yaml).
 
 ---
 
