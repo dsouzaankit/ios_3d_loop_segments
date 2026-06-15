@@ -20,6 +20,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 **Install on iPhone (no Mac):** [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) — **AltStore** (recommended on Windows), Sideloadly fallback, or paid TestFlight.
 
+**Windows AltStore:** Wi‑Fi auto-refresh is unreliable on many PCs — plan on **weekly USB + Refresh All**. iTunes from Apple’s site (not Store **Apple Devices**); full iTunes reinstall if **Apple Mobile Device Service** is missing. Quit **Clash/VPN** when testing iTunes Wi‑Fi sync.
+
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
 ## Open in Xcode (requires macOS or cloud CI)

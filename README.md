@@ -37,7 +37,20 @@ Copy segment files into your DLNA folder (or use [WORKFLOW.md](WORKFLOW.md)). Se
 
 ## iPhone app (no Mac on your desk)
 
-Sources: [`ios/`](ios/). Install on your phone: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md)** — **$0** (free Apple ID + **AltStore** on Windows; Sideloadly fallback) or paid TestFlight.
+Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md)** — **AltStore + AltServer** (primary) or paid TestFlight; Sideloadly only if AltStore fails.
+
+**Free install (~7-day certs):**
+
+| Piece | Notes |
+|-------|--------|
+| **Install IPA** | On the **iPhone**: AltStore → **My Apps → +** (not AltServer sideload on PC) |
+| **Refresh** | **AltServer** on PC + **AltStore → Refresh All** before expiry |
+| **Wi‑Fi refresh** | Often **broken** on Windows 11 (iTunes Wi‑Fi sync / Apple Devices / proxy). **Reliable habit: USB + Refresh All** weekly — see [BUILD-WITHOUT-MAC.md §3](ios/BUILD-WITHOUT-MAC.md#3-automate-weekly-refresh-altserver--altstore) |
+| **Signing errors** | iCloud (Apple direct, not Store) + **iTunes → Account → Authorizations → Deauthorize → Authorize** |
+| **AMDS missing** | Full **iTunes uninstall/reinstall** (`iTunes64Setup.exe`, admin). **Do not** install Microsoft Store **Apple Devices** afterward — it removes **Apple Mobile Device Service** |
+| **Trust** | [Once per install](ios/BUILD-WITHOUT-MAC.md#trust-the-developer-on-iphone-required-once-not-weekly) — Settings → General → VPN & Device Management |
+
+Optional: `windows/Register-AltServerAtLogon.ps1` keeps AltServer in the tray; you still plug in USB for refresh when Wi‑Fi pairing fails.
 
 Export uses **AVFoundation** on device (no embedded ffmpeg). **iOS 26.x:** **1.0.5+** to launch; **1.1.0** for export and fixed logs. Rebuild IPA from GitHub Actions if the phone still shows 1.0.5.
 
