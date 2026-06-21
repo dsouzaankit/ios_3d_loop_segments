@@ -29,6 +29,7 @@ windows/loop-segments-destination.txt
 windows/loop-segments-windows.json
 
 # Agent / scratch (local only)
+ai/
 scratch/
 ai_agent/
 _disk_write_staging/
