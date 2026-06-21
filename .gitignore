@@ -27,3 +27,9 @@ ios/logs/
 windows/loop-segments-lan-host.txt
 windows/loop-segments-destination.txt
 windows/loop-segments-windows.json
+
+# Agent / scratch (local only)
+scratch/
+ai_agent/
+_disk_write_staging/
+.export_latest.log
