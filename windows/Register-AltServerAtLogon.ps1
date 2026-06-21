@@ -4,8 +4,9 @@
   Start AltServer at Windows logon (for AltStore background refresh).
 
 .DESCRIPTION
-  AltStore refreshes sideloaded apps when AltServer is running and the iPhone is on
-  the same Wi-Fi. This task starts AltServer after you sign in.
+  Starts AltServer after you sign in so it is in the tray when AltStore requests a refresh.
+  AltServer does NOT refresh apps on USB/Wi-Fi detection — you still tap Refresh All in
+  AltStore (USB), or rely on AltStore background refresh (Wi-Fi). See BUILD-WITHOUT-MAC.md §3.
 
 .PARAMETER TaskName
   Scheduled task name (default: LoopSegments-AltServer).

@@ -44,7 +44,7 @@ Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT
 | Piece | Notes |
 |-------|--------|
 | **Install IPA** | On the **iPhone**: AltStore → **My Apps → +** (not AltServer sideload on PC) |
-| **Refresh** | **AltServer** on PC + **AltStore → Refresh All** before expiry |
+| **Refresh** | **You** tap **AltStore → Refresh All** (USB) — AltServer signs; it does **not** refresh on plug-in alone. Wi‑Fi: AltStore may refresh in background if pairing works ([§3](ios/BUILD-WITHOUT-MAC.md#3-automate-weekly-refresh-altserver--altstore)) |
 | **Wi‑Fi refresh** | Often **broken** on Windows 11 (iTunes Wi‑Fi sync / Apple Devices / proxy). **Reliable habit: USB + Refresh All** weekly — see [BUILD-WITHOUT-MAC.md §3](ios/BUILD-WITHOUT-MAC.md#3-automate-weekly-refresh-altserver--altstore) |
 | **Signing errors** | iCloud (Apple direct, not Store) + **iTunes → Account → Authorizations → Deauthorize → Authorize** |
 | **AMDS missing** | Full **iTunes uninstall/reinstall** (`iTunes64Setup.exe`, admin). **Do not** install Microsoft Store **Apple Devices** afterward — it removes **Apple Mobile Device Service** |

@@ -317,6 +317,21 @@ AltServer tray → **Install AltStore** — your phone name should appear in the
 
 AltStore can **re-sign Loop Segments (and itself)** before the free **~7-day** cert expires. This is the **recommended** automation path — no iTunes, no Sideloadly daemon.
 
+**Does AltServer refresh automatically when it sees the iPhone (USB or Wi‑Fi)?**
+
+**No.** AltServer does **not** watch for device connect and re-sign apps by itself.
+
+```text
+AltStore (iPhone)  ──requests refresh──►  AltServer (PC)  ──signs──►  apps updated
+```
+
+| Path | Who starts refresh | Automatic? |
+|------|-------------------|------------|
+| **Wi‑Fi** | **AltStore** (background, before expiry) | **Sometimes** — same Wi‑Fi, AltServer running, Background App Refresh on; iOS may delay |
+| **USB** | **You** — open AltStore → **My Apps → Refresh All** | **No** — cable only helps AltServer be reachable; no plug-in-and-refresh |
+
+[Register-AltServerAtLogon.ps1](../windows/Register-AltServerAtLogon.ps1) only keeps **AltServer in the tray** at logon; it does not trigger refresh on USB attach. For USB-only refresh without opening AltStore manually, use [Sideloadly fallback](#5-sideloadly-fallback-only-if-altstore-fails) (daemon refreshes on USB when enrolled).
+
 | Piece | Role |
 |-------|------|
 | **AltServer** (PC tray) | Signs apps when the phone is reachable on the LAN |
