@@ -12,6 +12,7 @@ function Get-LoopSegmentsWindowsExamplePath {
 function Get-DefaultLoopSegmentsWindowsSettings {
     [ordered]@{
         phoneLanHost       = ''
+        phoneLanHosts      = @()
         lanPort            = 8765
         mountDriveLetter   = 'L'
         rcloneRemoteName   = 'loopsegments'
@@ -294,6 +295,322 @@ function Get-LoopSegmentsPhoneLanBaseUrl {
     return "http://${hostIp}:${portNum}"
 }
 
+function ConvertTo-LoopSegmentsPhoneHostEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Raw,
+        [int] $DefaultPort = 8765
+    )
+
+    if ($Raw -is [string]) {
+        $hostText = $Raw.Trim()
+        if ([string]::IsNullOrWhiteSpace($hostText)) { return $null }
+        return @{
+            Host  = $hostText
+            Label = $hostText
+            Port  = $DefaultPort
+        }
+    }
+
+    $hostText = [string]$Raw.host
+    if ([string]::IsNullOrWhiteSpace($hostText)) {
+        $hostText = [string]$Raw.phoneLanHost
+    }
+    if ([string]::IsNullOrWhiteSpace($hostText)) {
+        $hostText = [string]$Raw.ip
+    }
+    $hostText = $hostText.Trim()
+    if ([string]::IsNullOrWhiteSpace($hostText)) { return $null }
+
+    $label = [string]$Raw.label
+    if ([string]::IsNullOrWhiteSpace($label)) {
+        $label = [string]$Raw.name
+    }
+    if ([string]::IsNullOrWhiteSpace($label)) {
+        $label = $hostText
+    }
+
+    $port = $DefaultPort
+    if ($null -ne $Raw.port -and [int]$Raw.port -gt 0) {
+        $port = [int]$Raw.port
+    } elseif ($null -ne $Raw.lanPort -and [int]$Raw.lanPort -gt 0) {
+        $port = [int]$Raw.lanPort
+    }
+
+    return @{
+        Host  = $hostText
+        Label = $label.Trim()
+        Port  = $port
+    }
+}
+
+function Get-LoopSegmentsPhoneHostEntries {
+    param(
+        [string[]] $HostOverride = @(),
+        [int] $PortOverride = 0
+    )
+
+    $defaultPort = Get-LoopSegmentsLanPort -Override $PortOverride
+    $entries = New-Object System.Collections.Generic.List[hashtable]
+
+    foreach ($rawHost in @($HostOverride)) {
+        if ([string]::IsNullOrWhiteSpace($rawHost)) { continue }
+        foreach ($part in ($rawHost -split '[,\s;]+')) {
+            $part = $part.Trim()
+            if ([string]::IsNullOrWhiteSpace($part)) { continue }
+            $entry = ConvertTo-LoopSegmentsPhoneHostEntry -Raw $part -DefaultPort $defaultPort
+            if ($null -ne $entry) { [void]$entries.Add($entry) }
+        }
+    }
+
+    if ($entries.Count -eq 0) {
+        $settings = Get-LoopSegmentsWindowsSettings
+        foreach ($raw in @($settings.phoneLanHosts)) {
+            $entry = ConvertTo-LoopSegmentsPhoneHostEntry -Raw $raw -DefaultPort $defaultPort
+            if ($null -ne $entry) { [void]$entries.Add($entry) }
+        }
+        if ($entries.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace([string]$settings.phoneLanHost)) {
+            $entry = ConvertTo-LoopSegmentsPhoneHostEntry -Raw $settings.phoneLanHost -DefaultPort $defaultPort
+            if ($null -ne $entry) { [void]$entries.Add($entry) }
+        }
+    }
+
+    if ($entries.Count -eq 0) {
+        throw @"
+No Loop Segments phone hosts configured.
+
+  Add phoneLanHosts to loop-segments-windows.json, or set phoneLanHost, or pass -PhoneHost.
+  Example:
+    "phoneLanHosts": [
+      { "host": "192.168.1.42", "label": "iPhone A" },
+      { "host": "192.168.1.43", "label": "iPhone B" }
+    ]
+"@
+    }
+
+    $seen = @{}
+    $unique = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($entry in $entries) {
+        $key = "{0}:{1}" -f $entry.Host, $entry.Port
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        [void]$unique.Add($entry)
+    }
+    return @($unique)
+}
+
+function Get-LoopSegmentsPhoneLanBaseUrlForEntry {
+    param(
+        [hashtable] $Entry
+    )
+    return "http://$($Entry.Host):$($Entry.Port)"
+}
+
+function Invoke-LoopSegmentsPhoneLANJson {
+    param(
+        [hashtable] $Entry,
+        [Parameter(Mandatory = $true)]
+        [string] $RelativePath,
+        [int] $TimeoutSec = 15
+    )
+
+    $base = Get-LoopSegmentsPhoneLanBaseUrlForEntry -Entry $Entry
+    $path = $RelativePath.Trim().TrimStart('/')
+    $uri = "$base/$path"
+    try {
+        $response = Invoke-WebRequest -Uri $uri -TimeoutSec $TimeoutSec -UseBasicParsing
+        if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) {
+            throw "HTTP $($response.StatusCode)"
+        }
+        return ($response.Content | ConvertFrom-Json)
+    } catch {
+        throw $_.Exception.Message
+    }
+}
+
+function ConvertTo-LoopSegmentsAbsoluteLANHref {
+    param(
+        [string] $BaseUrl,
+        [string] $Html
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Html)) { return '' }
+    $base = $BaseUrl.TrimEnd('/')
+    return [regex]::Replace(
+        $Html,
+        '(?i)(?<prefix>href\s*=\s*["''])(?!https?://|#|mailto:)(?<path>[^"'']+)',
+        {
+            param($match)
+            $path = $match.Groups['path'].Value
+            if ($path.StartsWith('/')) {
+                return '{0}{1}{2}' -f $match.Groups['prefix'].Value, $base, $path
+            }
+            return '{0}{1}/{2}' -f $match.Groups['prefix'].Value, $base, $path
+        }
+    )
+}
+
+function ConvertTo-LoopSegmentsHtmlEncoded {
+    param([string] $Text)
+    if ($null -eq $Text) { return '' }
+    return ($Text -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;')
+}
+
+function Get-LoopSegmentsUnifiedLANListing {
+    param(
+        [string[]] $PhoneHost = @(),
+        [int] $Port = 0,
+        [int] $TimeoutSec = 15
+    )
+
+    $entries = Get-LoopSegmentsPhoneHostEntries -HostOverride $PhoneHost -PortOverride $Port
+    $generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $devices = New-Object System.Collections.Generic.List[hashtable]
+    $mergedFiles = New-Object System.Collections.Generic.List[hashtable]
+
+    foreach ($entry in $entries) {
+        $baseUrl = Get-LoopSegmentsPhoneLanBaseUrlForEntry -Entry $entry
+        $device = [ordered]@{
+            label    = $entry.Label
+            host     = $entry.Host
+            port     = $entry.Port
+            baseUrl  = $baseUrl
+            reachable = $false
+            error    = $null
+            exportSource = $null
+            files    = @()
+            playbackListHTML = ''
+            exportLogsListHTML = ''
+        }
+
+        try {
+            $status = Invoke-LoopSegmentsPhoneLANJson -Entry $entry -RelativePath 'status.json' -TimeoutSec $TimeoutSec
+            $device.reachable = $true
+            if ($null -ne $status.exportSource) {
+                $device.exportSource = $status.exportSource
+            }
+        } catch {
+            $device.error = "status.json: $($_.Exception.Message)"
+            [void]$devices.Add($device)
+            continue
+        }
+
+        try {
+            $lists = Invoke-LoopSegmentsPhoneLANJson -Entry $entry -RelativePath 'status_lists.json' -TimeoutSec $TimeoutSec
+            $device.playbackListHTML = ConvertTo-LoopSegmentsAbsoluteLANHref -BaseUrl $baseUrl -Html ([string]$lists.playbackListHTML)
+            $device.exportLogsListHTML = ConvertTo-LoopSegmentsAbsoluteLANHref -BaseUrl $baseUrl -Html ([string]$lists.exportLogsListHTML)
+
+            $fileRows = @()
+            if ($null -ne $lists.files) {
+                $fileRows = @($lists.files)
+            }
+            $normalizedFiles = New-Object System.Collections.Generic.List[hashtable]
+            foreach ($file in $fileRows) {
+                $name = [string]$file.name
+                if ([string]::IsNullOrWhiteSpace($name)) { continue }
+                $url = if ($name.StartsWith('/')) { "$baseUrl$name" } else { "$baseUrl/$name" }
+                $row = [ordered]@{
+                    device   = $entry.Label
+                    host     = $entry.Host
+                    port     = $entry.Port
+                    name     = $name
+                    url      = $url
+                }
+                if ($null -ne $file.bytes) { $row.bytes = [int64]$file.bytes }
+                if ($null -ne $file.modified) { $row.modified = [string]$file.modified }
+                [void]$normalizedFiles.Add($row)
+                [void]$mergedFiles.Add($row)
+            }
+            $device.files = @($normalizedFiles)
+        } catch {
+            $device.error = "status_lists.json: $($_.Exception.Message)"
+        }
+
+        [void]$devices.Add($device)
+    }
+
+    return [ordered]@{
+        generatedAt = $generatedAt
+        deviceCount = $devices.Count
+        reachableCount = @($devices | Where-Object { $_.reachable }).Count
+        devices = @($devices)
+        files = @($mergedFiles)
+    }
+}
+
+function ConvertTo-LoopSegmentsUnifiedLANHtml {
+    param(
+        [hashtable] $Listing
+    )
+
+    $deviceSections = New-Object System.Collections.Generic.List[string]
+    foreach ($device in @($Listing.devices)) {
+        $statusLine = if ($device.reachable) {
+            'online'
+        } else {
+            'offline'
+        }
+        $exportLine = ''
+        if ($null -ne $device.exportSource -and $null -ne $device.exportSource.displayName) {
+            $exportLine = "<p><strong>Export:</strong> $($device.exportSource.displayName)</p>"
+        }
+        $errorLine = ''
+        if (-not [string]::IsNullOrWhiteSpace([string]$device.error)) {
+            $errorLine = "<p><em>$(ConvertTo-LoopSegmentsHtmlEncoded -Text ([string]$device.error))</em></p>"
+        }
+        $playback = [string]$device.playbackListHTML
+        if ([string]::IsNullOrWhiteSpace($playback)) {
+            $playback = '<li><em>No media listed.</em></li>'
+        }
+        $logs = [string]$device.exportLogsListHTML
+        $logsBlock = ''
+        if (-not [string]::IsNullOrWhiteSpace($logs)) {
+            $logsBlock = @"
+<h4>Export logs</h4>
+<ul>$logs</ul>
+"@
+        }
+        $section = @"
+<section>
+  <h2>$(ConvertTo-LoopSegmentsHtmlEncoded -Text ([string]$device.label)) <small>($(ConvertTo-LoopSegmentsHtmlEncoded -Text ([string]$device.host)):$($device.port) · $statusLine)</small></h2>
+  <p><a href="$($device.baseUrl)/">Open phone monitor</a> · <a href="$($device.baseUrl)/browse">Browse / export</a></p>
+  $exportLine
+  $errorLine
+  <h3>Media on phone</h3>
+  <ul>$playback</ul>
+  $logsBlock
+</section>
+"@
+        [void]$deviceSections.Add($section)
+    }
+
+    $summary = "Unified listing — $($Listing.reachableCount)/$($Listing.deviceCount) phone(s) reachable · generated $($Listing.generatedAt)"
+    return @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loop Segments — unified LAN media</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem 1.25rem; line-height: 1.4; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.5rem; }
+    h2 small { font-weight: normal; color: #555; }
+    ul { padding-left: 1.25rem; }
+    section { border-top: 1px solid #ddd; padding-top: 0.5rem; }
+    .meta { color: #555; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Loop Segments — unified LAN media</h1>
+  <p class="meta">$summary · <a href="listing.json">listing.json</a></p>
+  $($deviceSections -join "`n")
+</body>
+</html>
+"@
+}
+
 function Get-LoopSegmentsPhoneWebDavAuthHeader {
     $creds = Get-LoopSegmentsWebDAVCredentials
     $pair = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($creds.User):$($creds.Password)"))
@@ -370,6 +687,17 @@ function Show-LoopSegmentsWindowsDiagnostics {
     Write-Host 'Loop Segments Windows (this PC)'
     Write-Host "  Config file:     $(if (Test-Path $configPath) { $configPath } else { '(missing - copy .example.json)' })"
     Write-Host "  Phone LAN:       $($settings.phoneLanHost) : $(Get-LoopSegmentsLanPort)"
+    try {
+        $hosts = Get-LoopSegmentsPhoneHostEntries
+        if ($hosts.Count -gt 1) {
+            Write-Host '  Phone LAN hosts:'
+            foreach ($h in $hosts) {
+                Write-Host "                   $($h.Label) -> $($h.Host):$($h.Port)"
+            }
+        }
+    } catch {
+        # single-host diagnostics still useful when phoneLanHost is empty
+    }
     Write-Host "  Mount drive:     $(Get-LoopSegmentsMountDriveLetter):"
     Write-Host "  rclone remote:   $(Get-LoopSegmentsRcloneRemoteName)"
     $creds = Get-LoopSegmentsWebDAVCredentials

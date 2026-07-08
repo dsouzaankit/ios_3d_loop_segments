@@ -20,6 +20,7 @@
 [CmdletBinding()]
 param(
     [string] $PhoneHost = '',
+    [string[]] $PhoneHosts = @(),
     [string] $RcloneConfigPath = '',
     [string] $RcloneExe = '',
     [string] $DriveLetter = '',
@@ -45,6 +46,13 @@ $settings = Get-LoopSegmentsWindowsSettings
 
 if (-not [string]::IsNullOrWhiteSpace($PhoneHost)) {
     $settings.phoneLanHost = $PhoneHost.Trim()
+}
+if ($PhoneHosts.Count -gt 0) {
+    $settings.phoneLanHosts = @($PhoneHosts | ForEach-Object {
+        $part = $_.Trim()
+        if ([string]::IsNullOrWhiteSpace($part)) { return }
+        [ordered]@{ host = $part; label = $part }
+    } | Where-Object { $_ })
 }
 if (-not [string]::IsNullOrWhiteSpace($RcloneConfigPath)) {
     $settings.rcloneConfigPath = $RcloneConfigPath.Trim()

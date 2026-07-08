@@ -30,11 +30,42 @@ Same as `.\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json
 
 Optional args: **`Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestOnly`**.
 
+## Multiple iPhones — unified LAN listing
+
+Each phone runs its own LAN server on **`http://<phone-ip>:8765/`**. To browse **all** phones from one place on the PC:
+
+1. Add every phone to **`phoneLanHosts`** in `loop-segments-windows.json` (keep **`phoneLanHost`** as the primary rclone mount target):
+
+```json
+"phoneLanHost": "192.168.1.42",
+"phoneLanHosts": [
+  { "host": "192.168.1.42", "label": "iPhone A" },
+  { "host": "192.168.1.43", "label": "iPhone B" }
+]
+```
+
+2. One-shot JSON or HTML:
+
+```powershell
+.\Get-LoopSegmentsUnifiedLANListing.ps1
+.\Get-LoopSegmentsUnifiedLANListing.ps1 -Format html -OutFile unified-lan.html
+```
+
+3. Live index page on the PC (re-polls phones on each refresh):
+
+```powershell
+.\Serve-LoopSegmentsUnifiedLAN.ps1
+# Open http://<pc-ip>:8766/
+```
+
+Links in the unified view point back to each phone’s `:8765` URL — playback and WebDAV still go to the phone that holds the file. **`Mount-LoopSegmentsRclone.ps1`** still mounts **one** phone at a time (`phoneLanHost`).
+
 ## What goes in `loop-segments-windows.json`
 
 | Field | Purpose |
 |-------|---------|
-| `phoneLanHost` | iPhone IP (changes per Wi‑Fi) |
+| `phoneLanHost` | Primary iPhone IP for rclone mount (changes per Wi‑Fi) |
+| `phoneLanHosts` | Optional array `{ host, label?, port? }` — unified LAN listing across multiple iPhones |
 | `lanPort` | Usually `8765` |
 | `mountDriveLetter` | Drive letter for phone mount (default `L`; pick another if Koofr uses `L`) |
 | `rcloneRemoteName` | Block name in `rclone.conf` for the phone (default `loopsegments`) |
@@ -67,6 +98,8 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
 | `Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |
+| `Get-LoopSegmentsUnifiedLANListing.ps1` | **Pool media listings** from all `phoneLanHosts` → JSON or HTML |
+| `Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
 | `Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** = HTTP + PROPFIND + `rclone ls`; default = **read/write** **L:** (copy bootstrap `.ps1` and folders under `pcld_ios_media\`; ≤ 2 MB per file on phone); **`-ReadOnly`** = DLNA-only; **`-Remove`** / **`-RemovePort80Proxy`** |
 | `Register-AltServerAtLogon.ps1` | **AltServer** at logon ([BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) §3). Wi‑Fi refresh often fails on Win11 — **USB + AltStore Refresh All** weekly is the reliable path |
