@@ -11,6 +11,8 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
 
+**PC companion (browse + request export):** [`pcloud_web_dl`](../pcloud_web_dl) — browse pCloud on the PC while Loop Segments exports over **phone cellular** via LAN REST (`/export_from_folder.json`, etc.).
+
 | Step | Device | Connection |
 |------|--------|------------|
 | Export from pCloud | iPhone | Cellular (Wi‑Fi off OK) |
