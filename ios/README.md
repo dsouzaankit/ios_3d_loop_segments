@@ -24,6 +24,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 249 (1.2.14):** LAN **Export logs** no longer lists `export_latest.txt` / `export_progress.txt` twice (history filter was including the live pointers).
+
 **Build 248 (1.2.13):** **`POST /export_from_folder.json`** — queue export with pCloud **`folderPath` + `displayName`** (phone one-level WebDAV list, no CDN URL). Prefer this over **`/export_from_url.json`** for my.pcloud.com captures (CDN links are IP-bound → often **HTTP 410** on the phone).
 
 ## Open in Xcode (requires macOS or cloud CI)

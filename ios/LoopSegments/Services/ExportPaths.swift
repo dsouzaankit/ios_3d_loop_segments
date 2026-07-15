@@ -512,19 +512,22 @@ enum ExportPaths {
         return paths
     }
 
-    /// Drop history rows that duplicate `export_latest.txt` (common after pause: finalized `*_paused.txt` + live copy).
+    /// Drop exact path duplicates, then history rows that duplicate `export_latest.txt`
+    /// (common after pause: finalized `*_paused.txt` + live copy).
     private static func dedupeLANLogIndexPaths(_ paths: [String]) -> [String] {
-        guard !ExportPlaybackState.shared.isLANExportActive else { return paths }
+        var seen = Set<String>()
+        let unique = paths.filter { seen.insert($0).inserted }
+        guard !ExportPlaybackState.shared.isLANExportActive else { return unique }
         let fm = FileManager.default
         let latestRel = pathRelativeToExports(latestLogTextURL)
-        guard paths.contains(latestRel) else { return paths }
+        guard unique.contains(latestRel) else { return unique }
         let latestURL = latestLogTextURL
         guard fm.fileExists(atPath: latestURL.path),
               let latestSize = try? latestURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
               latestSize > 512 else {
-            return paths
+            return unique
         }
-        return paths.filter { rel in
+        return unique.filter { rel in
             if rel == latestRel || rel.hasSuffix("/export_progress.txt") { return true }
             guard rel.hasPrefix("\(exportLogsLANPrefix)/export_"), rel.hasSuffix(".txt") else { return true }
             let name = (rel as NSString).lastPathComponent
@@ -1007,10 +1010,15 @@ enum ExportPaths {
     }
 
     /// Relative paths for retained per-run logs (`pcld_ios_media/logs/export_<unix>.txt`), newest first.
+    /// Excludes live pointers (`export_latest.txt`, `export_progress.txt`) — those are prepended separately.
     static func listExportHistoryLogRelativePaths() -> [String] {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: logsDirectory.path) else { return [] }
-        let filtered = names.filter { $0.hasPrefix("export_") && $0.hasSuffix(".txt") }
+        let filtered = names.filter { name in
+            name.hasPrefix("export_") && name.hasSuffix(".txt")
+                && name != "export_latest.txt"
+                && name != "export_progress.txt"
+        }
         return sortedExportHistoryLogFileNames(filtered).map { "\(exportLogsLANPrefix)/\($0)" }
     }
 
