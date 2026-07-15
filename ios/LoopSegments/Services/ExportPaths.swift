@@ -437,6 +437,8 @@ enum ExportPaths {
         func appendFileIfPresent(_ url: URL) {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return }
+            let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+            guard size > 0 else { return }
             paths.append(pathRelativeToExports(url))
         }
 

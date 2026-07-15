@@ -2497,7 +2497,7 @@ enum ExportLANServer {
                   }
                 } catch (e) {}
               }
-              setStatus(finalMsg + " Progress appears in export_latest.txt / playback list when finished.");
+              setStatus(finalMsg + " Download continues on the phone — refresh playback when finished (also archived under archive/).");
             } catch (e) {
               setStatus(e.message || String(e), true);
             } finally {

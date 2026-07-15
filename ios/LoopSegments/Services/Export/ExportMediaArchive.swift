@@ -14,6 +14,8 @@ enum ExportMediaArchive {
         ExportPaths.segmentLoopFolderName,
         "scripts",
         archiveFolderName,
+        ExportPaths.downloadsFolderName,
+        ExportPaths.exportLogsFolderName,
     ]
 
     private static let retentionTimestampFormatter: DateFormatter = {
@@ -334,6 +336,58 @@ enum ExportMediaArchive {
             _ = removeActiveRootCompanionFiles(log: log)
         }
         return archived
+    }
+
+    /// Copy a finished LAN URL download into `archive/<name>_<timestamp>.<ext>` (keeps `downloads/` for LAN).
+    @discardableResult
+    static func archiveURLDownload(
+        source: URL,
+        log: ((String) -> Void)? = nil
+    ) -> URL? {
+        migrateRetainedFilesIntoArchive(log: log)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: source.path) else {
+            log?("URL archive skipped — missing \(source.lastPathComponent)")
+            return nil
+        }
+        let size = (try? fm.attributesOfItem(atPath: source.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard size > 0 else {
+            log?("URL archive skipped — empty \(source.lastPathComponent)")
+            return nil
+        }
+
+        do {
+            try fm.createDirectory(at: archiveDirectoryURL, withIntermediateDirectories: true)
+        } catch {
+            log?("Could not create archive/: \(error.localizedDescription)")
+            return nil
+        }
+
+        let timestamp = newRetentionTimestamp()
+        let threeDNK = ExportVideoDimensions.probeNKLabelForRetention(from: [source])
+        let archivedName = suffixedFileName(
+            forOnDiskFileName: source.lastPathComponent,
+            timestamp: timestamp,
+            threeDNKLabel: threeDNK,
+            sourceFileName: source.lastPathComponent,
+            appFastRemux: false
+        )
+        let destination = archiveDirectoryURL.appendingPathComponent(archivedName)
+        do {
+            if fm.fileExists(atPath: destination.path) {
+                try fm.removeItem(at: destination)
+            }
+            try fm.copyItem(at: source, to: destination)
+            log?(
+                "Archived URL download \(ExportPaths.pathRelativeToExports(source)) → " +
+                    "\(ExportPaths.pathRelativeToExports(destination))"
+            )
+            _ = pruneRetainedMedia(keepCount: retentionCount, log: log)
+            return destination
+        } catch {
+            log?("Could not archive URL download: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Root-level suffixed retains and `archive/export_*` batch folders → flat `archive/<file>…`.

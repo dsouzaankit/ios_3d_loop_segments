@@ -1,23 +1,25 @@
 import Foundation
 
 /// HTTP(S) download into `pcld_ios_media/downloads/<saveName>` (LAN-triggered or in-app).
+/// Uses a full GET (not Range) — external CDNs often mishandle Range and left 0-byte files.
 enum URLMediaDownload {
-    private static let chunkBytes: Int64 = 2 * 1024 * 1024
-    private static let progressStepPercent = 5
+    private static let minPlayableBytes: Int64 = 1
 
     enum DownloadError: LocalizedError {
         case invalidURL
         case invalidSaveName
-        case missingContentLength
         case httpStatus(Int)
+        case emptyFile
+        case htmlNotMedia
         case incomplete(expected: Int64, got: Int64)
 
         var errorDescription: String? {
             switch self {
             case .invalidURL: return "Invalid download URL"
             case .invalidSaveName: return "Invalid save file name"
-            case .missingContentLength: return "Server did not report Content-Length"
             case .httpStatus(let code): return "HTTP \(code)"
+            case .emptyFile: return "Download produced an empty file (check the URL returns the media, not a webpage)"
+            case .htmlNotMedia: return "URL returned HTML instead of a media file"
             case .incomplete(let expected, let got):
                 return "Incomplete download (\(got) / \(expected) bytes)"
             }
@@ -80,110 +82,25 @@ enum URLMediaDownload {
         let rel = ExportPaths.pathRelativeToExports(destination)
         log("URL download — \(remoteURL.absoluteString) → \(rel)")
 
-        let totalLength = try await probeContentLength(remoteURL: remoteURL, log: log)
-        if let totalLength, totalLength > 0 {
-            try await downloadWithRanges(
-                remoteURL: remoteURL,
-                destinationURL: destination,
-                totalLength: totalLength,
-                isCancelled: isCancelled,
-                log: log
-            )
-        } else {
+        do {
             try await downloadWholeFile(
                 remoteURL: remoteURL,
                 destinationURL: destination,
                 isCancelled: isCancelled,
                 log: log
             )
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
         }
 
-        let size = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?
-            .int64Value ?? 0
+        let size = fileSize(at: destination)
+        guard size >= minPlayableBytes else {
+            try? FileManager.default.removeItem(at: destination)
+            throw DownloadError.emptyFile
+        }
         log("URL download complete — \(rel) (\(formatBytes(size)))")
         return destination
-    }
-
-    private static func probeContentLength(remoteURL: URL, log: @escaping (String) -> Void) async throws -> Int64? {
-        var request = URLRequest(url: remoteURL)
-        request.httpMethod = "HEAD"
-        applyURLCredentials(to: &request, from: remoteURL)
-
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return nil }
-            if let length = http.value(forHTTPHeaderField: "Content-Length").flatMap({ Int64($0) }), length > 0 {
-                return length
-            }
-            if let range = http.value(forHTTPHeaderField: "Content-Range"),
-               let total = parseContentRangeTotal(range) {
-                return total
-            }
-            if !(200 ... 299).contains(http.statusCode), http.statusCode != 206 {
-                log("URL download HEAD \(http.statusCode) — falling back to full GET")
-            }
-            return nil
-        } catch {
-            log("URL download HEAD failed (\(error.localizedDescription)) — full GET")
-            return nil
-        }
-    }
-
-    private static func downloadWithRanges(
-        remoteURL: URL,
-        destinationURL: URL,
-        totalLength: Int64,
-        isCancelled: @escaping () -> Bool,
-        log: @escaping (String) -> Void
-    ) async throws {
-        let fm = FileManager.default
-        try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: totalLength)
-        if fm.fileExists(atPath: destinationURL.path) {
-            try fm.removeItem(at: destinationURL)
-        }
-        guard fm.createFile(atPath: destinationURL.path, contents: nil) else {
-            throw SegmentExporterError.writerSetupFailed
-        }
-
-        let handle = try FileHandle(forWritingTo: destinationURL)
-        defer { try? handle.close() }
-
-        var offset: Int64 = 0
-        var lastLoggedPercent = -1
-        var lastProgressLog = CFAbsoluteTimeGetCurrent()
-
-        while offset < totalLength {
-            if isCancelled() || Task.isCancelled { throw CancellationError() }
-            let end = min(offset + chunkBytes - 1, totalLength - 1)
-            var request = URLRequest(url: remoteURL)
-            request.httpMethod = "GET"
-            request.setValue("bytes=\(offset)-\(end)", forHTTPHeaderField: "Range")
-            applyURLCredentials(to: &request, from: remoteURL)
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw DownloadError.httpStatus(-1)
-            }
-            guard (200 ... 299).contains(http.statusCode) || http.statusCode == 206 else {
-                throw DownloadError.httpStatus(http.statusCode)
-            }
-            try handle.write(contentsOf: data)
-            offset += Int64(data.count)
-
-            let percent = Int(offset * 100 / totalLength)
-            let now = CFAbsoluteTimeGetCurrent()
-            if percent >= lastLoggedPercent + progressStepPercent || now - lastProgressLog >= 15 {
-                lastLoggedPercent = (percent / progressStepPercent) * progressStepPercent
-                lastProgressLog = now
-                log(
-                    "URL download — \(formatBytes(offset)) / \(formatBytes(totalLength)) (\(percent)%) → \(destinationURL.lastPathComponent)"
-                )
-            }
-        }
-
-        if offset < totalLength {
-            throw DownloadError.incomplete(expected: totalLength, got: offset)
-        }
     }
 
     private static func downloadWholeFile(
@@ -193,46 +110,65 @@ enum URLMediaDownload {
         log: @escaping (String) -> Void
     ) async throws {
         if isCancelled() || Task.isCancelled { throw CancellationError() }
+
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "GET"
+        request.timeoutInterval = 60 * 60
         applyURLCredentials(to: &request, from: remoteURL)
 
         let (tempURL, response) = try await URLSession.shared.download(for: request)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
         guard let http = response as? HTTPURLResponse else {
             throw DownloadError.httpStatus(-1)
         }
         guard (200 ... 299).contains(http.statusCode) else {
             throw DownloadError.httpStatus(http.statusCode)
         }
+        if let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased(),
+           contentType.contains("text/html") {
+            throw DownloadError.htmlNotMedia
+        }
         if isCancelled() || Task.isCancelled {
-            try? FileManager.default.removeItem(at: tempURL)
             throw CancellationError()
         }
 
         let fm = FileManager.default
-        if let size = (try? fm.attributesOfItem(atPath: tempURL.path)[.size] as? NSNumber)?.int64Value,
-           size > 0 {
-            try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: size)
+        let tempSize = fileSize(at: tempURL)
+        guard tempSize >= minPlayableBytes else {
+            throw DownloadError.emptyFile
         }
+        if let expected = contentLength(from: http), expected > 0, tempSize < expected {
+            throw DownloadError.incomplete(expected: expected, got: tempSize)
+        }
+
+        try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: tempSize)
+        ExportPaths.ensureDownloadsDirectory()
         if fm.fileExists(atPath: destinationURL.path) {
             try fm.removeItem(at: destinationURL)
         }
-        try fm.moveItem(at: tempURL, to: destinationURL)
-        log("URL download — full GET finished → \(destinationURL.lastPathComponent)")
+        try fm.copyItem(at: tempURL, to: destinationURL)
+        log(
+            "URL download — GET \(http.statusCode) finished → \(destinationURL.lastPathComponent) " +
+                "(\(formatBytes(tempSize)))"
+        )
+    }
+
+    private static func contentLength(from http: HTTPURLResponse) -> Int64? {
+        if let length = http.value(forHTTPHeaderField: "Content-Length").flatMap({ Int64($0) }), length > 0 {
+            return length
+        }
+        return nil
+    }
+
+    private static func fileSize(at url: URL) -> Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     private static func applyURLCredentials(to request: inout URLRequest, from url: URL) {
         guard let user = url.user, let password = url.password else { return }
         let token = Data("\(user):\(password)".utf8).base64EncodedString()
         request.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
-    }
-
-    private static func parseContentRangeTotal(_ header: String) -> Int64? {
-        // bytes 0-0/12345
-        guard let slash = header.lastIndex(of: "/") else { return nil }
-        let totalText = header[header.index(after: slash)...].trimmingCharacters(in: .whitespaces)
-        guard totalText != "*", let total = Int64(totalText), total > 0 else { return nil }
-        return total
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {

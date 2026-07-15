@@ -212,7 +212,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). LAN page **Start export** button only. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
 | **`clear_media`** | Same as **Clear media** — deletes active + `archive/` + `downloads/` (rejected while export running). |
-| **`download_url`** | Phone pulls HTTP(S) `url` into `pcld_ios_media/downloads/<saveName>` (overwrite if exists). One download at a time. |
+| **`download_url`** | Phone pulls HTTP(S) `url` into `pcld_ios_media/downloads/<saveName>` (overwrite if exists), then copies into `archive/<name>_<timestamp>.<ext>`. One download at a time. Rejects empty/HTML responses. |
 
 Triggers are polled while the app is **foreground**, **exporting**, or **Keep Alive** is playing (~2s). Optional fields: **`pool`**, **`folderPath`** (for random), **`url`** / **`saveName`** (for download), **`id`** (UUID — duplicate ids are ignored).
 

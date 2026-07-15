@@ -374,7 +374,7 @@ final class AppSession: ObservableObject {
         defer { isURLDownloadRunning = false }
 
         ExportRuntimeLog.mirror("URL download start — \(remoteURL.absoluteString) → downloads/\(safeName)")
-        _ = try await URLMediaDownload.download(
+        let destination = try await URLMediaDownload.download(
             remoteURL: remoteURL,
             saveName: safeName,
             isCancelled: { [weak self] in
@@ -382,6 +382,15 @@ final class AppSession: ObservableObject {
             },
             log: { ExportRuntimeLog.mirror($0) }
         )
+        if let archived = ExportMediaArchive.archiveURLDownload(
+            source: destination,
+            log: { ExportRuntimeLog.mirror($0) }
+        ) {
+            ExportRuntimeLog.mirror(
+                "URL download ready — \(ExportPaths.pathRelativeToExports(destination)) " +
+                    "+ \(ExportPaths.pathRelativeToExports(archived))"
+            )
+        }
     }
 
     func cancelURLDownload() {

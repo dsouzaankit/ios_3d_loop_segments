@@ -161,7 +161,7 @@ If Loop Segments is on the home screen and **`com.loopsegments.app` is in App ID
 4. Wait until AltStore shows install complete — **Loop Segments** should appear under **My Apps**.
 5. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
 
-If **+** install fails with **incorrect data format**, see [Fix install / refresh](#fix-install--refresh--do-in-order-usb) below — try **iTunes → Account → Authorizations → Deauthorize → Authorize** first (USB; confirmed working). Otherwise check **Store iCloud** or unsigned-in iTunes, not the IPA. If error is **1007** only, use a fresh IPA from **Actions → ios-build → Run workflow** (build **242+**). Do not mix Sideloadly and AltStore for the same app.
+If **+** install fails with **incorrect data format**, see [Fix install / refresh](#fix-install--refresh--do-in-order-usb) below — try **iTunes → Account → Authorizations → Deauthorize → Authorize** first (USB; confirmed working). Otherwise check **Store iCloud** or unsigned-in iTunes, not the IPA. If error is **1007** only, use a fresh IPA from **Actions → ios-build → Run workflow** (build **243+**). Do not mix Sideloadly and AltStore for the same app.
 
 #### Wi‑Fi sync for AltStore (one-time) — often broken on Windows 11
 
@@ -311,7 +311,7 @@ Restart-Service -Name 'Apple Mobile Device Service' -Force
 
 AltServer tray → **Install AltStore** — your phone name should appear in the list when pairing works.
 
-**AltStore install fails?** Accept the agreement at [developer.apple.com](https://developer.apple.com), use a personal Apple ID, turn VPN off, keep AltServer in the tray, use a fresh IPA (build **242+** / **1.2.7+**). Last resort: [Sideloadly fallback](#5-sideloadly-fallback-only-if-altstore-fails).
+**AltStore install fails?** Accept the agreement at [developer.apple.com](https://developer.apple.com), use a personal Apple ID, turn VPN off, keep AltServer in the tray, use a fresh IPA (build **243+** / **1.2.8+**). Last resort: [Sideloadly fallback](#5-sideloadly-fallback-only-if-altstore-fails).
 
 ### 3. Automate weekly refresh (AltServer + AltStore)
 
@@ -403,7 +403,7 @@ If refresh still fails after the above, use [Sideloadly fallback](#5-sideloadly-
 
 1. **[Trust the developer](#trust-the-developer-on-iphone-required-once-not-weekly)** if you have not already.
 2. **Settings → Cellular → Loop Segments → On** (cellular pCloud export).
-3. **iOS 17+** required. **iOS 26.x:** recent IPA (**1.2.7+** / build **242+** on sign-in).
+3. **iOS 17+** required. **iOS 26.x:** recent IPA (**1.2.8+** / build **243+** on sign-in).
 
 **App opens then closes immediately?** Reinstall **1.0.5+** IPA (not 1.0.4).
 
