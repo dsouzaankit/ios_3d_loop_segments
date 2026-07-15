@@ -2533,15 +2533,15 @@ enum ExportLANServer {
         <h2>Export from URL</h2>
         <p class="muted">Same pipeline as browse <strong>Export</strong>: phone downloads the link (vanilla → 60s segments → archive). Prefer <strong>https://</strong>. Keep Loop Segments open on Wi‑Fi. Save name becomes the export display name / file extension. REST: <code>POST /export_from_url.json</code> (Basic auth).</p>
         <div class="row">
-          <label style="flex:1;display:flex;flex-direction:column;gap:0.25rem">URL
-            <input type="url" id="url-download-link" placeholder="https://…" style="width:100%;padding:0.4rem" autocomplete="off" />
+          <label style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:0.25rem;width:100%">URL
+            <input type="url" id="url-download-link" placeholder="https://…" style="width:100%;box-sizing:border-box;padding:0.4rem" autocomplete="off" />
           </label>
         </div>
-        <div class="row">
-          <label style="flex:1;display:flex;flex-direction:column;gap:0.25rem">Save as (file name)
-            <input type="text" id="url-download-name" placeholder="MyClip.mp4" style="width:100%;padding:0.4rem" autocomplete="off" />
+        <div class="row" style="align-items:flex-end;flex-wrap:nowrap;gap:0.65rem">
+          <label style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:0.25rem">Save as (file name)
+            <input type="text" id="url-download-name" placeholder="MyClip.mp4" style="width:100%;box-sizing:border-box;padding:0.4rem" autocomplete="off" />
           </label>
-          <button type="button" id="url-download-start">Start export</button>
+          <button type="button" id="url-download-start" style="flex:0 0 auto;white-space:nowrap;align-self:flex-end">Start export</button>
         </div>
         <p id="url-download-status" class="muted"></p>
         </div>
