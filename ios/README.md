@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 253 (1.2.18):** LAN monitor + browse pages link **`status.json`**, **`export_trigger.ack.json`**, and **`export_from_folder.json`** (with export logs).
+
 **Build 252 (1.2.17):** Starting a new export (LAN REST or in-app **Start**) **pauses** the current run (checkpoint kept) and **archives** root media to `archive/` before the new job — no longer hard-stops. Prior paused rows stay resumable.
 
 **Build 251 (1.2.16):** **`/export_from_folder.json`** accepts **filename only** (`displayName` / `saveName` without `folderPath`) — phone runs WebDAV walk. Companion should POST `{ "saveName": "…" }` when folder resolve fails (do not require folderPath).

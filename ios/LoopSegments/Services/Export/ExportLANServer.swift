@@ -2006,7 +2006,12 @@ enum ExportLANServer {
     }
 
     private static func htmlMonitorQuickLogLinks() -> String {
-        var links = [#"<a href="export_latest.txt">export_latest.txt</a>"#]
+        var links = [
+            #"<a href="export_latest.txt">export_latest.txt</a>"#,
+            #"<a href="status.json">status.json</a>"#,
+            "<a href=\"\(LANExportTriggerControl.ackRelativePath)\">export_trigger.ack.json</a>",
+            #"<a href="export_from_folder.json">export_from_folder.json</a>"#,
+        ]
         if FileManager.default.fileExists(atPath: ExportPaths.searchDebugLogURL.path) {
             links.append(#"<a href="search_debug.txt">search_debug.txt</a>"#)
         }
@@ -2341,6 +2346,7 @@ enum ExportLANServer {
             </div>
             \(htmlExportSourceLineBlock())
             <p>Serving on port \(defaultPort): logs and media under <code>pcld_ios_media/</code> (private on phone, not in Files app). Legacy URLs <code>/export_latest.txt</code>, <code>/logs/export_*.txt</code>, and <code>/loop_segments_ok.txt</code> still work.</p>
+            <p>JSON: \(htmlMonitorQuickLogLinks())</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
             <p><strong>Playback:</strong> <code>pcld_ios_media/loop/op_00.mp4</code> / <code>pcld_ios_media/loop/op_01.mp4</code> (DLNA can loop the <code>loop/</code> folder). In-progress: <code>_working.mp4</code> (sparse original) or <code>_working_pcloud_transcode.mp4</code> (pCloud HLS transcode — labeled on index when active).</p>
             <div id="lan-playback-status">\(playbackStatusBlock)</div>
