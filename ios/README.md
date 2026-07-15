@@ -24,6 +24,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 248 (1.2.13):** **`POST /export_from_folder.json`** — queue export with pCloud **`folderPath` + `displayName`** (phone one-level WebDAV list, no CDN URL). Prefer this over **`/export_from_url.json`** for my.pcloud.com captures (CDN links are IP-bound → often **HTTP 410** on the phone).
+
 ## Open in Xcode (requires macOS or cloud CI)
 
 **Option A — XcodeGen**
@@ -178,7 +180,8 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`/pcloud_list.json?path=/Folder/`** | pCloud folder listing (directories + video files). |
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
-| **`/export_from_url.json`** (PUT or POST, Basic auth) | Queue **Export from URL**: `{ "url": "https://…", "saveName": "clip.mp4", "id": "<optional uuid>" }`. Returns **202** `{ status: "queued", … }`. Phone picks it up like other triggers (~2s). |
+| **`/export_from_url.json`** (PUT or POST, Basic auth) | Queue **Export from URL**: `{ "url": "https://…", "saveName": "clip.mp4", "id": "<optional uuid>" }`. Returns **202** `{ status: "queued", … }`. Phone picks it up like other triggers (~2s). For pCloud files prefer **`/export_from_folder.json`** (avoids CDN IP binding). |
+| **`/export_from_folder.json`** (PUT or POST, Basic auth) | Queue **Export from folder**: `{ "folderPath": "/Videos/MyFolder/", "displayName": "clip.mp4", "seekMs": 0, "id": "<optional uuid>" }`. Returns **202**. Phone does **one-level** PROPFIND on `folderPath`, matches the filename, starts WebDAV export (no recursive walk; no PC/CDN href). `saveName` / `name` alias `displayName`. |
 | **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
 | **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
 
@@ -199,6 +202,19 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 {
   "version": 1,
   "command": "start_export",
+  "folderPath": "/Videos/",
+  "displayName": "example.mp4",
+  "seekMs": 0,
+  "id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+Or with a known WebDAV path `href` (phone-relative path, not a PC/CDN URL):
+
+```json
+{
+  "version": 1,
+  "command": "start_export",
   "href": "/Videos/example.mp4",
   "displayName": "example.mp4",
   "seekMs": 0,
@@ -208,16 +224,33 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 
 | `command` | Behavior |
 |-----------|----------|
-| **`start_export`** | Export `href` from `seekMs`. **Auto-stops** any running export first (no manual stop required). |
+| **`start_export`** | Export from `seekMs`. Prefer **`folderPath` + `displayName`** (or `saveName`): phone lists that folder once and matches the filename (no recursive walk; builds on-phone WebDAV `href`). Or pass **`href` + `displayName`** when you already have a phone path. If both are present, **folder resolve wins**. **Auto-stops** any running export first. |
 | **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). LAN page **Start export** button only. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
 | **`clear_media`** | Same as **Clear media** — deletes active + `archive/` + `downloads/` (rejected while export running). |
-| **`download_url`** | Starts a full export from HTTP(S) `url` using `saveName` as display name (same pipeline as browse Export: vanilla download → 60s segments → archive). Auto-stops any running export first. |
+| **`download_url`** | Starts a full export from HTTP(S) `url` using `saveName` as display name (same pipeline as browse Export: vanilla download → 60s segments → archive). Auto-stops any running export first. For **pCloud CDN / publink** URLs (often IP-bound → **HTTP 410**), prefer **`/export_from_folder.json`** / `start_export` with `folderPath` instead. |
 
-Triggers are polled while the app is **foreground**, **exporting**, or **Keep Alive** is playing (~2s). Optional fields: **`pool`**, **`folderPath`** (for random), **`url`** / **`saveName`** (for download), **`id`** (UUID — duplicate ids are ignored).
+Triggers are polled while the app is **foreground**, **exporting**, or **Keep Alive** is playing (~2s). Optional fields: **`pool`**, **`folderPath`** (for random / folder resolve), **`url`** / **`saveName`** (for download; `saveName` also aliases `displayName` for folder resolve), **`id`** (UUID — duplicate ids are ignored).
 
 **Ack** (`export_trigger.ack.json`): `{ "receivedAt", "command", "status", "message", "triggerId" }` where **`status`** is `accepted` \| `rejected` \| `ignored`.
+
+Example (PowerShell) — **Export from folder** via REST (preferred for pCloud):
+
+```powershell
+$base = "http://10.0.0.42:8765"
+$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
+$body = @{
+  folderPath = "/Videos/MyFolder/"
+  displayName = "clip.mp4"
+  seekMs = 0
+  id = [guid]::NewGuid().ToString()
+} | ConvertTo-Json
+Invoke-WebRequest -Method POST -Uri "$base/export_from_folder.json" `
+  -Headers @{ Authorization = "Basic $cred"; "Content-Type" = "application/json" } -Body $body
+Invoke-RestMethod -Uri "$base/pcld_ios_media/scripts/export_trigger.ack.json" `
+  -Headers @{ Authorization = "Basic $cred" }
+```
 
 Example (PowerShell) — **Export from URL** via REST:
 
@@ -244,7 +277,7 @@ $cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmi
 $body = @{
   version = 1
   command = "start_export"
-  href = "/Videos/example.mp4"
+  folderPath = "/Videos/"
   displayName = "example.mp4"
   seekMs = 0
   id = [guid]::NewGuid().ToString()

@@ -37,6 +37,8 @@ enum AlternateExportFilePicker {
         case noVideos
         case noOtherVideos
         case noBookmarks
+        case fileNotFound(displayName: String, folderPath: String)
+        case ambiguousName(displayName: String, count: Int)
 
         var errorDescription: String? {
             switch self {
@@ -50,6 +52,10 @@ enum AlternateExportFilePicker {
                 return "No other videos in the chosen source (only this file)."
             case .noBookmarks:
                 return "No folder bookmarks — bookmark folders in Browse, or use “This folder”."
+            case .fileNotFound(let displayName, let folderPath):
+                return "No video named “\(displayName)” in \(folderPath) (one-level list only)."
+            case .ambiguousName(let displayName, let count):
+                return "\(count) videos named “\(displayName)” in that folder — use a unique name."
             }
         }
     }
@@ -119,6 +125,24 @@ enum AlternateExportFilePicker {
     ) async throws -> WebDAVItem {
         let candidates = try await listVideos(in: folderPath, credentials: credentials)
         return try pickRandom(excluding: fileKey, from: candidates)
+    }
+
+    /// One-level PROPFIND in `folderPath` — match `displayName` (case/diacritic-insensitive). No recursive walk.
+    static func findVideo(
+        named displayName: String,
+        in folderPath: String,
+        credentials: WebDAVCredentials
+    ) async throws -> WebDAVItem {
+        let target = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else { throw PickerError.noVideos }
+        let folder = WebDAVURLBuilder.directoryListingPath(folderPath)
+        let candidates = try await listVideos(in: folder, credentials: credentials)
+        let matches = candidates.filter { WebDAVRenameReconcile.namesEqual($0.name, target) }
+        if matches.count == 1 { return matches[0] }
+        if matches.isEmpty {
+            throw PickerError.fileNotFound(displayName: target, folderPath: folder)
+        }
+        throw PickerError.ambiguousName(displayName: target, count: matches.count)
     }
 
     private static func pickRandom(excluding fileKey: String?, from candidates: [WebDAVItem]) throws -> WebDAVItem {

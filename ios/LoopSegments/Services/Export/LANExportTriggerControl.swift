@@ -25,11 +25,12 @@ struct LANExportTrigger: Codable {
     /// Idempotency token — same `id` is not processed twice.
     var id: String?
     var pool: RandomPool?
-    /// pCloud folder listing path for `start_export_random` (same_folder pool).
+    /// pCloud folder listing path for `start_export_random` / `start_export` (one-level resolve).
     var folderPath: String?
     /// HTTP(S) URL for `download_url`.
     var url: String?
     /// Display name / basename for the export (same as browse Export display name).
+    /// Also accepted as the filename for `start_export` with `folderPath` (alias of `displayName`).
     var saveName: String?
 }
 
@@ -153,6 +154,75 @@ enum LANExportTriggerControl {
         )
     }
 
+    /// REST helper: queue `start_export` with `folderPath` + filename (phone resolves via one-level PROPFIND).
+    static func queueStartExportFromFolder(
+        folderPath: String,
+        displayName: String,
+        seekMs: Int64?,
+        triggerId: String?
+    ) -> (httpStatus: Int, payload: [String: Any]) {
+        let folder = folderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !folder.isEmpty else {
+            return (
+                400,
+                [
+                    "status": "rejected",
+                    "command": LANExportTrigger.Command.startExport.rawValue,
+                    "message": "folderPath is required (pCloud listing path, e.g. /Videos/MyFolder/)",
+                ]
+            )
+        }
+        guard !name.isEmpty else {
+            return (
+                400,
+                [
+                    "status": "rejected",
+                    "command": LANExportTrigger.Command.startExport.rawValue,
+                    "message": "displayName (or saveName) is required — video filename in that folder",
+                ]
+            )
+        }
+        let trimmedId = triggerId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let id = trimmedId.isEmpty ? UUID().uuidString : trimmedId
+        let normalizedFolder = WebDAVURLBuilder.directoryListingPath(folder)
+        let trigger = LANExportTrigger(
+            version: 1,
+            command: .startExport,
+            href: nil,
+            displayName: name,
+            seekMs: seekMs,
+            id: id,
+            pool: nil,
+            folderPath: normalizedFolder,
+            url: nil,
+            saveName: name
+        )
+        guard queueTrigger(trigger) else {
+            return (
+                500,
+                [
+                    "status": "error",
+                    "command": LANExportTrigger.Command.startExport.rawValue,
+                    "message": "Could not write export_trigger.json",
+                    "triggerId": id,
+                ]
+            )
+        }
+        return (
+            202,
+            [
+                "status": "queued",
+                "command": LANExportTrigger.Command.startExport.rawValue,
+                "message": "Export from folder queued — phone lists folderPath once and matches displayName (no walk)",
+                "triggerId": id,
+                "folderPath": normalizedFolder,
+                "displayName": name,
+                "ack": "/\(ackRelativePath)",
+            ]
+        )
+    }
+
     static func readAckSummary() -> String? {
         guard let url = ackURL,
               let data = try? Data(contentsOf: url),
@@ -206,14 +276,44 @@ enum LANExportTriggerControl {
 
         switch trigger.command {
         case .startExport:
-            guard let item = webDAVItem(from: trigger) else {
+            let item: WebDAVItem
+            if let folderRaw = trigger.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !folderRaw.isEmpty,
+               let fileName = startExportFileName(from: trigger) {
+                guard let credentials else {
+                    writeAck(
+                        command: trigger.command.rawValue,
+                        status: "rejected",
+                        message: "Not signed in to pCloud",
+                        triggerId: trigger.id
+                    )
+                    return "Not signed in"
+                }
+                do {
+                    item = try await AlternateExportFilePicker.findVideo(
+                        named: fileName,
+                        in: folderRaw,
+                        credentials: credentials
+                    )
+                } catch {
+                    writeAck(
+                        command: trigger.command.rawValue,
+                        status: "rejected",
+                        message: error.localizedDescription,
+                        triggerId: trigger.id
+                    )
+                    return "Trigger rejected — \(error.localizedDescription)"
+                }
+            } else if let hrefItem = webDAVItem(from: trigger) {
+                item = hrefItem
+            } else {
                 writeAck(
                     command: trigger.command.rawValue,
                     status: "rejected",
-                    message: "start_export requires href and displayName",
+                    message: "start_export requires folderPath+displayName (or saveName), or href+displayName",
                     triggerId: trigger.id
                 )
-                return "Trigger rejected — missing href/name"
+                return "Trigger rejected — missing folderPath/name or href/name"
             }
             if isExportRunning {
                 onStop()
@@ -477,6 +577,15 @@ enum LANExportTriggerControl {
         case .bookmarks: return .bookmarks
         case .sameFolder, .none: return .sameFolder
         }
+    }
+
+    /// Filename for `start_export` with `folderPath` — `displayName` or `saveName`.
+    private static func startExportFileName(from trigger: LANExportTrigger) -> String? {
+        for raw in [trigger.displayName, trigger.saveName] {
+            let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
     }
 
     private static func webDAVItem(from trigger: LANExportTrigger) -> WebDAVItem? {

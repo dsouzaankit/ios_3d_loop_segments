@@ -725,6 +725,10 @@ enum ExportLANServer {
             sendExportFromURLUsageJSON(connection: connection, done: done)
             return
         }
+        if resourcePath == "export_from_folder.json" {
+            sendExportFromFolderUsageJSON(connection: connection, done: done)
+            return
+        }
         guard let fileURL = resolveExportFile(relativePath: resourcePath) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -1244,6 +1248,16 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "export_from_folder.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleExportFromFolderWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         guard let rel = relativeExportPath(fromDAVPath: path) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -1319,11 +1333,21 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "export_from_folder.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleExportFromFolderWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         sendResponse(
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json and /export_from_folder.json".utf8),
             done: done
         )
     }
@@ -2420,6 +2444,31 @@ enum ExportLANServer {
                     "Same pipeline as browse Export from URL (vanilla → segments → archive).",
                     "Returns 202 queued; phone polls export_trigger.json ~2s while app is foreground/exporting/Keep Alive.",
                     "Poll GET /\(LANExportTriggerControl.ackRelativePath) for accepted/rejected.",
+                    "Prefer /export_from_folder.json for pCloud files (avoids CDN IP binding).",
+                ],
+            ] as [String: Any],
+            connection: connection,
+            done: done
+        )
+    }
+
+    private static func sendExportFromFolderUsageJSON(connection: NWConnection, done: @escaping () -> Void) {
+        sendJSONPayload(
+            [
+                "endpoint": "/export_from_folder.json",
+                "methods": ["PUT", "POST"],
+                "auth": "Basic admin:iosadmin",
+                "body": [
+                    "folderPath": "/Videos/MyFolder/",
+                    "displayName": "clip.mp4",
+                    "seekMs": 0,
+                    "id": "<optional uuid>",
+                ],
+                "notes": [
+                    "Queues start_export with folderPath + displayName (saveName alias).",
+                    "Phone does one-level PROPFIND on folderPath and matches the filename — no recursive WebDAV walk.",
+                    "Builds on-phone WebDAV href (avoids PC/CDN IP-bound URLs).",
+                    "Returns 202 queued; poll GET /\(LANExportTriggerControl.ackRelativePath) for accepted/rejected.",
                 ],
             ] as [String: Any],
             connection: connection,
@@ -2469,6 +2518,68 @@ enum ExportLANServer {
                 let queued = LANExportTriggerControl.queueDownloadURLExport(
                     urlString: urlString,
                     saveName: saveName,
+                    triggerId: triggerId
+                )
+                sendJSONPayload(
+                    queued.payload,
+                    connection: connection,
+                    done: done,
+                    status: queued.httpStatus
+                )
+            }
+        }
+    }
+
+    private static func handleExportFromFolderWrite(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 64_000
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain; charset=utf-8",
+                        body: Data("Expected JSON { \"folderPath\", \"displayName\"|\"saveName\", \"seekMs\"?, \"id\"? }".utf8),
+                        done: done
+                    )
+                    return
+                }
+                let folderPath = (object["folderPath"] as? String)
+                    ?? (object["path"] as? String)
+                    ?? (object["listingPath"] as? String)
+                    ?? ""
+                let displayName = (object["displayName"] as? String)
+                    ?? (object["saveName"] as? String)
+                    ?? (object["name"] as? String)
+                    ?? ""
+                let seekMs: Int64? = {
+                    if let n = object["seekMs"] as? Int64 { return n }
+                    if let n = object["seekMs"] as? Int { return Int64(n) }
+                    if let n = object["seekMs"] as? Double { return Int64(n) }
+                    return nil
+                }()
+                let triggerId = object["id"] as? String
+                let queued = LANExportTriggerControl.queueStartExportFromFolder(
+                    folderPath: folderPath,
+                    displayName: displayName,
+                    seekMs: seekMs,
                     triggerId: triggerId
                 )
                 sendJSONPayload(
