@@ -2465,9 +2465,9 @@ enum ExportLANServer {
                     "id": "<optional uuid>",
                 ],
                 "notes": [
-                    "Queues start_export with folderPath + displayName (saveName alias).",
-                    "Phone does one-level PROPFIND on folderPath and matches the filename — no recursive WebDAV walk on success.",
-                    "If folderPath is invalid/garbled or the file is not in that folder, falls back to filename WebDAV walk (bookmarks + recent folders).",
+                    "Queues start_export with displayName/saveName; folderPath optional.",
+                    "With folderPath: one-level PROPFIND, then WebDAV walk on failure.",
+                    "Without folderPath: WebDAV filename walk only (bookmarks + recent folders) — use when PC cannot resolve path.",
                     "Builds on-phone WebDAV href (avoids PC/CDN IP-bound URLs).",
                     "Returns 202 queued; poll GET /\(LANExportTriggerControl.ackRelativePath) for accepted/rejected.",
                 ],
@@ -2557,7 +2557,7 @@ enum ExportLANServer {
                         connection: connection,
                         status: 400,
                         contentType: "text/plain; charset=utf-8",
-                        body: Data("Expected JSON { \"folderPath\", \"displayName\"|\"saveName\", \"seekMs\"?, \"id\"? }".utf8),
+                        body: Data("Expected JSON { \"displayName\"|\"saveName\", \"folderPath\"?, \"seekMs\"?, \"id\"? }".utf8),
                         done: done
                     )
                     return

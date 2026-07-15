@@ -154,7 +154,8 @@ enum LANExportTriggerControl {
         )
     }
 
-    /// REST helper: queue `start_export` with `folderPath` + filename (phone resolves via one-level PROPFIND).
+    /// REST helper: queue `start_export` with optional `folderPath` + filename.
+    /// Empty `folderPath` → phone resolves by WebDAV filename walk only.
     static func queueStartExportFromFolder(
         folderPath: String,
         displayName: String,
@@ -163,29 +164,21 @@ enum LANExportTriggerControl {
     ) -> (httpStatus: Int, payload: [String: Any]) {
         let folder = folderPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !folder.isEmpty else {
-            return (
-                400,
-                [
-                    "status": "rejected",
-                    "command": LANExportTrigger.Command.startExport.rawValue,
-                    "message": "folderPath is required (pCloud listing path, e.g. /Videos/MyFolder/)",
-                ]
-            )
-        }
         guard !name.isEmpty else {
             return (
                 400,
                 [
                     "status": "rejected",
                     "command": LANExportTrigger.Command.startExport.rawValue,
-                    "message": "displayName (or saveName) is required — video filename in that folder",
+                    "message": "displayName (or saveName) is required — video filename",
                 ]
             )
         }
         let trimmedId = triggerId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let id = trimmedId.isEmpty ? UUID().uuidString : trimmedId
-        let normalizedFolder = WebDAVURLBuilder.directoryListingPath(folder)
+        let normalizedFolder: String? = folder.isEmpty
+            ? nil
+            : WebDAVURLBuilder.directoryListingPath(folder)
         let trigger = LANExportTrigger(
             version: 1,
             command: .startExport,
@@ -209,18 +202,23 @@ enum LANExportTriggerControl {
                 ]
             )
         }
-        return (
-            202,
-            [
-                "status": "queued",
-                "command": LANExportTrigger.Command.startExport.rawValue,
-                "message": "Export from folder queued — phone lists folderPath once and matches displayName (no walk)",
-                "triggerId": id,
-                "folderPath": normalizedFolder,
-                "displayName": name,
-                "ack": "/\(ackRelativePath)",
-            ]
-        )
+        var payload: [String: Any] = [
+            "status": "queued",
+            "command": LANExportTrigger.Command.startExport.rawValue,
+            "triggerId": id,
+            "displayName": name,
+            "ack": "/\(ackRelativePath)",
+        ]
+        if let normalizedFolder {
+            payload["folderPath"] = normalizedFolder
+            payload["message"] =
+                "Export from folder queued — phone lists folderPath once, then WebDAV walk on failure"
+        } else {
+            payload["folderPath"] = NSNull()
+            payload["message"] =
+                "Export by filename queued — phone WebDAV walk (no folderPath; bookmark parents / open folder in Browse)"
+        }
+        return (202, payload)
     }
 
     static func readAckSummary() -> String? {
@@ -278,9 +276,9 @@ enum LANExportTriggerControl {
         case .startExport:
             let item: WebDAVItem
             var resolveNote = ""
-            if let folderRaw = trigger.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !folderRaw.isEmpty,
-               let fileName = startExportFileName(from: trigger) {
+            let fileName = startExportFileName(from: trigger)
+            let folderRaw = trigger.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if let fileName, !folderRaw.isEmpty {
                 guard let credentials else {
                     writeAck(
                         command: trigger.command.rawValue,
@@ -302,34 +300,53 @@ enum LANExportTriggerControl {
                     SearchDebugLog.log(
                         "start_export folder resolve failed (\(folderError)) — WebDAV walk for \"\(fileName)\""
                     )
-                    let browsePaths = startExportBrowsePaths(currentItem: currentItem)
-                    do {
-                        if let walked = try await PCloudSearchService.findVideoByDisplayName(
-                            displayName: fileName,
-                            credentials: credentials,
-                            browsePaths: browsePaths,
-                            status: { note in SearchDebugLog.log("start_export walk: \(note)") }
-                        ) {
-                            item = walked
-                            resolveNote = "WebDAV walk (folderPath failed: \(folderError))"
-                        } else {
-                            writeAck(
-                                command: trigger.command.rawValue,
-                                status: "rejected",
-                                message: "\(folderError) — WebDAV walk also found no unique match for “\(fileName)” (bookmark parent folders / open folder in Browse)",
-                                triggerId: trigger.id
-                            )
-                            return "Trigger rejected — folder + walk miss for \(fileName)"
-                        }
-                    } catch {
+                    switch await resolveViaWebDAVWalk(
+                        fileName: fileName,
+                        credentials: credentials,
+                        currentItem: currentItem,
+                        folderErrorPrefix: folderError
+                    ) {
+                    case .success(let walked, let note):
+                        item = walked
+                        resolveNote = note
+                    case .failure(let message):
                         writeAck(
                             command: trigger.command.rawValue,
                             status: "rejected",
-                            message: "\(folderError) — walk failed: \(error.localizedDescription)",
+                            message: message,
                             triggerId: trigger.id
                         )
-                        return "Trigger rejected — \(error.localizedDescription)"
+                        return "Trigger rejected — \(message)"
                     }
+                }
+            } else if let fileName {
+                guard let credentials else {
+                    writeAck(
+                        command: trigger.command.rawValue,
+                        status: "rejected",
+                        message: "Not signed in to pCloud",
+                        triggerId: trigger.id
+                    )
+                    return "Not signed in"
+                }
+                SearchDebugLog.log("start_export: no folderPath — WebDAV walk for \"\(fileName)\"")
+                switch await resolveViaWebDAVWalk(
+                    fileName: fileName,
+                    credentials: credentials,
+                    currentItem: currentItem,
+                    folderErrorPrefix: nil
+                ) {
+                case .success(let walked, let note):
+                    item = walked
+                    resolveNote = note
+                case .failure(let message):
+                    writeAck(
+                        command: trigger.command.rawValue,
+                        status: "rejected",
+                        message: message,
+                        triggerId: trigger.id
+                    )
+                    return "Trigger rejected — \(message)"
                 }
             } else if let hrefItem = webDAVItem(from: trigger) {
                 item = hrefItem
@@ -337,7 +354,7 @@ enum LANExportTriggerControl {
                 writeAck(
                     command: trigger.command.rawValue,
                     status: "rejected",
-                    message: "start_export requires folderPath+displayName (or saveName), or href+displayName",
+                    message: "start_export requires displayName/saveName (optional folderPath), or href+displayName",
                     triggerId: trigger.id
                 )
                 return "Trigger rejected — missing folderPath/name or href/name"
@@ -625,6 +642,46 @@ enum LANExportTriggerControl {
             return [parent]
         }
         return ["/"]
+    }
+
+    private enum WalkResolveResult {
+        case success(WebDAVItem, note: String)
+        case failure(String)
+    }
+
+    private static func resolveViaWebDAVWalk(
+        fileName: String,
+        credentials: WebDAVCredentials,
+        currentItem: WebDAVItem,
+        folderErrorPrefix: String?
+    ) async -> WalkResolveResult {
+        let browsePaths = startExportBrowsePaths(currentItem: currentItem)
+        do {
+            if let walked = try await PCloudSearchService.findVideoByDisplayName(
+                displayName: fileName,
+                credentials: credentials,
+                browsePaths: browsePaths,
+                status: { note in SearchDebugLog.log("start_export walk: \(note)") }
+            ) {
+                let note: String
+                if let folderErrorPrefix {
+                    note = "WebDAV walk (folderPath failed: \(folderErrorPrefix))"
+                } else {
+                    note = "WebDAV walk (no folderPath)"
+                }
+                return .success(walked, note: note)
+            }
+            let miss = "WebDAV walk found no unique match for “\(fileName)” (bookmark parent folders / open folder in Browse)"
+            if let folderErrorPrefix {
+                return .failure("\(folderErrorPrefix) — \(miss)")
+            }
+            return .failure(miss)
+        } catch {
+            if let folderErrorPrefix {
+                return .failure("\(folderErrorPrefix) — walk failed: \(error.localizedDescription)")
+            }
+            return .failure("WebDAV walk failed: \(error.localizedDescription)")
+        }
     }
 
     private static func webDAVItem(from trigger: LANExportTrigger) -> WebDAVItem? {

@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 251 (1.2.16):** **`/export_from_folder.json`** accepts **filename only** (`displayName` / `saveName` without `folderPath`) — phone runs WebDAV walk. Companion should POST `{ "saveName": "…" }` when folder resolve fails (do not require folderPath).
+
 **Build 250 (1.2.15):** If `folderPath` list/match fails on **`/export_from_folder.json`** / `start_export`, the phone falls back to a **filename WebDAV walk** (bookmarks + recent folders — same as Browse search). Prefer a clean `folderPath`; walk is slower and can still miss deep paths.
 
 **Build 249 (1.2.14):** LAN **Export logs** no longer lists `export_latest.txt` / `export_progress.txt` twice (history filter was including the live pointers).
@@ -187,7 +189,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
 | **`/export_from_url.json`** (PUT or POST, Basic auth) | Queue **Export from URL**: `{ "url": "https://…", "saveName": "clip.mp4", "id": "<optional uuid>" }`. Returns **202** `{ status: "queued", … }`. Phone picks it up like other triggers (~2s). For pCloud files prefer **`/export_from_folder.json`** (avoids CDN IP binding). |
-| **`/export_from_folder.json`** (PUT or POST, Basic auth) | Queue **Export from folder**: `{ "folderPath": "/Videos/MyFolder/", "displayName": "clip.mp4", "seekMs": 0, "id": "<optional uuid>" }`. Returns **202**. Phone does **one-level** PROPFIND on `folderPath`, matches the filename, starts WebDAV export (no recursive walk; no PC/CDN href). If that fails (bad/garbled path), falls back to a **filename WebDAV walk** (bookmarks + recent). `saveName` / `name` alias `displayName`. Used by the PC companion [`pcloud_web_dl`](../../pcloud_web_dl). |
+| **`/export_from_folder.json`** (PUT or POST, Basic auth) | Queue **Export from folder/filename**: `{ "folderPath"?: "/Videos/MyFolder/", "displayName": "clip.mp4", "seekMs"?: 0, "id"?: "…" }`. Returns **202**. With `folderPath`: one-level PROPFIND, then walk on failure. **Without `folderPath`:** WebDAV filename walk only. `saveName` / `name` alias `displayName`. Used by [`pcloud_web_dl`](../../pcloud_web_dl) — when folder resolve fails, POST `{ "saveName": "…" }` (omit folderPath). |
 | **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
 | **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
 
@@ -230,7 +232,7 @@ Or with a known WebDAV path `href` (phone-relative path, not a PC/CDN URL):
 
 | `command` | Behavior |
 |-----------|----------|
-| **`start_export`** | Export from `seekMs`. Prefer **`folderPath` + `displayName`** (or `saveName`): phone lists that folder once and matches the filename (no recursive walk; builds on-phone WebDAV `href`). If folder list/match fails, **falls back to filename WebDAV walk** (bookmarks + recent folders). Or pass **`href` + `displayName`** when you already have a phone path. If both folder and `href` are present, **folder resolve wins** (then walk on failure). **Auto-stops** any running export first. |
+| **`start_export`** | Export from `seekMs`. Prefer **`folderPath` + `displayName`** (or `saveName`): phone lists that folder once and matches the filename. If folder list/match fails **or `folderPath` is omitted**, uses **filename WebDAV walk** (bookmarks + recent folders). Or pass **`href` + `displayName`**. If both folder and `href` are present, **folder resolve wins** (then walk on failure). **Auto-stops** any running export first. |
 | **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). LAN page **Start export** button only. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
