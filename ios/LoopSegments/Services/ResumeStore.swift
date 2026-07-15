@@ -79,7 +79,7 @@ final class ResumeStore: ObservableObject {
     }
 
     func beginExport(for item: WebDAVItem, seekMs: Int64, sourceDurationMs: Int64? = nil) {
-        clearPausedExports(exceptFileKey: item.fileKey)
+        // Keep other paused rows — handoff from a running export must stay resumable.
         clearPinnedCompletedExports()
         upsert(item: item) { entry in
             entry.exportInProgress = true

@@ -51,9 +51,18 @@ final class AppSession: ObservableObject {
     }
 
     /// Runs export work on the session so navigation away from Export does not cancel it.
+    /// If an export is already running, pauses + archives it before starting the new task.
     func runExportUITask(_ operation: @escaping @MainActor () async -> Void) {
-        exportUITask?.cancel()
-        exportUITask = Task { await operation() }
+        let prior = exportUITask
+        exportUITask = Task { @MainActor in
+            if isExportRunning || exportCoordinator.isBusy {
+                await prepareForNewExportHandoff()
+            }
+            prior?.cancel()
+            _ = await prior?.result
+            guard !Task.isCancelled else { return }
+            await operation()
+        }
     }
 
     func cancelExportUITask() {
@@ -190,11 +199,14 @@ final class AppSession: ObservableObject {
 
     func startExport(item: WebDAVItem, seekMs: Int64) async throws {
         guard let credentials else { throw ExportError.notSignedIn }
-        guard !isExportRunning else { throw ExportError.jobAlreadyActive }
+        if isExportRunning || exportCoordinator.isBusy {
+            await prepareForNewExportHandoff()
+        }
         for _ in 0 ..< 300 where exportCoordinator.isBusy {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         guard !exportCoordinator.isBusy else { throw ExportError.stillStopping }
+        guard !isExportRunning else { throw ExportError.jobAlreadyActive }
 
         exportGeneration += 1
         let generation = exportGeneration
@@ -433,16 +445,21 @@ final class AppSession: ObservableObject {
         }
     }
 
-    /// Stop any in-flight export so a LAN-page fresh start can proceed.
-    func prepareForLANFreshExport() async {
+    /// Pause the running export (checkpoint kept), archive root media off the active slot, then allow a fresh start.
+    /// Used by LAN REST and in-app Start when replacing the current run.
+    func prepareForNewExportHandoff() async {
+        let hadRunning = isExportRunning || exportCoordinator.isBusy
         if isExportRunning {
-            cancelExport()
+            let name = activeExportItem?.name ?? "export"
+            SearchDebugLog.log("Export handoff: pausing “\(name)” before new request")
+            ExportRuntimeLog.mirror("Export handoff: pausing “\(name)” — checkpoint kept; starting another export")
+            pauseExport()
         } else if exportCoordinator.isBusy {
             exportGeneration += 1
-            userRequestedExportCancel = true
-            userRequestedExportPause = false
-            exportCoordinator.userRequestedCancel = true
-            exportCoordinator.userRequestedPause = false
+            userRequestedExportPause = true
+            userRequestedExportCancel = false
+            exportCoordinator.userRequestedPause = true
+            exportCoordinator.userRequestedCancel = false
             exportCoordinator.cancel()
             isExportRunning = false
             syncExportSessionActive()
@@ -450,11 +467,31 @@ final class AppSession: ObservableObject {
         for _ in 0 ..< 300 where exportCoordinator.isBusy {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        // Clear stop flags so the follow-up startExport is not racing a stale cancel.
+        if hadRunning, ExportMediaArchive.hasActiveExportMediaOnDisk() {
+            let priorName = ExportRetentionSourceCatalog.read()?.sourceFileName
+            let timestamp = ExportMediaArchive.newRetentionTimestamp()
+            let archived = ExportMediaArchive.archiveActiveMedia(
+                timestamp: timestamp,
+                sourceFileName: priorName,
+                log: { ExportRuntimeLog.mirror($0) }
+            )
+            if archived > 0 {
+                _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount)
+                ExportRuntimeLog.mirror(
+                    "Export handoff: archived \(archived) root file(s) to pcld_ios_media/archive/ before new export"
+                )
+            }
+        }
+        // Clear pause/cancel flags so the follow-up startExport is not racing a stale request.
         userRequestedExportCancel = false
         userRequestedExportPause = false
         exportCoordinator.userRequestedCancel = false
         exportCoordinator.userRequestedPause = false
+    }
+
+    /// LAN fresh start — same pause + archive handoff as in-app Start when replacing a run.
+    func prepareForLANFreshExport() async {
+        await prepareForNewExportHandoff()
     }
 }
 

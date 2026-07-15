@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 252 (1.2.17):** Starting a new export (LAN REST or in-app **Start**) **pauses** the current run (checkpoint kept) and **archives** root media to `archive/` before the new job — no longer hard-stops. Prior paused rows stay resumable.
+
 **Build 251 (1.2.16):** **`/export_from_folder.json`** accepts **filename only** (`displayName` / `saveName` without `folderPath`) — phone runs WebDAV walk. Companion should POST `{ "saveName": "…" }` when folder resolve fails (do not require folderPath).
 
 **Build 250 (1.2.15):** If `folderPath` list/match fails on **`/export_from_folder.json`** / `start_export`, the phone falls back to a **filename WebDAV walk** (bookmarks + recent folders — same as Browse search). Prefer a clean `folderPath`; walk is slower and can still miss deep paths.
@@ -232,12 +234,12 @@ Or with a known WebDAV path `href` (phone-relative path, not a PC/CDN URL):
 
 | `command` | Behavior |
 |-----------|----------|
-| **`start_export`** | Export from `seekMs`. Prefer **`folderPath` + `displayName`** (or `saveName`): phone lists that folder once and matches the filename. If folder list/match fails **or `folderPath` is omitted**, uses **filename WebDAV walk** (bookmarks + recent folders). Or pass **`href` + `displayName`**. If both folder and `href` are present, **folder resolve wins** (then walk on failure). **Auto-stops** any running export first. |
-| **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). Also auto-stops first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
+| **`start_export`** | Export from `seekMs`. Prefer **`folderPath` + `displayName`** (or `saveName`): phone lists that folder once and matches the filename. If folder list/match fails **or `folderPath` is omitted**, uses **filename WebDAV walk** (bookmarks + recent folders). Or pass **`href` + `displayName`**. If both folder and `href` are present, **folder resolve wins** (then walk on failure). **Auto-pauses** any running export immediately (checkpoint kept) and **archives** root media before resolve/start — same handoff as in-app Start. |
+| **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). **Auto-pauses** + archives any running export first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). LAN page **Start export** button only. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
 | **`clear_media`** | Same as **Clear media** — deletes active + `archive/` + `downloads/` (rejected while export running). |
-| **`download_url`** | Starts a full export from HTTP(S) `url` using `saveName` as display name (same pipeline as browse Export: vanilla download → 60s segments → archive). Auto-stops any running export first. For **pCloud CDN / publink** URLs (often IP-bound → **HTTP 410**), prefer **`/export_from_folder.json`** / `start_export` with `folderPath` instead. |
+| **`download_url`** | Starts a full export from HTTP(S) `url` using `saveName` as display name (same pipeline as browse Export: vanilla download → 60s segments → archive). **Auto-pauses** + archives any running export first. For **pCloud CDN / publink** URLs (often IP-bound → **HTTP 410**), prefer **`/export_from_folder.json`** / `start_export` with `folderPath` instead. |
 
 Triggers are polled while the app is **foreground**, **exporting**, or **Keep Alive** is playing (~2s). Optional fields: **`pool`**, **`folderPath`** (for random / folder resolve), **`url`** / **`saveName`** (for download; `saveName` also aliases `displayName` for folder resolve), **`id`** (UUID — duplicate ids are ignored).
 

@@ -274,6 +274,10 @@ enum LANExportTriggerControl {
 
         switch trigger.command {
         case .startExport:
+            // Pause + archive immediately so a long folder/walk resolve does not leave the old run going.
+            if isExportRunning || isExportCoordinatorBusy {
+                await prepareForFreshStart()
+            }
             let item: WebDAVItem
             var resolveNote = ""
             let fileName = startExportFileName(from: trigger)
@@ -359,9 +363,6 @@ enum LANExportTriggerControl {
                 )
                 return "Trigger rejected — missing folderPath/name or href/name"
             }
-            if isExportRunning {
-                onStop()
-            }
             if let paused = ResumeStore.mostRecentPausedExport(),
                paused.fileKey == item.fileKey,
                let pausedItem = webDAVItem(from: paused) {
@@ -400,10 +401,9 @@ enum LANExportTriggerControl {
                 )
                 return "Not signed in"
             }
-            if isExportRunning {
-                onStop()
+            if isExportRunning || isExportCoordinatorBusy {
+                await prepareForFreshStart()
             }
-            await prepareForFreshStart()
             let pool = mapPool(trigger.pool)
             do {
                 let picked: WebDAVItem
@@ -436,6 +436,7 @@ enum LANExportTriggerControl {
                     message: "Starting random: \(picked.name)",
                     triggerId: trigger.id
                 )
+                await prepareForFreshStart()
                 onStartExport(picked, max(0, trigger.seekMs ?? 0))
                 return "LAN trigger — random \(picked.name)"
             } catch {
@@ -596,10 +597,9 @@ enum LANExportTriggerControl {
                 )
                 return "Trigger rejected — invalid saveName"
             }
-            if isExportRunning {
-                onStop()
+            if isExportRunning || isExportCoordinatorBusy {
+                await prepareForFreshStart()
             }
-            await prepareForFreshStart()
             let item = WebDAVItem(
                 href: remoteURL.absoluteString,
                 name: saveName,
