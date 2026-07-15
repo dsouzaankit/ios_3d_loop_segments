@@ -86,8 +86,11 @@ final class SegmentExporter {
         let rangeCache = WebDAVRangeCache()
         let containerFormat = MediaContainerFormat.from(filename: item.name)
         let vanillaOnlyContainer = containerFormat.usesVanillaOnlyOnDevice
+        let isExternalHTTP = item.isExternalHTTPMedia(credentials: credentials)
         logHandler(
-            vanillaOnlyContainer
+            isExternalHTTP
+                ? "Prefetching external HTTP(S) (file size)…"
+                : vanillaOnlyContainer
                 ? "Prefetching from pCloud (file size only — \(containerFormat.displayName) is vanilla-only on device)…"
                 : containerFormat.needsMP4IndexAtEOF
                     ? "Prefetching from pCloud (size + MP4 index)…"
@@ -99,7 +102,7 @@ final class SegmentExporter {
             cache: rangeCache,
             container: containerFormat,
             catalogContentLength: catalogContentLength,
-            headOnly: vanillaOnlyContainer,
+            headOnly: vanillaOnlyContainer || isExternalHTTP,
             log: logHandler
         )
 
@@ -118,6 +121,30 @@ final class SegmentExporter {
             continueLANExport: continueLANExport,
             log: logHandler
         )
+
+        if isExternalHTTP {
+            logHandler(
+                "External HTTP(S) — same export pipeline as browse Export " +
+                    "(vanilla download → segments; no sparse probe / pCloud HLS)"
+            )
+            return try await attemptRecoveryExport(
+                probeError: SegmentExporterError.containerProbeFailed(containerFormat),
+                item: item,
+                inputURL: inputURL,
+                credentials: credentials,
+                containerFormat: containerFormat,
+                fileBytes: fileSize > 0 ? fileSize : (item.contentLength ?? 0),
+                seekMs: seekMs,
+                continueLANExport: continueLANExport,
+                resumeCursorMs: resumeCursorMs,
+                authorizationProvider: authorizationProvider,
+                rangeCache: rangeCache,
+                isCancelled: cancelCheck,
+                logHandler: logHandler,
+                onMediaProgress: onMediaProgress,
+                allowPCloudHLSFallback: false
+            )
+        }
 
         if vanillaOnlyContainer {
             logHandler(
@@ -1159,13 +1186,16 @@ final class SegmentExporter {
         rangeCache: WebDAVRangeCache,
         isCancelled: @escaping () -> Bool,
         logHandler: @escaping (String) -> Void,
-        onMediaProgress: (@Sendable (Int64) -> Void)?
+        onMediaProgress: (@Sendable (Int64) -> Void)?,
+        allowPCloudHLSFallback: Bool = true
     ) async throws -> SegmentExportResult {
         abandonSparseWorkingForRecovery(logHandler: logHandler)
         var vanillaFailure: Error?
         if VanillaWebDAVDownload.isBackupEnabled {
             logHandler(
-                "WebDAV probe failed for \(containerFormat.displayName) — vanilla WebDAV download first " +
+                item.isExternalHTTPMedia(credentials: credentials)
+                    ? "External HTTP(S) — vanilla download (full file → segments; same as browse Export)"
+                    : "WebDAV probe failed for \(containerFormat.displayName) — vanilla WebDAV download first " +
                     "(full file, original extension; uses WebDAV only, no pCloud API / gethlslink)"
             )
             do {
@@ -1200,7 +1230,8 @@ final class SegmentExporter {
             }
         }
         if isCancelled() { throw SegmentExporterError.cancelled }
-        if Self.shouldAttemptPCloudHLSFallback(
+        if allowPCloudHLSFallback,
+           Self.shouldAttemptPCloudHLSFallback(
             error: probeError,
             containerFormat: containerFormat,
             fileBytes: fileBytes
@@ -1311,7 +1342,29 @@ final class SegmentExporter {
         ExportPlaybackState.shared.setPCloudTranscodedWorkingActive(false)
 
         let downloadURL = ExportPaths.vanillaDownloadURL(preservingExtensionFrom: item.name)
-        let effectiveBytes = fileBytes > 0 ? fileBytes : (item.contentLength ?? 0)
+        var effectiveBytes = fileBytes > 0 ? fileBytes : (item.contentLength ?? 0)
+        var vanillaAlreadyFilled = false
+        if effectiveBytes <= 0 {
+            logHandler("Unknown Content-Length — full GET into _vanilla_download.* before segments")
+            try await VanillaWebDAVDownload.downloadFullFile(
+                remoteURL: inputURL,
+                destinationURL: downloadURL,
+                fileKey: item.fileKey,
+                sourceHref: item.href,
+                totalLength: 0,
+                fastStartDestinationURL: nil,
+                authorizationProvider: authorizationProvider,
+                isCancelled: isCancelled,
+                log: logHandler,
+                onDownloadedBytes: nil
+            )
+            effectiveBytes = (try? FileManager.default.attributesOfItem(atPath: downloadURL.path)[.size] as? NSNumber)?
+                .int64Value ?? 0
+            guard effectiveBytes > 0 else { throw WebDAVResourceLoaderError.missingContentLength }
+            rangeCache.storeContentLength(effectiveBytes)
+            vanillaAlreadyFilled = true
+        }
+
         guard effectiveBytes > 0 else { throw WebDAVResourceLoaderError.missingContentLength }
 
         let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
@@ -1357,43 +1410,47 @@ final class SegmentExporter {
         }
         let durationProbe = VanillaDurationProbeState()
 
-        try await VanillaWebDAVDownload.downloadFullFile(
-            remoteURL: inputURL,
-            destinationURL: downloadURL,
-            fileKey: item.fileKey,
-            sourceHref: item.href,
-            totalLength: effectiveBytes,
-            fastStartDestinationURL: fastStartURL,
-            authorizationProvider: authorizationProvider,
-            isCancelled: isCancelled,
-            log: logHandler,
-            onDownloadedBytes: { [weak self] bytes in
-                ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: bytes)
-                guard let self else { return }
-                guard ExportPlaybackState.shared.vanillaDurationNeedsProbe else { return }
-                guard durationProbe.nextThresholdIndex < Self.vanillaDurationProbeByteThresholds.count else {
-                    return
-                }
-                let threshold = Self.vanillaDurationProbeByteThresholds[durationProbe.nextThresholdIndex]
-                guard bytes >= threshold else { return }
-                durationProbe.nextThresholdIndex += 1
-                Task {
-                    if let probed = try? await self.probeLocalDurationSeconds(
-                        fileURL: downloadURL,
-                        containerFormat: containerFormat,
-                        log: logHandler
-                    ),
-                        probed > 0 {
-                        ExportPlaybackState.shared.setVanillaDurationSeconds(probed)
-                        self.persistVanillaSourceDuration(seconds: probed, item: item)
-                        logHandler(
-                            "Vanilla LAN timeline — probed during download " +
-                                "\(ExportTimelineLog.wallClock(seconds: probed))"
-                        )
+        if !vanillaAlreadyFilled {
+            try await VanillaWebDAVDownload.downloadFullFile(
+                remoteURL: inputURL,
+                destinationURL: downloadURL,
+                fileKey: item.fileKey,
+                sourceHref: item.href,
+                totalLength: effectiveBytes,
+                fastStartDestinationURL: fastStartURL,
+                authorizationProvider: authorizationProvider,
+                isCancelled: isCancelled,
+                log: logHandler,
+                onDownloadedBytes: { [weak self] bytes in
+                    ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: bytes)
+                    guard let self else { return }
+                    guard ExportPlaybackState.shared.vanillaDurationNeedsProbe else { return }
+                    guard durationProbe.nextThresholdIndex < Self.vanillaDurationProbeByteThresholds.count else {
+                        return
+                    }
+                    let threshold = Self.vanillaDurationProbeByteThresholds[durationProbe.nextThresholdIndex]
+                    guard bytes >= threshold else { return }
+                    durationProbe.nextThresholdIndex += 1
+                    Task {
+                        if let probed = try? await self.probeLocalDurationSeconds(
+                            fileURL: downloadURL,
+                            containerFormat: containerFormat,
+                            log: logHandler
+                        ),
+                            probed > 0 {
+                            ExportPlaybackState.shared.setVanillaDurationSeconds(probed)
+                            self.persistVanillaSourceDuration(seconds: probed, item: item)
+                            logHandler(
+                                "Vanilla LAN timeline — probed during download " +
+                                    "\(ExportTimelineLog.wallClock(seconds: probed))"
+                            )
+                        }
                     }
                 }
-            }
-        )
+            )
+        } else {
+            ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: effectiveBytes)
+        }
 
         var exportAssetURL = downloadURL
         var vanillaSourceAlreadyFaststart = false

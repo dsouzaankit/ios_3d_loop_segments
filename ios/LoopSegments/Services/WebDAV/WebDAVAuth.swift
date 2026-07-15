@@ -15,6 +15,21 @@ enum WebDAVAuth {
             return fallback.authorizationHeaderValue
         }
     }
+
+    /// Basic auth from `user:pass` embedded in the URL, otherwise empty (omit Authorization header).
+    static func providerForExternalURL(_ url: URL) -> WebDAVAuthorizationProvider {
+        {
+            guard let user = url.user, let password = url.password else { return "" }
+            let token = Data("\(user):\(password)".utf8).base64EncodedString()
+            return "Basic \(token)"
+        }
+    }
+
+    static func applyAuthorization(_ authorization: String, to request: inout URLRequest) {
+        let trimmed = authorization.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        request.setValue(trimmed, forHTTPHeaderField: "Authorization")
+    }
 }
 
 enum WebDAVAccessProbe {
@@ -26,6 +41,12 @@ enum WebDAVAccessProbe {
         log: ((String) -> Void)? = nil
     ) async throws -> (URL, WebDAVItem) {
         let url = item.mediaURL(credentials: credentials)
+        if item.isExternalHTTPMedia(credentials: credentials) {
+            let externalAuth = WebDAVAuth.providerForExternalURL(url)
+            log?("External HTTP(S) media — skipping pCloud PROPFIND rename probe")
+            try await verifyMediaURL(url, authorization: externalAuth, log: log)
+            return (url, item)
+        }
         do {
             try await verifyMediaURL(url, authorization: authorization, log: log)
             return (url, item)
@@ -65,7 +86,7 @@ enum WebDAVAccessProbe {
     ) async throws {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
-        request.setValue(authorization(), forHTTPHeaderField: "Authorization")
+        WebDAVAuth.applyAuthorization(authorization(), to: &request)
 
         let (_, response) = try await WebDAVMediaSession.data(for: request, log: log)
         guard let http = response as? HTTPURLResponse else {

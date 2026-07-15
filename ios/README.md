@@ -158,7 +158,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | Page | Contents |
 |------|----------|
 | **`/` (monitor)** | Export source + resume when paused, static playback/log links, **Refresh status** / **Refresh file list** (no timers). Link to **`/browse`**. Browsers always get this HTML at **`GET /`** — not an in-page WebDAV folder tree. |
-| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, **Download URL → phone storage**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
+| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, **Export from URL**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
 
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 
@@ -167,7 +167,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Start export** while paused (resume). Pause/stop are in-app only — not on the LAN page. |
 | **Pending banner** | Shown while a trigger is in flight (switching source, resume, random, trim, clear). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those triggers until export stops). |
 | **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
-| **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. Below that: **Download URL → phone storage** (URL + save name → `pcld_ios_media/downloads/`). |
+| **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. Below that: **Export from URL** (HTTP(S) URL + save name → same vanilla → segments pipeline as browse Export). |
 
 #### JSON APIs (GET unless noted)
 
@@ -212,7 +212,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). LAN page **Start export** button only. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
 | **`clear_media`** | Same as **Clear media** — deletes active + `archive/` + `downloads/` (rejected while export running). |
-| **`download_url`** | Phone pulls HTTP(S) `url` into `pcld_ios_media/downloads/<saveName>` (overwrite if exists), then copies into `archive/<name>_<timestamp>.<ext>`. One download at a time. Rejects empty/HTML responses. |
+| **`download_url`** | Starts a full export from HTTP(S) `url` using `saveName` as display name (same pipeline as browse Export: vanilla download → 60s segments → archive). Auto-stops any running export first. |
 
 Triggers are polled while the app is **foreground**, **exporting**, or **Keep Alive** is playing (~2s). Optional fields: **`pool`**, **`folderPath`** (for random), **`url`** / **`saveName`** (for download), **`id`** (UUID — duplicate ids are ignored).
 

@@ -29,7 +29,7 @@ struct LANExportTrigger: Codable {
     var folderPath: String?
     /// HTTP(S) URL for `download_url`.
     var url: String?
-    /// Destination basename under `pcld_ios_media/downloads/` for `download_url`.
+    /// Display name / basename for the export (same as browse Export display name).
     var saveName: String?
 }
 
@@ -86,8 +86,7 @@ enum LANExportTriggerControl {
         onStop: @escaping () -> Void,
         onClearMedia: @escaping () -> Int,
         onTrimMedia: @escaping () -> Int,
-        onDownloadURL: @escaping (URL, String) -> Void,
-        isURLDownloadRunning: Bool
+        onDownloadURL: @escaping (URL, String) -> Void
     ) async -> String? {
         guard isEnabled else { return nil }
         guard ExportAutoLockCoordinator.appIsActive else { return nil }
@@ -340,15 +339,6 @@ enum LANExportTriggerControl {
             return trimmed > 0 ? "LAN trigger — trimmed \(trimmed) file(s)" : "LAN trigger — nothing to trim"
 
         case .downloadURL:
-            guard !isURLDownloadRunning else {
-                writeAck(
-                    command: trigger.command.rawValue,
-                    status: "rejected",
-                    message: "URL download already running",
-                    triggerId: trigger.id
-                )
-                return "URL download already running"
-            }
             let rawURL = trigger.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard let remoteURL = URL(string: rawURL),
                   let scheme = remoteURL.scheme?.lowercased(),
@@ -374,14 +364,18 @@ enum LANExportTriggerControl {
                 )
                 return "Trigger rejected — invalid saveName"
             }
+            if isExportRunning {
+                onStop()
+            }
+            await prepareForFreshStart()
             writeAck(
                 command: trigger.command.rawValue,
                 status: "accepted",
-                message: "Downloading → downloads/\(saveName)",
+                message: "Starting export \(saveName) from URL (vanilla → segments)",
                 triggerId: trigger.id
             )
             onDownloadURL(remoteURL, saveName)
-            return "LAN trigger — download \(saveName)"
+            return "LAN trigger — URL export \(saveName)"
         }
     }
 

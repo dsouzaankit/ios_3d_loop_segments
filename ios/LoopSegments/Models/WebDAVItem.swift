@@ -38,8 +38,29 @@ struct WebDAVItem: Identifiable, Hashable {
         return Self.videoExtensions.contains(ext)
     }
 
+    /// Absolute `http(s)://…` href whose host is not this account’s pCloud WebDAV host.
+    func isExternalHTTPMedia(credentials: WebDAVCredentials) -> Bool {
+        Self.isExternalHTTPMediaHref(href, pCloudWebDAVHost: credentials.region.webDAVHost)
+    }
+
+    static func isExternalHTTPMediaHref(_ href: String, pCloudWebDAVHost: String) -> Bool {
+        let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host?.lowercased(),
+              !host.isEmpty else {
+            return false
+        }
+        return host != pCloudWebDAVHost.lowercased()
+    }
+
     func mediaURL(credentials: WebDAVCredentials) -> URL {
-        WebDAVURLBuilder.fileURL(href: href, baseURL: credentials.region.baseURL)
+        if isExternalHTTPMedia(credentials: credentials),
+           let absolute = URL(string: href.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return absolute
+        }
+        return WebDAVURLBuilder.fileURL(href: href, baseURL: credentials.region.baseURL)
     }
 }
 

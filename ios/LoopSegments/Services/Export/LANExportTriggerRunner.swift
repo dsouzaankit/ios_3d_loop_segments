@@ -44,14 +44,13 @@ enum LANExportTriggerRunner {
             onDownloadURL: { url, saveName in
                 Task {
                     do {
-                        try await session.startURLDownload(remoteURL: url, saveName: saveName)
+                        try await session.startURLExport(remoteURL: url, saveName: saveName)
                     } catch {
-                        SearchDebugLog.log("LAN URL download failed: \(error.localizedDescription)")
-                        ExportRuntimeLog.mirror("URL download failed: \(error.localizedDescription)")
+                        SearchDebugLog.log("LAN URL export failed: \(error.localizedDescription)")
+                        ExportRuntimeLog.mirror("URL export failed: \(error.localizedDescription)")
                     }
                 }
-            },
-            isURLDownloadRunning: session.isURLDownloadRunning
+            }
         )
     }
 }

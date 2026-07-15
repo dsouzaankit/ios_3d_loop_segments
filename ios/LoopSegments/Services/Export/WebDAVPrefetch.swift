@@ -122,7 +122,7 @@ enum WebDAVPrefetch {
     ) async throws -> Int64 {
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "HEAD"
-        request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        WebDAVAuth.applyAuthorization(authorization, to: &request)
 
         let (_, response) = try await sessionData(for: request, log: log)
         guard let http = response as? HTTPURLResponse else {
@@ -159,7 +159,7 @@ enum WebDAVPrefetch {
     ) -> URLRequest {
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "GET"
-        request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        WebDAVAuth.applyAuthorization(authorization, to: &request)
         request.setValue("bytes=\(offset)-\(endInclusive)", forHTTPHeaderField: "Range")
         return request
     }

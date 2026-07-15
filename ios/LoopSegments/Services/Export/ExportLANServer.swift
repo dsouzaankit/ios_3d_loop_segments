@@ -2404,8 +2404,8 @@ enum ExportLANServer {
         let pass = htmlEscape(lanWebDAVPassword)
         return """
         <div class="panel">
-        <h2>Download URL → phone storage</h2>
-        <p class="muted">Phone pulls the link into <code>pcld_ios_media/downloads/</code> (same app storage as exports). Prefer <strong>https://</strong> (plain http works for LAN hosts). Keep Loop Segments open on Wi‑Fi. Overwrites if the save name already exists.</p>
+        <h2>Export from URL</h2>
+        <p class="muted">Same pipeline as browse <strong>Export</strong>: phone downloads the link (vanilla → 60s segments → archive). Prefer <strong>https://</strong>. Keep Loop Segments open on Wi‑Fi. Save name becomes the export display name / file extension.</p>
         <div class="row">
           <label style="flex:1;display:flex;flex-direction:column;gap:0.25rem">URL
             <input type="url" id="url-download-link" placeholder="https://…" style="width:100%;padding:0.4rem" autocomplete="off" />
@@ -2415,7 +2415,7 @@ enum ExportLANServer {
           <label style="flex:1;display:flex;flex-direction:column;gap:0.25rem">Save as (file name)
             <input type="text" id="url-download-name" placeholder="MyClip.mp4" style="width:100%;padding:0.4rem" autocomplete="off" />
           </label>
-          <button type="button" id="url-download-start">Download</button>
+          <button type="button" id="url-download-start">Start export</button>
         </div>
         <p id="url-download-status" class="muted"></p>
         </div>
@@ -2461,7 +2461,7 @@ enum ExportLANServer {
             }
             var btn = document.getElementById("url-download-start");
             btn.disabled = true;
-            setStatus("Queuing download… Keep the phone app open.");
+            setStatus("Queuing export… Keep the phone app open.");
             try {
               var body = {
                 version: 1,
@@ -2480,7 +2480,7 @@ enum ExportLANServer {
                 try { errText = await r.text(); } catch (e) {}
                 throw new Error("PUT " + r.status + (errText ? ": " + errText.trim() : ""));
               }
-              var finalMsg = "Trigger sent — phone is downloading to downloads/" + saveName;
+              var finalMsg = "Trigger sent — phone starting export from URL (" + saveName + ")";
               for (var i = 0; i < 8; i++) {
                 await new Promise(function (res) { setTimeout(res, 500); });
                 try {
@@ -2740,8 +2740,8 @@ enum ExportLANServer {
                 };
               case "download_url":
                 return {
-                  title: "Starting URL download",
-                  detail: "Please wait while the phone queues the download into downloads/." + foreground
+                  title: "Starting URL export",
+                  detail: "Please wait while the phone starts the same export pipeline as browse Export (vanilla → segments)." + foreground
                 };
               case "trim_media":
                 return {

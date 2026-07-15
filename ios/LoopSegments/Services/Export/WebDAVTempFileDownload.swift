@@ -1553,7 +1553,7 @@ final class WebDAVTempFileDownload: @unchecked Sendable {
     ) async throws -> Data {
         var request = URLRequest(url: remoteURL)
         request.httpMethod = "GET"
-        request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        WebDAVAuth.applyAuthorization(authorization, to: &request)
         request.setValue("bytes=\(offset)-\(endInclusive)", forHTTPHeaderField: "Range")
 
         let (data, response) = try await WebDAVMediaSession.data(for: request, log: log)

@@ -100,7 +100,15 @@ final class ExportCoordinator {
             "Logs: export_latest.txt (live), \(logWriter.historyLogFileName) (this run, kept), export_progress.txt"
         )
         logHandler("pCloud region: \(credentials.region.displayName) (\(credentials.region.webDAVHost))")
-        let authProvider = WebDAVAuth.provider(fallback: credentials)
+        let isExternal = item.isExternalHTTPMedia(credentials: credentials)
+        let authProvider: WebDAVAuthorizationProvider
+        if isExternal {
+            let absolute = item.mediaURL(credentials: credentials)
+            authProvider = WebDAVAuth.providerForExternalURL(absolute)
+            logHandler("External HTTP(S) export source — \(absolute.absoluteString)")
+        } else {
+            authProvider = WebDAVAuth.provider(fallback: credentials)
+        }
         logHandler("Verifying file access (HEAD)…")
         let (resolvedURL, resolvedItem) = try await WebDAVAccessProbe.resolveMediaURL(
             for: item,

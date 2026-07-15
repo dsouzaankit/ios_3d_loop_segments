@@ -28,8 +28,19 @@ enum VanillaWebDAVDownload {
         onDownloadedBytes: ((Int64) -> Void)? = nil
     ) async throws {
         var expectedLength = totalLength
-        guard expectedLength > 0 else {
-            throw WebDAVResourceLoaderError.missingContentLength
+        if expectedLength <= 0 {
+            log("Vanilla download — unknown Content-Length; using full GET")
+            try await downloadViaFullGET(
+                remoteURL: remoteURL,
+                destinationURL: destinationURL,
+                fileKey: fileKey,
+                sourceHref: sourceHref,
+                authorization: authorizationProvider(),
+                isCancelled: isCancelled,
+                log: log,
+                onDownloadedBytes: onDownloadedBytes
+            )
+            return
         }
 
         let fm = FileManager.default
@@ -140,6 +151,24 @@ enum VanillaWebDAVDownload {
                 throw error
             }
             guard data.count == chunkLen else {
+                if offset == 0 {
+                    log(
+                        "Range response size mismatch (\(data.count) vs \(chunkLen)) — " +
+                            "falling back to full GET (common for external CDNs)"
+                    )
+                    try? handle?.close()
+                    try await downloadViaFullGET(
+                        remoteURL: remoteURL,
+                        destinationURL: destinationURL,
+                        fileKey: fileKey,
+                        sourceHref: sourceHref,
+                        authorization: auth,
+                        isCancelled: isCancelled,
+                        log: log,
+                        onDownloadedBytes: onDownloadedBytes
+                    )
+                    return
+                }
                 throw WebDAVResourceLoaderError.invalidResponse
             }
             try handle?.seek(toOffset: UInt64(offset))
@@ -255,6 +284,49 @@ enum VanillaWebDAVDownload {
         }
 
         return nil
+    }
+
+    /// When Range is unsupported (CDN returns full body / wrong size), fill destination with one GET.
+    private static func downloadViaFullGET(
+        remoteURL: URL,
+        destinationURL: URL,
+        fileKey: String,
+        sourceHref: String?,
+        authorization: String,
+        isCancelled: @escaping () -> Bool,
+        log: @escaping (String) -> Void,
+        onDownloadedBytes: ((Int64) -> Void)?
+    ) async throws {
+        if isCancelled() || Task.isCancelled { throw CancellationError() }
+        var request = URLRequest(url: remoteURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 60 * 60
+        WebDAVAuth.applyAuthorization(authorization, to: &request)
+
+        let (tempURL, response) = try await URLSession.shared.download(for: request)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw WebDAVResourceLoaderError.invalidResponse
+        }
+        guard (200 ... 299).contains(http.statusCode) else {
+            throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
+        }
+        if isCancelled() || Task.isCancelled { throw CancellationError() }
+
+        let fm = FileManager.default
+        let size = (try? fm.attributesOfItem(atPath: tempURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard size > 0 else {
+            throw WebDAVResourceLoaderError.missingContentLength
+        }
+        try WebDAVTempFileDownload.ensureFreeDiskSpace(forBytes: size)
+        if fm.fileExists(atPath: destinationURL.path) {
+            try fm.removeItem(at: destinationURL)
+        }
+        try fm.copyItem(at: tempURL, to: destinationURL)
+        VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: size, href: sourceHref)
+        onDownloadedBytes?(size)
+        log("Vanilla download via full GET — \(formatBytes(size)) → \(destinationURL.lastPathComponent)")
     }
 
     /// `true` when a sidecar was written/updated; `false` when source is already faststart.

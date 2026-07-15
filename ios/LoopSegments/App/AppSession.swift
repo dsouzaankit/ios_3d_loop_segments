@@ -362,7 +362,23 @@ final class AppSession: ObservableObject {
         return SegmentCleanup.trimExportMediaArchives(log: { SearchDebugLog.log("Trim media: \($0)") })
     }
 
-    /// LAN / in-app HTTP(S) download into `pcld_ios_media/downloads/<saveName>`.
+    /// LAN external URL → same export pipeline as pCloud browse Export (vanilla → segments → archive).
+    func startURLExport(remoteURL: URL, saveName: String, seekMs: Int64 = 0) async throws {
+        guard credentials != nil else { throw ExportError.notSignedIn }
+        guard let safeName = URLMediaDownload.sanitizeSaveFileName(saveName, sourceURL: remoteURL) else {
+            throw URLMediaDownload.DownloadError.invalidSaveName
+        }
+        let item = WebDAVItem(
+            href: remoteURL.absoluteString,
+            name: safeName,
+            isDirectory: false,
+            contentLength: nil
+        )
+        LANExportContext.saveReference(item)
+        try await startExport(item: item, seekMs: seekMs)
+    }
+
+    /// Legacy one-shot save into `downloads/` (not the export pipeline). Prefer `startURLExport`.
     func startURLDownload(remoteURL: URL, saveName: String) async throws {
         guard !isURLDownloadRunning else { throw ExportError.urlDownloadAlreadyActive }
         guard let safeName = URLMediaDownload.sanitizeSaveFileName(saveName, sourceURL: remoteURL) else {
