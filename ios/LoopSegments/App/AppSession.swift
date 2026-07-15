@@ -450,6 +450,11 @@ final class AppSession: ObservableObject {
         for _ in 0 ..< 300 where exportCoordinator.isBusy {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
+        // Clear stop flags so the follow-up startExport is not racing a stale cancel.
+        userRequestedExportCancel = false
+        userRequestedExportPause = false
+        exportCoordinator.userRequestedCancel = false
+        exportCoordinator.userRequestedPause = false
     }
 }
 

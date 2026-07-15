@@ -2461,7 +2461,17 @@ enum ExportLANServer {
             }
             var btn = document.getElementById("url-download-start");
             btn.disabled = true;
-            setStatus("Queuing export… Keep the phone app open.");
+            setStatus("Starting export… Keep the phone app open.");
+            if (window.setExportPending) {
+              window.setExportPending(
+                true,
+                "Starting URL export",
+                "Please wait while the phone starts the same export pipeline as browse Export (vanilla → segments). Keep Loop Segments open in the foreground."
+              );
+            }
+            if (window.updateExportSourceLine) {
+              window.updateExportSourceLine("running", saveName);
+            }
             try {
               var body = {
                 version: 1,
@@ -2497,10 +2507,17 @@ enum ExportLANServer {
                   }
                 } catch (e) {}
               }
-              setStatus(finalMsg + " Download continues on the phone — refresh playback when finished (also archived under archive/).");
+              setStatus(finalMsg + " Export runs on the phone — watch the top bar / export_latest.txt.");
+              if (window.refreshLANPlayback) {
+                for (var p = 0; p < 6; p++) {
+                  await new Promise(function (res) { setTimeout(res, 500); });
+                  try { await window.refreshLANPlayback(); } catch (e) {}
+                }
+              }
             } catch (e) {
               setStatus(e.message || String(e), true);
             } finally {
+              if (window.setExportPending) window.setExportPending(false);
               btn.disabled = false;
             }
           };

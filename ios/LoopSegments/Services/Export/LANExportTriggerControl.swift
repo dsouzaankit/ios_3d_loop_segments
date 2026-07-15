@@ -85,8 +85,7 @@ enum LANExportTriggerControl {
         onPause: @escaping () -> Void,
         onStop: @escaping () -> Void,
         onClearMedia: @escaping () -> Int,
-        onTrimMedia: @escaping () -> Int,
-        onDownloadURL: @escaping (URL, String) -> Void
+        onTrimMedia: @escaping () -> Int
     ) async -> String? {
         guard isEnabled else { return nil }
         guard ExportAutoLockCoordinator.appIsActive else { return nil }
@@ -368,13 +367,19 @@ enum LANExportTriggerControl {
                 onStop()
             }
             await prepareForFreshStart()
+            let item = WebDAVItem(
+                href: remoteURL.absoluteString,
+                name: saveName,
+                isDirectory: false,
+                contentLength: nil
+            )
             writeAck(
                 command: trigger.command.rawValue,
                 status: "accepted",
                 message: "Starting export \(saveName) from URL (vanilla → segments)",
                 triggerId: trigger.id
             )
-            onDownloadURL(remoteURL, saveName)
+            onStartExport(item, 0)
             return "LAN trigger — URL export \(saveName)"
         }
     }

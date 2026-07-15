@@ -6,10 +6,16 @@ enum LANExportTriggerRunner {
     private static var task: Task<Void, Never>?
 
     static func setAppActive(_ active: Bool, session: AppSession) {
-        task?.cancel()
-        task = nil
         ExportAutoLockCoordinator.setAppActive(active)
-        guard active, ExportLANServer.isEnabled, LANExportTriggerControl.isEnabled else { return }
+        let shouldRun = active && ExportLANServer.isEnabled && LANExportTriggerControl.isEnabled
+        if !shouldRun {
+            task?.cancel()
+            task = nil
+            return
+        }
+        // Do not cancel/restart an already-running poller — `isExportSessionActive` flips when
+        // LAN-triggered startExport begins, and restarting here can drop the start Task.
+        if task != nil { return }
         task = Task {
             while !Task.isCancelled {
                 await tick(session: session)
@@ -29,28 +35,19 @@ enum LANExportTriggerRunner {
             prepareForFreshStart: { await session.prepareForLANFreshExport() },
             onStartExport: { item, seek in
                 LANExportContext.saveReference(item)
-                Task {
+                session.runExportUITask {
                     do {
                         try await session.startExport(item: item, seekMs: seek)
                     } catch {
                         SearchDebugLog.log("LAN HTTP trigger export failed: \(error.localizedDescription)")
+                        ExportRuntimeLog.mirror("LAN export failed: \(error.localizedDescription)")
                     }
                 }
             },
             onPause: { session.pauseExport() },
             onStop: { session.cancelExport() },
             onClearMedia: { session.clearExportMedia(referenceItem: reference) },
-            onTrimMedia: { session.trimExportMediaArchives() },
-            onDownloadURL: { url, saveName in
-                Task {
-                    do {
-                        try await session.startURLExport(remoteURL: url, saveName: saveName)
-                    } catch {
-                        SearchDebugLog.log("LAN URL export failed: \(error.localizedDescription)")
-                        ExportRuntimeLog.mirror("URL export failed: \(error.localizedDescription)")
-                    }
-                }
-            }
+            onTrimMedia: { session.trimExportMediaArchives() }
         )
     }
 }

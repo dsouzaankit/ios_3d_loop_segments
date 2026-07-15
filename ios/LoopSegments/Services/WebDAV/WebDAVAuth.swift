@@ -95,13 +95,35 @@ enum WebDAVAccessProbe {
         if http.statusCode == 401 || http.statusCode == 403 {
             throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
         }
-        guard (200 ... 299).contains(http.statusCode) else {
-            throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
+        if (200 ... 299).contains(http.statusCode) {
+            if let length = contentLength(from: http) {
+                log?("Auth probe OK — HTTP \(http.statusCode), size \(formatBytes(length))")
+            } else {
+                log?("Auth probe OK for file (HTTP \(http.statusCode))")
+            }
+            return
         }
-        if let length = contentLength(from: http) {
-            log?("Auth probe OK — HTTP \(http.statusCode), size \(formatBytes(length))")
+
+        // Many CDNs reject HEAD (405/404) but allow Range GET — same fallback as prefetch.
+        log?("Auth probe HEAD HTTP \(http.statusCode) — trying 1-byte Range GET")
+        var rangeRequest = URLRequest(url: url)
+        rangeRequest.httpMethod = "GET"
+        WebDAVAuth.applyAuthorization(authorization(), to: &rangeRequest)
+        rangeRequest.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        let (_, rangeResponse) = try await WebDAVMediaSession.data(for: rangeRequest, log: log)
+        guard let rangeHttp = rangeResponse as? HTTPURLResponse else {
+            throw WebDAVResourceLoaderError.invalidResponse
+        }
+        if rangeHttp.statusCode == 401 || rangeHttp.statusCode == 403 {
+            throw WebDAVResourceLoaderError.httpStatus(rangeHttp.statusCode)
+        }
+        guard (200 ... 299).contains(rangeHttp.statusCode) || rangeHttp.statusCode == 206 else {
+            throw WebDAVResourceLoaderError.httpStatus(rangeHttp.statusCode)
+        }
+        if let length = contentLength(from: rangeHttp) {
+            log?("Auth probe OK — Range GET HTTP \(rangeHttp.statusCode), size \(formatBytes(length))")
         } else {
-            log?("Auth probe OK for file (HTTP \(http.statusCode))")
+            log?("Auth probe OK — Range GET HTTP \(rangeHttp.statusCode)")
         }
     }
 
