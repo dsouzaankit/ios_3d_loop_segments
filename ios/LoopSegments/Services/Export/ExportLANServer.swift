@@ -399,6 +399,14 @@ enum ExportLANServer {
                 connection: connection,
                 done: done
             )
+        case "POST":
+            handlePOST(
+                path: path,
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
         case "MKCOL":
             handleMKCOL(path: path, connection: connection, done: done)
         case "DELETE":
@@ -412,7 +420,7 @@ enum ExportLANServer {
         case "UNLOCK":
             sendNoContent(connection: connection, done: done)
         default:
-            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Allowed: GET, HEAD, PUT, MKCOL, DELETE, OPTIONS, PROPFIND, LOCK, UNLOCK".utf8), done: done)
+            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Allowed: GET, HEAD, PUT, POST, MKCOL, DELETE, OPTIONS, PROPFIND, LOCK, UNLOCK".utf8), done: done)
         }
     }
 
@@ -515,7 +523,7 @@ enum ExportLANServer {
     /// Auth on OPTIONS/PROPFIND/LOCK, WebDAV writes, and WebDAV `GET /`. Media GET stays open (Skybox often omits Authorization on play).
     private static func requiresLANWebDAVAuth(method: String, path: String, requestHeaders: String) -> Bool {
         switch method {
-        case "OPTIONS", "PROPFIND", "LOCK", "PUT", "MKCOL", "DELETE":
+        case "OPTIONS", "PROPFIND", "LOCK", "PUT", "POST", "MKCOL", "DELETE":
             return true
         case "GET", "HEAD":
             return normalizedGETPath(path).isEmpty && !isBrowserLikeRequest(requestHeaders: requestHeaders)
@@ -711,6 +719,10 @@ enum ExportLANServer {
         if resourcePath == "pcloud_bookmarks.json" {
             guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
             sendPCloudBookmarksJSON(connection: connection, done: done)
+            return
+        }
+        if resourcePath == "export_from_url.json" {
+            sendExportFromURLUsageJSON(connection: connection, done: done)
             return
         }
         guard let fileURL = resolveExportFile(relativePath: resourcePath) else {
@@ -1222,6 +1234,16 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "export_from_url.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleExportFromURLWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         guard let rel = relativeExportPath(fromDAVPath: path) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -1277,6 +1299,33 @@ enum ExportLANServer {
                 }
             }
         }
+    }
+
+    private static func handlePOST(
+        path: String,
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        if normalized == "export_from_url.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleExportFromURLWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
+        sendResponse(
+            connection: connection,
+            status: 405,
+            contentType: "text/plain",
+            body: Data("POST is only supported for /export_from_url.json".utf8),
+            done: done
+        )
     }
 
     private static func handleMKCOL(
@@ -1363,7 +1412,7 @@ enum ExportLANServer {
     }
 
     private static func sendOptions(connection: NWConnection, done: @escaping () -> Void) {
-        let allow = "GET, HEAD, PUT, MKCOL, DELETE, OPTIONS, PROPFIND, LOCK, UNLOCK"
+        let allow = "GET, HEAD, PUT, POST, MKCOL, DELETE, OPTIONS, PROPFIND, LOCK, UNLOCK"
         var lines = [
             "HTTP/1.1 200 OK",
             "DAV: 1, 2",
@@ -2328,13 +2377,14 @@ enum ExportLANServer {
     private static func sendJSONPayload(
         _ payload: [String: Any],
         connection: NWConnection,
-        done: @escaping () -> Void
+        done: @escaping () -> Void,
+        status: Int = 200
     ) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return
         }
-        sendResponse(connection: connection, status: 200, contentType: "application/json", body: data, done: done)
+        sendResponse(connection: connection, status: status, contentType: "application/json", body: data, done: done)
     }
 
     private static func sendPCloudListJSON(
@@ -2353,6 +2403,82 @@ enum ExportLANServer {
         done: @escaping () -> Void
     ) {
         sendJSONPayload(FolderBookmarkStore.lanBookmarksPayload(), connection: connection, done: done)
+    }
+
+    private static func sendExportFromURLUsageJSON(connection: NWConnection, done: @escaping () -> Void) {
+        sendJSONPayload(
+            [
+                "endpoint": "/export_from_url.json",
+                "methods": ["PUT", "POST"],
+                "auth": "Basic admin:iosadmin",
+                "body": [
+                    "url": "https://example.com/video.mp4",
+                    "saveName": "video.mp4",
+                    "id": "<optional uuid>",
+                ],
+                "notes": [
+                    "Same pipeline as browse Export from URL (vanilla → segments → archive).",
+                    "Returns 202 queued; phone polls export_trigger.json ~2s while app is foreground/exporting/Keep Alive.",
+                    "Poll GET /\(LANExportTriggerControl.ackRelativePath) for accepted/rejected.",
+                ],
+            ] as [String: Any],
+            connection: connection,
+            done: done
+        )
+    }
+
+    private static func handleExportFromURLWrite(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 64_000
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain; charset=utf-8",
+                        body: Data("Expected JSON { \"url\", \"saveName\"? , \"id\"? }".utf8),
+                        done: done
+                    )
+                    return
+                }
+                let urlString = (object["url"] as? String)
+                    ?? (object["downloadURL"] as? String)
+                    ?? (object["href"] as? String)
+                    ?? ""
+                let saveName = (object["saveName"] as? String)
+                    ?? (object["name"] as? String)
+                    ?? (object["displayName"] as? String)
+                let triggerId = object["id"] as? String
+                let queued = LANExportTriggerControl.queueDownloadURLExport(
+                    urlString: urlString,
+                    saveName: saveName,
+                    triggerId: triggerId
+                )
+                sendJSONPayload(
+                    queued.payload,
+                    connection: connection,
+                    done: done,
+                    status: queued.httpStatus
+                )
+            }
+        }
     }
 
     private static func handlePCloudBookmarksPUT(
@@ -2405,7 +2531,7 @@ enum ExportLANServer {
         return """
         <div class="panel">
         <h2>Export from URL</h2>
-        <p class="muted">Same pipeline as browse <strong>Export</strong>: phone downloads the link (vanilla → 60s segments → archive). Prefer <strong>https://</strong>. Keep Loop Segments open on Wi‑Fi. Save name becomes the export display name / file extension.</p>
+        <p class="muted">Same pipeline as browse <strong>Export</strong>: phone downloads the link (vanilla → 60s segments → archive). Prefer <strong>https://</strong>. Keep Loop Segments open on Wi‑Fi. Save name becomes the export display name / file extension. REST: <code>POST /export_from_url.json</code> (Basic auth).</p>
         <div class="row">
           <label style="flex:1;display:flex;flex-direction:column;gap:0.25rem">URL
             <input type="url" id="url-download-link" placeholder="https://…" style="width:100%;padding:0.4rem" autocomplete="off" />
@@ -2422,7 +2548,7 @@ enum ExportLANServer {
         <script>
         (function () {
           var AUTH = "Basic " + btoa("\(user):\(pass)");
-          var triggerUrl = "/\(LANExportTriggerControl.triggerRelativePath)";
+          var exportUrlApi = "/export_from_url.json";
           var ackUrl = "/\(LANExportTriggerControl.ackRelativePath)";
           function uuid() {
             return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -2474,32 +2600,40 @@ enum ExportLANServer {
             }
             try {
               var body = {
-                version: 1,
-                command: "download_url",
                 url: url,
                 saveName: saveName,
                 id: uuid()
               };
-              var r = await fetch(triggerUrl, {
-                method: "PUT",
+              var r = await fetch(exportUrlApi, {
+                method: "POST",
                 headers: { "Authorization": AUTH, "Content-Type": "application/json" },
                 body: JSON.stringify(body)
               });
-              if (!r.ok) {
-                var errText = "";
-                try { errText = await r.text(); } catch (e) {}
-                throw new Error("PUT " + r.status + (errText ? ": " + errText.trim() : ""));
+              var j = null;
+              try { j = await r.json(); } catch (e) {}
+              if (!r.ok && r.status !== 202) {
+                var errText = (j && j.message) ? j.message : "";
+                if (!errText) {
+                  try { errText = await r.text(); } catch (e2) {}
+                }
+                throw new Error("POST " + r.status + (errText ? ": " + errText.trim() : ""));
               }
-              var finalMsg = "Trigger sent — phone starting export from URL (" + saveName + ")";
+              var finalMsg = (j && (j.status || j.message))
+                ? ((j.status || "ok") + ": " + (j.message || ""))
+                : ("queued: export " + saveName);
+              if (j && (j.status === "rejected" || j.status === "error")) {
+                setStatus(finalMsg, true);
+                return;
+              }
               for (var i = 0; i < 8; i++) {
                 await new Promise(function (res) { setTimeout(res, 500); });
                 try {
                   var ack = await fetch(ackUrl, { headers: { "Authorization": AUTH } });
                   if (ack.ok) {
-                    var j = await ack.json();
-                    if (j.triggerId && body.id && j.triggerId !== body.id) continue;
-                    finalMsg = (j.status || "ok") + ": " + (j.message || "");
-                    if (j.status === "rejected" || j.status === "ignored") {
+                    var a = await ack.json();
+                    if (j && j.triggerId && a.triggerId && a.triggerId !== j.triggerId) continue;
+                    finalMsg = (a.status || "ok") + ": " + (a.message || "");
+                    if (a.status === "rejected" || a.status === "ignored") {
                       setStatus(finalMsg, true);
                       return;
                     }

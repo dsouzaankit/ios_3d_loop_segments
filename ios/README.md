@@ -178,6 +178,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`/pcloud_list.json?path=/Folder/`** | pCloud folder listing (directories + video files). |
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
+| **`/export_from_url.json`** (PUT or POST, Basic auth) | Queue **Export from URL**: `{ "url": "https://…", "saveName": "clip.mp4", "id": "<optional uuid>" }`. Returns **202** `{ status: "queued", … }`. Phone picks it up like other triggers (~2s). |
 | **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
 | **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
 
@@ -218,7 +219,24 @@ Triggers are polled while the app is **foreground**, **exporting**, or **Keep Al
 
 **Ack** (`export_trigger.ack.json`): `{ "receivedAt", "command", "status", "message", "triggerId" }` where **`status`** is `accepted` \| `rejected` \| `ignored`.
 
-Example (PowerShell):
+Example (PowerShell) — **Export from URL** via REST:
+
+```powershell
+$base = "http://10.0.0.42:8765"
+$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
+$body = @{
+  url = "https://example.com/clip.mp4"
+  saveName = "clip.mp4"
+  id = [guid]::NewGuid().ToString()
+} | ConvertTo-Json
+Invoke-WebRequest -Method POST -Uri "$base/export_from_url.json" `
+  -Headers @{ Authorization = "Basic $cred"; "Content-Type" = "application/json" } -Body $body
+# Optional: poll ack
+Invoke-RestMethod -Uri "$base/pcld_ios_media/scripts/export_trigger.ack.json" `
+  -Headers @{ Authorization = "Basic $cred" }
+```
+
+Example (PowerShell) — pCloud **start_export** via trigger file:
 
 ```powershell
 $base = "http://10.0.0.42:8765"

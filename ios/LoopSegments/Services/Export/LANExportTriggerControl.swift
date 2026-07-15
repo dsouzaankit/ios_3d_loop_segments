@@ -65,6 +65,94 @@ enum LANExportTriggerControl {
         ExportPaths.urlForLANWritableMedia(relativePath: ackRelativePath)
     }
 
+    /// Writes `export_trigger.json` for LAN REST / scripts (polled ~2s while app is active).
+    @discardableResult
+    static func queueTrigger(_ trigger: LANExportTrigger) -> Bool {
+        guard let url = triggerURL else { return false }
+        let dir = url.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(trigger)
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// REST helper: queue `download_url` (same as browse **Export from URL**).
+    static func queueDownloadURLExport(
+        urlString: String,
+        saveName: String?,
+        triggerId: String?
+    ) -> (httpStatus: Int, payload: [String: Any]) {
+        let rawURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let remoteURL = URL(string: rawURL),
+              let scheme = remoteURL.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return (
+                400,
+                [
+                    "status": "rejected",
+                    "command": LANExportTrigger.Command.downloadURL.rawValue,
+                    "message": "url must be a valid http(s) URL",
+                ]
+            )
+        }
+        let requestedName = saveName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let fallback = remoteURL.lastPathComponent.isEmpty ? "download" : remoteURL.lastPathComponent
+        guard let name = URLMediaDownload.sanitizeSaveFileName(
+            requestedName.isEmpty ? fallback : requestedName,
+            sourceURL: remoteURL
+        ) else {
+            return (
+                400,
+                [
+                    "status": "rejected",
+                    "command": LANExportTrigger.Command.downloadURL.rawValue,
+                    "message": "saveName is invalid",
+                ]
+            )
+        }
+        let trimmedId = triggerId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let id = trimmedId.isEmpty ? UUID().uuidString : trimmedId
+        let trigger = LANExportTrigger(
+            version: 1,
+            command: .downloadURL,
+            href: nil,
+            displayName: nil,
+            seekMs: nil,
+            id: id,
+            pool: nil,
+            folderPath: nil,
+            url: remoteURL.absoluteString,
+            saveName: name
+        )
+        guard queueTrigger(trigger) else {
+            return (
+                500,
+                [
+                    "status": "error",
+                    "command": LANExportTrigger.Command.downloadURL.rawValue,
+                    "message": "Could not write export_trigger.json",
+                    "triggerId": id,
+                ]
+            )
+        }
+        return (
+            202,
+            [
+                "status": "queued",
+                "command": LANExportTrigger.Command.downloadURL.rawValue,
+                "message": "Export from URL queued — keep Loop Segments open (foreground, exporting, or Keep Alive)",
+                "triggerId": id,
+                "url": remoteURL.absoluteString,
+                "saveName": name,
+                "ack": "/\(ackRelativePath)",
+            ]
+        )
+    }
+
     static func readAckSummary() -> String? {
         guard let url = ackURL,
               let data = try? Data(contentsOf: url),
