@@ -58,8 +58,10 @@ final class AppSession: ObservableObject {
             if isExportRunning || exportCoordinator.isBusy {
                 await prepareForNewExportHandoff()
             }
-            prior?.cancel()
-            _ = await prior?.result
+            // Let the previous startExport unwind after pause (do not cancel mid-handoff).
+            if let prior {
+                _ = await prior.result
+            }
             guard !Task.isCancelled else { return }
             await operation()
         }
@@ -445,10 +447,38 @@ final class AppSession: ObservableObject {
         }
     }
 
+    /// Pause only (checkpoint + media stay on root). Used while REST resolves folder/filename so a failed
+    /// lookup does not archive/destroy the previous run.
+    func pauseRunningExportForResolve() async {
+        guard isExportRunning || exportCoordinator.isBusy else { return }
+        if isExportRunning {
+            let name = activeExportItem?.name ?? "export"
+            SearchDebugLog.log("Export handoff: soft-pause “\(name)” while resolving new REST target")
+            ExportRuntimeLog.mirror(
+                "Export handoff: pausing “\(name)” while resolving new request (media kept until start)"
+            )
+            pauseExport()
+        } else {
+            exportGeneration += 1
+            userRequestedExportPause = true
+            userRequestedExportCancel = false
+            exportCoordinator.userRequestedPause = true
+            exportCoordinator.userRequestedCancel = false
+            exportCoordinator.cancel()
+            isExportRunning = false
+            syncExportSessionActive()
+        }
+        for _ in 0 ..< 300 where exportCoordinator.isBusy {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        // Leave pause flags set until prepareForNewExportHandoff / startExport clears them.
+    }
+
     /// Pause the running export (checkpoint kept), archive root media off the active slot, then allow a fresh start.
-    /// Used by LAN REST and in-app Start when replacing the current run.
+    /// Used by LAN REST (after resolve) and in-app Start when replacing the current run.
     func prepareForNewExportHandoff() async {
         let hadRunning = isExportRunning || exportCoordinator.isBusy
+        let hadRootMedia = ExportMediaArchive.hasActiveExportMediaOnDisk()
         if isExportRunning {
             let name = activeExportItem?.name ?? "export"
             SearchDebugLog.log("Export handoff: pausing “\(name)” before new request")
@@ -467,7 +497,8 @@ final class AppSession: ObservableObject {
         for _ in 0 ..< 300 where exportCoordinator.isBusy {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        if hadRunning, ExportMediaArchive.hasActiveExportMediaOnDisk() {
+        // Archive when replacing a run (including after soft-pause left media on root).
+        if (hadRunning || hadRootMedia), ExportMediaArchive.hasActiveExportMediaOnDisk() {
             let priorName = ExportRetentionSourceCatalog.read()?.sourceFileName
             let timestamp = ExportMediaArchive.newRetentionTimestamp()
             let archived = ExportMediaArchive.archiveActiveMedia(

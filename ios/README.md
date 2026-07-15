@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 254 (1.2.19):** Fix REST handoff — soft-pause while resolving; archive only after the new target is known. Failed folder/walk no longer destroys the current export (252 regression).
+
 **Build 253 (1.2.18):** LAN monitor + browse pages link **`status.json`**, **`export_trigger.ack.json`**, and **`export_from_folder.json`** (with export logs).
 
 **Build 252 (1.2.17):** Starting a new export (LAN REST or in-app **Start**) **pauses** the current run (checkpoint kept) and **archives** root media to `archive/` before the new job — no longer hard-stops. Prior paused rows stay resumable.
@@ -236,7 +238,7 @@ Or with a known WebDAV path `href` (phone-relative path, not a PC/CDN URL):
 
 | `command` | Behavior |
 |-----------|----------|
-| **`start_export`** | Export from `seekMs`. Prefer **`folderPath` + `displayName`** (or `saveName`): phone lists that folder once and matches the filename. If folder list/match fails **or `folderPath` is omitted**, uses **filename WebDAV walk** (bookmarks + recent folders). Or pass **`href` + `displayName`**. If both folder and `href` are present, **folder resolve wins** (then walk on failure). **Auto-pauses** any running export immediately (checkpoint kept) and **archives** root media before resolve/start — same handoff as in-app Start. |
+| **`start_export`** | Export from `seekMs`. Prefer **`folderPath` + `displayName`** (or `saveName`): phone lists that folder once and matches the filename. If folder list/match fails **or `folderPath` is omitted**, uses **filename WebDAV walk** (bookmarks + recent folders). Or pass **`href` + `displayName`**. If both folder and `href` are present, **folder resolve wins** (then walk on failure). If an export is running: **soft-pause** immediately (media kept), resolve the new target, then **archive + start** only on success — a failed resolve leaves the previous export paused. Same handoff as in-app Start when the new job actually begins. |
 | **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). **Auto-pauses** + archives any running export first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). LAN page **Start export** button only. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |

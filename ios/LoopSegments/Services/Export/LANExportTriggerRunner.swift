@@ -33,6 +33,7 @@ enum LANExportTriggerRunner {
             isExportRunning: session.isExportRunning,
             isExportCoordinatorBusy: session.isExportCoordinatorBusy,
             prepareForFreshStart: { await session.prepareForLANFreshExport() },
+            pauseRunningForResolve: { await session.pauseRunningExportForResolve() },
             onStartExport: { item, seek in
                 LANExportContext.saveReference(item)
                 session.runExportUITask {

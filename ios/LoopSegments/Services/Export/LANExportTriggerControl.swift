@@ -237,6 +237,7 @@ enum LANExportTriggerControl {
         isExportRunning: Bool,
         isExportCoordinatorBusy: Bool,
         prepareForFreshStart: @escaping () async -> Void,
+        pauseRunningForResolve: @escaping () async -> Void,
         onStartExport: @escaping (WebDAVItem, Int64) -> Void,
         onPause: @escaping () -> Void,
         onStop: @escaping () -> Void,
@@ -274,9 +275,9 @@ enum LANExportTriggerControl {
 
         switch trigger.command {
         case .startExport:
-            // Pause + archive immediately so a long folder/walk resolve does not leave the old run going.
+            // Soft-pause only — do not archive until resolve succeeds (failed walk must not kill the current run).
             if isExportRunning || isExportCoordinatorBusy {
-                await prepareForFreshStart()
+                await pauseRunningForResolve()
             }
             let item: WebDAVItem
             var resolveNote = ""
@@ -402,7 +403,7 @@ enum LANExportTriggerControl {
                 return "Not signed in"
             }
             if isExportRunning || isExportCoordinatorBusy {
-                await prepareForFreshStart()
+                await pauseRunningForResolve()
             }
             let pool = mapPool(trigger.pool)
             do {
@@ -598,7 +599,7 @@ enum LANExportTriggerControl {
                 return "Trigger rejected — invalid saveName"
             }
             if isExportRunning || isExportCoordinatorBusy {
-                await prepareForFreshStart()
+                await pauseRunningForResolve()
             }
             let item = WebDAVItem(
                 href: remoteURL.absoluteString,
@@ -612,6 +613,7 @@ enum LANExportTriggerControl {
                 message: "Starting export \(saveName) from URL (vanilla → segments)",
                 triggerId: trigger.id
             )
+            await prepareForFreshStart()
             onStartExport(item, 0)
             return "LAN trigger — URL export \(saveName)"
         }
