@@ -560,11 +560,6 @@ enum PCloudSearchService {
         SearchDebugLog.log(
             "resume resolve start: \"\(entry.displayName)\" pinned=\(entry.pinnedCompleted) browseDepth=\(browsePaths.count)"
         )
-        if ResumeStore.shared.isExternalHTTPMediaEntry(entry, pCloudWebDAVHost: credentials.region.webDAVHost),
-           let item = ResumeStore.shared.webDAVItem(for: entry) {
-            SearchDebugLog.log("resume resolve: external HTTP(S) href — skipping pCloud search \(item.href)")
-            return item
-        }
         if let fileCached = SearchLocationCache.matchResumeEntry(entry) {
             SearchDebugLog.log("resume resolve: file cache match \"\(fileCached.name)\" href=\(fileCached.href)")
             SearchLocationCache.recordHits(from: [fileCached])

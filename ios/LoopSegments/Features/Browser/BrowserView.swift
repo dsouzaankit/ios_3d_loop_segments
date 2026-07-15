@@ -668,10 +668,6 @@ private struct PausedExportDestinationView: View {
         .task {
             resumeStore.reconcilePausedWithWorkingSource()
             resumeStore.backfillHrefsFromSparseManifest()
-            if resumeStore.isExternalHTTPMediaEntry(entry) {
-                // Absolute CDN/LAN URL — open Export with stored href; never WebDAV-walk by filename.
-                return
-            }
             if resumeStore.resolveItem(for: entry, browsing: browsing) != nil {
                 return
             }
@@ -701,11 +697,6 @@ private struct PausedExportDestinationView: View {
 
     private func resolveViaSearch() async {
         guard searchItem == nil else { return }
-        if resumeStore.isExternalHTTPMediaEntry(entry),
-           let item = resumeStore.webDAVItem(for: entry) {
-            searchItem = item
-            return
-        }
         SearchDebugLog.ensureReady()
         isSearching = true
         searchStatusLine = "Preparing pCloud search…"
@@ -740,10 +731,7 @@ private struct PausedExportDestinationView: View {
                 }
             ) {
                 searchItem = match
-                // Don't rewrite external URL hrefs via browse reconcile.
-                if !resumeStore.isExternalHTTPMediaEntry(entry, pCloudWebDAVHost: credentials.region.webDAVHost) {
-                    resumeStore.backfillHrefs(from: [match])
-                }
+                resumeStore.backfillHrefs(from: [match])
                 searchStatusLine = ""
                 return
             }

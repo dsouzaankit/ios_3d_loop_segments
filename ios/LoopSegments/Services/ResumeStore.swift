@@ -269,29 +269,8 @@ final class ResumeStore: ObservableObject {
         return WebDAVItem(href: href, name: entry.displayName, isDirectory: false, contentLength: nil)
     }
 
-    /// LAN **Export from URL** stores an absolute `http(s)` href — never resolve via pCloud WebDAV walk.
-    func isExternalHTTPMediaEntry(_ entry: ResumeEntry, pCloudWebDAVHost: String? = nil) -> Bool {
-        let href = entry.href?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !href.isEmpty else { return false }
-        let host = pCloudWebDAVHost ?? CredentialStore().load()?.region.webDAVHost
-        if let host {
-            return WebDAVItem.isExternalHTTPMediaHref(href, pCloudWebDAVHost: host)
-        }
-        guard let url = URL(string: href),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host != nil else {
-            return false
-        }
-        return true
-    }
-
     /// Prefer current folder listing (handles rename); then sparse manifest; avoid stale `href` alone.
-    /// External URL exports use the stored absolute href immediately (no bookmark/WebDAV filename search).
     func resolveItem(for entry: ResumeEntry, browsing: [WebDAVItem]) -> WebDAVItem? {
-        if isExternalHTTPMediaEntry(entry), let item = webDAVItem(for: entry) {
-            return item
-        }
         let videos = browsing.filter(\.isVideo)
         if let item = WebDAVRenameReconcile.matchResumeEntry(entry, in: videos) {
             backfillHrefIfNeeded(entry: entry, item: item)
@@ -363,8 +342,6 @@ final class ResumeStore: ObservableObject {
         var entries = load()
         var changed = false
         for index in entries.indices {
-            // Never rewrite LAN URL-export rows to a same-named pCloud file.
-            if isExternalHTTPMediaEntry(entries[index]) { continue }
             guard let match = WebDAVRenameReconcile.matchResumeEntry(entries[index], in: videos) else {
                 continue
             }
