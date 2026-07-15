@@ -432,8 +432,8 @@ struct ExportView: View {
             AlternateExportFileSource.stored = newValue
         }
 
-        if session.isExportSessionActive {
-            Text("Stop or pause the current export before switching to another file.")
+        if session.isExportSessionActive, !session.isExportActive(for: item) {
+            Text("Starting another file pauses the current export and archives its root media.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -450,18 +450,19 @@ struct ExportView: View {
                 Label("Export random file", systemImage: "shuffle")
             }
         }
-        .disabled(session.isExportSessionActive || alternateExportBusy)
+        .disabled(alternateExportBusy || session.isExportActive(for: item))
 
         Button {
             showAlternateFilePicker = true
         } label: {
             Label("Choose file…", systemImage: "film.stack")
         }
-        .disabled(session.isExportSessionActive || alternateExportBusy)
+        .disabled(alternateExportBusy || session.isExportActive(for: item))
 
         Text(
             "Opens export for another video at 0:00 — random from the pool above, or pick from the list. " +
-                "Same folder = parent of this file on pCloud. Bookmarks = folders saved in Browse."
+                "Same folder = parent of this file on pCloud. Bookmarks = folders saved in Browse. " +
+                "If an export is already running, it is paused and archived first."
         )
         .font(.footnote)
         .foregroundStyle(.secondary)
@@ -546,10 +547,14 @@ struct ExportView: View {
                 }
             }
 
-            Button(isThisFileExporting ? "Exporting…" : "Start export") {
+            Button(
+                isThisFileExporting
+                    ? "Exporting…"
+                    : (session.isExportSessionActive ? "Start export (pauses current)" : "Start export")
+            ) {
                 session.runExportUITask { await startExport() }
             }
-            .disabled(session.isExportSessionActive)
+            .disabled(isThisFileExporting)
 
             if isThisFileExporting {
                 Button("Pause") {
@@ -566,7 +571,8 @@ struct ExportView: View {
         } footer: {
             Text(
                 "Pause keeps checkpoint, _working.mp4, and loop/ segments. Stop clears paused state, removes loop/ segments, " +
-                    "and moves _working/vanilla/transcode copies into archive/. Clear media deletes active + archive/ (not logs)."
+                    "and moves _working/vanilla/transcode copies into archive/. Starting a different export while one runs " +
+                    "pauses the current run and archives root media. Clear media deletes active + archive/ (not logs)."
             )
                 .font(.footnote)
         }
@@ -783,7 +789,8 @@ struct ExportView: View {
         didAutoStartExport = true
         seekMs = max(0, autoStartSeekMs)
         resumeStore.saveSeekMs(seekMs, for: item)
-        guard !session.isExportSessionActive else { return }
+        // Allowed while another export runs — startExport / runExportUITask pause+archive handoff.
+        guard !session.isExportActive(for: item) else { return }
         session.runExportUITask { await startExport() }
     }
 
@@ -792,7 +799,7 @@ struct ExportView: View {
         resumeStore.saveSeekMs(seek, for: picked)
         if picked.fileKey == item.fileKey {
             seekMs = seek
-            guard autoStart, !session.isExportSessionActive else { return }
+            guard autoStart, !session.isExportActive(for: item) else { return }
             session.runExportUITask { await startExport() }
             return
         }
@@ -800,7 +807,7 @@ struct ExportView: View {
     }
 
     private func exportRandomFile() async {
-        guard !session.isExportSessionActive else { return }
+        guard !session.isExportActive(for: item) else { return }
         guard let credentials = session.credentials else {
             errorMessage = ExportError.notSignedIn.errorDescription
             return

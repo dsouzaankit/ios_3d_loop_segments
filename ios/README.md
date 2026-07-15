@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 255 (1.2.20):** In-app **Start export** stays enabled when another file is exporting (label: “pauses current”); random/choose-other-file too. Only disabled for the file that is already running.
+
 **Build 254 (1.2.19):** Fix REST handoff — soft-pause while resolving; archive only after the new target is known. Failed folder/walk no longer destroys the current export (252 regression).
 
 **Build 253 (1.2.18):** LAN monitor + browse pages link **`status.json`**, **`export_trigger.ack.json`**, and **`export_from_folder.json`** (with export logs).
