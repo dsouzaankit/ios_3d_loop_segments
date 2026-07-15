@@ -2295,6 +2295,7 @@ enum ExportLANServer {
             </div>
             </div>
             \(htmlExportControlPanel())
+            \(htmlURLDownloadPanel())
             \(exportActive
                 ? htmlMonitorManualRefreshScript()
                 : htmlLANLiveRefreshScript(monitorOnly: false, deferAutoPoll: false))
@@ -2396,6 +2397,116 @@ enum ExportLANServer {
                 }
             }
         }
+    }
+
+    private static func htmlURLDownloadPanel() -> String {
+        let user = htmlEscape(lanWebDAVUsername)
+        let pass = htmlEscape(lanWebDAVPassword)
+        return """
+        <div class="panel">
+        <h2>Download URL → phone storage</h2>
+        <p class="muted">Phone pulls the link into <code>pcld_ios_media/downloads/</code> (same app storage as exports). Prefer <strong>https://</strong> (plain http works for LAN hosts). Keep Loop Segments open on Wi‑Fi. Overwrites if the save name already exists.</p>
+        <div class="row">
+          <label style="flex:1;display:flex;flex-direction:column;gap:0.25rem">URL
+            <input type="url" id="url-download-link" placeholder="https://…" style="width:100%;padding:0.4rem" autocomplete="off" />
+          </label>
+        </div>
+        <div class="row">
+          <label style="flex:1;display:flex;flex-direction:column;gap:0.25rem">Save as (file name)
+            <input type="text" id="url-download-name" placeholder="MyClip.mp4" style="width:100%;padding:0.4rem" autocomplete="off" />
+          </label>
+          <button type="button" id="url-download-start">Download</button>
+        </div>
+        <p id="url-download-status" class="muted"></p>
+        </div>
+        <script>
+        (function () {
+          var AUTH = "Basic " + btoa("\(user):\(pass)");
+          var triggerUrl = "/\(LANExportTriggerControl.triggerRelativePath)";
+          var ackUrl = "/\(LANExportTriggerControl.ackRelativePath)";
+          function uuid() {
+            return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+              var r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+              return v.toString(16);
+            });
+          }
+          function setStatus(msg, isErr) {
+            var el = document.getElementById("url-download-status");
+            el.textContent = msg || "";
+            el.style.color = isErr ? "#b00020" : "#333";
+          }
+          function guessNameFromUrl(urlText) {
+            try {
+              var u = new URL(urlText);
+              var base = (u.pathname || "").split("/").filter(Boolean).pop() || "";
+              try { base = decodeURIComponent(base); } catch (e) {}
+              return base;
+            } catch (e) {
+              return "";
+            }
+          }
+          document.getElementById("url-download-link").addEventListener("change", function () {
+            var nameEl = document.getElementById("url-download-name");
+            if (nameEl.value.trim()) return;
+            var guess = guessNameFromUrl(this.value.trim());
+            if (guess) nameEl.value = guess;
+          });
+          document.getElementById("url-download-start").onclick = async function () {
+            var url = document.getElementById("url-download-link").value.trim();
+            var saveName = document.getElementById("url-download-name").value.trim();
+            if (!url) { setStatus("Enter a download URL", true); return; }
+            if (!saveName) {
+              saveName = guessNameFromUrl(url) || "download";
+              document.getElementById("url-download-name").value = saveName;
+            }
+            var btn = document.getElementById("url-download-start");
+            btn.disabled = true;
+            setStatus("Queuing download… Keep the phone app open.");
+            try {
+              var body = {
+                version: 1,
+                command: "download_url",
+                url: url,
+                saveName: saveName,
+                id: uuid()
+              };
+              var r = await fetch(triggerUrl, {
+                method: "PUT",
+                headers: { "Authorization": AUTH, "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+              });
+              if (!r.ok) {
+                var errText = "";
+                try { errText = await r.text(); } catch (e) {}
+                throw new Error("PUT " + r.status + (errText ? ": " + errText.trim() : ""));
+              }
+              var finalMsg = "Trigger sent — phone is downloading to downloads/" + saveName;
+              for (var i = 0; i < 8; i++) {
+                await new Promise(function (res) { setTimeout(res, 500); });
+                try {
+                  var ack = await fetch(ackUrl, { headers: { "Authorization": AUTH } });
+                  if (ack.ok) {
+                    var j = await ack.json();
+                    if (j.triggerId && body.id && j.triggerId !== body.id) continue;
+                    finalMsg = (j.status || "ok") + ": " + (j.message || "");
+                    if (j.status === "rejected" || j.status === "ignored") {
+                      setStatus(finalMsg, true);
+                      return;
+                    }
+                    break;
+                  }
+                } catch (e) {}
+              }
+              setStatus(finalMsg + " Progress appears in export_latest.txt / playback list when finished.");
+            } catch (e) {
+              setStatus(e.message || String(e), true);
+            } finally {
+              btn.disabled = false;
+            }
+          };
+        })();
+        </script>
+        """
     }
 
     private static func htmlExportControlPanel() -> String {
@@ -2625,7 +2736,12 @@ enum ExportLANServer {
               case "clear_media":
                 return {
                   title: "Clearing media",
-                  detail: "Please wait while the phone permanently deletes active export media and archive/ files." + foreground
+                  detail: "Please wait while the phone permanently deletes active export media, archive/, and downloads/ files." + foreground
+                };
+              case "download_url":
+                return {
+                  title: "Starting URL download",
+                  detail: "Please wait while the phone queues the download into downloads/." + foreground
                 };
               case "trim_media":
                 return {
@@ -2775,7 +2891,7 @@ enum ExportLANServer {
               .catch(function (e) { setStatus(e.message || e, true); });
           };
           document.getElementById("export-clear-media").onclick = function () {
-            if (!confirm("Permanently delete active export media and all archive/ files on the phone?")) return;
+            if (!confirm("Permanently delete active export media, archive/, and downloads/ files on the phone?")) return;
             putTrigger({ version: 1, command: "clear_media", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };

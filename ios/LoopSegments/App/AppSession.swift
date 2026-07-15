@@ -21,6 +21,9 @@ final class AppSession: ObservableObject {
     /// Survives leaving Export screen — must not be tied to `ExportView` lifetime.
     private var exportUITask: Task<Void, Never>?
     private var exportAutoPauseTask: Task<Void, Never>?
+    private var urlDownloadTask: Task<Void, Never>?
+    private var urlDownloadCancelRequested = false
+    @Published private(set) var isURLDownloadRunning = false
 
     /// File key for the export in flight (survives brief `activeExportItem` nil while coordinator winds down).
     var activeExportFileKey: String? {
@@ -359,6 +362,34 @@ final class AppSession: ObservableObject {
         return SegmentCleanup.trimExportMediaArchives(log: { SearchDebugLog.log("Trim media: \($0)") })
     }
 
+    /// LAN / in-app HTTP(S) download into `pcld_ios_media/downloads/<saveName>`.
+    func startURLDownload(remoteURL: URL, saveName: String) async throws {
+        guard !isURLDownloadRunning else { throw ExportError.urlDownloadAlreadyActive }
+        guard let safeName = URLMediaDownload.sanitizeSaveFileName(saveName, sourceURL: remoteURL) else {
+            throw URLMediaDownload.DownloadError.invalidSaveName
+        }
+
+        urlDownloadCancelRequested = false
+        isURLDownloadRunning = true
+        defer { isURLDownloadRunning = false }
+
+        ExportRuntimeLog.mirror("URL download start — \(remoteURL.absoluteString) → downloads/\(safeName)")
+        _ = try await URLMediaDownload.download(
+            remoteURL: remoteURL,
+            saveName: safeName,
+            isCancelled: { [weak self] in
+                self?.urlDownloadCancelRequested == true
+            },
+            log: { ExportRuntimeLog.mirror($0) }
+        )
+    }
+
+    func cancelURLDownload() {
+        urlDownloadCancelRequested = true
+        urlDownloadTask?.cancel()
+        urlDownloadTask = nil
+    }
+
     /// Pause export: saves checkpoint, keeps export marked paused, keeps media on disk.
     func pauseExport() {
         guard isExportRunning else { return }
@@ -401,12 +432,14 @@ enum ExportError: LocalizedError {
     case notSignedIn
     case jobAlreadyActive
     case stillStopping
+    case urlDownloadAlreadyActive
 
     var errorDescription: String? {
         switch self {
         case .notSignedIn: return "Sign in to pCloud first."
         case .jobAlreadyActive: return "An export is already running."
         case .stillStopping: return "Previous export is still stopping — wait a moment and tap Start again."
+        case .urlDownloadAlreadyActive: return "A URL download is already running."
         }
     }
 }

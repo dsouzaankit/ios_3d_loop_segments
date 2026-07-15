@@ -40,7 +40,18 @@ enum LANExportTriggerRunner {
             onPause: { session.pauseExport() },
             onStop: { session.cancelExport() },
             onClearMedia: { session.clearExportMedia(referenceItem: reference) },
-            onTrimMedia: { session.trimExportMediaArchives() }
+            onTrimMedia: { session.trimExportMediaArchives() },
+            onDownloadURL: { url, saveName in
+                Task {
+                    do {
+                        try await session.startURLDownload(remoteURL: url, saveName: saveName)
+                    } catch {
+                        SearchDebugLog.log("LAN URL download failed: \(error.localizedDescription)")
+                        ExportRuntimeLog.mirror("URL download failed: \(error.localizedDescription)")
+                    }
+                }
+            },
+            isURLDownloadRunning: session.isURLDownloadRunning
         )
     }
 }

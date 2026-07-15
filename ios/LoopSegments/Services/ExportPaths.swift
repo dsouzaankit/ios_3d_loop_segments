@@ -9,6 +9,8 @@ enum ExportPaths {
     static let segmentLoopFolderName = "loop"
     /// Export logs (live + history) — `pcld_ios_media/logs/` (private; LAN `/pcld_ios_media/logs/…` and legacy `/export_latest.txt`).
     static let exportLogsFolderName = "logs"
+    /// LAN / in-app URL downloads — `pcld_ios_media/downloads/<saveName>` (not export pipeline slots).
+    static let downloadsFolderName = "downloads"
     /// Two slots rotating under `pcld_ios_media/loop/` — PC sees both via rclone mount (`Mount-LoopSegmentsRclone.ps1`).
     static let segmentFileCount = 2
 
@@ -24,6 +26,18 @@ enum ExportPaths {
     static var mediaExportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent(mediaExportFolderName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// User-named HTTP(S) downloads from the LAN page — `pcld_ios_media/downloads/`.
+    static var downloadsDirectory: URL {
+        mediaExportDirectory.appendingPathComponent(downloadsFolderName, isDirectory: true)
+    }
+
+    @discardableResult
+    static func ensureDownloadsDirectory() -> URL {
+        let dir = downloadsDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -437,6 +451,14 @@ enum ExportPaths {
             for name in names.sorted() where isVanillaDownloadMediaCopy(fileName: name) {
                 guard isLANBrowsableMediaFile(fileName: name) else { continue }
                 appendFileIfPresent(mediaExportDirectory.appendingPathComponent(name))
+            }
+        }
+
+        let downloadsDir = downloadsDirectory
+        if fm.fileExists(atPath: downloadsDir.path),
+           let names = try? fm.contentsOfDirectory(atPath: downloadsDir.path) {
+            for name in names.sorted() where isLANBrowsableMediaFile(fileName: name) {
+                appendFileIfPresent(downloadsDir.appendingPathComponent(name))
             }
         }
 

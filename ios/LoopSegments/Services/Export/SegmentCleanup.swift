@@ -53,7 +53,30 @@ enum SegmentCleanup {
             removed += 1
         }
         removed += ExportMediaArchive.removeAllRetainedMedia(log: log)
+        removed += removeURLDownloads(log: log)
         ExportRetentionSourceCatalog.remove()
+        return removed
+    }
+
+    /// LAN URL downloads under `pcld_ios_media/downloads/`.
+    @discardableResult
+    static func removeURLDownloads(log: ((String) -> Void)? = nil) -> Int {
+        let dir = ExportPaths.downloadsDirectory
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.path) else { return 0 }
+        var removed = 0
+        if let names = try? fm.contentsOfDirectory(atPath: dir.path) {
+            for name in names {
+                let url = dir.appendingPathComponent(name)
+                do {
+                    try fm.removeItem(at: url)
+                    removed += 1
+                    log?("Removed downloads/\(name)")
+                } catch {
+                    log?("Could not remove downloads/\(name): \(error.localizedDescription)")
+                }
+            }
+        }
         return removed
     }
 

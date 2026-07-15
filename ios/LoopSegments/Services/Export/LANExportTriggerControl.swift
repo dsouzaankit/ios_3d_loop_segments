@@ -9,6 +9,7 @@ struct LANExportTrigger: Codable {
         case stopExport = "stop_export"
         case clearMedia = "clear_media"
         case trimMedia = "trim_media"
+        case downloadURL = "download_url"
     }
 
     enum RandomPool: String, Codable {
@@ -26,6 +27,10 @@ struct LANExportTrigger: Codable {
     var pool: RandomPool?
     /// pCloud folder listing path for `start_export_random` (same_folder pool).
     var folderPath: String?
+    /// HTTP(S) URL for `download_url`.
+    var url: String?
+    /// Destination basename under `pcld_ios_media/downloads/` for `download_url`.
+    var saveName: String?
 }
 
 struct LANExportTriggerAck: Codable {
@@ -80,7 +85,9 @@ enum LANExportTriggerControl {
         onPause: @escaping () -> Void,
         onStop: @escaping () -> Void,
         onClearMedia: @escaping () -> Int,
-        onTrimMedia: @escaping () -> Int
+        onTrimMedia: @escaping () -> Int,
+        onDownloadURL: @escaping (URL, String) -> Void,
+        isURLDownloadRunning: Bool
     ) async -> String? {
         guard isEnabled else { return nil }
         guard ExportAutoLockCoordinator.appIsActive else { return nil }
@@ -305,7 +312,7 @@ enum LANExportTriggerControl {
                 command: trigger.command.rawValue,
                 status: "accepted",
                 message: cleared > 0
-                    ? "Cleared \(cleared) media file(s) (active + archive/)"
+                    ? "Cleared \(cleared) media file(s) (active + archive/ + downloads/)"
                     : "No media files to clear",
                 triggerId: trigger.id
             )
@@ -331,6 +338,50 @@ enum LANExportTriggerControl {
                 triggerId: trigger.id
             )
             return trimmed > 0 ? "LAN trigger — trimmed \(trimmed) file(s)" : "LAN trigger — nothing to trim"
+
+        case .downloadURL:
+            guard !isURLDownloadRunning else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: "URL download already running",
+                    triggerId: trigger.id
+                )
+                return "URL download already running"
+            }
+            let rawURL = trigger.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let remoteURL = URL(string: rawURL),
+                  let scheme = remoteURL.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https" else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: "download_url requires a valid http(s) url",
+                    triggerId: trigger.id
+                )
+                return "Trigger rejected — invalid url"
+            }
+            let requestedName = trigger.saveName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let saveName = URLMediaDownload.sanitizeSaveFileName(
+                requestedName.isEmpty ? (remoteURL.lastPathComponent.isEmpty ? "download" : remoteURL.lastPathComponent) : requestedName,
+                sourceURL: remoteURL
+            ) else {
+                writeAck(
+                    command: trigger.command.rawValue,
+                    status: "rejected",
+                    message: "download_url requires a valid saveName",
+                    triggerId: trigger.id
+                )
+                return "Trigger rejected — invalid saveName"
+            }
+            writeAck(
+                command: trigger.command.rawValue,
+                status: "accepted",
+                message: "Downloading → downloads/\(saveName)",
+                triggerId: trigger.id
+            )
+            onDownloadURL(remoteURL, saveName)
+            return "LAN trigger — download \(saveName)"
         }
     }
 
