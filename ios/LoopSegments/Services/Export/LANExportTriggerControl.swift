@@ -277,6 +277,7 @@ enum LANExportTriggerControl {
         switch trigger.command {
         case .startExport:
             let item: WebDAVItem
+            var resolveNote = ""
             if let folderRaw = trigger.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines),
                !folderRaw.isEmpty,
                let fileName = startExportFileName(from: trigger) {
@@ -295,14 +296,40 @@ enum LANExportTriggerControl {
                         in: folderRaw,
                         credentials: credentials
                     )
+                    resolveNote = "folder list"
                 } catch {
-                    writeAck(
-                        command: trigger.command.rawValue,
-                        status: "rejected",
-                        message: error.localizedDescription,
-                        triggerId: trigger.id
+                    let folderError = error.localizedDescription
+                    SearchDebugLog.log(
+                        "start_export folder resolve failed (\(folderError)) — WebDAV walk for \"\(fileName)\""
                     )
-                    return "Trigger rejected — \(error.localizedDescription)"
+                    let browsePaths = startExportBrowsePaths(currentItem: currentItem)
+                    do {
+                        if let walked = try await PCloudSearchService.findVideoByDisplayName(
+                            displayName: fileName,
+                            credentials: credentials,
+                            browsePaths: browsePaths,
+                            status: { note in SearchDebugLog.log("start_export walk: \(note)") }
+                        ) {
+                            item = walked
+                            resolveNote = "WebDAV walk (folderPath failed: \(folderError))"
+                        } else {
+                            writeAck(
+                                command: trigger.command.rawValue,
+                                status: "rejected",
+                                message: "\(folderError) — WebDAV walk also found no unique match for “\(fileName)” (bookmark parent folders / open folder in Browse)",
+                                triggerId: trigger.id
+                            )
+                            return "Trigger rejected — folder + walk miss for \(fileName)"
+                        }
+                    } catch {
+                        writeAck(
+                            command: trigger.command.rawValue,
+                            status: "rejected",
+                            message: "\(folderError) — walk failed: \(error.localizedDescription)",
+                            triggerId: trigger.id
+                        )
+                        return "Trigger rejected — \(error.localizedDescription)"
+                    }
                 }
             } else if let hrefItem = webDAVItem(from: trigger) {
                 item = hrefItem
@@ -336,10 +363,11 @@ enum LANExportTriggerControl {
             }
             await prepareForFreshStart()
             let seek = max(0, trigger.seekMs ?? 0)
+            let via = resolveNote.isEmpty ? "" : " via \(resolveNote)"
             writeAck(
                 command: trigger.command.rawValue,
                 status: "accepted",
-                message: "Starting \(item.name) at \(ResumeTimeFormat.formatMs(seek))",
+                message: "Starting \(item.name) at \(ResumeTimeFormat.formatMs(seek))\(via)",
                 triggerId: trigger.id
             )
             onStartExport(item, seek)
@@ -586,6 +614,17 @@ enum LANExportTriggerControl {
             if !trimmed.isEmpty { return trimmed }
         }
         return nil
+    }
+
+    /// Browse / bookmark roots for filename walk fallback (current folder when known).
+    private static func startExportBrowsePaths(currentItem: WebDAVItem) -> [String] {
+        if currentItem.isDirectory {
+            return [WebDAVURLBuilder.directoryListingPath(currentItem.href)]
+        }
+        if let parent = AlternateExportFilePicker.parentFolderPath(for: currentItem) {
+            return [parent]
+        }
+        return ["/"]
     }
 
     private static func webDAVItem(from trigger: LANExportTrigger) -> WebDAVItem? {

@@ -2466,7 +2466,8 @@ enum ExportLANServer {
                 ],
                 "notes": [
                     "Queues start_export with folderPath + displayName (saveName alias).",
-                    "Phone does one-level PROPFIND on folderPath and matches the filename — no recursive WebDAV walk.",
+                    "Phone does one-level PROPFIND on folderPath and matches the filename — no recursive WebDAV walk on success.",
+                    "If folderPath is invalid/garbled or the file is not in that folder, falls back to filename WebDAV walk (bookmarks + recent folders).",
                     "Builds on-phone WebDAV href (avoids PC/CDN IP-bound URLs).",
                     "Returns 202 queued; poll GET /\(LANExportTriggerControl.ackRelativePath) for accepted/rejected.",
                 ],

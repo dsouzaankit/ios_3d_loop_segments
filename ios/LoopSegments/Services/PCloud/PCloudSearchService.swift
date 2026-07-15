@@ -598,6 +598,35 @@ enum PCloudSearchService {
         return nil
     }
 
+    /// LAN / REST: find a video by filename via cache + Browse search (WebDAV walk on bookmarks + recent folders).
+    static func findVideoByDisplayName(
+        displayName: String,
+        credentials: WebDAVCredentials,
+        browsePaths: [String] = ["/"],
+        status: (@Sendable (String) -> Void)? = nil
+    ) async throws -> WebDAVItem? {
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        let entry = ResumeEntry(
+            fileKey: "lan-resolve:\(name.lowercased())",
+            displayName: name,
+            href: nil,
+            lastSeekMs: 0,
+            sourceDurationMs: nil,
+            updatedAt: Date(),
+            exportInProgress: false,
+            checkpointMediaMs: nil,
+            pinnedCompleted: false
+        )
+        SearchDebugLog.log("LAN filename resolve start: \"\(name)\" browseDepth=\(browsePaths.count)")
+        return try await searchMatchingResumeEntry(
+            entry: entry,
+            credentials: credentials,
+            browsePaths: browsePaths,
+            status: status
+        )
+    }
+
     /// One PROPFIND per recent search-hit folder — avoids walking 80 bookmark trees first.
     private static func matchResumeEntryInCachedFolders(
         entry: ResumeEntry,
