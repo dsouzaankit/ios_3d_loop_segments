@@ -22,13 +22,26 @@ struct ResumeEntry: Codable, Identifiable, Hashable {
 
     /// Prefer stored name; fall back to href leaf so Paused never shows a blank row.
     var resolvedDisplayName: String {
-        ResumeStore.resolvedDisplayName(itemName: displayName, href: href)
+        ResumeDisplayName.resolve(itemName: displayName, href: href)
     }
 
     /// Enough identity to open Export (name and/or href).
     var hasResumableIdentity: Bool {
         !resolvedDisplayName.isEmpty
             || !(href?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+}
+
+enum ResumeDisplayName {
+    static func resolve(itemName: String, href: String?) -> String {
+        let trimmed = itemName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        if let href, !href.isEmpty {
+            let fromHref = WebDAVURLBuilder.displayName(fromHref: href)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !fromHref.isEmpty { return fromHref }
+        }
+        return ""
     }
 }
 
@@ -137,7 +150,7 @@ final class ResumeStore: ObservableObject {
         }
         if exceptFileKey == nil {
             _ = ExportParkedMedia.removeAll()
-        } else {
+        } else if let exceptFileKey {
             var keep = Set(entries.filter(\.exportInProgress).map(\.fileKey))
             keep.insert(exceptFileKey)
             ExportParkedMedia.pruneOrphans(keepingFileKeys: keep)
@@ -480,7 +493,7 @@ final class ResumeStore: ObservableObject {
 
     private func upsert(item: WebDAVItem, mutate: (inout ResumeEntry) -> Void) {
         var entries = load()
-        let resolvedName = Self.resolvedDisplayName(itemName: item.name, href: item.href)
+        let resolvedName = ResumeDisplayName.resolve(itemName: item.name, href: item.href)
         var entry: ResumeEntry
         if let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) {
             entry = entries[index]
@@ -507,16 +520,6 @@ final class ResumeStore: ObservableObject {
             entries.append(entry)
         }
         persist(entries)
-    }
-
-    fileprivate static func resolvedDisplayName(itemName: String, href: String?) -> String {
-        let trimmed = itemName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-        if let href, !href.isEmpty {
-            let fromHref = WebDAVURLBuilder.displayName(fromHref: href).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !fromHref.isEmpty { return fromHref }
-        }
-        return ""
     }
 
     private func load() -> [ResumeEntry] {
