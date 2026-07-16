@@ -708,7 +708,7 @@ enum LANExportTriggerControl {
         guard let href = entry.href?.trimmingCharacters(in: .whitespacesAndNewlines), !href.isEmpty else {
             return nil
         }
-        let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = entry.resolvedDisplayName
         guard !name.isEmpty else { return nil }
         return WebDAVItem(href: href, name: name, isDirectory: false, contentLength: nil)
     }

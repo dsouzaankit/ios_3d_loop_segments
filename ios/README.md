@@ -26,6 +26,14 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 266 (1.2.31):** LAN playback list shows **all** paused exports (same queue as the phone Paused tab), not only clips that have a `parked/` folder — soft-paused root media included.
+
+**Build 265 (1.2.30):** LAN parked playback links show the **source filename** (from `_parked_meta.json`); `href` still points at `parked/<fileKey>/…` on disk.
+
+**Build 264 (1.2.29):** LAN parked links stay visible while vanilla/transcode hides root `_working.mp4` (filename hide no longer applies under `parked/`); monitor lists parked even when idle.
+
+**Build 263 (1.2.28):** Clear media **deletes** paused/in-progress resume rows (not only flags) and dismisses a stale Paused detail so Resume cannot restart a wiped export; empty display names fall back to the href leaf.
+
 **Build 262 (1.2.27):** LAN playback list shows **Resume export** beside each `parked/` partial (same `start_export` trigger as Browse; uses stored href/folderPath + checkpoint seek).
 
 **Build 261 (1.2.26):** Handoff **parks** root media under **`pcld_ios_media/parked/<fileKey>/`** (keeps sparse map; LAN/WebDAV playable) instead of only timestamp-archiving. Resume restores park → root before sparse adopt. Parks prune with the paused queue / Clear media (not archive’s 10-batch prune).
@@ -355,7 +363,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | **Export finished** | **Copy** to `archive/` (root `_working*` / `_vanilla_*` / transcode **stay on LAN**); `loop/` unchanged. Same root slot is **not** copied again on Stop or fresh Start — only removed from root if already retained. |
 | **Stop** (in-app only) | `loop/` removed (+ Photos when enabled); active root files **moved** into `archive/` |
 | **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
-| **Clear media** / **`clear_media`** | Removes active root files, all `archive/` retains, `downloads/`, and `loop/` segments |
+| **Clear media** / **`clear_media`** | Removes active root files, all `archive/` / `parked/` retains, `downloads/`, `loop/` segments, and **deletes** paused/in-progress resume rows (Paused tab empties) |
 
 **Filename pattern:** `<pCloud-basename>[_3D_<nK>][_appFast_]yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`**. Example: `archive/MyMovie_3D_4K_2026-05-22_14-30-52.mp4`; after in-app moov-at-end remux: `archive/MyMovie_3D_4K_appFast_2026-05-22_14-30-52.mp4`. Legacy `_working_*` / `_vanilla_*` archive names are kept if already on disk. Prune/trim batches still key on the timestamp only (`_appFast_` does not split batches).
 

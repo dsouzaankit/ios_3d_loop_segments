@@ -137,6 +137,56 @@ enum ExportParkedMedia {
         return moved
     }
 
+    /// One playable parked path per `fileKey` (prefer `_working.mp4`, then any media).
+    static func primaryPlaybackRelativePath(forFileKey fileKey: String) -> String? {
+        let key = fileKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return nil }
+        let dir = folderURL(forFileKey: key)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.path),
+              let names = try? fm.contentsOfDirectory(atPath: dir.path) else {
+            return nil
+        }
+        let preferred = ExportPaths.workingSourceURL.lastPathComponent
+        let ordered = names.sorted { a, b in
+            if a == preferred { return true }
+            if b == preferred { return false }
+            return a < b
+        }
+        for name in ordered {
+            guard ExportPaths.isLANBrowsableMediaFile(fileName: name) else { continue }
+            let url = dir.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+            let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+            guard size > 0 else { continue }
+            return ExportPaths.pathRelativeToExports(url)
+        }
+        return nil
+    }
+
+    /// Friendly LAN label (source filename) — path still uses `parked/<fileKey>/…` on disk.
+    static func lanPlaybackLabel(forRelativePath relativePath: String) -> String {
+        let leaf = (relativePath as NSString).lastPathComponent
+        guard isUnderParkedLANPath(relativePath) else { return relativePath }
+        let metaName = (lanResumeTrigger(forRelativePath: relativePath)?.displayName ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !metaName.isEmpty else { return relativePath }
+        let pipelineLeaves: Set<String> = [
+            ExportPaths.workingSourceURL.lastPathComponent,
+            ExportPaths.vanillaFastStartURL.lastPathComponent,
+            ExportPaths.workingTranscodedURL.lastPathComponent,
+        ]
+        let isPipelineLeaf = pipelineLeaves.contains(leaf)
+            || leaf.hasPrefix("_vanilla_download.")
+            || leaf.hasPrefix("_working_pcloud_transcode")
+        if isPipelineLeaf {
+            return metaName
+        }
+        if leaf == metaName { return metaName }
+        return "\(metaName) (\(leaf))"
+    }
+
     /// LAN Resume/Export button payload for a parked media relative path.
     static func lanResumeTrigger(forRelativePath relativePath: String) -> Meta? {
         guard isUnderParkedLANPath(relativePath) else { return nil }

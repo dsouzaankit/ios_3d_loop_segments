@@ -101,7 +101,10 @@ enum LANExportSourceDisplay {
         }
         // exportInProgress without a running export session = user-paused / checkpointed.
         if let paused = ResumeStore.mostRecentPausedExport() {
-            return ("paused", paused.displayName)
+            let name = paused.resolvedDisplayName
+            if !name.isEmpty {
+                return ("paused", name)
+            }
         }
         if phase == "finished",
            let name = defaults.string(forKey: activeNameKey),

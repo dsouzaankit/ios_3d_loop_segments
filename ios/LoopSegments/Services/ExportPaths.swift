@@ -406,7 +406,8 @@ enum ExportPaths {
         ExportRetentionSourceCatalog.markAppFaststartRemuxCompleted()
     }
 
-    /// Hide stale sparse `_working.mp4` on LAN while vanilla (or transcode) is the active source.
+    /// Hide stale sparse root `_working.mp4` on LAN while vanilla (or transcode) is the active source.
+    /// Does **not** apply to `parked/<fileKey>/_working.mp4` (paused partials stay LAN-playable).
     static func shouldHideSparseWorkingFromLAN() -> Bool {
         if ExportPlaybackState.shared.usesVanillaDownloadForLAN() { return true }
         if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() { return true }
@@ -414,8 +415,13 @@ enum ExportPaths {
         return false
     }
 
+    /// Root slot only — not `parked/…/_working.mp4`.
+    static func isRootWorkingSourceRelativePath(_ relativePath: String) -> Bool {
+        let normalized = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return normalized == pathRelativeToExports(workingSourceURL)
+    }
+
     static func isLANBrowsableMediaFile(fileName: String) -> Bool {
-        if fileName == "_working.mp4", shouldHideSparseWorkingFromLAN() { return false }
         guard !isExcludedFromLANMediaServe(fileName: fileName) else { return false }
         let ext = (fileName as NSString).pathExtension.lowercased()
         return lanBrowsableMediaExtensions.contains(ext)
@@ -445,7 +451,9 @@ enum ExportPaths {
         for index in 0 ..< segmentFileCount {
             appendFileIfPresent(segmentURL(index: index))
         }
-        appendFileIfPresent(workingSourceURL)
+        if !shouldHideSparseWorkingFromLAN() {
+            appendFileIfPresent(workingSourceURL)
+        }
         appendFileIfPresent(workingTranscodedURL)
         appendFileIfPresent(vanillaFastStartURL)
 
@@ -464,6 +472,13 @@ enum ExportPaths {
             }
         }
 
+        // Parked before archive so pause partials are not truncated off the HTML index.
+        let parkedPaths = ExportParkedMedia.listLANPlaybackRelativePaths(limit: 16)
+        for path in parkedPaths {
+            let url = ExportPaths.urlUnderExports(relativePath: path)
+            appendFileIfPresent(url)
+        }
+
         if maxArchiveEntries > 0 {
             let archiveDir = mediaExportDirectory.appendingPathComponent("archive", isDirectory: true)
             if fm.fileExists(atPath: archiveDir.path),
@@ -478,14 +493,6 @@ enum ExportPaths {
                     appendFileIfPresent(archiveDir.appendingPathComponent(name))
                 }
             }
-        }
-
-        let parkedPaths = ExportParkedMedia.listLANPlaybackRelativePaths(
-            limit: max(8, maxArchiveEntries / 2)
-        )
-        for path in parkedPaths {
-            let url = ExportPaths.urlUnderExports(relativePath: path)
-            appendFileIfPresent(url)
         }
         return paths
     }
@@ -577,15 +584,18 @@ enum ExportPaths {
             guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
                 continue
             }
-            let name = url.lastPathComponent
-            guard isLANBrowsableMediaFile(fileName: name) else { continue }
-            paths.append(pathRelativeToExports(url))
+            let rel = pathRelativeToExports(url)
+            guard isLANBrowsableMediaRelativePath(rel) else { continue }
+            paths.append(rel)
         }
         return paths.sorted()
     }
 
     static func isLANBrowsableMediaRelativePath(_ relativePath: String) -> Bool {
         guard relativePath.hasPrefix(lanMediaPrefix), !relativePath.contains("..") else { return false }
+        if isRootWorkingSourceRelativePath(relativePath), shouldHideSparseWorkingFromLAN() {
+            return false
+        }
         let fileName = (relativePath as NSString).lastPathComponent
         return isLANBrowsableMediaFile(fileName: fileName)
     }
@@ -595,7 +605,9 @@ enum ExportPaths {
         guard isUnderMediaExportLANPath(relativePath) else { return false }
         let name = (relativePath as NSString).lastPathComponent
         if isExcludedFromLANMediaServe(fileName: name) { return false }
-        if name == "_working.mp4", shouldHideSparseWorkingFromLAN() { return false }
+        if isRootWorkingSourceRelativePath(relativePath), shouldHideSparseWorkingFromLAN() {
+            return false
+        }
         let url = urlUnderExports(relativePath: relativePath)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
@@ -671,13 +683,16 @@ enum ExportPaths {
         var result: [LANMediaTreeEntry] = []
         for name in names.sorted() {
             if isExcludedFromLANMediaServe(fileName: name) { continue }
-            if name == "_working.mp4", shouldHideSparseWorkingFromLAN() { continue }
             let childURL = dirURL.appendingPathComponent(name)
+            let childRel = pathRelativeToExports(childURL)
+            if isRootWorkingSourceRelativePath(childRel), shouldHideSparseWorkingFromLAN() {
+                continue
+            }
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: childURL.path, isDirectory: &isDir) else { continue }
             result.append(
                 LANMediaTreeEntry(
-                    relativePath: pathRelativeToExports(childURL),
+                    relativePath: childRel,
                     isDirectory: isDir.boolValue
                 )
             )

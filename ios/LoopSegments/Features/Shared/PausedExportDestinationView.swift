@@ -22,7 +22,7 @@ struct PausedExportDestinationView: View {
             } else if isSearching {
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text("Finding \(entry.displayName)…")
+                    Text("Finding \(entry.resolvedDisplayName.isEmpty ? "paused export" : entry.resolvedDisplayName)…")
                         .font(.subheadline)
                     if !searchStatusLine.isEmpty {
                         Text(searchStatusLine)
@@ -41,7 +41,7 @@ struct PausedExportDestinationView: View {
                     Text(notFoundDescription)
                 } actions: {
                     Button("Search in Browse") {
-                        onSearchByName(entry.displayName)
+                        onSearchByName(entry.resolvedDisplayName)
                     }
                     Button("Try again") {
                         Task { await resolveViaSearch() }
@@ -49,7 +49,7 @@ struct PausedExportDestinationView: View {
                 }
             }
         }
-        .navigationTitle(entry.displayName)
+        .navigationTitle(entry.resolvedDisplayName.isEmpty ? "Paused export" : entry.resolvedDisplayName)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             resumeStore.reconcilePausedWithWorkingSource()

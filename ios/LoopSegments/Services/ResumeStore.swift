@@ -19,6 +19,17 @@ struct ResumeEntry: Codable, Identifiable, Hashable {
     var pinnedCompleted: Bool = false
 
     var id: String { fileKey }
+
+    /// Prefer stored name; fall back to href leaf so Paused never shows a blank row.
+    var resolvedDisplayName: String {
+        ResumeStore.resolvedDisplayName(itemName: displayName, href: href)
+    }
+
+    /// Enough identity to open Export (name and/or href).
+    var hasResumableIdentity: Bool {
+        !resolvedDisplayName.isEmpty
+            || !(href?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
 }
 
 struct ResumeStatus {
@@ -97,18 +108,28 @@ final class ResumeStore: ObservableObject {
         }
     }
 
-    /// Clears paused flags (e.g. Clear media). Optional `exceptFileKey` keeps one row.
+    /// Clears paused / in-progress resume rows (e.g. Clear media).
+    /// Removes those entries entirely (not just flags) so Paused cannot resume a wiped export.
+    /// Optional `exceptFileKey` keeps one in-progress row and only clears flags on the others.
     func clearPausedExports(exceptFileKey: String? = nil) {
         var entries = load()
         var changed = false
         var droppedKeys: [String] = []
-        for index in entries.indices where entries[index].exportInProgress {
-            if let exceptFileKey, entries[index].fileKey == exceptFileKey { continue }
-            droppedKeys.append(entries[index].fileKey)
-            entries[index].exportInProgress = false
-            entries[index].checkpointMediaMs = nil
-            entries[index].updatedAt = Date()
-            changed = true
+        if exceptFileKey == nil {
+            droppedKeys = entries.filter(\.exportInProgress).map(\.fileKey)
+            let before = entries.count
+            entries.removeAll { $0.exportInProgress }
+            changed = entries.count != before || !droppedKeys.isEmpty
+        } else {
+            for index in entries.indices where entries[index].exportInProgress {
+                if entries[index].fileKey == exceptFileKey { continue }
+                droppedKeys.append(entries[index].fileKey)
+                entries[index].exportInProgress = false
+                entries[index].checkpointMediaMs = nil
+                entries[index].lastSeekMs = 0
+                entries[index].updatedAt = Date()
+                changed = true
+            }
         }
         if changed { persist(entries) }
         for key in droppedKeys {
@@ -118,7 +139,7 @@ final class ResumeStore: ObservableObject {
             _ = ExportParkedMedia.removeAll()
         } else {
             var keep = Set(entries.filter(\.exportInProgress).map(\.fileKey))
-            if let exceptFileKey { keep.insert(exceptFileKey) }
+            keep.insert(exceptFileKey)
             ExportParkedMedia.pruneOrphans(keepingFileKeys: keep)
         }
     }
@@ -200,7 +221,9 @@ final class ResumeStore: ObservableObject {
     func interruptedEntries(excludingFileKey activeFileKey: String? = nil) -> [ResumeEntry] {
         load()
             .filter { entry in
-                entry.exportInProgress && entry.fileKey != activeFileKey
+                entry.exportInProgress
+                    && entry.fileKey != activeFileKey
+                    && entry.hasResumableIdentity
             }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
@@ -295,8 +318,12 @@ final class ResumeStore: ObservableObject {
     }
 
     func webDAVItem(for entry: ResumeEntry) -> WebDAVItem? {
-        guard let href = entry.href, !href.isEmpty else { return nil }
-        return WebDAVItem(href: href, name: entry.displayName, isDirectory: false, contentLength: nil)
+        guard let href = entry.href?.trimmingCharacters(in: .whitespacesAndNewlines), !href.isEmpty else {
+            return nil
+        }
+        let name = entry.resolvedDisplayName
+        guard !name.isEmpty else { return nil }
+        return WebDAVItem(href: href, name: name, isDirectory: false, contentLength: nil)
     }
 
     /// Prefer current folder listing (handles rename); then sparse manifest; avoid stale `href` alone.
@@ -311,9 +338,11 @@ final class ResumeStore: ObservableObject {
             entry,
             singlePausedExport: paused.count == 1
         ) {
+            let name = entry.resolvedDisplayName
+            guard !name.isEmpty else { return nil }
             let item = WebDAVItem(
                 href: href,
-                name: entry.displayName,
+                name: name,
                 isDirectory: false,
                 contentLength: nil
             )
@@ -451,19 +480,22 @@ final class ResumeStore: ObservableObject {
 
     private func upsert(item: WebDAVItem, mutate: (inout ResumeEntry) -> Void) {
         var entries = load()
+        let resolvedName = Self.resolvedDisplayName(itemName: item.name, href: item.href)
         var entry: ResumeEntry
         if let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) {
             entry = entries[index]
         } else {
             entry = ResumeEntry(
                 fileKey: item.fileKey,
-                displayName: item.name,
+                displayName: resolvedName,
                 href: item.href,
                 lastSeekMs: 0,
                 updatedAt: Date()
             )
         }
-        entry.displayName = item.name
+        if !resolvedName.isEmpty {
+            entry.displayName = resolvedName
+        }
         entry.href = item.href
         if let parent = AlternateExportFilePicker.parentFolderPath(for: item) {
             entry.folderPath = parent
@@ -475,6 +507,16 @@ final class ResumeStore: ObservableObject {
             entries.append(entry)
         }
         persist(entries)
+    }
+
+    fileprivate static func resolvedDisplayName(itemName: String, href: String?) -> String {
+        let trimmed = itemName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        if let href, !href.isEmpty {
+            let fromHref = WebDAVURLBuilder.displayName(fromHref: href).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !fromHref.isEmpty { return fromHref }
+        }
+        return ""
     }
 
     private func load() -> [ResumeEntry] {
@@ -521,11 +563,28 @@ final class ResumeStore: ObservableObject {
 
 extension ResumeStore {
     nonisolated static func mostRecentPausedExport() -> ResumeEntry? {
+        pausedExportsForLAN(excludingFileKey: nil, limit: 1).first
+    }
+
+    /// Same queue as the phone Paused tab (exportInProgress + resumable identity).
+    nonisolated static func pausedExportsForLAN(
+        excludingFileKey activeFileKey: String? = nil,
+        limit: Int = 16
+    ) -> [ResumeEntry] {
         guard let data = UserDefaults.standard.data(forKey: entriesKey),
               let entries = try? JSONDecoder().decode([ResumeEntry].self, from: data) else {
-            return nil
+            return []
         }
-        return entries.filter(\.exportInProgress).max(by: { $0.updatedAt < $1.updatedAt })
+        return Array(
+            entries
+                .filter { entry in
+                    entry.exportInProgress
+                        && entry.fileKey != activeFileKey
+                        && entry.hasResumableIdentity
+                }
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .prefix(max(0, limit))
+        )
     }
 
     nonisolated static func isExportInProgress(forFileKey fileKey: String) -> Bool {

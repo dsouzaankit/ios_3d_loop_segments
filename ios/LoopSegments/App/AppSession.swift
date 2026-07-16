@@ -332,7 +332,7 @@ final class AppSession: ObservableObject {
         guard let entry,
               let href = entry.href?.trimmingCharacters(in: .whitespacesAndNewlines),
               !href.isEmpty else { return nil }
-        let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = entry.resolvedDisplayName
         guard !name.isEmpty else { return nil }
         return WebDAVItem(href: href, name: name, isDirectory: false, contentLength: nil)
     }
@@ -377,7 +377,9 @@ final class AppSession: ObservableObject {
         guard !isExportRunning, !exportCoordinator.isBusy else { return 0 }
         ResumeStore.shared.clearPinnedCompletedExports()
         ResumeStore.shared.clearPausedExports()
-        ResumeStore.shared.finishExport(for: referenceItem)
+        // Drop seek/checkpoint for the file whose Export screen triggered clear (row may not have been in-progress).
+        ResumeStore.shared.clearResume(for: referenceItem)
+        LANExportSourceDisplay.clearActive()
         return SegmentCleanup.removeExportMedia(log: { SearchDebugLog.log("Clear media: \($0)") })
     }
 

@@ -1911,11 +1911,14 @@ enum ExportLANServer {
 
     private static func playbackMediaFileListHTML() -> String {
         var items: [String] = []
+        items.append(contentsOf: htmlPausedExportListItems())
         let entries = listExportFilesForPlaybackIndex()
         let limit = ExportPaths.lanPlaybackArchiveIndexLimit + 12
         let capped = entries.count > limit
         for entry in entries.prefix(limit) {
             let name = entry.name
+            // Covered by the Paused section (one row per clip + optional play link).
+            if name.hasPrefix(parkedPlaybackPrefix) { continue }
             var sizeNote = ""
             if entry.size > 0 {
                 sizeNote = " (\(entry.size / 1024) KB)"
@@ -1964,17 +1967,6 @@ enum ExportLANServer {
                 note = " — ~60s segment in loop/ (Range supported)"
             } else if name.hasPrefix(archivePlaybackPrefix) {
                 note = " — retained export (archive/)"
-            } else if name.hasPrefix(parkedPlaybackPrefix) {
-                note = " — paused partial (parked/; LAN-playable)"
-                let link: String
-                if lanMediaListUsesClickOnly(relativePath: name) {
-                    link = lanMediaClickAnchor(relativePath: name, innerHTML: escaped)
-                } else {
-                    link = "<a href=\"\(escaped)\">\(escaped)</a>"
-                }
-                let resumeBtn = htmlParkedResumeExportButton(relativePath: name)
-                items.append("<li>\(link)\(sizeNote)\(note)\(resumeBtn)</li>")
-                continue
             } else if name.hasSuffix(".mp4") {
                 note = " — sparse in-progress source (seek in player to export start)"
             }
@@ -2001,19 +1993,96 @@ enum ExportLANServer {
             : items.joined()
     }
 
+    /// Same paused queue as the phone Paused tab (not only on-disk `parked/` folders).
+    private static func htmlPausedExportListItems() -> [String] {
+        let excludeKey = ExportPlaybackState.shared.isLANExportActive
+            ? ExportRetentionSourceCatalog.read()?.fileKey
+            : nil
+        let paused = ResumeStore.pausedExportsForLAN(excludingFileKey: excludeKey, limit: 16)
+        guard !paused.isEmpty else { return [] }
+        return paused.map { entry in
+            let title = entry.resolvedDisplayName.isEmpty ? "Paused export" : entry.resolvedDisplayName
+            let ms = max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
+            let seekNote = ms > 0
+                ? " — paused at \(formatLANClock(Int(ms / 1000)))"
+                : ""
+            var playPrefix = ""
+            if let rel = ExportParkedMedia.primaryPlaybackRelativePath(forFileKey: entry.fileKey) {
+                let label = htmlEscape(ExportParkedMedia.lanPlaybackLabel(forRelativePath: rel))
+                playPrefix = "\(lanMediaClickAnchor(relativePath: rel, innerHTML: label)) · "
+            } else if let rootRel = rootPlaybackRelativePathMatchingPaused(fileKey: entry.fileKey) {
+                let label = htmlEscape(title)
+                playPrefix = "\(lanMediaClickAnchor(relativePath: rootRel, innerHTML: label)) · "
+            }
+            let resumeBtn = htmlResumeExportButton(for: entry)
+            return "<li>\(playPrefix)<strong>\(htmlEscape(title))</strong>\(seekNote) (paused)\(resumeBtn)</li>"
+        }
+    }
+
+    /// Soft-paused clip still on root (not yet parked under `parked/`).
+    private static func rootPlaybackRelativePathMatchingPaused(fileKey: String) -> String? {
+        guard let manifest = ExportRetentionSourceCatalog.read(),
+              manifest.fileKey == fileKey else {
+            return nil
+        }
+        if ExportPaths.vanillaPrimaryMediaExistsOnDisk() {
+            let item = WebDAVItem(
+                href: "",
+                name: manifest.sourceFileName,
+                isDirectory: false,
+                contentLength: nil
+            )
+            let url = ExportPaths.vanillaPrimaryLocalURL(for: item)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return ExportPaths.pathRelativeToExports(url)
+            }
+        }
+        if FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
+            return ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL)
+        }
+        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
+           !ExportPaths.shouldHideSparseWorkingFromLAN() {
+            return ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
+        }
+        return nil
+    }
+
     /// Resume/Export control beside a parked partial (same trigger path as Browse Export).
     private static func htmlParkedResumeExportButton(relativePath: String) -> String {
         guard let meta = ExportParkedMedia.lanResumeTrigger(forRelativePath: relativePath) else {
             return ""
         }
-        let name = htmlEscape(meta.displayName)
-        let href = htmlEscape(meta.href ?? "")
-        let folder = htmlEscape(meta.folderPath ?? "")
-        let seek = max(0, meta.seekMs ?? 0)
+        return htmlResumeExportButton(
+            displayName: meta.displayName,
+            href: meta.href,
+            folderPath: meta.folderPath,
+            seekMs: meta.seekMs ?? 0
+        )
+    }
+
+    private static func htmlResumeExportButton(for entry: ResumeEntry) -> String {
+        htmlResumeExportButton(
+            displayName: entry.resolvedDisplayName,
+            href: entry.href,
+            folderPath: entry.folderPath,
+            seekMs: max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
+        )
+    }
+
+    private static func htmlResumeExportButton(
+        displayName: String,
+        href: String?,
+        folderPath: String?,
+        seekMs: Int64
+    ) -> String {
+        let name = htmlEscape(displayName)
+        let hrefEsc = htmlEscape(href ?? "")
+        let folder = htmlEscape(folderPath ?? "")
+        let seek = max(0, seekMs)
         let label = seek > 0
             ? "Resume export (\(formatLANClock(Int(seek / 1000))))"
             : "Resume export"
-        return " <button type=\"button\" class=\"export-parked\" data-name=\"\(name)\" data-href=\"\(href)\" data-folder-path=\"\(folder)\" data-seek-ms=\"\(seek)\">\(htmlEscape(label))</button>"
+        return " <button type=\"button\" class=\"export-parked\" data-name=\"\(name)\" data-href=\"\(hrefEsc)\" data-folder-path=\"\(folder)\" data-seek-ms=\"\(seek)\">\(htmlEscape(label))</button>"
     }
 
     private static func htmlLANExportLogListItems(relativePaths: [String]) -> String {
@@ -2130,6 +2199,7 @@ enum ExportLANServer {
                 : "<a href=\"\(esc)\">\(esc)</a>"
             items.append("<li>\(link) (sparse)</li>")
         }
+        items.append(contentsOf: htmlPausedExportListItems())
         if ExportPlaybackState.shared.isLANExportActive {
             for rel in ExportPaths.listLANPlaybackIndexRelativePaths(
                 maxArchiveEntries: ExportPaths.lanPlaybackArchiveIndexLimitDuringExport
@@ -2137,13 +2207,6 @@ enum ExportLANServer {
                 let esc = htmlEscape(rel)
                 items.append(
                     "<li>\(lanMediaClickAnchor(relativePath: rel, innerHTML: esc)) (archive)</li>"
-                )
-            }
-            for rel in ExportParkedMedia.listLANPlaybackRelativePaths(limit: 16) {
-                let esc = htmlEscape(rel)
-                let btn = htmlParkedResumeExportButton(relativePath: rel)
-                items.append(
-                    "<li>\(lanMediaClickAnchor(relativePath: rel, innerHTML: esc)) (parked)\(btn)</li>"
                 )
             }
         }

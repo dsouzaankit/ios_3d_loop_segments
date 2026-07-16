@@ -587,8 +587,9 @@ struct ExportView: View {
     private var exportsFolderSection: some View {
         Section("Exports folder") {
             Button {
-                clearExportMedia()
-                acknowledgeClearMediaTap()
+                if clearExportMedia() {
+                    acknowledgeClearMediaTap()
+                }
             } label: {
                 Label(
                     clearMediaAcknowledged ? "Cleared" : "Clear media",
@@ -668,12 +669,14 @@ struct ExportView: View {
         lanIPURL = urls.ip
     }
 
-    private func clearExportMedia() {
-        guard !session.isExportSessionActive else { return }
+    @discardableResult
+    private func clearExportMedia() -> Bool {
+        guard !session.isExportSessionActive else { return false }
         let count = session.clearExportMedia(referenceItem: item)
         liveLogTail = ""
-        status = count > 0 ? "Cleared \(count) media file(s) from Exports" : "No media files in Exports"
+        status = count > 0 ? "Cleared \(count) media file(s) from Exports" : "No media files in Exports (paused queue cleared)"
         refreshLogHint()
+        return true
     }
 
     private func clearExportLogs() {

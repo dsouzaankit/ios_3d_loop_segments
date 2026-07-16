@@ -87,8 +87,9 @@ struct PausedExportsView: View {
     @ViewBuilder
     private func pausedRow(entry: ResumeEntry) -> some View {
         let ms = max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
+        let title = entry.resolvedDisplayName.isEmpty ? "Untitled export" : entry.resolvedDisplayName
         VStack(alignment: .leading, spacing: 2) {
-            Text(entry.displayName)
+            Text(title)
                 .lineLimit(2)
             Text("Paused at \(ResumeTimeFormat.formatMs(ms)) · \(ResumeTimeFormat.relative(entry.updatedAt))")
                 .font(.caption)
@@ -128,5 +129,9 @@ struct PausedExportsView: View {
     private func refresh() {
         let activeKey = session.activeExportFileKey
         entries = resumeStore.interruptedEntries(excludingFileKey: activeKey)
+        if let selected = selectedEntry,
+           !entries.contains(where: { $0.fileKey == selected.fileKey }) {
+            selectedEntry = nil
+        }
     }
 }
