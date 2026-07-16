@@ -642,6 +642,11 @@ enum ExportPaths {
 
     /// Immediate children of a directory under `pcld_ios_media/` (`relativeDir` = `pcld_ios_media` or `pcld_ios_media/scripts`, …).
     static func listLANMediaDirectory(relativeDir: String) -> [LANMediaTreeEntry] {
+        // Rename legacy `parked/<sha256>/` → `parked/<filename>/` before WebDAV/PROPFIND lists children.
+        if relativeDir.contains(ExportParkedMedia.folderName) || relativeDir.hasSuffix(mediaExportFolderName)
+            || relativeDir == mediaExportFolderName {
+            _ = ExportParkedMedia.migrateLegacyParkFolderNames()
+        }
         let fm = FileManager.default
         var normalized = relativeDir.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if normalized.isEmpty { normalized = mediaExportFolderName }

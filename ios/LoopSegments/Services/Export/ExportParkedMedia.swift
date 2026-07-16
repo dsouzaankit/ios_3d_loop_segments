@@ -23,6 +23,7 @@ enum ExportParkedMedia {
 
     /// Existing park dir for `fileKey` (filename folder, collision suffix, or legacy fileKey folder).
     static func resolveParkDirectory(forFileKey fileKey: String) -> URL? {
+        _ = migrateLegacyParkFolderNames()
         let key = fileKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return nil }
         let fm = FileManager.default
@@ -39,12 +40,64 @@ enum ExportParkedMedia {
                 return dir
             }
         }
-        // Legacy builds used sanitized fileKey as the folder name (often a UUID).
+        // Legacy builds used sanitized fileKey (sha256 hex) as the folder name.
         let legacy = root.appendingPathComponent(sanitizePathComponent(key), isDirectory: true)
         if fm.fileExists(atPath: legacy.path) {
             return legacy
         }
         return nil
+    }
+
+    /// Rename `parked/<sha256…>/` (pre-268) to `parked/<filename>/` using `_parked_meta.json`.
+    @discardableResult
+    static func migrateLegacyParkFolderNames(log: ((String) -> Void)? = nil) -> Int {
+        let fm = FileManager.default
+        let root = parkedRootURL
+        guard fm.fileExists(atPath: root.path),
+              let names = try? fm.contentsOfDirectory(atPath: root.path) else {
+            return 0
+        }
+        var renamed = 0
+        for name in names {
+            let dir = root.appendingPathComponent(name, isDirectory: true)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            guard let meta = readMeta(in: dir) else { continue }
+            let display = meta.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !display.isEmpty, display != meta.fileKey else { continue }
+            guard needsFilenameMigration(folderLeaf: name, meta: meta) else { continue }
+            let destLeaf = uniqueFolderName(displayName: display, fileKey: meta.fileKey)
+            guard destLeaf != name else { continue }
+            let dest = root.appendingPathComponent(destLeaf, isDirectory: true)
+            guard !fm.fileExists(atPath: dest.path) else { continue }
+            do {
+                try fm.moveItem(at: dir, to: dest)
+                renamed += 1
+                log?(
+                    "Parked folder rename — \(ExportPaths.pathRelativeToExports(dir))/ → " +
+                        "\(ExportPaths.pathRelativeToExports(dest))/"
+                )
+            } catch {
+                log?("Could not rename parked/\(name): \(error.localizedDescription)")
+            }
+        }
+        return renamed
+    }
+
+    /// True when folder still looks like a fileKey/hash name instead of the source filename.
+    private static func needsFilenameMigration(folderLeaf: String, meta: Meta) -> Bool {
+        let base = sanitizePathComponent(meta.displayName)
+        let suffixed = sanitizePathComponent("\(base)__\(shortStableSuffix(forFileKey: meta.fileKey))")
+        if folderLeaf == base || folderLeaf == suffixed { return false }
+        let keyLeaf = sanitizePathComponent(meta.fileKey)
+        if folderLeaf == keyLeaf { return true }
+        // Prefer filename folders; only force-migrate hash/fileKey-named dirs (not already-correct names).
+        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        if folderLeaf.count >= 40,
+           folderLeaf.unicodeScalars.allSatisfy({ hex.contains($0) }) {
+            return true
+        }
+        return false
     }
 
     static func folderURL(forFileKey fileKey: String) -> URL {
@@ -395,6 +448,7 @@ enum ExportParkedMedia {
 
     /// LAN playback index paths for parked media (playable partials).
     static func listLANPlaybackRelativePaths(limit: Int = 32) -> [String] {
+        _ = migrateLegacyParkFolderNames()
         let fm = FileManager.default
         let root = parkedRootURL
         guard fm.fileExists(atPath: root.path),

@@ -860,6 +860,7 @@ enum ExportLANServer {
 
     private static func buildLANIndexSnapshot() -> LANIndexSnapshot {
         autoreleasepool {
+            _ = ExportParkedMedia.migrateLegacyParkFolderNames()
             let exportActive = ExportPlaybackState.shared.isLANExportActive
             let archiveCap = exportActive
                 ? ExportPaths.lanPlaybackArchiveIndexLimitDuringExport
