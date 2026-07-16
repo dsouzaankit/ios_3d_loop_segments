@@ -479,6 +479,14 @@ enum ExportPaths {
                 }
             }
         }
+
+        let parkedPaths = ExportParkedMedia.listLANPlaybackRelativePaths(
+            limit: max(8, maxArchiveEntries / 2)
+        )
+        for path in parkedPaths {
+            let url = ExportPaths.urlUnderExports(relativePath: path)
+            appendFileIfPresent(url)
+        }
         return paths
     }
 
@@ -610,6 +618,8 @@ enum ExportPaths {
         let normalized = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if normalized == mediaExportFolderName { return true }
         if normalized == "\(mediaExportFolderName)/\(segmentLoopFolderName)" { return true }
+        if normalized == "\(mediaExportFolderName)/\(ExportParkedMedia.folderName)" { return true }
+        if normalized.hasPrefix("\(mediaExportFolderName)/\(ExportParkedMedia.folderName)/") { return true }
         if normalized.hasPrefix("\(mediaExportFolderName)/\(exportLogsFolderName)/") { return true }
         let lower = relativePath.lowercased()
         let name = (relativePath as NSString).lastPathComponent.lowercased()

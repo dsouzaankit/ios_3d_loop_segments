@@ -54,6 +54,9 @@ final class ExportCoordinator {
                 _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount)
             }
         }
+        if !continueLANExport {
+            _ = ExportParkedMedia.removePark(forFileKey: item.fileKey)
+        }
         ExportRetentionSourceCatalog.save(sourceFileName: item.name, fileKey: item.fileKey)
 
         if continueLANExport {
@@ -73,6 +76,10 @@ final class ExportCoordinator {
         }
         ExportRuntimeLog.setMirror(logHandler)
         defer { ExportRuntimeLog.setMirror(nil) }
+
+        if continueLANExport {
+            _ = ExportParkedMedia.restoreToRootIfNeeded(fileKey: item.fileKey, log: logHandler)
+        }
 
         BackgroundTaskKeeper.begin()
         defer { BackgroundTaskKeeper.end() }

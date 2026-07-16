@@ -14,6 +14,7 @@ enum ExportMediaArchive {
         ExportPaths.segmentLoopFolderName,
         "scripts",
         archiveFolderName,
+        ExportParkedMedia.folderName,
         ExportPaths.downloadsFolderName,
         ExportPaths.exportLogsFolderName,
     ]
@@ -154,9 +155,19 @@ enum ExportMediaArchive {
         unstampedRootFiles(where: { isRetentionArchivableMediaFileName($0) })
     }
 
+    /// Unstamped root sidecars (manifests, meta JSON) — moved into `parked/<fileKey>/` on handoff.
+    static func activeRootCompanionFilesForParking() -> [URL] {
+        unstampedRootFiles(where: { !isRetentionArchivableMediaFileName($0) })
+    }
+
     /// Unstamped root sidecars (manifests, meta JSON) — not suffixed; removed when media is relocated off root.
     private static func activeRootCompanionFiles() -> [URL] {
-        unstampedRootFiles(where: { !isRetentionArchivableMediaFileName($0) })
+        activeRootCompanionFilesForParking()
+    }
+
+    @discardableResult
+    static func removeLeftoverRootCompanionsAfterParking(log: ((String) -> Void)? = nil) -> Int {
+        removeActiveRootCompanionFiles(log: log)
     }
 
     private static func unstampedRootFiles(where include: (String) -> Bool) -> [URL] {

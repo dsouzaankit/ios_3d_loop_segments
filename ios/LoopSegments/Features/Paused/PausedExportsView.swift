@@ -46,6 +46,7 @@ struct PausedExportsView: View {
                             Text(
                                 "Cap is \(ResumeStore.maxPausedExports) in-progress slots total (includes the live export). " +
                                     "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
+                                    "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
                                     "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove."
                             )
                             .font(.footnote)

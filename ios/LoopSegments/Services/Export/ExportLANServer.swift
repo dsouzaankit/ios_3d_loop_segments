@@ -909,6 +909,7 @@ enum ExportLANServer {
     }
 
     private static let archivePlaybackPrefix = "\(ExportPaths.mediaExportFolderName)/archive/"
+    private static let parkedPlaybackPrefix = "\(ExportPaths.mediaExportFolderName)/\(ExportParkedMedia.folderName)/"
 
     private static func isLANExportLogRelativePath(_ relativePath: String) -> Bool {
         ExportPaths.isLANExportLogRelativePath(relativePath)
@@ -1963,6 +1964,8 @@ enum ExportLANServer {
                 note = " — ~60s segment in loop/ (Range supported)"
             } else if name.hasPrefix(archivePlaybackPrefix) {
                 note = " — retained export (archive/)"
+            } else if name.hasPrefix(parkedPlaybackPrefix) {
+                note = " — paused partial (parked/; LAN-playable)"
             } else if name.hasSuffix(".mp4") {
                 note = " — sparse in-progress source (seek in player to export start)"
             }

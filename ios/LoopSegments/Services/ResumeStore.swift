@@ -101,14 +101,26 @@ final class ResumeStore: ObservableObject {
     func clearPausedExports(exceptFileKey: String? = nil) {
         var entries = load()
         var changed = false
+        var droppedKeys: [String] = []
         for index in entries.indices where entries[index].exportInProgress {
             if let exceptFileKey, entries[index].fileKey == exceptFileKey { continue }
+            droppedKeys.append(entries[index].fileKey)
             entries[index].exportInProgress = false
             entries[index].checkpointMediaMs = nil
             entries[index].updatedAt = Date()
             changed = true
         }
         if changed { persist(entries) }
+        for key in droppedKeys {
+            _ = ExportParkedMedia.removePark(forFileKey: key)
+        }
+        if exceptFileKey == nil {
+            _ = ExportParkedMedia.removeAll()
+        } else {
+            var keep = Set(entries.filter(\.exportInProgress).map(\.fileKey))
+            if let exceptFileKey { keep.insert(exceptFileKey) }
+            ExportParkedMedia.pruneOrphans(keepingFileKeys: keep)
+        }
     }
 
     /// Href backfill only — do not clear other paused rows (multi-pause handoff keeps them for the Paused tab).
@@ -124,6 +136,7 @@ final class ResumeStore: ObservableObject {
         entries[index].checkpointMediaMs = nil
         entries[index].updatedAt = Date()
         persist(entries)
+        _ = ExportParkedMedia.removePark(forFileKey: entry.fileKey)
     }
 
     func setSourceDurationMs(_ ms: Int64, for item: WebDAVItem) {
@@ -428,9 +441,11 @@ final class ResumeStore: ObservableObject {
         guard paused.count > Self.maxPausedExports else { return }
         let drop = paused.prefix(paused.count - Self.maxPausedExports)
         for index in drop {
+            let key = entries[index].fileKey
             entries[index].exportInProgress = false
             entries[index].checkpointMediaMs = nil
             entries[index].updatedAt = Date()
+            _ = ExportParkedMedia.removePark(forFileKey: key)
         }
     }
 

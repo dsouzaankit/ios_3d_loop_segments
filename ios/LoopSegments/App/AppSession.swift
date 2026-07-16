@@ -486,15 +486,19 @@ final class AppSession: ObservableObject {
         // Leave pause flags set until prepareForNewExportHandoff / startExport clears them.
     }
 
-    /// Pause the running export (checkpoint kept), archive root media off the active slot, then allow a fresh start.
+    /// Pause the running export (checkpoint kept), park root media under `parked/<fileKey>/`, then allow a fresh start.
     /// Used by LAN REST (after resolve) and in-app Start when replacing the current run.
     func prepareForNewExportHandoff() async {
         let hadRunning = isExportRunning || exportCoordinator.isBusy
         let hadRootMedia = ExportMediaArchive.hasActiveExportMediaOnDisk()
+        let parkFileKey = activeExportItem?.fileKey
+            ?? ExportRetentionSourceCatalog.read()?.fileKey
+        let parkDisplayName = activeExportItem?.name
+            ?? ExportRetentionSourceCatalog.read()?.sourceFileName
         if isExportRunning {
             let name = activeExportItem?.name ?? "export"
             SearchDebugLog.log("Export handoff: pausing “\(name)” before new request")
-            ExportRuntimeLog.mirror("Export handoff: pausing “\(name)” — checkpoint kept; starting another export")
+            ExportRuntimeLog.mirror("Export handoff: pausing “\(name)” — checkpoint kept; parking root media")
             pauseExport()
         } else if exportCoordinator.isBusy {
             exportGeneration += 1
@@ -509,20 +513,44 @@ final class AppSession: ObservableObject {
         for _ in 0 ..< 300 where exportCoordinator.isBusy {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        // Archive when replacing a run (including after soft-pause left media on root).
+        // Park when replacing a run (including after soft-pause left media on root).
         if (hadRunning || hadRootMedia), ExportMediaArchive.hasActiveExportMediaOnDisk() {
-            let priorName = ExportRetentionSourceCatalog.read()?.sourceFileName
-            let timestamp = ExportMediaArchive.newRetentionTimestamp()
-            let archived = ExportMediaArchive.archiveActiveMedia(
-                timestamp: timestamp,
-                sourceFileName: priorName,
-                log: { ExportRuntimeLog.mirror($0) }
-            )
-            if archived > 0 {
-                _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount)
-                ExportRuntimeLog.mirror(
-                    "Export handoff: archived \(archived) root file(s) to pcld_ios_media/archive/ before new export"
+            if let parkFileKey, !parkFileKey.isEmpty {
+                let parked = ExportParkedMedia.parkActiveRootMedia(
+                    fileKey: parkFileKey,
+                    displayName: parkDisplayName,
+                    log: { ExportRuntimeLog.mirror($0) }
                 )
+                if parked == 0 {
+                    // Fallback: timestamp archive if park moved nothing.
+                    let priorName = ExportRetentionSourceCatalog.read()?.sourceFileName
+                    let timestamp = ExportMediaArchive.newRetentionTimestamp()
+                    let archived = ExportMediaArchive.archiveActiveMedia(
+                        timestamp: timestamp,
+                        sourceFileName: priorName,
+                        log: { ExportRuntimeLog.mirror($0) }
+                    )
+                    if archived > 0 {
+                        _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount)
+                        ExportRuntimeLog.mirror(
+                            "Export handoff: archived \(archived) root file(s) to pcld_ios_media/archive/ (park unavailable)"
+                        )
+                    }
+                }
+            } else {
+                let priorName = ExportRetentionSourceCatalog.read()?.sourceFileName
+                let timestamp = ExportMediaArchive.newRetentionTimestamp()
+                let archived = ExportMediaArchive.archiveActiveMedia(
+                    timestamp: timestamp,
+                    sourceFileName: priorName,
+                    log: { ExportRuntimeLog.mirror($0) }
+                )
+                if archived > 0 {
+                    _ = ExportMediaArchive.pruneRetainedMedia(keepCount: ExportMediaArchive.retentionCount)
+                    ExportRuntimeLog.mirror(
+                        "Export handoff: archived \(archived) root file(s) to pcld_ios_media/archive/ before new export"
+                    )
+                }
             }
         }
         // Clear pause/cancel flags so the follow-up startExport is not racing a stale request.

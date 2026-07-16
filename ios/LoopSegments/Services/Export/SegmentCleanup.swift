@@ -23,6 +23,9 @@ enum SegmentCleanup {
         } else {
             log?("Stop: removed pcld_ios_media/loop/op_*.mp4 (no root media to archive)")
         }
+        if let key = ExportRetentionSourceCatalog.read()?.fileKey {
+            _ = ExportParkedMedia.removePark(forFileKey: key, log: log)
+        }
         return archived
     }
 
@@ -53,6 +56,7 @@ enum SegmentCleanup {
             removed += 1
         }
         removed += ExportMediaArchive.removeAllRetainedMedia(log: log)
+        removed += ExportParkedMedia.removeAll(log: log)
         removed += removeURLDownloads(log: log)
         ExportRetentionSourceCatalog.remove()
         return removed
