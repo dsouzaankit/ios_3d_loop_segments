@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 259 (1.2.24):** Paused Export screen shows **Resume export** while another file is running (was wrongly treated as “Exporting…”). `isExportActive` matches only the live run, not other paused rows.
+
 **Build 258 (1.2.23):** LAN Browse **Export 0:00** uses `href` again (displayName no longer forces a WebDAV walk). Also sends `folderPath` as backup.
 
 **Build 257 (1.2.22):** Paused rows store **`folderPath`** (one-level PROPFIND before WebDAV walk on resume). Paused queue capped at **10** (oldest dropped).

@@ -550,7 +550,13 @@ struct ExportView: View {
             Button(
                 isThisFileExporting
                     ? "Exporting…"
-                    : (session.isExportSessionActive ? "Start export (pauses current)" : "Start export")
+                    : resume.isPaused
+                        ? (session.isExportSessionActive
+                            ? "Resume export (pauses current)"
+                            : "Resume export")
+                        : (session.isExportSessionActive
+                            ? "Start export (pauses current)"
+                            : "Start export")
             ) {
                 session.runExportUITask { await startExport() }
             }

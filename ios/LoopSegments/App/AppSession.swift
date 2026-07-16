@@ -48,11 +48,14 @@ final class AppSession: ObservableObject {
         return Self.webDAVItem(from: ResumeStore.shared.interruptedEntries().first)
     }
 
-    /// True while this file is exporting (including after leaving Export UI).
+    /// True while this file is the export currently running (not merely another paused queue row).
     func isExportActive(for item: WebDAVItem) -> Bool {
         guard isExportSessionActive else { return false }
-        if let active = activeExportItem, active.fileKey == item.fileKey { return true }
-        return ResumeStore.shared.exportWasInterrupted(for: item)
+        if let active = activeExportItem {
+            return active.fileKey == item.fileKey
+        }
+        // Brief window while coordinator is busy but `activeExportItem` is cleared — match newest in-progress only.
+        return ResumeStore.shared.interruptedEntries().first?.fileKey == item.fileKey
     }
 
     private func syncExportSessionActive() {
