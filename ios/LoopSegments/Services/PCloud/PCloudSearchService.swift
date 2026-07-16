@@ -558,12 +558,31 @@ enum PCloudSearchService {
         status: (@Sendable (String) -> Void)? = nil
     ) async throws -> WebDAVItem? {
         SearchDebugLog.log(
-            "resume resolve start: \"\(entry.displayName)\" pinned=\(entry.pinnedCompleted) browseDepth=\(browsePaths.count)"
+            "resume resolve start: \"\(entry.displayName)\" pinned=\(entry.pinnedCompleted) folder=\(entry.folderPath ?? "—") browseDepth=\(browsePaths.count)"
         )
         if let fileCached = SearchLocationCache.matchResumeEntry(entry) {
             SearchDebugLog.log("resume resolve: file cache match \"\(fileCached.name)\" href=\(fileCached.href)")
             SearchLocationCache.recordHits(from: [fileCached])
             return fileCached
+        }
+        if let folder = entry.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines), !folder.isEmpty {
+            let listing = WebDAVURLBuilder.directoryListingPath(folder)
+            status?("Folder: \(listing)…")
+            SearchDebugLog.log("resume resolve: one-level list \(listing)")
+            do {
+                let match = try await AlternateExportFilePicker.findVideo(
+                    named: entry.displayName,
+                    in: listing,
+                    credentials: credentials
+                )
+                SearchDebugLog.log("resume resolve: folderPath match \"\(match.name)\" href=\(match.href)")
+                SearchLocationCache.recordHits(from: [match])
+                return match
+            } catch {
+                SearchDebugLog.log(
+                    "resume resolve: folderPath miss (\(error.localizedDescription)) — continuing"
+                )
+            }
         }
         if let cached = try await matchResumeEntryInCachedFolders(
             entry: entry,

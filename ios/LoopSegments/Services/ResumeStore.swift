@@ -5,6 +5,8 @@ struct ResumeEntry: Codable, Identifiable, Hashable {
     var fileKey: String
     var displayName: String
     var href: String?
+    /// Parent WebDAV folder (listing path) — one-level PROPFIND on resume before a full walk.
+    var folderPath: String? = nil
     var lastSeekMs: Int64
     /// Source duration from last export probe (ms); caps mistaken end-of-file resume points.
     var sourceDurationMs: Int64?
@@ -55,6 +57,8 @@ enum ResumeTimeFormat {
 @MainActor
 final class ResumeStore: ObservableObject {
     static let shared = ResumeStore()
+    /// Max paused / interrupted rows retained; oldest `exportInProgress` cleared when exceeded.
+    static let maxPausedExports = 10
     @Published private(set) var revision = 0
 
     fileprivate static let entriesKey = "resume_entries"
@@ -211,9 +215,13 @@ final class ResumeStore: ObservableObject {
         if let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) {
             entries[index].displayName = item.name
             entries[index].href = item.href
+            if let parent = AlternateExportFilePicker.parentFolderPath(for: item) {
+                entries[index].folderPath = parent
+            }
         } else {
             var entry = ResumeEntry(fileKey: item.fileKey, displayName: item.name, href: item.href, lastSeekMs: 0, updatedAt: Date())
             entry.pinnedCompleted = true
+            entry.folderPath = AlternateExportFilePicker.parentFolderPath(for: item)
             entries.append(entry)
         }
         persist(entries)
@@ -322,6 +330,11 @@ final class ResumeStore: ObservableObject {
                 entries[index].href = href
                 changed = true
             }
+            if let parent = WebDAVRenameReconcile.parentBrowsePath(forFileHref: href),
+               entries[index].folderPath != parent {
+                entries[index].folderPath = parent
+                changed = true
+            }
             if entries[index].fileKey != item.fileKey {
                 entries[index].fileKey = item.fileKey
                 changed = true
@@ -331,7 +344,10 @@ final class ResumeStore: ObservableObject {
     }
 
     private func backfillHrefIfNeeded(entry: ResumeEntry, item: WebDAVItem) {
-        guard entry.href != item.href || entry.fileKey != item.fileKey else { return }
+        let parent = AlternateExportFilePicker.parentFolderPath(for: item)
+        guard entry.href != item.href
+            || entry.fileKey != item.fileKey
+            || entry.folderPath != parent else { return }
         var entries = load()
         guard let index = entries.firstIndex(where: { $0.fileKey == entry.fileKey || $0.id == entry.id }) else {
             return
@@ -339,6 +355,9 @@ final class ResumeStore: ObservableObject {
         entries[index].href = item.href
         entries[index].fileKey = item.fileKey
         entries[index].displayName = item.name
+        if let parent {
+            entries[index].folderPath = parent
+        }
         persist(entries)
     }
 
@@ -355,12 +374,16 @@ final class ResumeStore: ObservableObject {
             }
             if entries[index].fileKey == match.fileKey,
                entries[index].href == match.href,
-               entries[index].displayName == match.name {
+               entries[index].displayName == match.name,
+               entries[index].folderPath == AlternateExportFilePicker.parentFolderPath(for: match) {
                 continue
             }
             entries[index].fileKey = match.fileKey
             entries[index].href = match.href
             entries[index].displayName = match.name
+            if let parent = AlternateExportFilePicker.parentFolderPath(for: match) {
+                entries[index].folderPath = parent
+            }
             entries[index].updatedAt = Date()
             changed = true
         }
@@ -375,12 +398,39 @@ final class ResumeStore: ObservableObject {
         reconcileWithBrowseListing(browsing)
     }
 
+    /// Persist an explicit listing folder (e.g. REST `folderPath` after a successful one-level resolve).
+    func setFolderPath(_ folderPath: String?, for item: WebDAVItem) {
+        let trimmed = folderPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return }
+        let normalized = WebDAVURLBuilder.directoryListingPath(trimmed)
+        upsert(item: item) { entry in
+            entry.folderPath = normalized
+        }
+    }
+
     private func persist(_ entries: [ResumeEntry]) {
+        var trimmed = entries
+        trimPausedQueueOverflow(&trimmed)
         invalidateEntriesCache()
-        if let data = try? JSONEncoder().encode(entries) {
+        if let data = try? JSONEncoder().encode(trimmed) {
             defaults.set(data, forKey: Self.entriesKey)
         }
+        entriesCache = trimmed
         revision += 1
+    }
+
+    /// Keep at most `maxPausedExports` in-progress rows; clear oldest first.
+    private func trimPausedQueueOverflow(_ entries: inout [ResumeEntry]) {
+        let paused = entries.indices
+            .filter { entries[$0].exportInProgress }
+            .sorted { entries[$0].updatedAt < entries[$1].updatedAt }
+        guard paused.count > Self.maxPausedExports else { return }
+        let drop = paused.prefix(paused.count - Self.maxPausedExports)
+        for index in drop {
+            entries[index].exportInProgress = false
+            entries[index].checkpointMediaMs = nil
+            entries[index].updatedAt = Date()
+        }
     }
 
     private func upsert(item: WebDAVItem, mutate: (inout ResumeEntry) -> Void) {
@@ -399,6 +449,9 @@ final class ResumeStore: ObservableObject {
         }
         entry.displayName = item.name
         entry.href = item.href
+        if let parent = AlternateExportFilePicker.parentFolderPath(for: item) {
+            entry.folderPath = parent
+        }
         mutate(&entry)
         if let index = entries.firstIndex(where: { $0.fileKey == item.fileKey }) {
             entries[index] = entry
@@ -413,12 +466,36 @@ final class ResumeStore: ObservableObject {
             return entriesCache
         }
         guard let data = defaults.data(forKey: Self.entriesKey),
-              let entries = try? JSONDecoder().decode([ResumeEntry].self, from: data) else {
+              var entries = try? JSONDecoder().decode([ResumeEntry].self, from: data) else {
             entriesCache = []
             return []
         }
+        var needsSave = backfillMissingFolderPaths(&entries)
+        let pausedBefore = entries.filter(\.exportInProgress).count
+        trimPausedQueueOverflow(&entries)
+        if entries.filter(\.exportInProgress).count != pausedBefore {
+            needsSave = true
+        }
+        if needsSave, let encoded = try? JSONEncoder().encode(entries) {
+            defaults.set(encoded, forKey: Self.entriesKey)
+        }
         entriesCache = entries
         return entries
+    }
+
+    /// Older pauses only had `href` — derive listing folder once.
+    private func backfillMissingFolderPaths(_ entries: inout [ResumeEntry]) -> Bool {
+        var changed = false
+        for index in entries.indices {
+            guard entries[index].folderPath == nil,
+                  let href = entries[index].href,
+                  let parent = WebDAVRenameReconcile.parentBrowsePath(forFileHref: href) else {
+                continue
+            }
+            entries[index].folderPath = parent
+            changed = true
+        }
+        return changed
     }
 
     private func invalidateEntriesCache() {

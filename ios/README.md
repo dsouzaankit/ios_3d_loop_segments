@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 257 (1.2.22):** Paused rows store **`folderPath`** (one-level PROPFIND before WebDAV walk on resume). Paused queue capped at **10** (oldest dropped).
+
 **Build 256 (1.2.21):** Browse keeps only the **latest finished** export pin. All paused / interrupted exports move to a **Paused** tab (badge count). Sparse reconcile no longer wipes other paused rows.
 
 **Build 255 (1.2.20):** In-app **Start export** stays enabled when another file is exporting (label: “pauses current”); random/choose-other-file too. Only disabled for the file that is already running.
@@ -612,7 +614,7 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 | Entry point | Behavior |
 |-------------|----------|
 | **Browse** search bar (`.searchable`) | Primary UI; optional **pCloud REST search (account-wide)** toggle (off by default). |
-| **Paused** tab | Auto-search on open via `searchMatchingResumeEntry` if the file is not resolved from href / sparse catalog. |
+| **Paused** tab | Saved **`folderPath`** → one-level PROPFIND first; then `searchMatchingResumeEntry` (cache / walk) if needed. Max **10** paused rows. |
 | **Pinned completed** (Browse sidebar, latest only) | Same resolve path — locates the pCloud source for Export settings while segment media stays on disk. |
 | **Search in Browse** (failed resume screen) | Fills the Browse search bar and runs the same pipeline. |
 

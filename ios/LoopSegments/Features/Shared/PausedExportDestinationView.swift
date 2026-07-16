@@ -75,7 +75,7 @@ struct PausedExportDestinationView: View {
             """
         }
         return """
-        Uses the same pCloud search as Browse (bookmarks + current folder, optional REST search). \
+        Tries the saved folderPath (one-level list), then the same pCloud search as Browse. \
         Open the folder that contains the file or tap Search in Browse.
         """
     }

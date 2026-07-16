@@ -44,7 +44,7 @@ struct PausedExportsView: View {
                             }
                         } footer: {
                             Text(
-                                "Interrupted or left mid-run. Starting a new export pauses the current one and keeps prior rows here. Swipe to remove a stale row."
+                                "Up to \(ResumeStore.maxPausedExports) paused files (oldest dropped). Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove."
                             )
                             .font(.footnote)
                         }
@@ -90,6 +90,12 @@ struct PausedExportsView: View {
             Text("Paused at \(ResumeTimeFormat.formatMs(ms)) · \(ResumeTimeFormat.relative(entry.updatedAt))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if let folder = entry.folderPath, !folder.isEmpty {
+                Text(folder)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
     }
 
