@@ -516,9 +516,14 @@ final class AppSession: ObservableObject {
         // Park when replacing a run (including after soft-pause left media on root).
         if (hadRunning || hadRootMedia), ExportMediaArchive.hasActiveExportMediaOnDisk() {
             if let parkFileKey, !parkFileKey.isEmpty {
+                let entry = ResumeStore.shared.snapshotEntries().first { $0.fileKey == parkFileKey }
+                let seekMs = max(entry?.lastSeekMs ?? 0, entry?.checkpointMediaMs ?? 0)
                 let parked = ExportParkedMedia.parkActiveRootMedia(
                     fileKey: parkFileKey,
-                    displayName: parkDisplayName,
+                    displayName: parkDisplayName ?? entry?.displayName,
+                    href: activeExportItem?.href ?? entry?.href,
+                    folderPath: entry?.folderPath,
+                    seekMs: seekMs,
                     log: { ExportRuntimeLog.mirror($0) }
                 )
                 if parked == 0 {

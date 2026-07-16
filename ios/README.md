@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 262 (1.2.27):** LAN playback list shows **Resume export** beside each `parked/` partial (same `start_export` trigger as Browse; uses stored href/folderPath + checkpoint seek).
+
 **Build 261 (1.2.26):** Handoff **parks** root media under **`pcld_ios_media/parked/<fileKey>/`** (keeps sparse map; LAN/WebDAV playable) instead of only timestamp-archiving. Resume restores park → root before sparse adopt. Parks prune with the paused queue / Clear media (not archive’s 10-batch prune).
 
 **Build 260 (1.2.25):** Document paused-queue cap: **10** `exportInProgress` slots include the live run, so the Paused tab usually shows **≤9** while exporting (brief flash to 10 on handoff, then oldest dropped).

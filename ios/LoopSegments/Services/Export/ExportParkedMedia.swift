@@ -11,6 +11,9 @@ enum ExportParkedMedia {
         var fileKey: String
         var displayName: String
         var parkedAt: Date
+        var href: String?
+        var folderPath: String?
+        var seekMs: Int64?
     }
 
     static var parkedRootURL: URL {
@@ -44,6 +47,9 @@ enum ExportParkedMedia {
     static func parkActiveRootMedia(
         fileKey: String,
         displayName: String?,
+        href: String? = nil,
+        folderPath: String? = nil,
+        seekMs: Int64? = nil,
         log: ((String) -> Void)? = nil
     ) -> Int {
         let key = fileKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -92,7 +98,25 @@ enum ExportParkedMedia {
         let name = (displayName?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
             ?? ExportRetentionSourceCatalog.read()?.sourceFileName
             ?? key
-        let meta = Meta(fileKey: key, displayName: name, parkedAt: Date())
+        let resolvedHref = href?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedFolder: String? = {
+            if let folderPath, !folderPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return WebDAVURLBuilder.directoryListingPath(folderPath)
+            }
+            if let resolvedHref, !resolvedHref.isEmpty,
+               let parent = WebDAVRenameReconcile.parentBrowsePath(forFileHref: resolvedHref) {
+                return parent
+            }
+            return nil
+        }()
+        let meta = Meta(
+            fileKey: key,
+            displayName: name,
+            parkedAt: Date(),
+            href: (resolvedHref?.isEmpty == false) ? resolvedHref : nil,
+            folderPath: resolvedFolder,
+            seekMs: seekMs.map { max(0, $0) }
+        )
         if let data = try? JSONEncoder().encode(meta) {
             try? data.write(to: destDir.appendingPathComponent(metaFileName), options: .atomic)
         }
@@ -102,7 +126,6 @@ enum ExportParkedMedia {
             ExportPlaybackState.shared.setVanillaDownloadActive(false)
         }
         ExportPlaybackState.shared.clearSparseWorkingPlaybackHints()
-        // Any leftover root companions (e.g. failed move) — drop so root is clear for the next export.
         _ = ExportMediaArchive.removeLeftoverRootCompanionsAfterParking(log: log)
 
         if moved > 0 {
@@ -112,6 +135,14 @@ enum ExportParkedMedia {
             )
         }
         return moved
+    }
+
+    /// LAN Resume/Export button payload for a parked media relative path.
+    static func lanResumeTrigger(forRelativePath relativePath: String) -> Meta? {
+        guard isUnderParkedLANPath(relativePath) else { return nil }
+        let url = ExportPaths.urlUnderExports(relativePath: relativePath)
+        let dir = url.deletingLastPathComponent()
+        return readMeta(in: dir)
     }
 
     /// Restore parked media to root when resuming the same `fileKey` (before sparse adopt).

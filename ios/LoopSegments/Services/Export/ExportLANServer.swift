@@ -1966,6 +1966,15 @@ enum ExportLANServer {
                 note = " — retained export (archive/)"
             } else if name.hasPrefix(parkedPlaybackPrefix) {
                 note = " — paused partial (parked/; LAN-playable)"
+                let link: String
+                if lanMediaListUsesClickOnly(relativePath: name) {
+                    link = lanMediaClickAnchor(relativePath: name, innerHTML: escaped)
+                } else {
+                    link = "<a href=\"\(escaped)\">\(escaped)</a>"
+                }
+                let resumeBtn = htmlParkedResumeExportButton(relativePath: name)
+                items.append("<li>\(link)\(sizeNote)\(note)\(resumeBtn)</li>")
+                continue
             } else if name.hasSuffix(".mp4") {
                 note = " — sparse in-progress source (seek in player to export start)"
             }
@@ -1990,6 +1999,21 @@ enum ExportLANServer {
         return items.isEmpty
             ? "<li><em>No export files yet — start export on the phone.</em></li>"
             : items.joined()
+    }
+
+    /// Resume/Export control beside a parked partial (same trigger path as Browse Export).
+    private static func htmlParkedResumeExportButton(relativePath: String) -> String {
+        guard let meta = ExportParkedMedia.lanResumeTrigger(forRelativePath: relativePath) else {
+            return ""
+        }
+        let name = htmlEscape(meta.displayName)
+        let href = htmlEscape(meta.href ?? "")
+        let folder = htmlEscape(meta.folderPath ?? "")
+        let seek = max(0, meta.seekMs ?? 0)
+        let label = seek > 0
+            ? "Resume export (\(formatLANClock(Int(seek / 1000))))"
+            : "Resume export"
+        return " <button type=\"button\" class=\"export-parked\" data-name=\"\(name)\" data-href=\"\(href)\" data-folder-path=\"\(folder)\" data-seek-ms=\"\(seek)\">\(htmlEscape(label))</button>"
     }
 
     private static func htmlLANExportLogListItems(relativePaths: [String]) -> String {
@@ -2115,6 +2139,13 @@ enum ExportLANServer {
                     "<li>\(lanMediaClickAnchor(relativePath: rel, innerHTML: esc)) (archive)</li>"
                 )
             }
+            for rel in ExportParkedMedia.listLANPlaybackRelativePaths(limit: 16) {
+                let esc = htmlEscape(rel)
+                let btn = htmlParkedResumeExportButton(relativePath: rel)
+                items.append(
+                    "<li>\(lanMediaClickAnchor(relativePath: rel, innerHTML: esc)) (parked)\(btn)</li>"
+                )
+            }
         }
         return items.isEmpty
             ? "<li><em>No media files yet.</em></li>"
@@ -2198,6 +2229,50 @@ enum ExportLANServer {
           var listsBtn = document.getElementById("lan-refresh-lists");
           if (statusBtn) statusBtn.onclick = refreshStatus;
           if (listsBtn) listsBtn.onclick = refreshLists;
+          function uuid() {
+            return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+              var r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+              return v.toString(16);
+            });
+          }
+          function putTrigger(body) {
+            return fetch("\(LANExportTriggerControl.triggerRelativePath)", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+              cache: "no-store"
+            }).then(function (r) {
+              if (!r.ok) throw new Error("trigger HTTP " + r.status);
+            });
+          }
+          function queueParkedResume(btn) {
+            if (!btn) return;
+            var href = (btn.getAttribute("data-href") || "").trim();
+            var name = (btn.getAttribute("data-name") || "").trim();
+            var folder = (btn.getAttribute("data-folder-path") || "").trim();
+            var seekMs = parseInt(btn.getAttribute("data-seek-ms") || "0", 10) || 0;
+            var body = { version: 1, command: "start_export", displayName: name, seekMs: seekMs, id: uuid() };
+            if (href) body.href = href;
+            if (folder) body.folderPath = folder;
+            if (!href && !folder && !name) return;
+            putTrigger(body).catch(function () {});
+          }
+          var playbackFiles = document.getElementById("lan-playback-files");
+          if (playbackFiles) {
+            playbackFiles.onclick = function (ev) {
+              var parkedBtn = ev.target.closest ? ev.target.closest(".export-parked") : null;
+              if (!parkedBtn && ev.target.classList && ev.target.classList.contains("export-parked")) {
+                parkedBtn = ev.target;
+              }
+              if (parkedBtn) queueParkedResume(parkedBtn);
+            };
+          }
+          var resumeBtn = document.getElementById("export-resume");
+          if (resumeBtn) {
+            resumeBtn.onclick = function () {
+              putTrigger({ version: 1, command: "resume_export", id: uuid() }).catch(function () {});
+            };
+          }
         })();
         </script>
         """
@@ -3042,6 +3117,9 @@ enum ExportLANServer {
             document.querySelectorAll(".export-file").forEach(function (btn) {
               btn.disabled = !!active;
             });
+            document.querySelectorAll(".export-parked").forEach(function (btn) {
+              btn.disabled = !!active;
+            });
           }
           window.setExportPending = setExportPending;
           async function putTrigger(body) {
@@ -3194,6 +3272,31 @@ enum ExportLANServer {
               }).catch(function (e) { setStatus(e.message || e, true); });
             }
           };
+          function queueParkedResume(btn) {
+            if (!btn) return;
+            var href = (btn.getAttribute("data-href") || "").trim();
+            var name = (btn.getAttribute("data-name") || "").trim();
+            var folder = (btn.getAttribute("data-folder-path") || "").trim();
+            var seekMs = parseInt(btn.getAttribute("data-seek-ms") || "0", 10) || 0;
+            var body = { version: 1, command: "start_export", displayName: name, seekMs: seekMs, id: uuid() };
+            if (href) body.href = href;
+            if (folder) body.folderPath = folder;
+            if (!href && !folder && !name) {
+              setStatus("Parked resume missing href/folder/name", true);
+              return;
+            }
+            putTrigger(body).catch(function (e) { setStatus(e.message || e, true); });
+          }
+          var playbackFiles = document.getElementById("lan-playback-files");
+          if (playbackFiles) {
+            playbackFiles.onclick = function (ev) {
+              var parkedBtn = ev.target.closest ? ev.target.closest(".export-parked") : null;
+              if (!parkedBtn && ev.target.classList && ev.target.classList.contains("export-parked")) {
+                parkedBtn = ev.target;
+              }
+              if (parkedBtn) queueParkedResume(parkedBtn);
+            };
+          }
           loadPins().then(function () { loadPCloud(); }).catch(function () { loadPCloud(); });
           window.refreshLANBookmarks = loadPins;
         })();
