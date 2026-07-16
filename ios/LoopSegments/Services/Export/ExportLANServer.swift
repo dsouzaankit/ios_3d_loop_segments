@@ -1858,8 +1858,7 @@ enum ExportLANServer {
             ExportPlaybackState.shared.updateTranscodedWorkingFileBytes(sizeNum.int64Value)
             return
         }
-        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-           !ExportPaths.shouldHideSparseWorkingFromLAN() {
+        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
     }
@@ -1891,8 +1890,7 @@ enum ExportLANServer {
             <p>Prefer <code>loop/op_00.mp4</code> while export runs.</p>
             """
         }
-        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-           !ExportPaths.shouldHideSparseWorkingFromLAN() {
+        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             let line = ExportPlaybackState.shared.lanPlayableStatusLine()
             let startSec = ExportPlaybackState.shared.playbackStartSeconds
             let startedReadable = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
@@ -2002,20 +2000,18 @@ enum ExportLANServer {
         guard !paused.isEmpty else { return [] }
         return paused.map { entry in
             let title = entry.resolvedDisplayName.isEmpty ? "Paused export" : entry.resolvedDisplayName
-            let ms = max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
-            let seekNote = ms > 0
-                ? " — paused at \(formatLANClock(Int(ms / 1000)))"
-                : ""
-            var playPrefix = ""
+            let label = htmlEscape(title)
+            let play: String
             if let rel = ExportParkedMedia.primaryPlaybackRelativePath(forFileKey: entry.fileKey) {
-                let label = htmlEscape(ExportParkedMedia.lanPlaybackLabel(forRelativePath: rel))
-                playPrefix = "\(lanMediaClickAnchor(relativePath: rel, innerHTML: label)) · "
+                let linkLabel = htmlEscape(ExportParkedMedia.lanPlaybackLabel(forRelativePath: rel))
+                play = lanMediaClickAnchor(relativePath: rel, innerHTML: linkLabel)
             } else if let rootRel = rootPlaybackRelativePathMatchingPaused(fileKey: entry.fileKey) {
-                let label = htmlEscape(title)
-                playPrefix = "\(lanMediaClickAnchor(relativePath: rootRel, innerHTML: label)) · "
+                play = lanMediaClickAnchor(relativePath: rootRel, innerHTML: label)
+            } else {
+                // No on-disk media yet — filename only (Resume button has seek).
+                play = "<span>\(label)</span>"
             }
-            let resumeBtn = htmlResumeExportButton(for: entry)
-            return "<li>\(playPrefix)<strong>\(htmlEscape(title))</strong>\(seekNote) (paused)\(resumeBtn)</li>"
+            return "<li>\(play)\(htmlResumeExportButton(for: entry))</li>"
         }
     }
 
@@ -2040,8 +2036,7 @@ enum ExportLANServer {
         if FileManager.default.fileExists(atPath: ExportPaths.workingTranscodedURL.path) {
             return ExportPaths.pathRelativeToExports(ExportPaths.workingTranscodedURL)
         }
-        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-           !ExportPaths.shouldHideSparseWorkingFromLAN() {
+        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             return ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
         }
         return nil
@@ -2190,8 +2185,7 @@ enum ExportLANServer {
                 : "<a href=\"\(esc)\">\(esc)</a>"
             items.append("<li>\(link) (growing transcode)</li>")
         }
-        if fm.fileExists(atPath: ExportPaths.workingSourceURL.path),
-           !ExportPaths.shouldHideSparseWorkingFromLAN() {
+        if fm.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             let rel = ExportPaths.pathRelativeToExports(ExportPaths.workingSourceURL)
             let esc = htmlEscape(rel)
             let link = lanMediaListUsesClickOnly(relativePath: rel)
@@ -3410,8 +3404,7 @@ enum ExportLANServer {
             let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
             playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)
             payload["pcloudTranscodedPlayback"] = playback
-        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path),
-                  !ExportPaths.shouldHideSparseWorkingFromLAN() {
+        } else if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             var playback = ExportPlaybackState.shared.frozenStatusPayload
             let startSec = (playback["playbackStartSeconds"] as? Double) ?? 0
             playback["resumeTimelineReadable"] = ExportPlaybackState.shared.timelineSecondsIsReadable(startSec)

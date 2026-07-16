@@ -155,7 +155,7 @@ enum ExportMediaArchive {
         unstampedRootFiles(where: { isRetentionArchivableMediaFileName($0) })
     }
 
-    /// Unstamped root sidecars (manifests, meta JSON) — moved into `parked/<fileKey>/` on handoff.
+    /// Unstamped root sidecars (manifests, meta JSON) — moved into `parked/<filename>/` on handoff.
     static func activeRootCompanionFilesForParking() -> [URL] {
         unstampedRootFiles(where: { !isRetentionArchivableMediaFileName($0) })
     }

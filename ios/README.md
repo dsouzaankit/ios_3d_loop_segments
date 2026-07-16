@@ -26,17 +26,23 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 269 (1.2.34):** Stop hiding root `_working.mp4` on LAN/WebDAV while vanilla or transcode is active — list and serve it whenever the file exists on disk. (`loop/op_*.mp4` were never gated by that filter; only missing when not written or cleared.)
+
+**Build 268 (1.2.33):** Park folders use the **source filename** on disk/WebDAV (`parked/MyClip.mp4/`); `fileKey` stays in `_parked_meta.json`. Name collisions get a short `__suffix`. Legacy UUID park folders still restore.
+
+**Build 267 (1.2.32):** LAN paused rows are just **filename link + Resume button** (no repeated name / “paused at” / “(paused)” text). Also included in this ship with 268–269.
+
 **Build 266 (1.2.31):** LAN playback list shows **all** paused exports (same queue as the phone Paused tab), not only clips that have a `parked/` folder — soft-paused root media included.
 
 **Build 265 (1.2.30):** LAN parked playback links show the **source filename** (from `_parked_meta.json`); `href` still points at `parked/<fileKey>/…` on disk.
 
-**Build 264 (1.2.29):** LAN parked links stay visible while vanilla/transcode hides root `_working.mp4` (filename hide no longer applies under `parked/`); monitor lists parked even when idle.
+**Build 264 (1.2.29):** LAN parked links stay visible while idle (not only during export). (Build **269** later stopped hiding root `_working.mp4` during vanilla.)
 
 **Build 263 (1.2.28):** Clear media **deletes** paused/in-progress resume rows (not only flags) and dismisses a stale Paused detail so Resume cannot restart a wiped export; empty display names fall back to the href leaf.
 
 **Build 262 (1.2.27):** LAN playback list shows **Resume export** beside each `parked/` partial (same `start_export` trigger as Browse; uses stored href/folderPath + checkpoint seek).
 
-**Build 261 (1.2.26):** Handoff **parks** root media under **`pcld_ios_media/parked/<fileKey>/`** (keeps sparse map; LAN/WebDAV playable) instead of only timestamp-archiving. Resume restores park → root before sparse adopt. Parks prune with the paused queue / Clear media (not archive’s 10-batch prune).
+**Build 261 (1.2.26):** Handoff **parks** root media under **`pcld_ios_media/parked/`** (keeps sparse map; LAN/WebDAV playable) instead of only timestamp-archiving. Resume restores park → root before sparse adopt. Parks prune with the paused queue / Clear media (not archive’s 10-batch prune). (Build **268+** uses source **filename** folders; older builds used `fileKey`/UUID folder names.)
 
 **Build 260 (1.2.25):** Document paused-queue cap: **10** `exportInProgress` slots include the live run, so the Paused tab usually shows **≤9** while exporting (brief flash to 10 on handoff, then oldest dropped).
 
@@ -112,7 +118,7 @@ While a run is active there are **two** live copies (`export_latest.txt` + a tem
 **Start export** archives any finished live log, clears live pointers, and **keeps** history. **Resume** after pause keeps history and on-disk media (no log wipe); checkpoint seek is used even if the Export screen seek UI drifted. **Clear logs** (Export tab) deletes all log files. Copy from LAN **`http://<ip>:8765/pcld_ios_media/logs/…`** (or legacy **`/export_latest.txt`**). On upgrade, logs move automatically out of **Documents/Exports/**.
 
 On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** is moved into Application Support automatically. **rclone** and **WebDAV** paths are unchanged (`L:\pcld_ios_media\...`). Copy **segment MP4s** from the PC via LAN/rclone, not Apple Devices USB.
-- **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
+- **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse**, **Paused**, and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. Paused mid-run files are listed on the **Paused** tab (not in Browse).
@@ -351,9 +357,9 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | **2** | **Stop** / handoff during **(1)** | Both files if still present | One archive timestamp batch; `_appFast_` only if replace already ran. |
 | **4** | **Sparse + kept vanilla** (below) | `_working.mp4` + `_vanilla_download.*` | Rare; see **Sparse + vanilla overlap**. |
 
-**Fresh export vs LAN resume:** Any **new** Start export (not `continueLANExport`) **moves** existing root media into `archive/` first (including leftovers from a **paused** or **interrupted** run), then starts the new job. **Handoff** to another title **parks** the prior root set under **`pcld_ios_media/parked/<fileKey>/`** (media + sparse sidecars; LAN-listed) instead of only a timestamped `archive/` copy — resume of that paused title **restores** park → root then sparse-adopts. **LAN resume** (`continueLANExport` — same title paused: checkpoint &gt; ~0.25 s **or** partial `_vanilla_download.*` for that file) keeps `_working` / `loop/` / vanilla on disk (or restores from `parked/`) and does **not** archive first; WebDAV vanilla fill still resumes from the last byte via `_vanilla_download.meta.json`.
+**Fresh export vs LAN resume:** Any **new** Start export (not `continueLANExport`) **moves** existing root media into `archive/` first (including leftovers from a **paused** or **interrupted** run), then starts the new job. **Handoff** to another title **parks** the prior root set under **`pcld_ios_media/parked/<filename>/`** (media + sparse sidecars; LAN/WebDAV; `fileKey` in `_parked_meta.json`) instead of only a timestamped `archive/` copy — resume of that paused title **restores** park → root then sparse-adopts. **LAN resume** (`continueLANExport` — same title paused: checkpoint &gt; ~0.25 s **or** partial `_vanilla_download.*` for that file) keeps `_working` / `loop/` / vanilla on disk (or restores from `parked/`) and does **not** archive first; WebDAV vanilla fill still resumes from the last byte via `_vanilla_download.meta.json`.
 
-**Sparse + vanilla overlap (case 4):** At the start of **every** export, `syncVanillaDownloadWithExportItem` runs. If a partial or complete `_vanilla_download.<ext>` already exists for the **same** pCloud `fileKey` + size (e.g. an earlier vanilla attempt or interrupted vanilla download), that file is **kept** so WebDAV download can resume (`_vanilla_download.meta.json` is never pruned as a “stale copy”). After auto-pause, use **Start export** / **`resume_export`** (not a fresh **`start_export`** on another title) so `continueLANExport` keeps partial bytes. A **sparse** export on the same title does **not** delete that vanilla copy (`abandonSparseWorkingForRecovery` only runs on the vanilla/HLS recovery path, not on a successful sparse probe). So you can have **`_working.mp4`** (sparse mirror) and **`_vanilla_download.*`** (dense partial/full copy) at the same root. LAN may **hide** `_working.mp4` while a vanilla download is active (`shouldHideSparseWorkingFromLAN`). **Finish** can **copy both** into `archive/` (same timestamp batch, two filenames from the pCloud basename). To avoid overlap: **Stop** or start a **fresh** export (archives first), or **Clear media**.
+**Sparse + vanilla overlap (case 4):** At the start of **every** export, `syncVanillaDownloadWithExportItem` runs. If a partial or complete `_vanilla_download.<ext>` already exists for the **same** pCloud `fileKey` + size (e.g. an earlier vanilla attempt or interrupted vanilla download), that file is **kept** so WebDAV download can resume (`_vanilla_download.meta.json` is never pruned as a “stale copy”). After auto-pause, use **Start export** / **`resume_export`** (not a fresh **`start_export`** on another title) so `continueLANExport` keeps partial bytes. A **sparse** export on the same title does **not** delete that vanilla copy (`abandonSparseWorkingForRecovery` only runs on the vanilla/HLS recovery path, not on a successful sparse probe). So you can have **`_working.mp4`** (sparse mirror) and **`_vanilla_download.*`** (dense partial/full copy) at the same root. Both stay listed/served on LAN and WebDAV when present. **Finish** can **copy both** into `archive/` (same timestamp batch, two filenames from the pCloud basename). To avoid overlap: **Stop** or start a **fresh** export (archives first), or **Clear media**.
 
 **`loop/op_*.mp4`** are separate and never counted as root retention media.
 
@@ -474,7 +480,7 @@ flowchart TD
 | **pCloud HLS transcode** | Vanilla off/failed; probe error is container/no-track; est. Mbps ≥ HLS cutoff; API token | `_working_pcloud_transcode.mp4` (growing MP4) | HTTPS HLS playlist + progressive transcode (not WebDAV range mirror) |
 | **Probe failure (terminal)** | Recovery exhausted (vanilla off, HLS ineligible or failed) | None new | — |
 
-**Recovery notes:** Fresh export probes pCloud **before** creating `_working.mp4` (avoids a useless sparse shell). Starting vanilla/HLS **removes** stale sparse `_working.mp4`. LAN hides `_working.mp4` while `_vanilla_download.*` is active.
+**Recovery notes:** Fresh export probes pCloud **before** creating `_working.mp4` (avoids a useless sparse shell). Starting vanilla/HLS **removes** stale sparse `_working.mp4` when abandoning sparse for recovery. If both remain on disk, LAN/WebDAV list both.
 
 #### Per-minute transport (sparse path, segments enabled)
 
@@ -560,7 +566,7 @@ Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN serv
 
 **A1–A2 pass signals:** index shows `_working.mp4`; no `op_00` yet; WAN Mbps lines during preload; playable till > 0:00 within ~30 s on good Wi‑Fi.
 
-**A3–A4 pass signals:** log *WebDAV probe failed* or *unsupportedCodec* → *vanilla WebDAV download*; stale `_working.mp4` removed; LAN lists `_vanilla_download.*` only.
+**A3–A4 pass signals:** log *WebDAV probe failed* or *unsupportedCodec* → *vanilla WebDAV download*; stale `_working.mp4` removed on recovery abandon; LAN lists `_vanilla_download.*` (and `_working.mp4` if still on disk).
 
 ##### B. High bitrate (≥ **35 Mbps** est., typically **50–150+ Mbps**), seek **0:00**
 

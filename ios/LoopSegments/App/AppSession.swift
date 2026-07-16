@@ -488,7 +488,7 @@ final class AppSession: ObservableObject {
         // Leave pause flags set until prepareForNewExportHandoff / startExport clears them.
     }
 
-    /// Pause the running export (checkpoint kept), park root media under `parked/<fileKey>/`, then allow a fresh start.
+    /// Pause the running export (checkpoint kept), park root media under `parked/<filename>/`, then allow a fresh start.
     /// Used by LAN REST (after resolve) and in-app Start when replacing the current run.
     func prepareForNewExportHandoff() async {
         let hadRunning = isExportRunning || exportCoordinator.isBusy

@@ -1,7 +1,8 @@
 import Foundation
 
-/// Parks in-progress root export media under `pcld_ios_media/parked/<fileKey>/` during handoff
+/// Parks in-progress root export media under `pcld_ios_media/parked/<filename>/` during handoff
 /// so another export can use the root slot. Restore before sparse `tryAdopt` on resume.
+/// Folder names use the source filename (WebDAV-friendly); `fileKey` stays in `_parked_meta.json`.
 /// Playable partials are listed on LAN/WebDAV; prune follows the paused queue (not archive timestamps).
 enum ExportParkedMedia {
     static let folderName = "parked"
@@ -20,29 +21,83 @@ enum ExportParkedMedia {
         ExportPaths.mediaExportDirectory.appendingPathComponent(folderName, isDirectory: true)
     }
 
-    static func folderURL(forFileKey fileKey: String) -> URL {
-        parkedRootURL.appendingPathComponent(sanitizedFolderName(forFileKey: fileKey), isDirectory: true)
+    /// Existing park dir for `fileKey` (filename folder, collision suffix, or legacy fileKey folder).
+    static func resolveParkDirectory(forFileKey fileKey: String) -> URL? {
+        let key = fileKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return nil }
+        let fm = FileManager.default
+        let root = parkedRootURL
+        guard fm.fileExists(atPath: root.path),
+              let names = try? fm.contentsOfDirectory(atPath: root.path) else {
+            return nil
+        }
+        for name in names {
+            let dir = root.appendingPathComponent(name, isDirectory: true)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            if let meta = readMeta(in: dir), meta.fileKey == key {
+                return dir
+            }
+        }
+        // Legacy builds used sanitized fileKey as the folder name (often a UUID).
+        let legacy = root.appendingPathComponent(sanitizePathComponent(key), isDirectory: true)
+        if fm.fileExists(atPath: legacy.path) {
+            return legacy
+        }
+        return nil
     }
 
-    static func sanitizedFolderName(forFileKey fileKey: String) -> String {
-        let trimmed = fileKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let illegal = CharacterSet(charactersIn: "/\\:\0")
+    static func folderURL(forFileKey fileKey: String) -> URL {
+        resolveParkDirectory(forFileKey: fileKey)
+            ?? parkedRootURL.appendingPathComponent(sanitizePathComponent(fileKey), isDirectory: true)
+    }
+
+    /// Sanitize a single path component for `parked/<name>/`.
+    static func sanitizePathComponent(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let illegal = CharacterSet(charactersIn: "/\\:\0*?\"<>|")
         var name = trimmed.components(separatedBy: illegal).joined(separator: "_")
         name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        while name.hasPrefix(".") { name = String(name.dropFirst()) }
         if name.isEmpty { return "unknown" }
         if name.count > 120 { name = String(name.prefix(120)) }
         return name
     }
 
-    static func hasPark(forFileKey fileKey: String) -> Bool {
-        let dir = folderURL(forFileKey: fileKey)
-        let working = dir.appendingPathComponent(ExportPaths.workingSourceURL.lastPathComponent)
-        return FileManager.default.fileExists(atPath: working.path)
-            || FileManager.default.fileExists(atPath: dir.path)
-                && ((try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.isEmpty == false)
+    /// Stable short suffix for collision disambiguation (from fileKey).
+    private static func shortStableSuffix(forFileKey fileKey: String) -> String {
+        let alnum = fileKey.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }
+        let s = String(String.UnicodeScalarView(alnum))
+        if s.count >= 8 { return String(s.suffix(8)) }
+        if !s.isEmpty { return s }
+        return String(format: "%08x", fileKey.utf8.reduce(into: UInt32(0)) { partial, byte in
+            partial = partial &* 1_664_525 &+ UInt32(byte) &+ 1_013_904_223
+        })
     }
 
-    /// Move root media + companions into `parked/<fileKey>/` (replaces any prior park for that key).
+    /// Prefer `MyClip.mp4`; on name collision with another fileKey use `MyClip.mp4__abcd1234`.
+    private static func uniqueFolderName(displayName: String, fileKey: String) -> String {
+        let base = sanitizePathComponent(displayName)
+        let fm = FileManager.default
+        let root = parkedRootURL
+        let preferredURL = root.appendingPathComponent(base, isDirectory: true)
+        if !fm.fileExists(atPath: preferredURL.path) {
+            return base
+        }
+        if let meta = readMeta(in: preferredURL), meta.fileKey == fileKey {
+            return base
+        }
+        return sanitizePathComponent("\(base)__\(shortStableSuffix(forFileKey: fileKey))")
+    }
+
+    static func hasPark(forFileKey fileKey: String) -> Bool {
+        guard let dir = resolveParkDirectory(forFileKey: fileKey) else { return false }
+        let working = dir.appendingPathComponent(ExportPaths.workingSourceURL.lastPathComponent)
+        return FileManager.default.fileExists(atPath: working.path)
+            || ((try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.isEmpty == false)
+    }
+
+    /// Move root media + companions into `parked/<filename>/` (replaces any prior park for that key).
     @discardableResult
     static func parkActiveRootMedia(
         fileKey: String,
@@ -64,8 +119,16 @@ enum ExportParkedMedia {
             return 0
         }
 
+        let name = (displayName?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            ?? ExportRetentionSourceCatalog.read()?.sourceFileName
+            ?? key
+
+        // Drop any prior park for this key (filename folder or legacy UUID folder).
+        _ = removePark(forFileKey: key)
+
         let fm = FileManager.default
-        let destDir = folderURL(forFileKey: key)
+        let folderLeaf = uniqueFolderName(displayName: name, fileKey: key)
+        let destDir = parkedRootURL.appendingPathComponent(folderLeaf, isDirectory: true)
         do {
             try fm.createDirectory(at: parkedRootURL, withIntermediateDirectories: true)
             if fm.fileExists(atPath: destDir.path) {
@@ -95,9 +158,6 @@ enum ExportParkedMedia {
             }
         }
 
-        let name = (displayName?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
-            ?? ExportRetentionSourceCatalog.read()?.sourceFileName
-            ?? key
         let resolvedHref = href?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedFolder: String? = {
             if let folderPath, !folderPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -131,7 +191,7 @@ enum ExportParkedMedia {
         if moved > 0 {
             log?(
                 "Export handoff: parked \(moved) file(s) under pcld_ios_media/\(folderName)/" +
-                    "\(sanitizedFolderName(forFileKey: key))/ (LAN-playable partial; sparse keep)"
+                    "\(folderLeaf)/ (LAN/WebDAV; sparse keep)"
             )
         }
         return moved
@@ -140,13 +200,9 @@ enum ExportParkedMedia {
     /// One playable parked path per `fileKey` (prefer `_working.mp4`, then any media).
     static func primaryPlaybackRelativePath(forFileKey fileKey: String) -> String? {
         let key = fileKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return nil }
-        let dir = folderURL(forFileKey: key)
+        guard !key.isEmpty, let dir = resolveParkDirectory(forFileKey: key) else { return nil }
         let fm = FileManager.default
-        guard fm.fileExists(atPath: dir.path),
-              let names = try? fm.contentsOfDirectory(atPath: dir.path) else {
-            return nil
-        }
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return nil }
         let preferred = ExportPaths.workingSourceURL.lastPathComponent
         let ordered = names.sorted { a, b in
             if a == preferred { return true }
@@ -165,7 +221,7 @@ enum ExportParkedMedia {
         return nil
     }
 
-    /// Friendly LAN label (source filename) — path still uses `parked/<fileKey>/…` on disk.
+    /// Friendly LAN label (source filename from meta when present).
     static func lanPlaybackLabel(forRelativePath relativePath: String) -> String {
         let leaf = (relativePath as NSString).lastPathComponent
         guard isUnderParkedLANPath(relativePath) else { return relativePath }
@@ -203,9 +259,8 @@ enum ExportParkedMedia {
     ) -> Bool {
         let key = fileKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return false }
-        let parkDir = folderURL(forFileKey: key)
+        guard let parkDir = resolveParkDirectory(forFileKey: key) else { return false }
         let fm = FileManager.default
-        guard fm.fileExists(atPath: parkDir.path) else { return false }
 
         let parkedWorking = parkDir.appendingPathComponent(ExportPaths.workingSourceURL.lastPathComponent)
         let parkedSparse = parkDir.appendingPathComponent(ExportPaths.workingSourceManifestURL.lastPathComponent)
@@ -273,13 +328,13 @@ enum ExportParkedMedia {
 
     @discardableResult
     static func removePark(forFileKey fileKey: String, log: ((String) -> Void)? = nil) -> Int {
-        let dir = folderURL(forFileKey: fileKey)
+        guard let dir = resolveParkDirectory(forFileKey: fileKey) else { return 0 }
         let fm = FileManager.default
-        guard fm.fileExists(atPath: dir.path) else { return 0 }
+        let leaf = dir.lastPathComponent
         let count = ((try? fm.contentsOfDirectory(atPath: dir.path))?.count) ?? 1
         do {
             try fm.removeItem(at: dir)
-            log?("Removed parked/\(sanitizedFolderName(forFileKey: fileKey))/ (\(count) item(s))")
+            log?("Removed parked/\(leaf)/ (\(count) item(s))")
             return count
         } catch {
             log?("Could not remove parked folder: \(error.localizedDescription)")
@@ -317,12 +372,18 @@ enum ExportParkedMedia {
         let fm = FileManager.default
         let root = parkedRootURL
         guard let names = try? fm.contentsOfDirectory(atPath: root.path) else { return }
-        let keepFolders = Set(keep.map { sanitizedFolderName(forFileKey: $0) })
         for name in names {
-            guard !keepFolders.contains(name) else { continue }
             let url = root.appendingPathComponent(name)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let parkKey: String
+            if let meta = readMeta(in: url) {
+                parkKey = meta.fileKey
+            } else {
+                // Legacy UUID folder with no/unreadable meta — treat folder name as key.
+                parkKey = name
+            }
+            guard !keep.contains(parkKey) else { continue }
             do {
                 try fm.removeItem(at: url)
                 log?("Pruned orphan parked/\(name)/")
