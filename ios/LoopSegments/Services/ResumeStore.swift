@@ -92,7 +92,7 @@ final class ResumeStore: ObservableObject {
         }
     }
 
-    /// Only one export runs at a time; starting another file should not leave stale rows in Paused exports.
+    /// Clears paused flags (e.g. Clear media). Optional `exceptFileKey` keeps one row.
     func clearPausedExports(exceptFileKey: String? = nil) {
         var entries = load()
         var changed = false
@@ -106,19 +106,9 @@ final class ResumeStore: ObservableObject {
         if changed { persist(entries) }
     }
 
-    /// `_working.sparse.json` is for one source file — other paused rows are stale.
+    /// Href backfill only — do not clear other paused rows (multi-pause handoff keeps them for the Paused tab).
     func reconcilePausedWithWorkingSource() {
-        guard let manifest = WorkingSourceSparseCatalog.readManifest() else { return }
-        var entries = load()
-        var changed = false
-        for index in entries.indices where entries[index].exportInProgress {
-            if entries[index].fileKey == manifest.fileKey { continue }
-            entries[index].exportInProgress = false
-            entries[index].checkpointMediaMs = nil
-            entries[index].updatedAt = Date()
-            changed = true
-        }
-        if changed { persist(entries) }
+        backfillHrefsFromSparseManifest()
     }
 
     func dismissPausedExport(_ entry: ResumeEntry) {
@@ -197,10 +187,15 @@ final class ResumeStore: ObservableObject {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    /// At most one completed pin (newest) for Browse.
     func pinnedCompletedEntries() -> [ResumeEntry] {
-        load()
-            .filter(\.pinnedCompleted)
-            .sorted { $0.updatedAt > $1.updatedAt }
+        pruneExtraCompletedPinsIfNeeded()
+        return Array(
+            load()
+                .filter(\.pinnedCompleted)
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .prefix(1)
+        )
     }
 
     /// Pins the item in Browse when an export finishes and export media exists (root, `archive/`, or `loop/`). Clears other pins.
@@ -220,6 +215,19 @@ final class ResumeStore: ObservableObject {
             var entry = ResumeEntry(fileKey: item.fileKey, displayName: item.name, href: item.href, lastSeekMs: 0, updatedAt: Date())
             entry.pinnedCompleted = true
             entries.append(entry)
+        }
+        persist(entries)
+    }
+
+    private func pruneExtraCompletedPinsIfNeeded() {
+        var entries = load()
+        let pinned = entries
+            .enumerated()
+            .filter { $0.element.pinnedCompleted }
+            .sorted { $0.element.updatedAt > $1.element.updatedAt }
+        guard pinned.count > 1 else { return }
+        for pair in pinned.dropFirst() {
+            entries[pair.offset].pinnedCompleted = false
         }
         persist(entries)
     }

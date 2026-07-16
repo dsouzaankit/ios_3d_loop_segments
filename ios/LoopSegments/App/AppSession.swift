@@ -1,5 +1,10 @@
 import Foundation
 
+enum MainTab: Hashable {
+    case browse
+    case paused
+}
+
 @MainActor
 final class AppSession: ObservableObject {
     @Published var credentials: WebDAVCredentials?
@@ -8,6 +13,10 @@ final class AppSession: ObservableObject {
     @Published private(set) var isExportSessionActive = false
     /// WebDAV folder path stack for the browser (survives Export push/pop on the NavigationStack).
     @Published var browserPathStack: [String] = ["/"]
+    /// Root tab selection (Browse vs Paused exports).
+    @Published var selectedMainTab: MainTab = .browse
+    /// When set from the Paused tab, Browse applies this as the search field and switches focus.
+    @Published var pendingBrowseSearch: String?
 
     private let credentialStore = CredentialStore()
     private(set) var userRequestedExportCancel = false

@@ -16,9 +16,7 @@ struct BrowserView: View {
     @State private var searchModeNote = ""
     @State private var searchDebugStatus = ""
     @State private var restAPISearchEnabled = PCloudSearchSettings.restAPISearchEnabled
-    @State private var selectedPausedEntry: ResumeEntry?
     @State private var selectedPinnedEntry: ResumeEntry?
-    @State private var pausedSidebarEntries: [ResumeEntry] = []
     @State private var pinnedSidebarEntries: [ResumeEntry] = []
     @State private var folderBookmarkEntries: [FolderBookmark] = []
     @State private var resumeByFileKey: [String: ResumeStatus] = [:]
@@ -95,35 +93,6 @@ struct BrowserView: View {
                                     .font(.footnote)
                             }
                         }
-                        if !isSearchActive, !pausedSidebarEntries.isEmpty {
-                            Section {
-                                ForEach(pausedSidebarEntries) { entry in
-                                    Button {
-                                        selectedPausedEntry = entry
-                                    } label: {
-                                        HStack(alignment: .center) {
-                                            pausedExportRow(entry: entry)
-                                            Spacer(minLength: 4)
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .swipeActions(edge: .trailing) {
-                                        Button("Remove", role: .destructive) {
-                                            resumeStore.dismissPausedExport(entry)
-                                        }
-                                    }
-                                }
-                            } header: {
-                                Text("Paused exports")
-                            } footer: {
-                                Text("Shows exports interrupted or left mid-run. Usually one file; swipe left to remove a stale row.")
-                                    .font(.footnote)
-                            }
-                        }
                         if !isSearchActive, !pinnedSidebarEntries.isEmpty {
                             Section {
                                 ForEach(pinnedSidebarEntries) { entry in
@@ -150,7 +119,7 @@ struct BrowserView: View {
                                 Text("Last finished export")
                             } footer: {
                                 Text(
-                                    "Pinned when an export finishes and `\(ExportPaths.mediaExportFolderName)/_working.mp4` exists (segments in `\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/`). Opens Export for LAN paths and settings."
+                                    "Only the latest finished export is pinned. Paused mid-run files are on the Paused tab. Media under `\(ExportPaths.mediaExportFolderName)/`."
                                 )
                                     .font(.footnote)
                             }
@@ -218,17 +187,6 @@ struct BrowserView: View {
             .navigationDestination(for: WebDAVItem.self) { item in
                 ExportView(item: item)
             }
-            .navigationDestination(item: $selectedPausedEntry) { entry in
-                PausedExportDestinationView(
-                    entry: entry,
-                    browsing: items,
-                    browsePathStack: pathStack,
-                    onSearchByName: { name in
-                        searchText = name
-                        searchToken += 1
-                    }
-                )
-            }
             .navigationDestination(item: $selectedPinnedEntry) { entry in
                 PausedExportDestinationView(
                     entry: entry,
@@ -281,10 +239,10 @@ struct BrowserView: View {
                 searchDebugStatus = SearchDebugLog.statusLine()
                 refreshResumeSidebar()
                 refreshFolderBookmarks()
+                applyPendingBrowseSearchIfNeeded()
                 if !didSyncResumeManifest {
                     didSyncResumeManifest = true
                     resumeStore.reconcilePausedWithWorkingSource()
-                    resumeStore.backfillHrefsFromSparseManifest()
                 }
             }
             .onChange(of: resumeStore.revision) { _, _ in
@@ -298,6 +256,14 @@ struct BrowserView: View {
             }
             .onChange(of: session.activeExportItem?.fileKey) { _, _ in
                 refreshResumeSidebar()
+            }
+            .onChange(of: session.pendingBrowseSearch) { _, _ in
+                applyPendingBrowseSearchIfNeeded()
+            }
+            .onChange(of: session.selectedMainTab) { _, tab in
+                if tab == .browse {
+                    applyPendingBrowseSearchIfNeeded()
+                }
             }
             .onChange(of: folderBookmarkStore.revision) { _, _ in
                 refreshFolderBookmarks()
@@ -368,18 +334,6 @@ struct BrowserView: View {
     }
 
     @ViewBuilder
-    private func pausedExportRow(entry: ResumeEntry) -> some View {
-        let ms = max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
-        VStack(alignment: .leading, spacing: 2) {
-            Text(entry.displayName)
-                .lineLimit(2)
-            Text("Paused at \(ResumeTimeFormat.formatMs(ms)) · \(ResumeTimeFormat.relative(entry.updatedAt))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
     private func pinnedCompletedRow(entry: ResumeEntry) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(entry.displayName)
@@ -391,9 +345,16 @@ struct BrowserView: View {
     }
 
     private func refreshResumeSidebar() {
-        let activeKey = session.activeExportFileKey
-        pausedSidebarEntries = resumeStore.interruptedEntries(excludingFileKey: activeKey)
         pinnedSidebarEntries = resumeStore.pinnedCompletedEntries()
+    }
+
+    private func applyPendingBrowseSearchIfNeeded() {
+        guard let pending = session.pendingBrowseSearch else { return }
+        session.pendingBrowseSearch = nil
+        let trimmed = pending.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        searchText = trimmed
+        searchToken += 1
     }
 
     private func refreshFolderBookmarks() {
@@ -611,138 +572,6 @@ struct BrowserView: View {
             guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             SearchDebugLog.log("UI error: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
-        }
-    }
-}
-
-private struct PausedExportDestinationView: View {
-    @EnvironmentObject private var session: AppSession
-    @ObservedObject private var resumeStore = ResumeStore.shared
-    let entry: ResumeEntry
-    let browsing: [WebDAVItem]
-    /// Current Browse folder stack — merged with bookmarks inside `PCloudSearchService` (same as Browse search).
-    let browsePathStack: [String]
-    let onSearchByName: (String) -> Void
-
-    @State private var searchItem: WebDAVItem?
-    @State private var isSearching = false
-    @State private var searchStatusLine = ""
-    @State private var resolveError: String?
-
-    var body: some View {
-        Group {
-            if let item = resumeStore.resolveItem(for: entry, browsing: browsing + (searchItem.map { [$0] } ?? [])) {
-                ExportView(item: item)
-            } else if isSearching {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Finding \(entry.displayName)…")
-                        .font(.subheadline)
-                    if !searchStatusLine.isEmpty {
-                        Text(searchStatusLine)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(4)
-                            .padding(.horizontal)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ContentUnavailableView {
-                    Label(notFoundTitle, systemImage: "film")
-                } description: {
-                    Text(notFoundDescription)
-                } actions: {
-                    Button("Search in Browse") {
-                        onSearchByName(entry.displayName)
-                    }
-                    Button("Try again") {
-                        Task { await resolveViaSearch() }
-                    }
-                }
-            }
-        }
-        .navigationTitle(entry.displayName)
-        .navigationBarTitleDisplayMode(.inline)
-        .task {
-            resumeStore.reconcilePausedWithWorkingSource()
-            resumeStore.backfillHrefsFromSparseManifest()
-            if resumeStore.resolveItem(for: entry, browsing: browsing) != nil {
-                return
-            }
-            await resolveViaSearch()
-        }
-    }
-
-    private var notFoundTitle: String {
-        entry.pinnedCompleted ? "Source not found yet" : "File not in this folder"
-    }
-
-    private var notFoundDescription: String {
-        if let resolveError, !resolveError.isEmpty {
-            return resolveError
-        }
-        if entry.pinnedCompleted {
-            return """
-            Segment media is on disk; searching pCloud (bookmarks + Browse path, same as the search bar) to open Export for the source file. \
-            Tap Try again or Search in Browse.
-            """
-        }
-        return """
-        Uses the same pCloud search as Browse (bookmarks + current folder, optional REST search). \
-        Open the folder that contains the file or tap Search in Browse.
-        """
-    }
-
-    private func resolveViaSearch() async {
-        guard searchItem == nil else { return }
-        SearchDebugLog.ensureReady()
-        isSearching = true
-        searchStatusLine = "Preparing pCloud search…"
-        resolveError = nil
-        defer {
-            isSearching = false
-        }
-        let credentials: WebDAVCredentials
-        do {
-            guard let prepared = try await session.prepareCredentialsForSearch() else {
-                SearchDebugLog.log("resume resolve UI: not signed in")
-                resolveError = "Sign in to search pCloud for this file."
-                return
-            }
-            credentials = prepared
-        } catch is CancellationError {
-            return
-        } catch {
-            SearchDebugLog.log("resume resolve UI: prepare failed — \(error.localizedDescription)")
-            resolveError = error.localizedDescription
-            return
-        }
-        do {
-            if let match = try await PCloudSearchService.searchMatchingResumeEntry(
-                entry: entry,
-                credentials: credentials,
-                browsePaths: browsePathStack,
-                status: { note in
-                    Task { @MainActor in
-                        searchStatusLine = note
-                    }
-                }
-            ) {
-                searchItem = match
-                resumeStore.backfillHrefs(from: [match])
-                searchStatusLine = ""
-                return
-            }
-            resolveError = entry.pinnedCompleted
-                ? "No matching file in bookmarks or Browse path. Turn on pCloud REST search in Browse or open the source folder."
-                : "No matching file found. Try Search in Browse or enable pCloud REST search."
-        } catch is CancellationError {
-            SearchDebugLog.log("resume resolve UI: cancelled")
-        } catch {
-            SearchDebugLog.log("resume resolve UI: \(error.localizedDescription)")
-            resolveError = error.localizedDescription
         }
     }
 }

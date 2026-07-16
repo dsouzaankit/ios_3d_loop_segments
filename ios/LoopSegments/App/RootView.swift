@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var session: AppSession
+    @ObservedObject private var resumeStore = ResumeStore.shared
     @Environment(\.scenePhase) private var scenePhase
 
     /// Foreground, export in flight, or Keep Alive audio playing — keep LAN server + trigger polling.
@@ -11,10 +12,27 @@ struct RootView: View {
             || ExportBackgroundKeepAlive.shared.isActive
     }
 
+    private var pausedTabBadge: Int {
+        resumeStore.interruptedEntries(excludingFileKey: session.activeExportFileKey).count
+    }
+
     var body: some View {
         Group {
             if session.credentials != nil {
-                BrowserView()
+                TabView(selection: $session.selectedMainTab) {
+                    BrowserView()
+                        .tabItem {
+                            Label("Browse", systemImage: "folder")
+                        }
+                        .tag(MainTab.browse)
+
+                    PausedExportsView()
+                        .tabItem {
+                            Label("Paused", systemImage: "pause.circle")
+                        }
+                        .badge(pausedTabBadge)
+                        .tag(MainTab.paused)
+                }
             } else {
                 AuthView()
             }

@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 256 (1.2.21):** Browse keeps only the **latest finished** export pin. All paused / interrupted exports move to a **Paused** tab (badge count). Sparse reconcile no longer wipes other paused rows.
+
 **Build 255 (1.2.20):** In-app **Start export** stays enabled when another file is exporting (label: “pauses current”); random/choose-other-file too. Only disabled for the file that is already running.
 
 **Build 254 (1.2.19):** Fix REST handoff — soft-pause while resolving; archive only after the new target is known. Failed folder/walk no longer destroys the current export (252 regression).
@@ -93,7 +95,7 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts; LAN hides `_working.mp4` while `_vanilla_download.*` is active. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
-- **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse** and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. **Paused exports** sidebar hides the file that is actively exporting.
+- **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse**, **Paused**, and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. Paused mid-run files are listed on the **Paused** tab (not in Browse).
 - **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Mix mode** (default) or **Prefer lock screen controls** (exclusive). **Build 225+:** **60-minute** sessions when foregrounded and after export stops; LAN stays up while the loop runs. See **Keep Alive: mix vs lock screen** and **Background / lock screen** below. Not reliable in Low Power Mode.
   - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin` / `iosadmin`**), since they expose pCloud folder/file names.
 
@@ -610,8 +612,8 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 | Entry point | Behavior |
 |-------------|----------|
 | **Browse** search bar (`.searchable`) | Primary UI; optional **pCloud REST search (account-wide)** toggle (off by default). |
-| **Paused exports** (orange sidebar) | Auto-search on open via `searchMatchingResumeEntry` if the file is not in the current folder listing. |
-| **Pinned completed** (gray sidebar) | Same as paused — locates the pCloud source for Export settings while segment media stays on disk. |
+| **Paused** tab | Auto-search on open via `searchMatchingResumeEntry` if the file is not resolved from href / sparse catalog. |
+| **Pinned completed** (Browse sidebar, latest only) | Same resolve path — locates the pCloud source for Export settings while segment media stays on disk. |
 | **Search in Browse** (failed resume screen) | Fills the Browse search bar and runs the same pipeline. |
 
 **Default path (REST toggle off or `tokenSaved=false`):** **File cache** (last **200** hits: full `href` + filename) is checked locally first — full-path or exact-name matches return in Browse immediately; **folder cache** (last **100** parent paths) is used for PROPFIND only when file cache is not a strong match. Then WebDAV walk on **current Browse folder** + **bookmarks** (deduped), always **excluding `/`**. Cached/bookmark roots are visited **before** the pCloud user-files tree (build **232+**). **Paused/pinned resume** tries **file cache** (no network), then one PROPFIND per cached folder, then full search. Timeout scales with root count: `min(10 + 2.5×(roots−1), 45)` seconds. Cap **80 folders** visited per search. If search starts from `/`, UI + `search_debug.txt` note that root is excluded (bookmarks-only scan unless recent-hit cache has paths).
