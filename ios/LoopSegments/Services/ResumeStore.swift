@@ -57,7 +57,8 @@ enum ResumeTimeFormat {
 @MainActor
 final class ResumeStore: ObservableObject {
     static let shared = ResumeStore()
-    /// Max paused / interrupted rows retained; oldest `exportInProgress` cleared when exceeded.
+    /// Max `exportInProgress` rows retained (includes the live exporting file). Oldest cleared when exceeded.
+    /// While a run is active the Paused tab hides that file, so the list typically shows at most `maxPausedExports - 1`.
     static let maxPausedExports = 10
     @Published private(set) var revision = 0
 
