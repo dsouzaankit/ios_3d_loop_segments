@@ -283,6 +283,7 @@ enum LANExportTriggerControl {
             var resolveNote = ""
             let fileName = startExportFileName(from: trigger)
             let folderRaw = trigger.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let hrefItem = webDAVItem(from: trigger)
             if let fileName, !folderRaw.isEmpty {
                 guard let credentials else {
                     writeAck(
@@ -324,6 +325,10 @@ enum LANExportTriggerControl {
                         return "Trigger rejected — \(message)"
                     }
                 }
+            } else if let hrefItem {
+                // LAN Browse "Export 0:00" sends href + displayName — prefer href (do not walk by name).
+                item = hrefItem
+                resolveNote = "href"
             } else if let fileName {
                 guard let credentials else {
                     writeAck(
@@ -334,7 +339,7 @@ enum LANExportTriggerControl {
                     )
                     return "Not signed in"
                 }
-                SearchDebugLog.log("start_export: no folderPath — WebDAV walk for \"\(fileName)\"")
+                SearchDebugLog.log("start_export: no folderPath/href — WebDAV walk for \"\(fileName)\"")
                 switch await resolveViaWebDAVWalk(
                     fileName: fileName,
                     credentials: credentials,
@@ -353,8 +358,6 @@ enum LANExportTriggerControl {
                     )
                     return "Trigger rejected — \(message)"
                 }
-            } else if let hrefItem = webDAVItem(from: trigger) {
-                item = hrefItem
             } else {
                 writeAck(
                     command: trigger.command.rawValue,

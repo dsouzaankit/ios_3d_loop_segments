@@ -3185,6 +3185,7 @@ enum ExportLANServer {
                 command: "start_export",
                 href: exportBtn.getAttribute("data-href"),
                 displayName: exportBtn.getAttribute("data-name"),
+                folderPath: pcloudPath,
                 seekMs: 0,
                 id: uuid()
               }).catch(function (e) { setStatus(e.message || e, true); });
