@@ -32,7 +32,8 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 | `-SkipUsbLaunch` | Do not run `Launch-LoopSegmentsViaUsb.ps1` |
 | `-UsbLaunchMount` | Remount Developer Disk Image (default skips mount) |
 | `-SkipProfileSync` | Do not sync Chromium profile to/from repo |
-| `-DetachChromium` | Do not wait for browser exit (upload on next run start) |
+| `-DetachChromium` | Do not wait for browser exit (upload + local clear on next run) |
+| `-KeepLocalProfile` | Do not wipe local AppData profile after upload |
 | `-StartUrl "..."` | Override start page (default `https://my.pcloud.com`) |
 
 Each launch:
@@ -41,7 +42,7 @@ Each launch:
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
 - Starts a local REST log sink
 - **USB-launches Loop Segments** via `..\Launch-LoopSegmentsViaUsb.ps1` (phone must be unlocked; **exit 3 / locked aborts Chromium**)
-- **Profile sync:** `%LOCALAPPDATA%\pcloud_web_companion\chromium-profile` ↔ `windows\pcloud_web_companion\chromium-profile` (upload then download before start; upload again after Chromium exits). Caches/lock files skipped. Folder is gitignored.
+- **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from the Playwright browser cache) with the extension loaded; waits for exit unless `-DetachChromium`
 

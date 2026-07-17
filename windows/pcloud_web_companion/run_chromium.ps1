@@ -8,6 +8,8 @@
     [switch]$SkipProfileSync,
     # Do not wait for Chromium exit (upload runs at the start of the next launch instead).
     [switch]$DetachChromium,
+    # Keep the full local AppData profile after upload (default: wipe local after sync to P:).
+    [switch]$KeepLocalProfile,
     [string]$StartUrl = "https://my.pcloud.com"
 )
 
@@ -355,21 +357,10 @@ function Sync-ChromiumProfile {
     }
 
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
-    Write-Host "[profile] $Direction : $src -> $dst"
+    Write-Host "[profile] $Direction (full folder): $src -> $dst"
 
-    # Keep cookies/logins; skip bulky caches and live lock files (Chromium must be closed).
-    $excludeDirs = @(
-        "Cache"
-        "Code Cache"
-        "GPUCache"
-        "GrShaderCache"
-        "ShaderCache"
-        "Crashpad"
-        "BrowserMetrics"
-        "optimization_guide_model_store"
-        "component_crx_cache"
-        "GraphiteDawnCache"
-    )
+    # Full mirror of the profile tree. Skip only live lock files so the next
+    # Chromium start is not blocked (Chromium must already be closed).
     $excludeFiles = @(
         "SingletonLock"
         "SingletonCookie"
@@ -382,6 +373,7 @@ function Sync-ChromiumProfile {
         $src
         $dst
         "/E"
+        "/MIR"
         "/R:2"
         "/W:1"
         "/NFL"
@@ -390,8 +382,8 @@ function Sync-ChromiumProfile {
         "/NJS"
         "/NC"
         "/NS"
-        "/XD"
-    ) + $excludeDirs + @("/XF") + $excludeFiles
+        "/XF"
+    ) + $excludeFiles
 
     & robocopy.exe @robocopyArgs | Out-Null
     $rc = $LASTEXITCODE
@@ -401,12 +393,44 @@ function Sync-ChromiumProfile {
     } else {
         Write-Host "[profile] $Direction OK (robocopy=$rc)"
     }
+
+    foreach ($name in $excludeFiles) {
+        Remove-ProfilePath (Join-Path $dst $name)
+    }
+}
+
+function Test-LocalProfileHasContent {
+    param([string] $ProfileDir)
+    if (-not (Test-Path -LiteralPath $ProfileDir)) { return $false }
+    if (Test-Path -LiteralPath (Join-Path $ProfileDir "Default")) { return $true }
+    $any = @(Get-ChildItem -LiteralPath $ProfileDir -Force -ErrorAction SilentlyContinue)
+    return ($any.Count -gt 0)
+}
+
+function Clear-LocalProfileMinimal {
+    param([string] $ProfileDir)
+
+    if ($KeepLocalProfile) {
+        Write-Host "[profile] Keeping local profile (-KeepLocalProfile)"
+        return
+    }
+    if (-not (Test-Path -LiteralPath $ProfileDir)) {
+        New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
+        return
+    }
+
+    Write-Host "[profile] Clearing local profile (canonical copy is on P: / repo)"
+    Get-ChildItem -LiteralPath $ProfileDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
+    Write-Host "[profile] Local profile is empty: $ProfileDir"
 }
 
 function Wait-ProfileChromiumExit {
     param([string]$ProfileDir)
 
-    Write-Host "[run] Waiting for Chromium to exit (will upload profile to repo)..."
+    Write-Host "[run] Waiting for Chromium to exit (will upload profile to repo, then clear local)..."
     Write-Host "      Close the browser window when finished. Ctrl+C skips wait (upload on next run)."
     while ($true) {
         $still = @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
@@ -471,8 +495,13 @@ function Clear-ProfileTabsAndDownloadHistory {
 New-Item -ItemType Directory -Force -Path $UserDataDir | Out-Null
 New-Item -ItemType Directory -Force -Path $RepoProfileDir | Out-Null
 Stop-ProfileChromium -ProfileDir $UserDataDir
-# Persist any local profile from a prior detach run, then restore repo copy locally.
-Sync-ChromiumProfile -Direction Upload
+# If a prior -DetachChromium left a full local profile, upload it first.
+# Never upload an empty local over P: (would wipe the canonical copy).
+if (Test-LocalProfileHasContent -ProfileDir $UserDataDir) {
+    Sync-ChromiumProfile -Direction Upload
+} else {
+    Write-Host "[profile] Local empty - skip upload before download"
+}
 Sync-ChromiumProfile -Direction Download
 Clear-ProfileTabsAndDownloadHistory -ProfileRoot $UserDataDir
 
@@ -549,7 +578,7 @@ Write-Host "[run] Chromium started (fresh tabs + download history; cookies kept)
 Write-Host "[run] pCloud downloads -> clipboard + POST Loop Segments /export_from_folder.json"
 
 if ($DetachChromium) {
-    Write-Host "[run] Detached (-DetachChromium). Profile uploads at the start of the next run."
+    Write-Host "[run] Detached (-DetachChromium). Full local profile kept until next run uploads, then clears."
 } else {
     try {
         Wait-ProfileChromiumExit -ProfileDir $UserDataDir
@@ -560,4 +589,5 @@ if ($DetachChromium) {
     Start-Sleep -Milliseconds 500
     Sync-ChromiumProfile -Direction Upload
     Write-Host "[run] Profile synced to $RepoProfileDir"
+    Clear-LocalProfileMinimal -ProfileDir $UserDataDir
 }

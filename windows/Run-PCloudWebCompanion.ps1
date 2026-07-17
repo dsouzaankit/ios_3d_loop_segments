@@ -23,6 +23,7 @@ param(
     [switch] $UsbLaunchMount,
     [switch] $SkipProfileSync,
     [switch] $DetachChromium,
+    [switch] $KeepLocalProfile,
     [string] $StartUrl = "https://my.pcloud.com"
 )
 
@@ -42,6 +43,7 @@ $forward = @{
     UsbLaunchMount   = $UsbLaunchMount
     SkipProfileSync  = $SkipProfileSync
     DetachChromium   = $DetachChromium
+    KeepLocalProfile = $KeepLocalProfile
     StartUrl         = $StartUrl
 }
 

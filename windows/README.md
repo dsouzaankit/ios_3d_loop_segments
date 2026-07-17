@@ -26,7 +26,7 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 .\Run-PCloudWebCompanion.ps1
 # unlock phone first; locked → exit 3, Chromium not started
 # .\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only
-# Profile syncs to windows\pcloud_web_companion\chromium-profile (gitignored)
+# Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
 ```
 
 Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).

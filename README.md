@@ -11,7 +11,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
 
-**PC companion (browse + request export):** [`windows/pcloud_web_companion`](windows/pcloud_web_companion) — run `windows\Run-PCloudWebCompanion.ps1` (USB-opens Loop Segments if unlocked, syncs Chromium profile to/from `windows\pcloud_web_companion\chromium-profile`, then Chromium). Browse pCloud on the PC while the phone exports over cellular via LAN REST (`/export_from_folder.json`, etc.).
+**PC companion (browse + request export):** [`windows/pcloud_web_companion`](windows/pcloud_web_companion) — run `windows\Run-PCloudWebCompanion.ps1` (USB-opens Loop Segments if unlocked; Chromium profile lives on P: under `windows\pcloud_web_companion\chromium-profile`, local AppData cleared after exit). Browse pCloud on the PC while the phone exports over cellular via LAN REST (`/export_from_folder.json`, etc.).
 
 | Step | Device | Connection |
 |------|--------|------------|
