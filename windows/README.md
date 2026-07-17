@@ -24,7 +24,7 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 
 ```powershell
 .\Run-PCloudWebCompanion.ps1
-# unlock phone first; locked → exit 3, Chromium not started
+# if :8765/browse is already up → skip unlock/USB launch; else unlock first (locked → exit 3)
 # .\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
 ```
@@ -49,7 +49,7 @@ py -3.12 -m pip install -U pymobiledevice3
 | Topic | Notes |
 |-------|--------|
 | Bundle id | Usually `com.loopsegments.app`; AltStore may use `com.loopsegments.app.<TEAMID>` — auto-detected |
-| Unlock | Phone must be **unlocked** (probe + launch). Exit code **3** if locked — `Run-PCloudWebCompanion.ps1` will not start Chromium |
+| Unlock | Needed only when LAN is down: phone must be **unlocked** (probe + launch). Exit code **3** if locked — companion will not start Chromium. If `:8765/browse` is already reachable, USB unlock/launch is skipped |
 | Trust / 7-day cert | If launch fails with untrusted/invalid signature: **Settings → General → VPN & Device Management → Trust**, or AltStore refresh, open app once by hand, retry |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
 | Background launch | **Not supported** — USB launch opens the app; use **Keep Alive** after open, then lock |

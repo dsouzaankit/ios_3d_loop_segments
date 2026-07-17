@@ -5,7 +5,8 @@
 
 .DESCRIPTION
   Wrapper around windows\pcloud_web_companion\run_chromium.ps1.
-  Before Chromium starts, runs Launch-LoopSegmentsViaUsb.ps1.
+  Before Chromium starts, probes phone LAN (:8765/browse). If reachable, skips USB
+  unlock/launch; otherwise runs Launch-LoopSegmentsViaUsb.ps1.
   Exit code 3 (phone locked) or other USB launch failures abort Chromium.
 
 .EXAMPLE

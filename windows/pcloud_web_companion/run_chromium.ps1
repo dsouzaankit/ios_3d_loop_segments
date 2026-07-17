@@ -245,9 +245,55 @@ function Start-RestLogSink {
     }
 }
 
+function Test-PhoneLanPageReachable {
+    $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
+    if (-not (Test-Path -LiteralPath $lanConfigPath)) {
+        return $false
+    }
+
+    try {
+        $lan = Get-Content -LiteralPath $lanConfigPath -Raw | ConvertFrom-Json
+    } catch {
+        Write-Warning "[lan] Could not read $lanConfigPath : $_"
+        return $false
+    }
+
+    $hostName = [string]$lan.phoneLanHost
+    if ([string]::IsNullOrWhiteSpace($hostName)) {
+        return $false
+    }
+
+    $port = 8765
+    if ($null -ne $lan.lanPort -and [int]$lan.lanPort -gt 0) {
+        $port = [int]$lan.lanPort
+    }
+
+    # Prefer /browse (companion target); fall back to /status.json.
+    $paths = @("/browse", "/status.json")
+    foreach ($path in $paths) {
+        $uri = "http://${hostName}:${port}${path}"
+        try {
+            Write-Host "[lan] Probing $uri ..."
+            $resp = Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 3
+            if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
+                Write-Host "[lan] Reachable ($($resp.StatusCode)): $uri"
+                return $true
+            }
+        } catch {
+            Write-Host "[lan] Not reachable: $uri ($($_.Exception.Message))"
+        }
+    }
+    return $false
+}
+
 function Invoke-LoopSegmentsUsbLaunch {
     if ($SkipUsbLaunch) {
         Write-Host "[usb] Skipping Loop Segments USB launch (-SkipUsbLaunch)"
+        return
+    }
+
+    if (Test-PhoneLanPageReachable) {
+        Write-Host "[usb] Phone LAN already up - skipping unlock probe and USB launch"
         return
     }
 
@@ -268,7 +314,7 @@ function Invoke-LoopSegmentsUsbLaunch {
         [void]$psArgs.Add("-SkipMount")
     }
 
-    Write-Host "[usb] Launching Loop Segments on phone before Chromium..."
+    Write-Host "[usb] LAN not reachable - launching Loop Segments on phone before Chromium..."
     Write-Host "[usb] > powershell $($psArgs -join ' ')"
     & powershell.exe @psArgs
     $code = $LASTEXITCODE

@@ -41,7 +41,7 @@ Each launch:
 - Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
 - Starts a local REST log sink
-- **USB-launches Loop Segments** via `..\Launch-LoopSegmentsViaUsb.ps1` (phone must be unlocked; **exit 3 / locked aborts Chromium**)
+- **USB-launches Loop Segments** via `..\Launch-LoopSegmentsViaUsb.ps1` only if `http://<phone>:8765/browse` (or `/status.json`) is not reachable. If LAN is already up, unlock/USB launch is skipped. Otherwise phone must be unlocked; **exit 3 / locked aborts Chromium**
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from the Playwright browser cache) with the extension loaded; waits for exit unless `-DetachChromium`
