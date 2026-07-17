@@ -47,6 +47,7 @@ Each launch:
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded; waits for exit unless `-DetachChromium`
+- **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, uploads full profile to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X)
 
 ## Playwright
 
@@ -85,6 +86,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | `logs.html` / `logs.js` | In-browser REST log UI |
 | `lan_config.json` | Phone LAN target (synced on launch) |
 | `run_chromium.ps1` | Venv, Playwright Chromium, USB launch, profile sync, extension copy, browser launch |
+| `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium + sync/clear profile |
 | `requirements.txt` | `playwright` (launcher Chromium fetch only) |
 | `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log` |
 | `chromium-profile/` | Synced browser profile (gitignored; local working copy under `%LOCALAPPDATA%`) |

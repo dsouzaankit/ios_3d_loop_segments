@@ -2337,6 +2337,172 @@ enum ExportLANServer {
     }
 
     /// Lightweight monitor at `/` (playback + logs + resume when paused). No embedded pCloud browser.
+    /// Shared light/night CSS + Day/Night toggle script for `/` and `/browse`.
+    private static func htmlLANAppearanceHeadBits() -> String {
+        let appNight = AppearanceSettings.isNightModeEnabled
+        let htmlClass = appNight ? "night" : ""
+        let defaultAttr = appNight ? "1" : "0"
+        return """
+            <html lang="en" class="\(htmlClass)" data-night-default="\(defaultAttr)"><head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta name="color-scheme" content="dark light">
+            <meta http-equiv="x-dns-prefetch-control" content="off">
+            <style>
+            :root {
+              color-scheme: light dark;
+              --bg: #f6f7f9;
+              --fg: #1a1a1a;
+              --muted: #666;
+              --panel-bg: #ffffff;
+              --panel-border: #ccc;
+              --banner-bg: #e8f4fd;
+              --banner-border: #5b9bd5;
+              --banner-fg: #0d3a5c;
+              --source-bg: #f5f8ff;
+              --source-border: #c5d4f0;
+              --source-active-bg: #fffbea;
+              --source-active-border: #c8a415;
+              --source-paused-bg: #fff5f0;
+              --source-paused-border: #d08050;
+              --scroll-bg: #fafafa;
+              --scroll-border: #ddd;
+              --pin-bg: #fffbea;
+              --pin-border: #c8a415;
+              --pin-fg: #c8a415;
+              --link: #0b57d0;
+              --btn-bg: #efefef;
+              --btn-border: #bbb;
+              --err: #b00020;
+              --ok: #333;
+              --input-bg: #fff;
+              --input-border: #ccc;
+            }
+            html.night {
+              color-scheme: dark;
+              --bg: #121418;
+              --fg: #e8eaed;
+              --muted: #9aa0a6;
+              --panel-bg: #1c1f26;
+              --panel-border: #3c4048;
+              --banner-bg: #1a3050;
+              --banner-border: #3d6fa5;
+              --banner-fg: #cfe3f7;
+              --source-bg: #1a2438;
+              --source-border: #3a4f75;
+              --source-active-bg: #3a3218;
+              --source-active-border: #c8a415;
+              --source-paused-bg: #3a2418;
+              --source-paused-border: #d08050;
+              --scroll-bg: #181b22;
+              --scroll-border: #3c4048;
+              --pin-bg: #3a3218;
+              --pin-border: #c8a415;
+              --pin-fg: #e0c060;
+              --link: #8ab4f8;
+              --btn-bg: #2a2f38;
+              --btn-border: #5f6368;
+              --err: #ff8a80;
+              --ok: #c8cdd3;
+              --input-bg: #0f1115;
+              --input-border: #5f6368;
+            }
+            body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; background: var(--bg); color: var(--fg); }
+            a { color: var(--link); }
+            code { font-size: 0.9em; }
+            ul { padding-left: 1.25rem; }
+            .lan-topbar { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between; margin: 0 0 0.75rem; }
+            .lan-topbar h1 { margin: 0; font-size: 1.35rem; }
+            .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: var(--source-bg); border: 1px solid var(--source-border); border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
+            .export-source-line.is-active { background: var(--source-active-bg); border-color: var(--source-active-border); }
+            .export-source-line.is-paused { background: var(--source-paused-bg); border-color: var(--source-paused-border); }
+            .export-source-main { flex: 1 1 12rem; min-width: 0; }
+            .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-shrink: 0; }
+            .export-source-line #lan-export-source-name { word-break: break-all; }
+            .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: var(--banner-bg); border: 1px solid var(--banner-border); border-radius: 8px; color: var(--banner-fg); }
+            .export-pending-banner strong { display: block; margin-bottom: 0.25rem; font-size: 1.05em; }
+            .export-pending-banner span { font-size: 0.95em; line-height: 1.45; }
+            .panel { border: 1px solid var(--panel-border); border-radius: 8px; padding: 1rem; margin: 1rem 0; background: var(--panel-bg); }
+            .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
+            button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; background: var(--btn-bg); color: var(--fg); border: 1px solid var(--btn-border); border-radius: 6px; }
+            button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+            input[type="text"], input[type="url"], input[type="search"], select, textarea {
+              background: var(--input-bg); color: var(--fg); border: 1px solid var(--input-border); border-radius: 6px; padding: 0.35rem 0.5rem;
+            }
+            .pcloud-folders { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
+            .pcloud-folders .pcloud-dir { flex: 1 1 9rem; max-width: 14rem; text-align: left; }
+            .pcloud-pinned-wrap { margin: 0.25rem 0 0.75rem; }
+            .pcloud-pinned-wrap .label { margin-bottom: 0.25rem; font-size: 0.9em; color: var(--muted); }
+            .pcloud-pinned .pcloud-dir { border: 1px solid var(--pin-border); background: var(--pin-bg); }
+            .folder-item { display: flex; flex: 1 1 9rem; max-width: 14rem; align-items: stretch; }
+            .folder-item .pcloud-dir { flex: 1; max-width: none; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+            .pin-toggle { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0.35rem 0.5rem; min-width: 2rem; }
+            .pin-toggle.pinned { color: var(--pin-fg); }
+            #pcloud-files { list-style: none; padding-left: 0; margin: 0.5rem 0; }
+            #pcloud-files li { margin: 0.35rem 0; display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
+            .file-meta { color: var(--muted); font-size: 0.85em; }
+            .muted { color: var(--muted); font-size: 0.9em; }
+            .lan-playback-section { display: flex; flex-direction: column; }
+            .lan-playback-media { order: 1; margin: 0 0 0.25rem; }
+            .lan-playback-media ul { margin: 0; padding-left: 1.25rem; }
+            .lan-playback-logs-block { order: 2; margin: 0; }
+            .lan-playback-subhead { margin: 1rem 0 0.35rem; font-size: 1em; font-weight: 600; }
+            .lan-playback-logs-scroll {
+              max-height: calc(5 * 1.75lh);
+              overflow-x: auto;
+              overflow-y: auto;
+              -webkit-overflow-scrolling: touch;
+              overscroll-behavior: contain;
+              margin: 0 0 0.5rem;
+              padding: 0.2rem 0.4rem 0.2rem 0;
+              border: 1px solid var(--scroll-border);
+              border-radius: 6px;
+              background: var(--scroll-bg);
+            }
+            .lan-playback-logs-scroll ul { margin: 0; padding-left: 1.25rem; }
+            #lan-export-logs li { word-break: break-all; }
+            #trigger-status { min-height: 1.2em; }
+            </style>
+            <script>
+            (function () {
+              var KEY = "loopsegments-lan-night";
+              function readNight() {
+                var stored = null;
+                try { stored = localStorage.getItem(KEY); } catch (e) {}
+                if (stored === null) {
+                  return document.documentElement.getAttribute("data-night-default") !== "0";
+                }
+                return stored === "1";
+              }
+              var night = readNight();
+              function apply() {
+                document.documentElement.classList.toggle("night", night);
+                var btn = document.getElementById("lan-night-toggle");
+                if (btn) btn.textContent = night ? "Day mode" : "Night mode";
+              }
+              window.__lanSetNight = function (v) {
+                night = !!v;
+                try { localStorage.setItem(KEY, night ? "1" : "0"); } catch (e) {}
+                apply();
+              };
+              window.__lanToggleNight = function () { window.__lanSetNight(!night); };
+              window.__lanStatusColor = function (isErr) {
+                return isErr ? getComputedStyle(document.documentElement).getPropertyValue("--err").trim() || "#b00020"
+                  : getComputedStyle(document.documentElement).getPropertyValue("--ok").trim() || "#333";
+              };
+              apply();
+              document.addEventListener("DOMContentLoaded", apply);
+            })();
+            </script>
+            """
+    }
+
+    private static func htmlLANNightModeToggleButton() -> String {
+        """
+        <button type="button" id="lan-night-toggle" onclick="__lanToggleNight()">Night mode</button>
+        """
+    }
+
     private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         autoreleasepool {
             let exportActive = ExportPlaybackState.shared.isLANExportActive
@@ -2345,28 +2511,13 @@ enum ExportLANServer {
                 : htmlPlaybackStatusShell()
             let html = """
                 <!DOCTYPE html>
-                <html lang="en"><head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <meta http-equiv="x-dns-prefetch-control" content="off">
+                \(htmlLANAppearanceHeadBits())
                 <title>Loop Segments — LAN monitor</title>
-                <style>
-                body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
-                code { font-size: 0.9em; }
-                ul { padding-left: 1.25rem; }
-                .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
-                .export-source-line.is-active { background: #fffbea; border-color: #c8a415; }
-                .export-source-line.is-paused { background: #fff5f0; border-color: #d08050; }
-                .export-source-main { flex: 1 1 12rem; min-width: 0; }
-                .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-                .export-source-line #lan-export-source-name { word-break: break-all; }
-                .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; }
-                .lan-playback-logs-scroll { max-height: calc(5 * 1.75lh); overflow: auto; border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem 0.4rem; }
-                .muted { color: #666; font-size: 0.9em; }
-                button:disabled { opacity: 0.55; cursor: not-allowed; }
-                </style>
                 </head><body>
-                <h1>Loop Segments — LAN monitor</h1>
+                <div class="lan-topbar">
+                  <h1>Loop Segments — LAN monitor</h1>
+                  \(htmlLANNightModeToggleButton())
+                </div>
                 <p><a href="/browse">Open pCloud browser &amp; export controls</a> · \(htmlMonitorQuickLogLinks())</p>
                 <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status">
                   <strong id="lan-export-pending-title">Processing export request</strong>
@@ -2418,64 +2569,13 @@ enum ExportLANServer {
         }
         let html = """
             <!DOCTYPE html>
-            <html lang="en"><head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="x-dns-prefetch-control" content="off">
+            \(htmlLANAppearanceHeadBits())
             <title>Loop Segments — LAN export</title>
-            <style>
-            .export-source-line { margin: 0.75rem 0 1rem; padding: 0.65rem 0.85rem; background: #f5f8ff; border: 1px solid #c5d4f0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; justify-content: space-between; }
-            .export-source-line.is-active { background: #fffbea; border-color: #c8a415; }
-            .export-source-line.is-paused { background: #fff5f0; border-color: #d08050; }
-            .export-source-main { flex: 1 1 12rem; min-width: 0; }
-            .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-shrink: 0; }
-            .export-source-line #lan-export-source-name { word-break: break-all; }
-            .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: #e8f4fd; border: 1px solid #5b9bd5; border-radius: 8px; color: #0d3a5c; }
-            .export-pending-banner strong { display: block; margin-bottom: 0.25rem; font-size: 1.05em; }
-            .export-pending-banner span { font-size: 0.95em; line-height: 1.45; }
-            body { font: -apple-system-body; margin: 1.25rem; line-height: 1.4; }
-            code { font-size: 0.9em; }
-            ul { padding-left: 1.25rem; }
-            .panel { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
-            .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
-            button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; }
-            button:disabled, .btn:disabled { opacity: 0.55; cursor: wait; }
-            .pcloud-folders { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
-            .pcloud-folders .pcloud-dir { flex: 1 1 9rem; max-width: 14rem; text-align: left; }
-            .pcloud-pinned-wrap { margin: 0.25rem 0 0.75rem; }
-            .pcloud-pinned-wrap .label { margin-bottom: 0.25rem; font-size: 0.9em; color: #666; }
-            .pcloud-pinned .pcloud-dir { border: 1px solid #c8a415; background: #fffbea; }
-            .folder-item { display: flex; flex: 1 1 9rem; max-width: 14rem; align-items: stretch; }
-            .folder-item .pcloud-dir { flex: 1; max-width: none; border-top-right-radius: 0; border-bottom-right-radius: 0; }
-            .pin-toggle { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0.35rem 0.5rem; min-width: 2rem; }
-            .pin-toggle.pinned { color: #c8a415; }
-            #pcloud-files { list-style: none; padding-left: 0; margin: 0.5rem 0; }
-            #pcloud-files li { margin: 0.35rem 0; display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
-            .file-meta { color: #666; font-size: 0.85em; }
-            .muted { color: #666; font-size: 0.9em; }
-            .lan-playback-section { display: flex; flex-direction: column; }
-            .lan-playback-media { order: 1; margin: 0 0 0.25rem; }
-            .lan-playback-media ul { margin: 0; padding-left: 1.25rem; }
-            .lan-playback-logs-block { order: 2; margin: 0; }
-            .lan-playback-subhead { margin: 1rem 0 0.35rem; font-size: 1em; font-weight: 600; }
-            .lan-playback-logs-scroll {
-              max-height: calc(5 * 1.75lh);
-              overflow-x: auto;
-              overflow-y: auto;
-              -webkit-overflow-scrolling: touch;
-              overscroll-behavior: contain;
-              margin: 0 0 0.5rem;
-              padding: 0.2rem 0.4rem 0.2rem 0;
-              border: 1px solid #ddd;
-              border-radius: 6px;
-              background: #fafafa;
-            }
-            .lan-playback-logs-scroll ul { margin: 0; padding-left: 1.25rem; }
-            #lan-export-logs li { word-break: break-all; }
-            #trigger-status { min-height: 1.2em; }
-            </style>
             </head><body>
-            <h1>Loop Segments — LAN export</h1>
+            <div class="lan-topbar">
+              <h1>Loop Segments — LAN export</h1>
+              \(htmlLANNightModeToggleButton())
+            </div>
             <div id="lan-export-pending" class="export-pending-banner" style="display:none" role="status" aria-live="polite">
               <strong id="lan-export-pending-title">Processing export request</strong>
               <span id="lan-export-pending-detail">Please wait — keep Loop Segments open in the foreground on the phone.</span>
@@ -2813,7 +2913,7 @@ enum ExportLANServer {
           function setStatus(msg, isErr) {
             var el = document.getElementById("url-download-status");
             el.textContent = msg || "";
-            el.style.color = isErr ? "#b00020" : "#333";
+            el.style.color = (typeof __lanStatusColor === "function") ? __lanStatusColor(isErr) : (isErr ? "#b00020" : "#333");
           }
           function guessNameFromUrl(urlText) {
             try {
@@ -3117,7 +3217,7 @@ enum ExportLANServer {
           function setStatus(msg, isErr) {
             var el = document.getElementById("trigger-status");
             el.textContent = msg || "";
-            el.style.color = isErr ? "#b00020" : "#333";
+            el.style.color = (typeof __lanStatusColor === "function") ? __lanStatusColor(isErr) : (isErr ? "#b00020" : "#333");
           }
           function exportPendingMessage(command, body) {
             var foreground = " Keep Loop Segments open in the foreground on the phone.";

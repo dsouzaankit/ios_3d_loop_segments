@@ -9,6 +9,8 @@
   unlock/launch; otherwise runs Launch-LoopSegmentsViaUsb.ps1.
   Exit code 3 (phone locked) or other USB launch failures abort Chromium.
   On error, waits for Enter so a double-clicked console window does not close immediately.
+  While Chromium is running, Ctrl+C or closing the console (X) kills that Chromium profile
+  and syncs/clears the profile the same as a normal exit.
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1

@@ -15,6 +15,7 @@ cd <repo>\windows
 
 # 3) Day-to-day: pCloud companion (probes :8765/browse; USB-launches app if LAN down)
 .\Run-PCloudWebCompanion.ps1
+#    Quit: close Chromium, Ctrl+C, or console X — kills Chromium and syncs profile to P:
 
 # Optional helpers
 .\Set-LoopSegmentsWindows.ps1 -Show          # show/edit per-PC json
@@ -52,6 +53,7 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 # if :8765/browse is already up → skip unlock/USB launch; else unlock first (locked → exit 3)
 # .\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
+# Quit: close Chromium, or Ctrl+C / console X — kills Chromium and syncs profile gracefully
 ```
 
 **Machine-local** (not synced via pCloud): companion venv, Playwright Chromium, and the unpacked extension under `%LOCALAPPDATA%\pcloud_web_companion\`. The repo `.venv` is removed if present — do not recreate it on `P:`.

@@ -616,12 +616,114 @@ function Clear-LocalProfileMinimal {
     Write-Host "[profile] Local profile is empty: $ProfileDir"
 }
 
+$script:CompanionShutdownRequested = $false
+$script:CompanionFinished = $false
+$script:CancelKeyPressHandler = $null
+$GracefulExitMarker = Join-Path $CompanionLocalRoot "companion-graceful-exit.marker"
+
+function Stop-CompanionRestLogSink {
+    Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like '*_rest_log_sink.ps1*' } |
+        ForEach-Object {
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+        }
+}
+
+function Invoke-CompanionGracefulFinish {
+    param([string] $Reason = "session end")
+
+    if ($script:CompanionFinished) { return }
+    $script:CompanionFinished = $true
+
+    Write-Host ""
+    Write-Host "[run] Finishing companion ($Reason): close Chromium, sync profile, clear local..." -ForegroundColor Cyan
+
+    # Signal watchdog that this process is exiting on purpose.
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GracefulExitMarker) | Out-Null
+        Set-Content -LiteralPath $GracefulExitMarker -Value (Get-Date -Format o) -Encoding ascii
+    } catch {}
+
+    try {
+        Stop-ProfileChromium -ProfileDir $UserDataDir
+        Start-Sleep -Milliseconds 500
+        if (Test-LocalProfileHasContent -ProfileDir $UserDataDir) {
+            Sync-ChromiumProfile -Direction Upload
+            Write-Host "[run] Profile synced to $RepoProfileDir"
+        } else {
+            Write-Host "[run] Local profile empty - skip upload"
+        }
+        Clear-LocalProfileMinimal -ProfileDir $UserDataDir
+        Stop-CompanionRestLogSink
+        Write-Host "[run] Companion finish complete." -ForegroundColor Green
+    } catch {
+        Write-Warning "[run] Finish had errors: $($_.Exception.Message)"
+    }
+}
+
+function Register-CompanionCancelHandler {
+    try {
+        if ($null -eq [Console]::CancelKeyPress) { return }
+        $script:CancelKeyPressHandler = [ConsoleCancelEventHandler] {
+            param($sender, $eventArgs)
+            $eventArgs.Cancel = $true
+            $script:CompanionShutdownRequested = $true
+            Write-Host ""
+            Write-Host "[run] Ctrl+C received - will close Chromium and sync profile..." -ForegroundColor Yellow
+        }
+        [Console]::CancelKeyPress += $script:CancelKeyPressHandler
+    } catch {
+        Write-Warning "[run] Could not register Ctrl+C handler: $($_.Exception.Message)"
+    }
+}
+
+function Unregister-CompanionCancelHandler {
+    if ($null -ne $script:CancelKeyPressHandler) {
+        try { [Console]::CancelKeyPress -= $script:CancelKeyPressHandler } catch {}
+        $script:CancelKeyPressHandler = $null
+    }
+}
+
+function Start-CompanionExitWatchdog {
+    $watchdog = Join-Path $ScriptDir "_profile_exit_watchdog.ps1"
+    if (-not (Test-Path -LiteralPath $watchdog)) {
+        Write-Warning "[run] Missing $watchdog - console X may skip profile sync"
+        return
+    }
+    Remove-Item -LiteralPath $GracefulExitMarker -Force -ErrorAction SilentlyContinue
+    $argList = @(
+        "-NoProfile"
+        "-ExecutionPolicy"
+        "Bypass"
+        "-File"
+        $watchdog
+        "-ParentPid"
+        "$PID"
+        "-ProfileDir"
+        $UserDataDir
+        "-RepoProfileDir"
+        $RepoProfileDir
+        "-GracefulMarkerPath"
+        $GracefulExitMarker
+    )
+    if ($SkipProfileSync) { $argList += "-SkipProfileSync" }
+    if ($KeepLocalProfile) { $argList += "-KeepLocalProfile" }
+
+    Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList $argList | Out-Null
+    Write-Host "[run] Exit watchdog armed (Ctrl+C or console X will finish Chromium + profile sync)"
+}
+
 function Wait-ProfileChromiumExit {
     param([string]$ProfileDir)
 
     Write-Host "[run] Waiting for Chromium to exit (will upload profile to repo, then clear local)..."
-    Write-Host "      Close the browser window when finished. Ctrl+C skips wait (upload on next run)."
+    Write-Host "      Close the browser, or quit this window with Ctrl+C / X (graceful finish)."
     while ($true) {
+        if ($script:CompanionShutdownRequested) {
+            Write-Host "[run] Shutdown requested - stopping Chromium..."
+            Stop-ProfileChromium -ProfileDir $ProfileDir
+            return
+        }
         $still = @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.CommandLine -and
@@ -769,14 +871,16 @@ Write-Host "[run] pCloud downloads -> clipboard + POST Loop Segments /export_fro
 if ($DetachChromium) {
     Write-Host "[run] Detached (-DetachChromium). Full local profile kept until next run uploads, then clears."
 } else {
+    Register-CompanionCancelHandler
+    Start-CompanionExitWatchdog
     try {
         Wait-ProfileChromiumExit -ProfileDir $UserDataDir
     } catch {
         Write-Warning "[run] Wait interrupted: $_"
+        $script:CompanionShutdownRequested = $true
+    } finally {
+        Unregister-CompanionCancelHandler
+        $reason = if ($script:CompanionShutdownRequested) { "Ctrl+C / shutdown" } else { "Chromium closed" }
+        Invoke-CompanionGracefulFinish -Reason $reason
     }
-    Stop-ProfileChromium -ProfileDir $UserDataDir
-    Start-Sleep -Milliseconds 500
-    Sync-ChromiumProfile -Direction Upload
-    Write-Host "[run] Profile synced to $RepoProfileDir"
-    Clear-LocalProfileMinimal -ProfileDir $UserDataDir
 }

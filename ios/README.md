@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 271 (1.2.35):** Night mode toggle on Export → Appearance (default **on**) and on LAN `/` + `/browse` (Day/Night button; seeds from the app preference, PC can override via `localStorage`).
+
 **Build 270 (1.2.35):** On LAN/WebDAV access, rename legacy `parked/<sha256-fileKey>/` folders to `parked/<filename>/` (from `_parked_meta.json`) so hrefs and PROPFIND match the source name.
 
 **Build 269 (1.2.34):** Stop hiding root `_working.mp4` on LAN/WebDAV while vanilla or transcode is active — list and serve it whenever the file exists on disk. (`loop/op_*.mp4` were never gated by that filter; only missing when not written or cleared.)

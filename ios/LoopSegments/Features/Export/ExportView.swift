@@ -30,6 +30,7 @@ struct ExportView: View {
     @State private var exportKeepAliveEnabled = ExportKeepAliveSettings.isEnabled
     @State private var exportKeepAliveTimeoutHours = ExportKeepAliveSettings.timeoutHours
     @State private var exportKeepAlivePreferControls = ExportKeepAliveSettings.preferLockScreenControls
+    @State private var nightModeEnabled = AppearanceSettings.isNightModeEnabled
     @State private var alternateExportSource = AlternateExportFileSource.stored
     @State private var alternateExportBusy = false
     @State private var showAlternateFilePicker = false
@@ -41,6 +42,7 @@ struct ExportView: View {
             exportControlsSection
             exportAutoPauseSection
             keepAliveSection
+            appearanceSection
             Section("File") {
                 Text(item.name)
                 Text(item.href).font(.caption).foregroundStyle(.secondary)
@@ -330,6 +332,22 @@ struct ExportView: View {
                     "Does not stop or archive — tap Start export to resume. Log line: Auto-pause: … in export_latest.txt."
             )
             .font(.footnote)
+        }
+    }
+
+    @ViewBuilder
+    private var appearanceSection: some View {
+        Section("Appearance") {
+            Toggle("Night mode", isOn: $nightModeEnabled)
+                .onAppear {
+                    nightModeEnabled = AppearanceSettings.isNightModeEnabled
+                }
+                .onChange(of: nightModeEnabled) { _, enabled in
+                    AppearanceSettings.isNightModeEnabled = enabled
+                }
+            Text("Defaults to night mode. Same preference seeds the LAN page; the PC browser can still override with its own Day/Night control.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 

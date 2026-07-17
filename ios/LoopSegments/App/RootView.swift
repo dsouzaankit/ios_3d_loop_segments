@@ -4,6 +4,7 @@ struct RootView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
     @Environment(\.scenePhase) private var scenePhase
+    @State private var nightModeEnabled = AppearanceSettings.isNightModeEnabled
 
     /// Foreground, export in flight, or Keep Alive audio playing — keep LAN server + trigger polling.
     private var lanServicesActive: Bool {
@@ -37,15 +38,20 @@ struct RootView: View {
                 AuthView()
             }
         }
+        .preferredColorScheme(nightModeEnabled ? .dark : .light)
         .background {
             NowPlayingFirstResponderAnchor()
                 .frame(width: 0, height: 0)
         }
         .onAppear {
+            nightModeEnabled = AppearanceSettings.isNightModeEnabled
             if scenePhase == .active {
                 ExportBackgroundKeepAlive.shared.beginAppForegroundSession()
             }
             syncLANServices()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appearanceNightModeDidChange)) { _ in
+            nightModeEnabled = AppearanceSettings.isNightModeEnabled
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
