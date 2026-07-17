@@ -10,7 +10,7 @@ Notes:
 LAN: below Mbps cutoff → preload/full file only; at/above → op_*.mp4 when codec allows (LAN server optional).
 _working.mp4: full-timeline LAN play is reliable at seek=0:00; seek>0 see “Seek > 0” below.
 Av1 is not supported, prefer h.265!
-phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-screen audio; see **Background / lock screen** below):
+phone: **Keep Alive** defaults **on** (build **272+**) — silent lock-screen audio so export/LAN can continue after Home/lock (see **Background / lock screen** below). Turn off on Export if you want foreground-only.
   Optional: Settings > Display & Brightness > Auto-Lock > Never!
 
 
@@ -177,7 +177,7 @@ Both modes run the **same silent MP3 loop** (export, **60-minute** foreground se
 
 **There is no API to request “another 30 minutes” of generic background time.** iOS does not grant stacked 30-minute extensions via `beginBackgroundTask`. Long runs depend on **Keep Alive audio** (and stable Wi‑Fi for WebDAV reads), not on background-task renewal.
 
-**Practical guidance:** enable **Keep Alive**; use **build 190+** so **`KeepAlive_silence.mp3`** is in the IPA; stay on **Wi‑Fi**; avoid **Low Power Mode**. After a long locked run, confirm **`completed (end of file)`** and archive playback before assuming iOS preemption. If truly interrupted, **Start export** resumes from the checkpoint.
+**Practical guidance:** **Keep Alive** is **on by default** (build **272+**; Export → Keep Alive to toggle). Use **build 190+** so **`KeepAlive_silence.mp3`** is in the IPA; stay on **Wi‑Fi**; avoid **Low Power Mode**. After a long locked run, confirm **`completed (end of file)`** and archive playback before assuming iOS preemption. If truly interrupted, **Start export** resumes from the checkpoint.
 
 Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
@@ -203,7 +203,7 @@ Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authoriz
 
 ### LAN HTTP page (browser control)
 
-Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Keep Alive** on → **60-minute** audio session when the app is open (and after export ends); lock the phone to keep LAN + trigger polling for the rest of that timer. Without Keep Alive, keep the app in the foreground for reliable LAN while locked.
+Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the same Wi‑Fi. Uses the phone’s pCloud sign-in (not the PC’s). **Keep Alive** (default **on**) → **60-minute** audio session when the app is open (and after export ends); lock the phone to keep LAN + trigger polling for the rest of that timer. If you turn Keep Alive off, keep the app in the foreground for reliable LAN while locked.
 
 #### Page layout
 
