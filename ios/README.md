@@ -10,8 +10,6 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 273 (1.2.37):** Keep Alive resumes on Home/background during export; Now Playing stays published while exporting; `status.json` exposes `exportActive` / `keepAliveActive`. Companion skips USB Home while export is active.
-
 **Build 272 (1.2.36):** **Keep Alive** defaults **on** (fresh install / unset preference).
 
 **Build 271 (1.2.35):** Night mode toggle on Export → Appearance (default **on**) and on LAN `/` + `/browse` (Day/Night button; seeds from the app preference, PC can override via `localStorage`).

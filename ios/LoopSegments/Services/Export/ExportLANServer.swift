@@ -3487,9 +3487,6 @@ enum ExportLANServer {
             "exportsDirectory": "Exports",
             "port": Int(defaultPort),
             "listsDeferred": true,
-            "exportActive": exportActive,
-            "keepAliveActive": ExportBackgroundKeepAlive.isActiveSnapshot,
-            "keepAliveEnabled": ExportKeepAliveSettings.isEnabled,
         ]
         if exportActive {
             payload["manualRefresh"] = true

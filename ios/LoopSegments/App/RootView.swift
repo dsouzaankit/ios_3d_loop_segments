@@ -54,13 +54,8 @@ struct RootView: View {
             nightModeEnabled = AppearanceSettings.isNightModeEnabled
         }
         .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
+            if phase == .active {
                 ExportBackgroundKeepAlive.shared.beginAppForegroundSession()
-            case .inactive, .background:
-                ExportBackgroundKeepAlive.shared.ensurePlayingForBackground()
-            @unknown default:
-                break
             }
             syncLANServices()
         }

@@ -854,8 +854,6 @@ function Invoke-GoIphoneHome {
         Write-Host "[home] Done"
     } elseif ($code -eq 2) {
         Write-Host "[home] Skipped (no USB device)"
-    } elseif ($code -eq 4) {
-        Write-Host "[home] Skipped (export active on phone LAN — leave app foreground)"
     } else {
         Write-Warning "[home] Home press did not succeed (exit $code) - phone may still show Loop Segments"
     }
