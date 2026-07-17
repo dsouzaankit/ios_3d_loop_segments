@@ -18,7 +18,7 @@ cd <repo>\windows
 # 3) Day-to-day: pCloud companion (probes :8765/browse; USB-launches app if LAN down)
 .\Run-PCloudWebCompanion.ps1
 #    Quit: close Chromium, Ctrl+C, or console X — kills Chromium, syncs profile,
-#    then USB Home (Keep Alive defaults on — export can keep running; -SkipGoHome to skip)
+#    then USB Home (app Keep Alive default on — see ../ios/README.md; -SkipGoHome to skip)
 
 # Optional helpers
 .\Set-LoopSegmentsWindows.ps1 -Show          # show/edit per-PC json
@@ -57,9 +57,8 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 # .\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
 # Quit: close Chromium, or Ctrl+C / console X — syncs profile, then USB Home if unlocked
-# On finish: USB Home backgrounds Loop Segments (Keep Alive defaults ON — keeps
-#   export/LAN running when backgrounded). Locked / no USB → Home skipped.
-#   -SkipGoHome to leave app foreground
+# On finish: USB Home backgrounds the app (needs Keep Alive for export — see ios README).
+#   Locked / no USB → Home skipped. -SkipGoHome leaves app foreground
 ```
 
 **Machine-local** (not synced via pCloud): companion venv, Playwright Chromium, and the unpacked extension under `%LOCALAPPDATA%\pcloud_web_companion\`. The repo `.venv` is removed if present — do not recreate it on `P:`.
@@ -85,12 +84,11 @@ py -3.12 -m pip install -U pymobiledevice3
 |-------|--------|
 | Bundle id | Usually `com.loopsegments.app`; AltStore may use `com.loopsegments.app.<TEAMID>` — auto-detected |
 | Unlock | Needed when LAN is down (USB launch) **and** for finish-time Home press. Exit **3** if locked during launch — companion will not start Chromium. If `:8765/browse` is already reachable, USB launch is skipped; Home on quit still needs unlock if you want the app backgrounded |
-| Home on quit | Companion finish presses **Home** over USB (`Go-IphoneHomeViaUsb.ps1`) to background Loop Segments. Requires USB + **unlocked** phone; otherwise skipped. `-SkipGoHome` leaves the app foreground. Safe with **Keep Alive** (default **on** in app build 272+); without Keep Alive, Home can pause/stop export |
-| Keep Alive | App default **on** (Export → Keep Alive). Silent lock-screen audio so export/LAN can continue after Home/lock. Turn off in-app if you want foreground-only |
+| Home on quit | Companion finish presses **Home** over USB (`Go-IphoneHomeViaUsb.ps1`) to background Loop Segments. Requires USB + **unlocked** phone; otherwise skipped. `-SkipGoHome` leaves the app foreground. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
 | Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh. **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. USB detect failure auto-starts AltServer when installed |
 | AltServer | Companion / USB launch / Setup always report status + the unavailable-app resolution. Optional logon start: `.\Register-AltServerAtLogon.ps1` |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
-| Background launch | **Not supported** — USB launch opens the app; **Keep Alive** (default on) then lock |
+| Background launch | **Not supported** — USB launch opens the app; lock only after Keep Alive is running (app setting) |
 | iOS 17+ tunnel | If DVT fails: elevated `py -3.12 -m pymobiledevice3 remote tunneld`, then `.\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount` |
 
 ## Day-to-day mount
