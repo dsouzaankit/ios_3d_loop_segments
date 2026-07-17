@@ -42,6 +42,7 @@ $ErrorActionPreference = "Stop"
 
 . "$PSScriptRoot\LoopSegments-Windows.ps1"
 . "$PSScriptRoot\Get-LoopSegmentsPython.ps1"
+. "$PSScriptRoot\Get-LoopSegmentsAltServer.ps1"
 
 $exampleJson = Join-Path $PSScriptRoot "loop-segments-windows.example.json"
 $liveJson = Join-Path $PSScriptRoot "loop-segments-windows.json"
@@ -51,6 +52,8 @@ $runChromium = Join-Path $companionDir "run_chromium.ps1"
 Write-Host "=== Loop Segments Windows setup (portable) ===" -ForegroundColor Cyan
 Write-Host "Repo windows folder: $PSScriptRoot"
 Write-Host "Machine-local companion data: $(Join-Path $env:LOCALAPPDATA 'pcloud_web_companion')"
+Write-Host ""
+[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
 Write-Host ""
 
 # --- per-PC json ---
@@ -167,4 +170,11 @@ Portable notes:
   - Companion venv/browsers/extension live under %LOCALAPPDATA%\pcloud_web_companion (not P:).
   - chromium-profile on P: is intentional (shared pCloud login cookies across your PCs).
   - On a new PC: run this Setup again; do not copy another user's .venv.
+  - Install AltServer (https://altstore.io) and keep it running for AltStore refresh;
+    without weekly refresh, free/Personal Team Loop Segments stops opening after ~7 days.
+  - If the app becomes unavailable: AltServer running -> USB + unlock -> AltStore Refresh All
+    -> Settings -> General -> VPN & Device Management -> Developer App -> Trust
+    -> open Loop Segments once -> retry companion/USB launch.
+  - Optional: .\Register-AltServerAtLogon.ps1
 "@
+[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)

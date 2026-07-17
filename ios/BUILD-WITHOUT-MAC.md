@@ -64,7 +64,9 @@ After **AltStore** (or Sideloadly fallback) installs the app, iOS blocks it unti
 
 | Symptom | Try |
 |---------|-----|
-| No **VPN & Device Management** entry | Install did not finish — reinstall from AltStore and wait for “Complete”. |
+| **Unable to Trust “iPhone Developer: you@…”** (or similar with your Apple ID email) | **Settings → General → VPN & Device Management** → under **DEVELOPER APP** tap that email → **Trust “…”** → confirm **Trust** → open Loop Segments from the home screen. |
+| **Loop Segments / developer profile not listed yet** | Normal right after install or before the first failed open. Wait for AltStore to show **Complete**, open (or fail-open) Loop Segments once, leave Settings and come back — the **DEVELOPER APP** email entry often appears only then. Trust it, then open the app again. |
+| No **VPN & Device Management** entry at all | Install did not finish — reinstall from AltStore and wait for “Complete”. |
 | **Untrusted Developer** when tapping the icon | Repeat steps 1–6 above; profile may appear only after the first failed launch. |
 | **Unable to Verify App** after ~7 days | Certificate expired — [refresh the IPA](#refresh-the-ipa-later), then trust again if iOS shows a new profile. |
 | Profile missing after refresh | **Settings → General → VPN & Device Management** → trust the **new** entry (old one may be gone). |

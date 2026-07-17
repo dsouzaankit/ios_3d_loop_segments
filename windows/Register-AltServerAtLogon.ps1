@@ -25,20 +25,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Get-AltServerPath {
-    $candidates = @(
-        (Join-Path ${env:ProgramFiles} 'AltServer\AltServer.exe'),
-        (Join-Path ${env:ProgramFiles(x86)} 'AltServer\AltServer.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\AltServer\AltServer.exe'),
-        (Join-Path $env:LOCALAPPDATA 'AltServer\AltServer.exe')
-    )
-    foreach ($p in $candidates) {
-        if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
-    }
-    $found = Get-ChildItem -Path $env:LOCALAPPDATA, ${env:ProgramFiles} -Filter 'AltServer.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) { return $found.FullName }
-    return $null
+$AltServerHelper = Join-Path $PSScriptRoot 'Get-LoopSegmentsAltServer.ps1'
+if (-not (Test-Path -LiteralPath $AltServerHelper)) {
+    throw "Missing shared AltServer helper: $AltServerHelper"
 }
+. $AltServerHelper
 
 if ($Unregister) {
     $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -49,11 +40,13 @@ if ($Unregister) {
     exit 0
 }
 
-$altServer = Get-AltServerPath
+$altServer = Get-LoopSegmentsAltServerPath
 if (-not $altServer) {
     Write-Error @"
 AltServer.exe not found. Install from https://altstore.io first.
-The AltServer installer usually offers "Run at startup" — use that if present.
+The AltServer installer usually offers "Run at startup" - use that if present.
+
+$(Get-LoopSegmentsAltServerSevenDayWarning)
 "@
 }
 

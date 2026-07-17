@@ -2,6 +2,30 @@
 
 Scripts work on **any Windows PC** after you copy or clone this repo. Machine-specific paths live in **`loop-segments-windows.json`** (gitignored), not in the scripts. All scripts resolve paths from **`$PSScriptRoot`** in this folder.
 
+## Typical `.ps1` run sequence (`windows\`)
+
+```powershell
+cd <repo>\windows
+
+# 1) Once per PC (Python 3.12, pymobiledevice3, companion venv/Chromium, portable json)
+.\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
+
+# 2) Once (optional): AltServer at logon — needed for AltStore / ~7-day sideload refresh
+.\Register-AltServerAtLogon.ps1
+
+# 3) Day-to-day: pCloud companion (probes :8765/browse; USB-launches app if LAN down)
+.\Run-PCloudWebCompanion.ps1
+
+# Optional helpers
+.\Set-LoopSegmentsWindows.ps1 -Show          # show/edit per-PC json
+.\Set-LoopSegmentsLANHost.ps1 <phone-ip>     # IP changed on Wi-Fi
+.\Launch-LoopSegmentsViaUsb.ps1 -SkipMount   # open app over USB only
+.\Mount-LoopSegmentsRclone.ps1 -TestOnly     # probe phone LAN / WebDAV
+.\Mount-LoopSegmentsRclone.ps1               # mount L: (optional; WinFsp)
+```
+
+If Loop Segments won’t open after ~7 days: start **AltServer** → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → DEVELOPER APP → iPhone Developer: \<email\> → Trust** (entry may appear only after a failed open) → open app once → retry.
+
 ## First time on a PC
 
 ```powershell
@@ -53,7 +77,8 @@ py -3.12 -m pip install -U pymobiledevice3
 |-------|--------|
 | Bundle id | Usually `com.loopsegments.app`; AltStore may use `com.loopsegments.app.<TEAMID>` — auto-detected |
 | Unlock | Needed only when LAN is down: phone must be **unlocked** (probe + launch). Exit code **3** if locked — companion will not start Chromium. If `:8765/browse` is already reachable, USB unlock/launch is skipped |
-| Trust / 7-day cert | If launch fails with untrusted/invalid signature: **Settings → General → VPN & Device Management → Trust**, or AltStore refresh, open app once by hand, retry |
+| Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh. **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. USB detect failure auto-starts AltServer when installed |
+| AltServer | Companion / USB launch / Setup always report status + the unavailable-app resolution. Optional logon start: `.\Register-AltServerAtLogon.ps1` |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
 | Background launch | **Not supported** — USB launch opens the app; use **Keep Alive** after open, then lock |
 | iOS 17+ tunnel | If DVT fails: elevated `py -3.12 -m pymobiledevice3 remote tunneld`, then `.\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount` |
@@ -154,6 +179,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); exit **3** if phone locked |
 | `Probe-IphoneUnlock.py` / `Resolve-LoopSegmentsBundleId.py` | Helpers for USB unlock probe + AltStore bundle-id suffix |
 | `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
+| `Get-LoopSegmentsAltServer.ps1` | Locate/start AltServer; warn if missing (7-day AltStore expiry) |
 | `Register-AltServerAtLogon.ps1` | **AltServer** at logon ([BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) §3). Wi‑Fi refresh often fails on Win11 — **USB + AltStore Refresh All** weekly is the reliable path |
 | `Register-SideloadlyAutoRefresh.ps1` | **Fallback only** — Sideloadly daemon if AltStore fails |
 | `RCLONE-PHONE-MOUNT.md` | Optional rclone mount notes (sluggish vs Skybox) |

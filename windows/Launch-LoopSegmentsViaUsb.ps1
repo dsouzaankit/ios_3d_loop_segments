@@ -73,6 +73,12 @@ if (-not (Test-Path -LiteralPath $PythonHelper)) {
 }
 . $PythonHelper
 
+$AltServerHelper = Join-Path $PSScriptRoot "Get-LoopSegmentsAltServer.ps1"
+if (-not (Test-Path -LiteralPath $AltServerHelper)) {
+    throw "Missing shared AltServer helper: $AltServerHelper"
+}
+. $AltServerHelper
+
 function Get-PythonRuntime {
     Get-LoopSegmentsPythonRuntime
 }
@@ -131,11 +137,39 @@ $(Get-LoopSegmentsPythonInstallHint)
 }
 Write-Host "pymobiledevice3 import OK"
 
-Write-Host "Listing USB / usbmux devices..."
-$listCode = Invoke-Pymobile -Runtime $rt -CliArgs @("usbmux", "list") -AllowFail
-if ($listCode -ne 0) {
-    Write-Host "usbmux list failed. Plug in USB, Trust This Computer, keep iTunes/Apple Mobile Device Support running." -ForegroundColor Yellow
-    exit 2
+# Always surface AltServer install status (7-day AltStore cert depends on it).
+[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
+
+function Invoke-UsbmuxList {
+    Write-Host "Listing USB / usbmux devices..."
+    Write-Host ("> $($rt.Display) -m pymobiledevice3 usbmux list") -ForegroundColor DarkGray
+    $result = Invoke-PythonRuntime -Runtime $rt -ArgumentList @("-m", "pymobiledevice3", "usbmux", "list")
+    Write-CommandLines -Lines $result.Lines
+    return $result
+}
+
+$list = Invoke-UsbmuxList
+if (-not (Test-LoopSegmentsUsbmuxListHasDevice -ExitCode $list.ExitCode -Lines $list.Lines)) {
+    Write-Host ""
+    Write-Host "iPhone USB detection failed (no usbmux device)." -ForegroundColor Yellow
+    Write-Host "Trying AltServer start/ensure, then one retry..." -ForegroundColor Yellow
+    [void](Start-LoopSegmentsAltServer -WaitSeconds 4)
+    Start-Sleep -Seconds 2
+    $list = Invoke-UsbmuxList
+    if (-not (Test-LoopSegmentsUsbmuxListHasDevice -ExitCode $list.ExitCode -Lines $list.Lines)) {
+        Write-Host @"
+
+usbmux still empty. Plug in USB, unlock, Trust This Computer, keep Apple Mobile Device Support running.
+If AltServer is missing, install it from https://altstore.io — without weekly AltStore refresh,
+Loop Segments (free/Personal Team) stops working after ~7 days.
+
+$(Get-LoopSegmentsAppUnavailableResolution)
+
+"@ -ForegroundColor Yellow
+        [void](Write-LoopSegmentsAltServerNotice)
+        exit 2
+    }
+    Write-Host "USB device visible after AltServer recovery." -ForegroundColor Green
 }
 
 if ($ListOnly) { return }
@@ -172,6 +206,8 @@ $resolve = Invoke-PythonRuntime -Runtime $rt -ArgumentList @($resolveScript, $Bu
 Write-CommandLines -Lines $resolve.Lines
 if ($resolve.ExitCode -ne 0) {
     Write-Host "Loop Segments not found on device. Install/refresh via AltStore, then retry." -ForegroundColor Yellow
+    Write-Host (Get-LoopSegmentsAppUnavailableResolution) -ForegroundColor Yellow
+    [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
     exit 2
 }
 $resolvedBundleId = (
@@ -270,17 +306,13 @@ Bundle id used: $BundleId
     }
     if ($blob -match "not been explicitly trusted|invalid code signature|inadequate entitlements|FBSOpenApplicationErrorDomain|RequestDenied") {
         Write-Host @"
-Launch blocked by iOS trust/signature (not a USB/script bug).
+Launch blocked by iOS trust/signature (not a USB/script bug). App may be past the ~7-day sideload window.
 
-On the iPhone:
-  1. Settings -> General -> VPN & Device Management
-     -> tap your Developer App certificate -> Trust
-  2. Or refresh/reinstall Loop Segments in AltStore (7-day cert may be expired)
-  3. Unlock the phone and open Loop Segments once by hand
-  4. Re-run: .\Launch-LoopSegmentsViaUsb.ps1 -SkipMount
+$(Get-LoopSegmentsAppUnavailableResolution)
 
 Bundle id used: $BundleId
 "@ -ForegroundColor Yellow
+        [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
     } else {
         Write-Host @"
 Launch failed (last exit $lastErr). Check:
@@ -288,12 +320,15 @@ Launch failed (last exit $lastErr). Check:
   1. Phone unlocked; USB Trusted.
   2. Developer Mode On (Settings -> Privacy & Security).
   3. Developer cert trusted (Settings -> General -> VPN & Device Management).
-  4. AltStore refresh if the 7-day install expired.
+  4. If the app became unavailable (~7-day expiry), use the resolution below.
   5. iOS 17+: elevated $($rt.Display) -m pymobiledevice3 remote tunneld
      then .\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount
 
+$(Get-LoopSegmentsAppUnavailableResolution)
+
 Bundle id used: $BundleId
 "@ -ForegroundColor Yellow
+        [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
     }
     exit 1
 }

@@ -27,6 +27,12 @@ if (-not (Test-Path -LiteralPath $PythonHelper)) {
 }
 . $PythonHelper
 
+$AltServerHelper = Join-Path $WindowsDir "Get-LoopSegmentsAltServer.ps1"
+if (-not (Test-Path -LiteralPath $AltServerHelper)) {
+    throw "Missing shared AltServer helper: $AltServerHelper"
+}
+. $AltServerHelper
+
 # Machine-local only (never on pCloud P:). Repo .venv is legacy and ignored.
 $CompanionLocalRoot = Join-Path $env:LOCALAPPDATA "pcloud_web_companion"
 $VenvDir = Join-Path $CompanionLocalRoot "venv"
@@ -409,6 +415,9 @@ function Test-PhoneLanPageReachable {
 }
 
 function Invoke-LoopSegmentsUsbLaunch {
+    # Always warn if AltServer missing (7-day AltStore cert), even when LAN skip / -SkipUsbLaunch.
+    [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
+
     if ($SkipUsbLaunch) {
         Write-Host "[usb] Skipping Loop Segments USB launch (-SkipUsbLaunch)"
         return
@@ -448,9 +457,21 @@ function Invoke-LoopSegmentsUsbLaunch {
 Chromium was not started.
 "@
     }
+    if ($code -eq 2) {
+        throw @"
+[usb] No iPhone on USB (exit 2). Plug in, Trust This Computer, unlock.
+If AltServer is not installed, install from https://altstore.io - without weekly AltStore refresh,
+Loop Segments (free/Personal Team) stops working after ~7 days.
+
+$(Get-LoopSegmentsAppUnavailableResolution)
+Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launch.
+"@
+    }
     if ($code -ne 0) {
         throw @"
 [usb] Launch-LoopSegmentsViaUsb.ps1 failed (exit $code). Fix USB / Developer Mode / cert trust, then re-run.
+
+$(Get-LoopSegmentsAppUnavailableResolution)
 Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launch.
 "@
     }
