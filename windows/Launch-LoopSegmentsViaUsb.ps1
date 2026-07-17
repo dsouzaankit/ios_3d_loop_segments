@@ -67,42 +67,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-function Get-PythonRuntime {
-    # Prefer a runtime that already has pymobiledevice3. Avoid default `python`
-    # when it is 3.14 (native wheels for pylzss/lzfse often missing).
-    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
-    if ($pyLauncher) {
-        foreach ($ver in @("3.12", "3.11", "3.10", "3.9", "3.13")) {
-            $out = & $pyLauncher.Source "-$ver" "-c" "import pymobiledevice3; print('ok')" 2>&1
-            if (($LASTEXITCODE -eq 0) -and (("$out") -match "ok")) {
-                return [pscustomobject]@{
-                    Exe     = $pyLauncher.Source
-                    Prefix  = @("-$ver")
-                    Display = "py -$ver"
-                }
-            }
-        }
-        foreach ($ver in @("3.12", "3.9", "3.11", "3.10", "3.13")) {
-            $out = & $pyLauncher.Source "-$ver" "-c" "print('ok')" 2>&1
-            if (($LASTEXITCODE -eq 0) -and (("$out") -match "ok")) {
-                return [pscustomobject]@{
-                    Exe     = $pyLauncher.Source
-                    Prefix  = @("-$ver")
-                    Display = "py -$ver"
-                }
-            }
-        }
-    }
+$PythonHelper = Join-Path $PSScriptRoot "Get-LoopSegmentsPython.ps1"
+if (-not (Test-Path -LiteralPath $PythonHelper)) {
+    throw "Missing shared Python helper: $PythonHelper"
+}
+. $PythonHelper
 
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) {
-        return [pscustomobject]@{
-            Exe     = $python.Source
-            Prefix  = @()
-            Display = "python"
-        }
-    }
-    return $null
+function Get-PythonRuntime {
+    Get-LoopSegmentsPythonRuntime
 }
 
 function Invoke-PythonRuntime {
@@ -110,16 +82,7 @@ function Invoke-PythonRuntime {
         [Parameter(Mandatory = $true)] $Runtime,
         [Parameter(Mandatory = $true)] [string[]] $ArgumentList
     )
-    $all = @($Runtime.Prefix) + $ArgumentList
-    $output = & $Runtime.Exe @all 2>&1
-    $code = 0
-    if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
-    $lines = @()
-    foreach ($item in @($output)) { $lines += [string]$item }
-    return [pscustomobject]@{
-        ExitCode = $code
-        Lines    = $lines
-    }
+    Invoke-LoopSegmentsPythonRuntime -Runtime $Runtime -ArgumentList $ArgumentList
 }
 
 function Write-CommandLines {
@@ -146,7 +109,11 @@ function Invoke-Pymobile {
 
 $rt = Get-PythonRuntime
 if (-not $rt) {
-    throw "Python not found. Install Python 3.12, then: py -3.12 -m pip install -U pymobiledevice3"
+    throw @"
+Python not found (need 3.9-3.13; prefer 3.12).
+
+$(Get-LoopSegmentsPythonInstallHint)
+"@
 }
 
 Write-Host "Using $($rt.Display) ($($rt.Exe))"
@@ -159,9 +126,7 @@ if ($importCheck.ExitCode -ne 0 -or ($importCheck.Lines -join " ") -notmatch "im
     throw @"
 pymobiledevice3 not installed for $($rt.Display).
 
-  Prefer Python 3.12 (not 3.14):
-    py install 3.12
-    py -3.12 -m pip install -U pymobiledevice3
+$(Get-LoopSegmentsPythonInstallHint)
 "@
 }
 Write-Host "pymobiledevice3 import OK"

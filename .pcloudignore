@@ -1,0 +1,9 @@
+# Machine-local / non-portable — do not sync across PCs via pCloud Drive
+windows/pcloud_web_companion/.venv/
+windows/pcloud_web_companion/.playwright-browsers/
+windows/pcloud_web_companion/__pycache__/
+windows/pcloud_web_companion/lan_config.json
+
+# Per-PC settings (regenerate with Setup-LoopSegmentsWindows.ps1 / Set-LoopSegmentsWindows.ps1)
+windows/loop-segments-windows.json
+windows/loop-segments-lan-host.txt

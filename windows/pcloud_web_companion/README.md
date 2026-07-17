@@ -15,10 +15,11 @@ On a pCloud download click:
 
 ## Run
 
-Integrated under **`ios_3d_loop_segments\windows\pcloud_web_companion`** (preferred):
+Integrated under **`windows\pcloud_web_companion`** (preferred):
 
 ```powershell
-cd P:\all_scripts\ios_3d_loop_segments\windows
+cd <repo>\windows
+.\Setup-LoopSegmentsWindows.ps1    # once per PC
 .\Run-PCloudWebCompanion.ps1
 # same as:
 .\pcloud_web_companion\run_chromium.ps1
@@ -26,7 +27,7 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 
 | Flag | Effect |
 |------|--------|
-| `-RecreateVenv` | Recreate `.venv` |
+| `-RecreateVenv` | Recreate machine-local venv under `%LOCALAPPDATA%\pcloud_web_companion\venv` |
 | `-ForceDeps` | Reinstall pip deps + Chromium |
 | `-NoLaunch` | Setup + USB launch only (no Chromium) |
 | `-SkipUsbLaunch` | Do not run `Launch-LoopSegmentsViaUsb.ps1` |
@@ -38,13 +39,14 @@ cd P:\all_scripts\ios_3d_loop_segments\windows
 
 Each launch:
 
+- Ensures a **machine-local** venv at `%LOCALAPPDATA%\pcloud_web_companion\venv` (Python 3.12 preferred; removes any legacy repo `.venv` on P:)
 - Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
 - Starts a local REST log sink
 - **USB-launches Loop Segments** via `..\Launch-LoopSegmentsViaUsb.ps1` only if `http://<phone>:8765/browse` (or `/status.json`) is not reachable. If LAN is already up, unlock/USB launch is skipped. Otherwise phone must be unlocked; **exit 3 / locked aborts Chromium**
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
-- Launches Chromium (from the Playwright browser cache) with the extension loaded; waits for exit unless `-DetachChromium`
+- Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded; waits for exit unless `-DetachChromium`
 
 ## Playwright
 
@@ -92,4 +94,4 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 - Windows + Python (`py`) — for the launcher’s Chromium install via Playwright
 - Loop Segments app LAN server on port 8765 (USB launch opens the app first when possible)
 - `windows\loop-segments-windows.json` with `phoneLanHost`
-- USB: iPhone plugged in, trusted, **unlocked**; `py -3.12 -m pip install -U pymobiledevice3` (see parent `windows\README.md`)
+- USB: iPhone plugged in, trusted, **unlocked**; prefer `..\Setup-LoopSegmentsWindows.ps1` (or `py -3.12 -m pip install -U pymobiledevice3`)

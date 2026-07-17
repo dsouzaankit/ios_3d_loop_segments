@@ -87,21 +87,36 @@ if ([string]::IsNullOrWhiteSpace($settings.phoneLanHost)) {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($settings.rcloneConfigPath)) {
+# Never persist standard %APPDATA%/LOCALAPPDATA rclone paths — empty = portable auto-detect.
+if (-not [string]::IsNullOrWhiteSpace($settings.rcloneConfigPath)) {
+    if (Test-IsStandardRcloneConfigPath $settings.rcloneConfigPath) {
+        Write-Host "rcloneConfigPath is a standard location; clearing to '' for portability across PCs."
+        $settings.rcloneConfigPath = ''
+    } elseif ($settings.rcloneConfigPath -match '(?i)^[A-Za-z]:\\Users\\([^\\]+)\\') {
+        $pathUser = $Matches[1]
+        if ($pathUser -ne $env:USERNAME) {
+            Write-Warning "rcloneConfigPath belongs to another Windows user ($pathUser); clearing to ''."
+            $settings.rcloneConfigPath = ''
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($settings.rcloneConfigPath) -and -not $PSBoundParameters.ContainsKey('RcloneConfigPath')) {
     try {
         $detected = Ensure-RcloneConfigFile -ConfigPath (Find-RcloneConfigPath)
-        $defaultPath = Get-DefaultRcloneConfigPath
         Write-Host "Detected rclone.conf: $detected"
-        Write-Host 'Press Enter for auto (empty in json, portable across PCs), or type another full path:'
+        Write-Host 'Press Enter for auto (empty in json, portable across PCs), or type a non-default full path:'
         $entered = (Read-Host).Trim()
         if (-not [string]::IsNullOrWhiteSpace($entered)) {
             $custom = Resolve-LoopSegmentsPath $entered
             if (-not (Test-Path -LiteralPath $custom) -and (Test-IsStandardRcloneConfigPath $custom)) {
                 $null = Ensure-RcloneConfigFile -ConfigPath $custom
             }
-            $settings.rcloneConfigPath = $entered
-        } elseif ((Resolve-LoopSegmentsPath $detected) -ne (Resolve-LoopSegmentsPath $defaultPath)) {
-            $settings.rcloneConfigPath = $detected
+            if (Test-IsStandardRcloneConfigPath $custom) {
+                $settings.rcloneConfigPath = ''
+            } else {
+                $settings.rcloneConfigPath = $entered
+            }
         } else {
             $settings.rcloneConfigPath = ''
         }

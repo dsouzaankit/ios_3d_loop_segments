@@ -1,0 +1,4 @@
+Do not create .venv in this folder.
+The companion virtualenv is machine-local:
+  %LOCALAPPDATA%\pcloud_web_companion\venv
+Run ..\Setup-LoopSegmentsWindows.ps1 on each PC.

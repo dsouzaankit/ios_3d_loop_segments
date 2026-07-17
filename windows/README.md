@@ -5,16 +5,17 @@ Scripts work on **any Windows PC** after you copy or clone this repo. Machine-sp
 ## First time on a PC
 
 ```powershell
-cd P:\all_scripts\ios_3d_loop_segments\windows   # or your clone path
+cd <repo>\windows   # e.g. where this README lives
 
-Copy-Item loop-segments-windows.example.json loop-segments-windows.json
-.\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
-# Or interactive: .\Set-LoopSegmentsWindows.ps1
+# One shot: Python 3.12 + pymobiledevice3 + companion venv/Chromium + portable json
+.\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 
 .\Set-LoopSegmentsWindows.ps1 -Show
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly
 .\Mount-LoopSegmentsRclone.ps1          # rclone mount -> drive letter (WinFsp)
 ```
+
+Or step by step: copy `loop-segments-windows.example.json` → `loop-segments-windows.json`, then `.\Set-LoopSegmentsWindows.ps1`.
 
 Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[RCLONE-PHONE-MOUNT.md](RCLONE-PHONE-MOUNT.md)**.
 
@@ -29,6 +30,8 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
 ```
 
+**Machine-local** (not synced via pCloud): companion venv, Playwright Chromium, and the unpacked extension under `%LOCALAPPDATA%\pcloud_web_companion\`. The repo `.venv` is removed if present — do not recreate it on `P:`.
+
 Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
 ## Open Loop Segments over USB (pymobiledevice3)
@@ -36,7 +39,7 @@ Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 Force-launch the app from the PC when the iPhone is **USB-connected** and trusted (iTunes / Apple Mobile Device Support). Used standalone or by `Run-PCloudWebCompanion.ps1` before Chromium. Scripts: `Launch-LoopSegmentsViaUsb.ps1`, `Resolve-LoopSegmentsBundleId.py`, `Probe-IphoneUnlock.py`.
 
 ```powershell
-# Prefer Python 3.12 (3.14 often needs MSVC to build pymobiledevice3 deps)
+# Prefer Setup (installs 3.12 tooling). Manual:
 py install 3.12
 py -3.12 -m pip install -U pymobiledevice3
 # Phone: Settings → Privacy & Security → Developer Mode → On
@@ -121,10 +124,16 @@ Links in the unified view point back to each phone’s `:8765` URL — playback 
 
 ## Moving to another PC
 
-1. Clone or copy the repo (do **not** commit `loop-segments-windows.json`).
-2. Copy your json from the old PC, or run `Set-LoopSegmentsWindows.ps1` again.
-3. Update **`phoneLanHost`** for the new LAN.
-4. Leave **`rcloneConfigPath`** empty unless the new PC stores config elsewhere (do not copy another user’s `C:\Users\…\rclone.conf` path).
+1. Clone, copy, or sync the repo (`.pcloudignore` skips per-PC junk; do **not** commit `loop-segments-windows.json`).
+2. On the new PC: `.\Setup-LoopSegmentsWindows.ps1 -PhoneHost <ip>` (clears foreign `rcloneConfigPath`, builds a local companion venv).
+3. Leave **`rcloneConfigPath`** empty unless this PC stores rclone.conf somewhere non-standard.
+4. Do **not** rely on a synced `pcloud_web_companion\.venv` — it embeds absolute Python paths from the old user/PC.
+
+| Stays on P: / repo (intentional) | Machine-local only |
+|----------------------------------|--------------------|
+| Extension source, scripts | `%LOCALAPPDATA%\pcloud_web_companion\venv` |
+| `chromium-profile\` (shared pCloud login) | Playwright browsers, unpacked extension, REST log |
+| | `loop-segments-windows.json` (per-PC phone IP) |
 
 Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compatibility (gitignored).
 
@@ -132,6 +141,8 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 
 | Script | Role |
 |--------|------|
+| `Setup-LoopSegmentsWindows.ps1` | **New PC bootstrap** — Python 3.12 / pymobiledevice3 / companion venv / portable json |
+| `Get-LoopSegmentsPython.ps1` | Shared Python picker (dot-sourced; prefer 3.12, skip 3.14+) |
 | `LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
 | `Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |

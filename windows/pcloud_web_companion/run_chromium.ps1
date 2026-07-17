@@ -20,29 +20,100 @@ if (-not $ScriptDir) { throw "Cannot resolve script directory; run with: powersh
 
 $ExtensionDir = $ScriptDir
 $ManifestPath = Join-Path $ExtensionDir "manifest.json"
-$VenvDir = Join-Path $ScriptDir ".venv"
+$WindowsDir = Split-Path -Parent $ScriptDir
+$PythonHelper = Join-Path $WindowsDir "Get-LoopSegmentsPython.ps1"
+if (-not (Test-Path -LiteralPath $PythonHelper)) {
+    throw "Missing shared Python helper: $PythonHelper"
+}
+. $PythonHelper
+
+# Machine-local only (never on pCloud P:). Repo .venv is legacy and ignored.
+$CompanionLocalRoot = Join-Path $env:LOCALAPPDATA "pcloud_web_companion"
+$VenvDir = Join-Path $CompanionLocalRoot "venv"
 $PythonExe = Join-Path $VenvDir "Scripts\python.exe"
 $Requirements = Join-Path $ScriptDir "requirements.txt"
 $DepsStamp = Join-Path $VenvDir ".deps_requirements_sha256.txt"
+$LegacyRepoVenv = Join-Path $ScriptDir ".venv"
 
-# Prefer project-local browsers when present; otherwise %LOCALAPPDATA%\ms-playwright.
 # Chromium must use a local disk profile (not P:). We sync that folder to/from the repo each run.
-$LocalBrowsers = Join-Path $ScriptDir ".playwright-browsers"
-$UserDataDir = Join-Path $env:LOCALAPPDATA "pcloud_web_companion\chromium-profile"
+$UserDataDir = Join-Path $CompanionLocalRoot "chromium-profile"
 $RepoProfileDir = Join-Path $ScriptDir "chromium-profile"
 
 if (-not (Test-Path $ManifestPath)) {
     throw "Extension manifest not found: $ManifestPath"
 }
 
-if (Test-Path $LocalBrowsers) {
-    $env:PLAYWRIGHT_BROWSERS_PATH = $LocalBrowsers
-    $PlaywrightCache = $LocalBrowsers
-    Write-Host "[playwright] Using local browser path: $PlaywrightCache"
+# Browsers stay machine-local under LOCALAPPDATA. Ignore ambient PLAYWRIGHT_BROWSERS_PATH
+# (IDEs/sandboxes often set it); use LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS for a custom cache.
+# Do not prefer a repo/.playwright-browsers folder on P: (pCloud sync + wrong machine).
+$LegacyRepoBrowsers = Join-Path $ScriptDir ".playwright-browsers"
+if (-not [string]::IsNullOrWhiteSpace($env:LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS)) {
+    $PlaywrightCache = $env:LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS
+    Write-Host "[playwright] Using LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS: $PlaywrightCache"
 } else {
-    Remove-Item Env:PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
     $PlaywrightCache = Join-Path $env:LOCALAPPDATA "ms-playwright"
-    Write-Host "[playwright] Using default browser cache: $PlaywrightCache"
+    Write-Host "[playwright] Using machine-local browser cache: $PlaywrightCache"
+}
+$env:PLAYWRIGHT_BROWSERS_PATH = $PlaywrightCache
+if (Test-Path -LiteralPath $LegacyRepoBrowsers) {
+    Write-Warning "[playwright] Ignoring legacy $LegacyRepoBrowsers (use LOCALAPPDATA; delete that folder to stop syncing browsers via pCloud)."
+}
+
+function Test-CompanionVenvHealthy {
+    param([string] $Dir, [string] $Exe)
+    if (-not (Test-Path -LiteralPath $Exe)) { return $false }
+    $pyvenvCfg = Join-Path $Dir "pyvenv.cfg"
+    if (-not (Test-Path -LiteralPath $pyvenvCfg)) { return $false }
+    $homeLine = Get-Content -LiteralPath $pyvenvCfg | Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1
+    if ($homeLine -notmatch '^\s*home\s*=\s*(.+)$') { return $false }
+    $venvHome = $Matches[1].Trim()
+    $homePython = Join-Path $venvHome "python.exe"
+    if (-not (Test-Path -LiteralPath $homePython)) { return $false }
+    # Another Windows user/machine left a synced or copied venv.
+    $userProfile = $env:USERPROFILE
+    if ($userProfile -and ($venvHome -match '(?i)^[A-Za-z]:\\Users\\') -and ($venvHome -notlike "$userProfile*")) {
+        return $false
+    }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $probe = & $Exe -c "print('ok')" 2>&1
+        $code = 0
+        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    $text = (@($probe) | ForEach-Object { [string]$_ }) -join "`n"
+    return (($code -eq 0) -and ($text -match "(?m)^ok\s*$"))
+}
+
+if (Test-Path -LiteralPath $LegacyRepoVenv) {
+    Write-Host "[venv] Removing legacy repo .venv (not portable across PCs / pCloud sync): $LegacyRepoVenv"
+    try {
+        # Clear hidden/system attrs that can block deletes on cloud drives.
+        Get-ChildItem -LiteralPath $LegacyRepoVenv -Recurse -Force -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Attributes = 'Normal' }
+        (Get-Item -LiteralPath $LegacyRepoVenv -Force).Attributes = 'Normal'
+        Remove-Item -Recurse -Force -LiteralPath $LegacyRepoVenv -ErrorAction Stop
+    } catch {
+        Write-Warning "[venv] Could not fully remove $LegacyRepoVenv ($($_.Exception.Message)). Delete it manually; companion uses $VenvDir instead."
+    }
+}
+$legacyVenvMarker = Join-Path $ScriptDir ".venv-DO-NOT-USE.txt"
+if (-not (Test-Path -LiteralPath $legacyVenvMarker)) {
+    @(
+        "Do not create .venv in this folder."
+        "The companion virtualenv is machine-local:"
+        "  %LOCALAPPDATA%\pcloud_web_companion\venv"
+        "Run ..\Setup-LoopSegmentsWindows.ps1 on each PC."
+    ) -join [Environment]::NewLine | Set-Content -LiteralPath $legacyVenvMarker -Encoding utf8
+}
+
+if (-not $RecreateVenv -and -not (Test-CompanionVenvHealthy -Dir $VenvDir -Exe $PythonExe)) {
+    if (Test-Path -LiteralPath $VenvDir) {
+        Write-Host "[venv] Existing venv is stale or from another PC/user; recreating $VenvDir"
+        $RecreateVenv = $true
+    }
 }
 
 if ($RecreateVenv -and (Test-Path $VenvDir)) {
@@ -51,9 +122,21 @@ if ($RecreateVenv -and (Test-Path $VenvDir)) {
 }
 
 if (-not (Test-Path $PythonExe)) {
-    Write-Host "[venv] Creating virtualenv at $VenvDir"
-    py -m venv $VenvDir
-    if ($LASTEXITCODE -ne 0) { throw "py -m venv failed (exit $LASTEXITCODE)" }
+    $pyRt = Get-LoopSegmentsPythonRuntime -ForVenv
+    if (-not $pyRt) {
+        throw @"
+No suitable Python for companion venv (need 3.9-3.13; prefer 3.12).
+
+$(Get-LoopSegmentsPythonInstallHint)
+"@
+    }
+    New-Item -ItemType Directory -Force -Path $CompanionLocalRoot | Out-Null
+    Write-Host "[venv] Creating virtualenv at $VenvDir with $($pyRt.Display)"
+    $create = Invoke-LoopSegmentsPythonRuntime -Runtime $pyRt -ArgumentList @("-m", "venv", $VenvDir)
+    if ($create.ExitCode -ne 0) {
+        $create.Lines | ForEach-Object { Write-Host $_ }
+        throw "venv create failed (exit $($create.ExitCode)) via $($pyRt.Display)"
+    }
 }
 
 if (-not (Test-Path $Requirements)) {
@@ -236,12 +319,45 @@ function Start-RestLogSink {
         "18765"
     ) | Out-Null
 
-    Start-Sleep -Milliseconds 400
+    # Child powershell cold-start often exceeds 400ms; poll briefly before warning.
+    $deadline = [datetime]::UtcNow.AddSeconds(12)
+    $ok = $false
+    while ([datetime]::UtcNow -lt $deadline) {
+        try {
+            $health = Invoke-WebRequest -Uri "http://127.0.0.1:18765/health" -UseBasicParsing -TimeoutSec 1
+            Write-Host "[rest-log] Sink OK ($($health.StatusCode))"
+            $ok = $true
+            break
+        } catch {
+            Start-Sleep -Milliseconds 400
+        }
+    }
+    if (-not $ok) {
+        Write-Warning "[rest-log] Sink not reachable after 12s (extension logs may miss this run)"
+    }
+}
+
+function Test-TcpPortOpen {
+    param(
+        [string]$HostName,
+        [int]$Port,
+        [int]$TimeoutMs = 2000
+    )
+    $client = $null
     try {
-        $health = Invoke-WebRequest -Uri "http://127.0.0.1:18765/health" -UseBasicParsing -TimeoutSec 2
-        Write-Host "[rest-log] Sink OK ($($health.StatusCode))"
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
+            return $false
+        }
+        $client.EndConnect($iar)
+        return $client.Connected
     } catch {
-        Write-Warning "[rest-log] Sink not reachable yet: $_"
+        return $false
+    } finally {
+        if ($null -ne $client) {
+            try { $client.Close() } catch {}
+        }
     }
 }
 
@@ -268,12 +384,18 @@ function Test-PhoneLanPageReachable {
         $port = [int]$lan.lanPort
     }
 
+    Write-Host "[lan] TCP probe ${hostName}:${port} ..."
+    if (-not (Test-TcpPortOpen -HostName $hostName -Port $port -TimeoutMs 2000)) {
+        Write-Host "[lan] Port closed/unreachable - will USB-launch if needed"
+        return $false
+    }
+
     # Prefer /browse (companion target); fall back to /status.json.
     $paths = @("/browse", "/status.json")
     foreach ($path in $paths) {
         $uri = "http://${hostName}:${port}${path}"
         try {
-            Write-Host "[lan] Probing $uri ..."
+            Write-Host "[lan] HTTP probe $uri ..."
             $resp = Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 3
             if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
                 Write-Host "[lan] Reachable ($($resp.StatusCode)): $uri"

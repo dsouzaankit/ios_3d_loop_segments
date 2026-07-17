@@ -159,9 +159,25 @@ function Ensure-RcloneConfigFile {
     return $path
 }
 
+function Test-RcloneConfigPathForeignUser {
+    param([string] $Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    if ($Path -match '(?i)^[A-Za-z]:\\Users\\([^\\]+)\\') {
+        return ($Matches[1] -ne $env:USERNAME)
+    }
+    return $false
+}
+
 function Find-RcloneConfigPath {
     $settings = Get-LoopSegmentsWindowsSettings
     $override = Resolve-LoopSegmentsPath $settings.rcloneConfigPath
+    if (-not [string]::IsNullOrWhiteSpace($override)) {
+        # Copied json from another PC/user: ignore foreign absolute paths.
+        if (Test-RcloneConfigPathForeignUser $override) {
+            Write-Warning "Ignoring rcloneConfigPath from another Windows user; using auto-detect. Clear it with Set-LoopSegmentsWindows.ps1 or Setup-LoopSegmentsWindows.ps1."
+            $override = $null
+        }
+    }
     if (-not [string]::IsNullOrWhiteSpace($override)) {
         if (Test-Path -LiteralPath $override) { return $override }
         if (Test-IsStandardRcloneConfigPath $override) {
@@ -171,6 +187,7 @@ function Find-RcloneConfigPath {
 rcloneConfigPath not found: $override
 
   Set rcloneConfigPath to "" in loop-segments-windows.json for auto (%APPDATA%\rclone\rclone.conf), or create that file, or fix the path if this json was copied from another PC.
+  Tip: .\Setup-LoopSegmentsWindows.ps1 clears foreign/stale absolute paths.
 "@
     }
     if (-not [string]::IsNullOrWhiteSpace($env:RCLONE_CONFIG)) {
