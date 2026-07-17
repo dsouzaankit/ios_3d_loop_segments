@@ -26,6 +26,8 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 272 (1.2.36):** **Keep Alive** defaults **on** (fresh install / unset preference).
+
 **Build 271 (1.2.35):** Night mode toggle on Export → Appearance (default **on**) and on LAN `/` + `/browse` (Day/Night button; seeds from the app preference, PC can override via `localStorage`).
 
 **Build 270 (1.2.35):** On LAN/WebDAV access, rename legacy `parked/<sha256-fileKey>/` folders to `parked/<filename>/` (from `_parked_meta.json`) so hrefs and PROPFIND match the source name.
@@ -126,7 +128,7 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse**, **Paused**, and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. Paused mid-run files are listed on the **Paused** tab (not in Browse).
-- **Keep Alive (optional):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Mix mode** (default) or **Prefer lock screen controls** (exclusive). **Build 225+:** **60-minute** sessions when foregrounded and after export stops; LAN stays up while the loop runs. See **Keep Alive: mix vs lock screen** and **Background / lock screen** below. Not reliable in Low Power Mode.
+- **Keep Alive (default on):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Mix mode** (default) or **Prefer lock screen controls** (exclusive). **Build 225+:** **60-minute** sessions when foregrounded and after export stops; LAN stays up while the loop runs. See **Keep Alive: mix vs lock screen** and **Background / lock screen** below. Not reliable in Low Power Mode.
   - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin` / `iosadmin`**), since they expose pCloud folder/file names.
 
 ### Keep Alive: mix vs lock screen

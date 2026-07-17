@@ -10,6 +10,8 @@
     [switch]$DetachChromium,
     # Keep the full local AppData profile after upload (default: wipe local after sync to P:).
     [switch]$KeepLocalProfile,
+    # Do not press iPhone Home on companion finish (default: background Loop Segments via USB HID).
+    [switch]$SkipGoHome,
     [string]$StartUrl = "https://my.pcloud.com"
 )
 
@@ -300,6 +302,109 @@ function Sync-ExtensionToLocalDisk {
     return $localExt
 }
 
+function Start-HiddenPowerShell {
+    param(
+        [Parameter(Mandatory = $true)] [string[]] $ArgumentList,
+        # Survive parent console X (exit watchdog). Rest-log sink does not need this.
+        [switch] $BreakAwayFromConsoleJob
+    )
+
+    $argString = ($ArgumentList | ForEach-Object {
+            $a = [string]$_
+            if ($a -match '[\s"]') {
+                '"' + ($a -replace '\\', '\\' -replace '"', '\"') + '"'
+            } else {
+                $a
+            }
+        }) -join ' '
+
+    $psExe = (Get-Command powershell.exe).Source
+    # -WindowStyle Hidden alone still flashes a blue console; CreateNoWindow avoids that.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $psExe
+    $psi.Arguments = "-NoProfile -NoLogo -NonInteractive $argString"
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+
+    if (-not $BreakAwayFromConsoleJob) {
+        return [System.Diagnostics.Process]::Start($psi)
+    }
+
+    # Detach from the console job so closing the companion window does not kill this child.
+    # PowerShell $null marshals as "" for string P/Invoke — that makes CreateProcess return
+    # ERROR_INVALID_NAME. Use IntPtr.Zero for lpApplicationName and a writable StringBuilder.
+    if (-not ("CompanionDetachedProc" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CompanionDetachedProc {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct STARTUPINFO {
+        public int cb;
+        public IntPtr lpReserved;
+        public IntPtr lpDesktop;
+        public IntPtr lpTitle;
+        public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short wShowWindow, cbReserved2;
+        public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION {
+        public IntPtr hProcess, hThread;
+        public int dwProcessId, dwThreadId;
+    }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool CreateProcess(
+        IntPtr lpApplicationName,
+        StringBuilder lpCommandLine,
+        IntPtr lpProcessAttributes,
+        IntPtr lpThreadAttributes,
+        bool bInheritHandles,
+        uint dwCreationFlags,
+        IntPtr lpEnvironment,
+        string lpCurrentDirectory,
+        ref STARTUPINFO lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool CloseHandle(IntPtr hObject);
+    public const uint CREATE_NO_WINDOW = 0x08000000;
+    public const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
+    public const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
+
+    public static int Start(string exePath, string arguments, bool breakAway) {
+        string cmd = "\"" + exePath + "\" " + arguments;
+        var sb = new StringBuilder(cmd);
+        var si = new STARTUPINFO();
+        si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+        PROCESS_INFORMATION pi;
+        uint flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+        if (breakAway) flags |= CREATE_BREAKAWAY_FROM_JOB;
+        if (!CreateProcess(IntPtr.Zero, sb, IntPtr.Zero, IntPtr.Zero, false, flags,
+                IntPtr.Zero, null, ref si, out pi)) {
+            return 0;
+        }
+        int pid = pi.dwProcessId;
+        if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
+        if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
+        return pid;
+    }
+}
+"@
+    }
+
+    $pidStarted = [CompanionDetachedProc]::Start($psExe, $psi.Arguments, $true)
+    if ($pidStarted -le 0) {
+        $pidStarted = [CompanionDetachedProc]::Start($psExe, $psi.Arguments, $false)
+    }
+    if ($pidStarted -le 0) {
+        $err = [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+        throw "CreateProcess failed (Win32 $($err.Message))"
+    }
+    return [pscustomobject]@{ Id = $pidStarted }
+}
+
 function Start-RestLogSink {
     $sinkScript = Join-Path $ScriptDir "_rest_log_sink.ps1"
     $logFile = Join-Path $env:LOCALAPPDATA "pcloud_web_companion\rest.log"
@@ -313,17 +418,12 @@ function Start-RestLogSink {
     Set-Content -LiteralPath $logFile -Value "" -Encoding utf8
     Write-Host "[rest-log] Cleared $logFile"
     Write-Host "[rest-log] Starting sink -> $logFile"
-    Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList @(
-        "-NoProfile"
-        "-ExecutionPolicy"
-        "Bypass"
-        "-File"
-        $sinkScript
-        "-LogFile"
-        $logFile
-        "-Port"
-        "18765"
-    ) | Out-Null
+    [void](Start-HiddenPowerShell -ArgumentList @(
+            "-ExecutionPolicy", "Bypass",
+            "-File", $sinkScript,
+            "-LogFile", $logFile,
+            "-Port", "18765"
+        ))
 
     # Child powershell cold-start often exceeds 400ms; poll briefly before warning.
     $deadline = [datetime]::UtcNow.AddSeconds(12)
@@ -493,10 +593,7 @@ function Stop-ProfileChromium {
 
     Write-Host "[cleanup] Closing Chromium instances for this profile"
     $procs = @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.CommandLine -and
-            $_.CommandLine.IndexOf($ProfileDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
-        })
+        Where-Object { Test-IsCompanionProfileChromium -CommandLine $_.CommandLine -ProfileDir $ProfileDir })
 
     foreach ($proc in $procs) {
         Write-Host "[cleanup] Stopping PID $($proc.ProcessId)"
@@ -506,6 +603,32 @@ function Stop-ProfileChromium {
     if ($procs.Count -gt 0) {
         Start-Sleep -Seconds 1
     }
+}
+
+function Test-IsCompanionProfileChromium {
+    param(
+        [string] $CommandLine,
+        [string] $ProfileDir
+    )
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
+    # Chromium is started with forward-slash --user-data-dir=...; normalize before match.
+    $cmd = $CommandLine.Replace('/', '\')
+    if (-not [string]::IsNullOrWhiteSpace($ProfileDir)) {
+        $prof = $ProfileDir.Replace('/', '\')
+        if ($cmd.IndexOf($prof, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return $true
+        }
+    }
+    return ($cmd -match '(?i)pcloud_web_companion[\\/]+chromium-profile')
+}
+
+function Get-CompanionProfileChromiumProcessIds {
+    param([string] $ProfileDir)
+    return @(
+        Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { Test-IsCompanionProfileChromium -CommandLine $_.CommandLine -ProfileDir $ProfileDir } |
+            ForEach-Object { [int]$_.ProcessId }
+    )
 }
 
 function Remove-ProfilePath {
@@ -576,12 +699,13 @@ function Sync-ChromiumProfile {
 
     & robocopy.exe @robocopyArgs | Out-Null
     $rc = $LASTEXITCODE
-    # robocopy: 0-7 = success / no fatal error
+    # robocopy: 0-7 = success / no fatal error (do not leave this in $LASTEXITCODE for the wrapper).
     if ($rc -ge 8) {
         Write-Warning "[profile] $Direction robocopy exit $rc (see robocopy docs)"
     } else {
         Write-Host "[profile] $Direction OK (robocopy=$rc)"
     }
+    $global:LASTEXITCODE = 0
 
     foreach ($name in $excludeFiles) {
         Remove-ProfilePath (Join-Path $dst $name)
@@ -619,7 +743,70 @@ function Clear-LocalProfileMinimal {
 $script:CompanionShutdownRequested = $false
 $script:CompanionFinished = $false
 $script:CancelKeyPressHandler = $null
+$script:ConsoleCtrlHandler = $null
 $GracefulExitMarker = Join-Path $CompanionLocalRoot "companion-graceful-exit.marker"
+
+# Native console close (X) does not raise CancelKeyPress. Track Chromium PIDs and kill
+# them from SetConsoleCtrlHandler; watchdog (detached) syncs the profile afterward.
+try {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+public static class CompanionConsoleGuard {
+    public static int[] ChromePids = new int[0];
+    public static volatile bool CloseRequested = false;
+    static HandlerRoutine _handler;
+
+    public delegate bool HandlerRoutine(uint dwCtrlType);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleCtrlHandler(HandlerRoutine Handler, bool Add);
+
+    public static void Register() {
+        if (_handler != null) return;
+        _handler = Handler;
+        SetConsoleCtrlHandler(_handler, true);
+    }
+
+    public static void Unregister() {
+        if (_handler == null) return;
+        SetConsoleCtrlHandler(_handler, false);
+        _handler = null;
+    }
+
+    public static void SetChromePids(int[] pids) {
+        ChromePids = pids ?? new int[0];
+    }
+
+    public static void KillTrackedChrome() {
+        var pids = ChromePids;
+        if (pids == null) return;
+        foreach (var id in pids) {
+            try {
+                using (var p = Process.GetProcessById(id)) {
+                    p.Kill();
+                }
+            } catch { }
+        }
+    }
+
+    static bool Handler(uint ctrlType) {
+        // 0 CTRL_C, 1 CTRL_BREAK, 2 CTRL_CLOSE, 5 LOGOFF, 6 SHUTDOWN
+        if (ctrlType == 0 || ctrlType == 1 || ctrlType == 2 || ctrlType == 5 || ctrlType == 6) {
+            CloseRequested = true;
+            KillTrackedChrome();
+            // Return true for Close so we get a short window; process still ends after.
+            return true;
+        }
+        return false;
+    }
+}
+"@ -ErrorAction Stop
+} catch {
+    Write-Warning "[run] Console close guard unavailable: $($_.Exception.Message)"
+}
 
 function Stop-CompanionRestLogSink {
     Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction SilentlyContinue |
@@ -629,6 +816,49 @@ function Stop-CompanionRestLogSink {
         }
 }
 
+function Invoke-GoIphoneHome {
+    if ($SkipGoHome) {
+        Write-Host "[home] Skipping iPhone Home press (-SkipGoHome)"
+        return
+    }
+    $homePs1 = Join-Path $WindowsDir "Go-IphoneHomeViaUsb.ps1"
+    if (-not (Test-Path -LiteralPath $homePs1)) {
+        Write-Warning "[home] Missing $homePs1"
+        return
+    }
+    Write-Host "[home] Backgrounding Loop Segments (USB Home button)..."
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $code = 1
+    try {
+        $p = Start-HiddenPowerShell -ArgumentList @(
+            "-ExecutionPolicy", "Bypass",
+            "-File", $homePs1
+        )
+        if ($p -is [System.Diagnostics.Process]) {
+            if (-not $p.WaitForExit(90000)) {
+                try { $p.Kill() } catch {}
+                $code = 1
+            } else {
+                $code = [int]$p.ExitCode
+            }
+        } else {
+            # Unexpected shape from Start-HiddenPowerShell
+            $code = 1
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+        $global:LASTEXITCODE = 0
+    }
+    if ($code -eq 0) {
+        Write-Host "[home] Done"
+    } elseif ($code -eq 2) {
+        Write-Host "[home] Skipped (no USB device)"
+    } else {
+        Write-Warning "[home] Home press did not succeed (exit $code) - phone may still show Loop Segments"
+    }
+}
+
 function Invoke-CompanionGracefulFinish {
     param([string] $Reason = "session end")
 
@@ -636,13 +866,7 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): close Chromium, sync profile, clear local..." -ForegroundColor Cyan
-
-    # Signal watchdog that this process is exiting on purpose.
-    try {
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GracefulExitMarker) | Out-Null
-        Set-Content -LiteralPath $GracefulExitMarker -Value (Get-Date -Format o) -Encoding ascii
-    } catch {}
+    Write-Host "[run] Finishing companion ($Reason): close Chromium, sync profile, clear local, Home on phone..." -ForegroundColor Cyan
 
     try {
         Stop-ProfileChromium -ProfileDir $UserDataDir
@@ -655,25 +879,42 @@ function Invoke-CompanionGracefulFinish {
         }
         Clear-LocalProfileMinimal -ProfileDir $UserDataDir
         Stop-CompanionRestLogSink
+        Invoke-GoIphoneHome
         Write-Host "[run] Companion finish complete." -ForegroundColor Green
     } catch {
         Write-Warning "[run] Finish had errors: $($_.Exception.Message)"
+    } finally {
+        # Marker only after finish attempt so a killed-mid-sync console X still lets the watchdog upload.
+        try {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GracefulExitMarker) | Out-Null
+            Set-Content -LiteralPath $GracefulExitMarker -Value (Get-Date -Format o) -Encoding ascii
+        } catch {}
     }
 }
 
 function Register-CompanionCancelHandler {
+    # Windows PowerShell 5.1 [Console] often has no CancelKeyPress; native SetConsoleCtrlHandler covers Ctrl+C / X.
     try {
-        if ($null -eq [Console]::CancelKeyPress) { return }
-        $script:CancelKeyPressHandler = [ConsoleCancelEventHandler] {
-            param($sender, $eventArgs)
-            $eventArgs.Cancel = $true
-            $script:CompanionShutdownRequested = $true
-            Write-Host ""
-            Write-Host "[run] Ctrl+C received - will close Chromium and sync profile..." -ForegroundColor Yellow
+        $consoleType = [Console]
+        $hasCancel = $consoleType.GetEvent('CancelKeyPress')
+        if ($null -ne $hasCancel) {
+            $script:CancelKeyPressHandler = [ConsoleCancelEventHandler] {
+                param($sender, $eventArgs)
+                $eventArgs.Cancel = $true
+                $script:CompanionShutdownRequested = $true
+                Write-Host ""
+                Write-Host "[run] Ctrl+C received - will close Chromium and sync profile..." -ForegroundColor Yellow
+                try { [CompanionConsoleGuard]::KillTrackedChrome() } catch {}
+            }
+            [Console]::CancelKeyPress += $script:CancelKeyPressHandler
         }
-        [Console]::CancelKeyPress += $script:CancelKeyPressHandler
     } catch {
-        Write-Warning "[run] Could not register Ctrl+C handler: $($_.Exception.Message)"
+        # Ignore - CompanionConsoleGuard handles console signals.
+    }
+    try {
+        [CompanionConsoleGuard]::Register()
+    } catch {
+        Write-Warning "[run] Could not register console close handler: $($_.Exception.Message)"
     }
 }
 
@@ -682,6 +923,7 @@ function Unregister-CompanionCancelHandler {
         try { [Console]::CancelKeyPress -= $script:CancelKeyPressHandler } catch {}
         $script:CancelKeyPressHandler = $null
     }
+    try { [CompanionConsoleGuard]::Unregister() } catch {}
 }
 
 function Start-CompanionExitWatchdog {
@@ -691,26 +933,28 @@ function Start-CompanionExitWatchdog {
         return
     }
     Remove-Item -LiteralPath $GracefulExitMarker -Force -ErrorAction SilentlyContinue
-    $argList = @(
-        "-NoProfile"
-        "-ExecutionPolicy"
-        "Bypass"
-        "-File"
-        $watchdog
-        "-ParentPid"
-        "$PID"
-        "-ProfileDir"
-        $UserDataDir
-        "-RepoProfileDir"
-        $RepoProfileDir
-        "-GracefulMarkerPath"
-        $GracefulExitMarker
-    )
-    if ($SkipProfileSync) { $argList += "-SkipProfileSync" }
-    if ($KeepLocalProfile) { $argList += "-KeepLocalProfile" }
 
-    Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList $argList | Out-Null
-    Write-Host "[run] Exit watchdog armed (Ctrl+C or console X will finish Chromium + profile sync)"
+    $watchArgs = [System.Collections.Generic.List[string]]::new()
+    foreach ($a in @(
+            "-ExecutionPolicy", "Bypass",
+            "-File", $watchdog,
+            "-ParentPid", "$PID",
+            "-ProfileDir", $UserDataDir,
+            "-RepoProfileDir", $RepoProfileDir,
+            "-GracefulMarkerPath", $GracefulExitMarker
+        )) { [void]$watchArgs.Add($a) }
+    if ($SkipProfileSync) { [void]$watchArgs.Add("-SkipProfileSync") }
+    if ($KeepLocalProfile) { [void]$watchArgs.Add("-KeepLocalProfile") }
+    if ($SkipGoHome) { [void]$watchArgs.Add("-SkipGoHome") }
+
+    try {
+        $started = Start-HiddenPowerShell -BreakAwayFromConsoleJob -ArgumentList $watchArgs.ToArray()
+        Write-Host "[run] Exit watchdog armed (PID $($started.Id); survives console X, no blue flash)"
+    } catch {
+        Write-Warning "[run] Detached watchdog failed ($($_.Exception.Message)); falling back to hidden Start-Process"
+        [void](Start-HiddenPowerShell -ArgumentList $watchArgs.ToArray())
+        Write-Host "[run] Exit watchdog armed (hidden Start-Process fallback)"
+    }
 }
 
 function Wait-ProfileChromiumExit {
@@ -719,21 +963,28 @@ function Wait-ProfileChromiumExit {
     Write-Host "[run] Waiting for Chromium to exit (will upload profile to repo, then clear local)..."
     Write-Host "      Close the browser, or quit this window with Ctrl+C / X (graceful finish)."
     while ($true) {
+        $pids = @(Get-CompanionProfileChromiumProcessIds -ProfileDir $ProfileDir)
+        try { [CompanionConsoleGuard]::SetChromePids([int[]]$pids) } catch {}
+
         if ($script:CompanionShutdownRequested) {
             Write-Host "[run] Shutdown requested - stopping Chromium..."
             Stop-ProfileChromium -ProfileDir $ProfileDir
             return
         }
-        $still = @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.CommandLine -and
-                $_.CommandLine.IndexOf($ProfileDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
-            })
-        if ($still.Count -eq 0) {
+        try {
+            if ([CompanionConsoleGuard]::CloseRequested) {
+                Write-Host "[run] Console close - stopping Chromium..."
+                $script:CompanionShutdownRequested = $true
+                Stop-ProfileChromium -ProfileDir $ProfileDir
+                return
+            }
+        } catch {}
+
+        if ($pids.Count -eq 0) {
             Write-Host "[run] Chromium exited"
             return
         }
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 1
     }
 }
 
@@ -870,6 +1121,7 @@ Write-Host "[run] pCloud downloads -> clipboard + POST Loop Segments /export_fro
 
 if ($DetachChromium) {
     Write-Host "[run] Detached (-DetachChromium). Full local profile kept until next run uploads, then clears."
+    exit 0
 } else {
     Register-CompanionCancelHandler
     Start-CompanionExitWatchdog
@@ -883,4 +1135,5 @@ if ($DetachChromium) {
         $reason = if ($script:CompanionShutdownRequested) { "Ctrl+C / shutdown" } else { "Chromium closed" }
         Invoke-CompanionGracefulFinish -Reason $reason
     }
+    exit 0
 }

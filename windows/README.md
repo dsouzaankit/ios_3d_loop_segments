@@ -2,6 +2,8 @@
 
 Scripts work on **any Windows PC** after you copy or clone this repo. Machine-specific paths live in **`loop-segments-windows.json`** (gitignored), not in the scripts. All scripts resolve paths from **`$PSScriptRoot`** in this folder.
 
+**PowerShell:** scripts target **Windows PowerShell 5.1** (`#Requires -Version 5.1`, built into Windows — no PowerShell 7 / `pwsh` install needed). Child helpers (REST log sink, exit watchdog, USB launch) also call **`powershell.exe`** (5.1), not `pwsh`. That is why a blue console can appear for USB launch; background helpers use a no-window start so they should not flash.
+
 ## Typical `.ps1` run sequence (`windows\`)
 
 ```powershell
@@ -15,7 +17,8 @@ cd <repo>\windows
 
 # 3) Day-to-day: pCloud companion (probes :8765/browse; USB-launches app if LAN down)
 .\Run-PCloudWebCompanion.ps1
-#    Quit: close Chromium, Ctrl+C, or console X — kills Chromium and syncs profile to P:
+#    Quit: close Chromium, Ctrl+C, or console X — kills Chromium, syncs profile,
+#    then USB Home (Keep Alive defaults on — export can keep running; -SkipGoHome to skip)
 
 # Optional helpers
 .\Set-LoopSegmentsWindows.ps1 -Show          # show/edit per-PC json
@@ -53,7 +56,10 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 # if :8765/browse is already up → skip unlock/USB launch; else unlock first (locked → exit 3)
 # .\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
-# Quit: close Chromium, or Ctrl+C / console X — kills Chromium and syncs profile gracefully
+# Quit: close Chromium, or Ctrl+C / console X — syncs profile, then USB Home if unlocked
+# On finish: USB Home backgrounds Loop Segments (Keep Alive defaults ON — keeps
+#   export/LAN running when backgrounded). Locked / no USB → Home skipped.
+#   -SkipGoHome to leave app foreground
 ```
 
 **Machine-local** (not synced via pCloud): companion venv, Playwright Chromium, and the unpacked extension under `%LOCALAPPDATA%\pcloud_web_companion\`. The repo `.venv` is removed if present — do not recreate it on `P:`.
@@ -78,11 +84,13 @@ py -3.12 -m pip install -U pymobiledevice3
 | Topic | Notes |
 |-------|--------|
 | Bundle id | Usually `com.loopsegments.app`; AltStore may use `com.loopsegments.app.<TEAMID>` — auto-detected |
-| Unlock | Needed only when LAN is down: phone must be **unlocked** (probe + launch). Exit code **3** if locked — companion will not start Chromium. If `:8765/browse` is already reachable, USB unlock/launch is skipped |
+| Unlock | Needed when LAN is down (USB launch) **and** for finish-time Home press. Exit **3** if locked during launch — companion will not start Chromium. If `:8765/browse` is already reachable, USB launch is skipped; Home on quit still needs unlock if you want the app backgrounded |
+| Home on quit | Companion finish presses **Home** over USB (`Go-IphoneHomeViaUsb.ps1`) to background Loop Segments. Requires USB + **unlocked** phone; otherwise skipped. `-SkipGoHome` leaves the app foreground. Safe with **Keep Alive** (default **on** in app build 272+); without Keep Alive, Home can pause/stop export |
+| Keep Alive | App default **on** (Export → Keep Alive). Silent lock-screen audio so export/LAN can continue after Home/lock. Turn off in-app if you want foreground-only |
 | Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh. **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. USB detect failure auto-starts AltServer when installed |
 | AltServer | Companion / USB launch / Setup always report status + the unavailable-app resolution. Optional logon start: `.\Register-AltServerAtLogon.ps1` |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
-| Background launch | **Not supported** — USB launch opens the app; use **Keep Alive** after open, then lock |
+| Background launch | **Not supported** — USB launch opens the app; **Keep Alive** (default on) then lock |
 | iOS 17+ tunnel | If DVT fails: elevated `py -3.12 -m pymobiledevice3 remote tunneld`, then `.\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount` |
 
 ## Day-to-day mount
@@ -179,6 +187,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** = HTTP + PROPFIND + `rclone ls`; default = **read/write** **L:** (copy bootstrap `.ps1` and folders under `pcld_ios_media\`; ≤ 2 MB per file on phone); **`-ReadOnly`** = DLNA-only; **`-Remove`** / **`-RemovePort80Proxy`** |
 | `Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: USB-launch Loop Segments, sync profile, start browser |
 | `Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); exit **3** if phone locked |
+| `Go-IphoneHomeViaUsb.ps1` | Press Home over USB to background the app (companion finish); needs USB + unlocked; exit **3** if locked |
 | `Probe-IphoneUnlock.py` / `Resolve-LoopSegmentsBundleId.py` | Helpers for USB unlock probe + AltStore bundle-id suffix |
 | `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
 | `Get-LoopSegmentsAltServer.ps1` | Locate/start AltServer; warn if missing (7-day AltStore expiry) |

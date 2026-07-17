@@ -6,9 +6,14 @@ enum ExportKeepAliveSettings {
     static let timeoutHoursKey = "export_keep_alive_timeout_hours"
     static let preferLockScreenControlsKey = "export_keep_alive_prefer_lock_screen_controls"
 
-    /// Off by default — user opts in (battery / App Store expectations).
+    /// Default `true` when the key has never been set (fresh install / reinstall).
     static var isEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: enabledKey) }
+        get {
+            if UserDefaults.standard.object(forKey: enabledKey) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: enabledKey)
+        }
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 

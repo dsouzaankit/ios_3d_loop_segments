@@ -35,6 +35,7 @@ cd <repo>\windows
 | `-SkipProfileSync` | Do not sync Chromium profile to/from repo |
 | `-DetachChromium` | Do not wait for browser exit (upload + local clear on next run) |
 | `-KeepLocalProfile` | Do not wipe local AppData profile after upload |
+| `-SkipGoHome` | Do not press iPhone Home on companion finish |
 | `-StartUrl "..."` | Override start page (default `https://my.pcloud.com`) |
 
 Each launch:
@@ -47,7 +48,7 @@ Each launch:
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded; waits for exit unless `-DetachChromium`
-- **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, uploads full profile to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X)
+- **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, uploads full profile to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X), then presses **iPhone Home** over USB to background Loop Segments (use `-SkipGoHome` to leave it foreground)
 
 ## Playwright
 
@@ -93,6 +94,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 ## Requirements
 
+- Windows + **Windows PowerShell 5.1** (built-in; scripts use `powershell.exe`, not `pwsh`)
 - Windows + Python (`py`) — for the launcher’s Chromium install via Playwright
 - Loop Segments app LAN server on port 8765 (USB launch opens the app first when possible)
 - `windows\loop-segments-windows.json` with `phoneLanHost`

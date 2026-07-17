@@ -15,7 +15,9 @@ param(
     [Parameter(Mandatory = $true)] [string] $RepoProfileDir,
     [Parameter(Mandatory = $true)] [string] $GracefulMarkerPath,
     [switch] $SkipProfileSync,
-    [switch] $KeepLocalProfile
+    [switch] $KeepLocalProfile,
+    [Parameter(Mandatory = $false)]
+    [switch] $SkipGoHome
 )
 
 $ErrorActionPreference = "Continue"
@@ -30,10 +32,15 @@ function Test-LocalHasContent {
 
 function Stop-ProfileChrome {
     param([string] $Dir)
+    $needle = if ($Dir) { $Dir.Replace('/', '\') } else { "" }
     $procs = @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.CommandLine -and
-            $_.CommandLine.IndexOf($Dir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            if (-not $_.CommandLine) { return $false }
+            $cmd = $_.CommandLine.Replace('/', '\')
+            if ($needle -and ($cmd.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                return $true
+            }
+            return ($cmd -match '(?i)pcloud_web_companion[\\/]+chromium-profile')
         })
     foreach ($proc in $procs) {
         Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
@@ -88,7 +95,7 @@ while ($true) {
     Start-Sleep -Milliseconds 500
 }
 
-# Give the parent a moment to write the graceful marker / finish itself.
+# Brief pause so a graceful parent finish can write its marker after sync.
 Start-Sleep -Seconds 2
 
 if (Test-Path -LiteralPath $GracefulMarkerPath) {
@@ -97,8 +104,23 @@ if (Test-Path -LiteralPath $GracefulMarkerPath) {
 }
 
 # Ungraceful close (console X, kill, crash): finish the companion session.
+Write-Host "[watchdog] Parent gone without graceful marker - closing Chromium and syncing profile"
 Stop-ProfileChrome -Dir $ProfileDir
 Start-Sleep -Milliseconds 500
 Sync-Upload -Src $ProfileDir -Dst $RepoProfileDir
 Clear-Local -Dir $ProfileDir
+
+$homePs1 = Join-Path (Split-Path -Parent $PSScriptRoot) "Go-IphoneHomeViaUsb.ps1"
+if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {
+    Write-Host "[watchdog] Pressing iPhone Home to background Loop Segments..."
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = (Get-Command powershell.exe).Source
+        $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`""
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $hp = [System.Diagnostics.Process]::Start($psi)
+        if ($null -ne $hp) { [void]$hp.WaitForExit(90000) }
+    } catch {}
+}
 exit 0

@@ -10,7 +10,8 @@
   Exit code 3 (phone locked) or other USB launch failures abort Chromium.
   On error, waits for Enter so a double-clicked console window does not close immediately.
   While Chromium is running, Ctrl+C or closing the console (X) kills that Chromium profile
-  and syncs/clears the profile the same as a normal exit.
+  and syncs/clears the profile the same as a normal exit. On finish, presses iPhone Home
+  over USB so Loop Segments is backgrounded (Keep Alive can keep running).
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1
@@ -28,6 +29,7 @@ param(
     [switch] $SkipProfileSync,
     [switch] $DetachChromium,
     [switch] $KeepLocalProfile,
+    [switch] $SkipGoHome,
     [string] $StartUrl = "https://my.pcloud.com"
 )
 
@@ -61,6 +63,7 @@ try {
         SkipProfileSync  = $SkipProfileSync
         DetachChromium   = $DetachChromium
         KeepLocalProfile = $KeepLocalProfile
+        SkipGoHome       = $SkipGoHome
         StartUrl         = $StartUrl
     }
 
