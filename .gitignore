@@ -34,3 +34,13 @@ scratch/
 ai_agent/
 _disk_write_staging/
 .export_latest.log
+
+# pcloud_web_companion helper (integrated under windows/)
+windows/pcloud_web_companion/.venv/
+windows/pcloud_web_companion/.playwright-browsers/
+windows/pcloud_web_companion/lan_config.json
+windows/pcloud_web_companion/__pycache__/
+
+
+
+windows/pcloud_web_companion/chromium-profile/

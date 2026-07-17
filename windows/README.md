@@ -18,6 +18,43 @@ Copy-Item loop-segments-windows.example.json loop-segments-windows.json
 
 Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[RCLONE-PHONE-MOUNT.md](RCLONE-PHONE-MOUNT.md)**.
 
+## pCloud web helper (integrated)
+
+Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it runs the USB launch script (blocks if the phone is locked).
+
+```powershell
+.\Run-PCloudWebCompanion.ps1
+# unlock phone first; locked → exit 3, Chromium not started
+# .\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only
+# Profile syncs to windows\pcloud_web_companion\chromium-profile (gitignored)
+```
+
+Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
+
+## Open Loop Segments over USB (pymobiledevice3)
+
+Force-launch the app from the PC when the iPhone is **USB-connected** and trusted (iTunes / Apple Mobile Device Support). Used standalone or by `Run-PCloudWebCompanion.ps1` before Chromium. Scripts: `Launch-LoopSegmentsViaUsb.ps1`, `Resolve-LoopSegmentsBundleId.py`, `Probe-IphoneUnlock.py`.
+
+```powershell
+# Prefer Python 3.12 (3.14 often needs MSVC to build pymobiledevice3 deps)
+py install 3.12
+py -3.12 -m pip install -U pymobiledevice3
+# Phone: Settings → Privacy & Security → Developer Mode → On
+# Unlock phone, then:
+.\Launch-LoopSegmentsViaUsb.ps1
+# If Developer Disk Image is already mounted:
+.\Launch-LoopSegmentsViaUsb.ps1 -SkipMount
+```
+
+| Topic | Notes |
+|-------|--------|
+| Bundle id | Usually `com.loopsegments.app`; AltStore may use `com.loopsegments.app.<TEAMID>` — auto-detected |
+| Unlock | Phone must be **unlocked** (probe + launch). Exit code **3** if locked — `Run-PCloudWebCompanion.ps1` will not start Chromium |
+| Trust / 7-day cert | If launch fails with untrusted/invalid signature: **Settings → General → VPN & Device Management → Trust**, or AltStore refresh, open app once by hand, retry |
+| “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
+| Background launch | **Not supported** — USB launch opens the app; use **Keep Alive** after open, then lock |
+| iOS 17+ tunnel | If DVT fails: elevated `py -3.12 -m pymobiledevice3 remote tunneld`, then `.\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount` |
+
 ## Day-to-day mount
 
 After setup, double-click **`Mount-PhoneL.cmd`** or run:
@@ -102,6 +139,10 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
 | `Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** = HTTP + PROPFIND + `rclone ls`; default = **read/write** **L:** (copy bootstrap `.ps1` and folders under `pcld_ios_media\`; ≤ 2 MB per file on phone); **`-ReadOnly`** = DLNA-only; **`-Remove`** / **`-RemovePort80Proxy`** |
+| `Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: USB-launch Loop Segments, sync profile, start browser |
+| `Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); exit **3** if phone locked |
+| `Probe-IphoneUnlock.py` / `Resolve-LoopSegmentsBundleId.py` | Helpers for USB unlock probe + AltStore bundle-id suffix |
+| `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
 | `Register-AltServerAtLogon.ps1` | **AltServer** at logon ([BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) §3). Wi‑Fi refresh often fails on Win11 — **USB + AltStore Refresh All** weekly is the reliable path |
 | `Register-SideloadlyAutoRefresh.ps1` | **Fallback only** — Sideloadly daemon if AltStore fails |
 | `RCLONE-PHONE-MOUNT.md` | Optional rclone mount notes (sluggish vs Skybox) |

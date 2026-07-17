@@ -18,7 +18,7 @@ phone: foreground recommended, or enable **Keep Alive** on Export (silent lock-s
 
 **Cellular → pCloud WebDAV → segment export → LAN (or USB) → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
 
-**PC companion:** [`pcloud_web_dl`](../../pcloud_web_dl) — browse pCloud on the PC and request exports over the phone’s **cellular** path via this app’s LAN REST API (`/export_from_folder.json`, triggers). Loop Segments runs the download/export on the phone; the PC does not pull CDN URLs itself.
+**PC companion:** [`../windows/pcloud_web_companion`](../windows/pcloud_web_companion) — `windows\Run-PCloudWebCompanion.ps1` USB-opens Loop Segments (blocks if locked), syncs Chromium profile, then launches Chromium; browse pCloud on the PC and request exports over the phone’s **cellular** path via LAN REST (`/export_from_folder.json`, triggers).
 
 **Install on iPhone (no Mac):** [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) — **AltStore** (recommended on Windows), Sideloadly fallback, or paid TestFlight.
 
@@ -227,7 +227,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`/pcloud_bookmarks.json`** | Bookmarked folders — **same set as Browse bookmarks in the app**. |
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
 | **`/export_from_url.json`** (PUT or POST, Basic auth) | Queue **Export from URL**: `{ "url": "https://…", "saveName": "clip.mp4", "id": "<optional uuid>" }`. Returns **202** `{ status: "queued", … }`. Phone picks it up like other triggers (~2s). For pCloud files prefer **`/export_from_folder.json`** (avoids CDN IP binding). |
-| **`/export_from_folder.json`** (PUT or POST, Basic auth) | Queue **Export from folder/filename**: `{ "folderPath"?: "/Videos/MyFolder/", "displayName": "clip.mp4", "seekMs"?: 0, "id"?: "…" }`. Returns **202**. With `folderPath`: one-level PROPFIND, then walk on failure. **Without `folderPath`:** WebDAV filename walk only. `saveName` / `name` alias `displayName`. Used by [`pcloud_web_dl`](../../pcloud_web_dl) — when folder resolve fails, POST `{ "saveName": "…" }` (omit folderPath). |
+| **`/export_from_folder.json`** (PUT or POST, Basic auth) | Queue **Export from folder/filename**: `{ "folderPath"?: "/Videos/MyFolder/", "displayName": "clip.mp4", "seekMs"?: 0, "id"?: "…" }`. Returns **202**. With `folderPath`: one-level PROPFIND, then walk on failure. **Without `folderPath`:** WebDAV filename walk only. `saveName` / `name` alias `displayName`. Used by [`windows/pcloud_web_companion`](../windows/pcloud_web_companion) — when folder resolve fails, POST `{ "saveName": "…" }` (omit folderPath). |
 | **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
 | **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
 

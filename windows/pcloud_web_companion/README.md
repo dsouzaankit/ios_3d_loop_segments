@@ -1,0 +1,94 @@
+# pCloud web companion → Loop Segments
+
+Chromium MV3 extension (`pcloud_web_companion`) that intercepts pCloud downloads, cancels them, copies the URL + filename, and queues an export on the Loop Segments iOS LAN API.
+
+## What it does
+
+On a pCloud download click:
+
+1. Cancels the Chromium download (or closes a CDN file tab) immediately, then removes it from the shelf
+2. Resolves the open my.pcloud `folder=` id to a folder **path/name** via `listfolder` / parent walk — `folderPath` is the full pCloud path (root segment kept). API host is derived from the download CDN domain when possible (`pnyc1.pcloud.com` → `apinyc1.pcloud.com`), with `api.pcloud.com` / `eapi` as fallbacks
+3. If `folderPath` is missing/garbled (e.g. search UI text like `"darina" in "/All Files/"`), runs **right-click → Open Location** on the file, then re-resolves; falls back to pCloud `search` API if needed
+4. Copies clipboard lines: download URL, filename, folder path, folder name (when known)
+5. `POST /export_from_folder.json` with `{ folderPath, displayName, seekMs, id }` only — CDN download URLs are **not** posted to the phone
+6. Opens `http://<phoneLanHost>:8765/browse` in a new tab (or focuses it if already open)
+
+## Run
+
+Integrated under **`ios_3d_loop_segments\windows\pcloud_web_companion`** (preferred):
+
+```powershell
+cd P:\all_scripts\ios_3d_loop_segments\windows
+.\Run-PCloudWebCompanion.ps1
+# same as:
+.\pcloud_web_companion\run_chromium.ps1
+```
+
+| Flag | Effect |
+|------|--------|
+| `-RecreateVenv` | Recreate `.venv` |
+| `-ForceDeps` | Reinstall pip deps + Chromium |
+| `-NoLaunch` | Setup + USB launch only (no Chromium) |
+| `-SkipUsbLaunch` | Do not run `Launch-LoopSegmentsViaUsb.ps1` |
+| `-UsbLaunchMount` | Remount Developer Disk Image (default skips mount) |
+| `-SkipProfileSync` | Do not sync Chromium profile to/from repo |
+| `-DetachChromium` | Do not wait for browser exit (upload on next run start) |
+| `-StartUrl "..."` | Override start page (default `https://my.pcloud.com`) |
+
+Each launch:
+
+- Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
+- Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
+- Starts a local REST log sink
+- **USB-launches Loop Segments** via `..\Launch-LoopSegmentsViaUsb.ps1` (phone must be unlocked; **exit 3 / locked aborts Chromium**)
+- **Profile sync:** `%LOCALAPPDATA%\pcloud_web_companion\chromium-profile` ↔ `windows\pcloud_web_companion\chromium-profile` (upload then download before start; upload again after Chromium exits). Caches/lock files skipped. Folder is gitignored.
+- Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
+- Launches Chromium (from the Playwright browser cache) with the extension loaded; waits for exit unless `-DetachChromium`
+
+## Playwright
+
+**Not required by the extension.** Playwright is only used by `run_chromium.ps1` to download a Chromium build and resolve `chrome.exe`. Runtime is plain Chromium + the MV3 extension (no Playwright API calls). You can replace that with any Chromium/Chrome-for-Testing binary if you prefer.
+
+## Config
+
+`lan_config.json` (written by the launcher):
+
+```json
+{
+  "phoneLanHost": "10.0.100.10",
+  "lanPort": 8765,
+  "webdavUser": "admin",
+  "webdavPassword": "iosadmin"
+}
+```
+
+Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep Alive) so the export trigger is picked up.
+
+## Logs
+
+| Where | What |
+|-------|------|
+| `%LOCALAPPDATA%\pcloud_web_companion\rest.log` | JSON lines: `sw_boot`, `capture`, `request`, `response`, `browse`, … (cleared each `run_chromium.ps1` start) |
+| Extension toolbar icon | Same events in a popup |
+| Desktop notification | Queued / REST failed |
+
+## Extension files
+
+| File | Role |
+|------|------|
+| `manifest.json` | MV3 permissions |
+| `background.js` | Download intercept, REST POST, `/browse` tab |
+| `offscreen.html` / `offscreen.js` | Clipboard write |
+| `logs.html` / `logs.js` | In-browser REST log UI |
+| `lan_config.json` | Phone LAN target (synced on launch) |
+| `run_chromium.ps1` | Venv, Playwright Chromium, USB launch, profile sync, extension copy, browser launch |
+| `requirements.txt` | `playwright` (launcher Chromium fetch only) |
+| `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log` |
+| `chromium-profile/` | Synced browser profile (gitignored; local working copy under `%LOCALAPPDATA%`) |
+
+## Requirements
+
+- Windows + Python (`py`) — for the launcher’s Chromium install via Playwright
+- Loop Segments app LAN server on port 8765 (USB launch opens the app first when possible)
+- `windows\loop-segments-windows.json` with `phoneLanHost`
+- USB: iPhone plugged in, trusted, **unlocked**; `py -3.12 -m pip install -U pymobiledevice3` (see parent `windows\README.md`)
