@@ -15,6 +15,9 @@ extension Notification.Name {
 final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     static let shared = ExportBackgroundKeepAlive()
 
+    /// Thread-safe snapshot for LAN `status.json` (network queue may read off main).
+    nonisolated(unsafe) private(set) static var isActiveSnapshot = false
+
     private var queuePlayer: AVQueuePlayer?
     private var playerLooper: AVPlayerLooper?
     private var playbackBackend = ""
@@ -100,6 +103,24 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         startPlayback()
     }
 
+    /// Call when leaving the foreground so silent audio (and thus export) keeps running.
+    func ensurePlayingForBackground() {
+        guard ExportKeepAliveSettings.isEnabled else { return }
+        guard exportSessionEligible || hasSessionAutoStop else { return }
+        guard !userPausedFromLockScreen else { return }
+        installSessionObserversIfNeeded()
+        if !isActive {
+            logKeepAlive("Keep Alive: background — restarting loop")
+            startedAt = Date()
+            startPlayback()
+            return
+        }
+        if !isQueuePlaying {
+            logKeepAlive("Keep Alive: background — resuming stalled loop")
+            resumeAfterSessionDisruption(reclaimLockScreen: exportSessionEligible)
+        }
+    }
+
     func stopForUserSettingOff() {
         let keepEligible = exportSessionEligible
         cancelSessionAutoStop()
@@ -112,6 +133,10 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     }
 
     var isActive: Bool { queuePlayer != nil }
+
+    private func syncActiveSnapshot() {
+        Self.isActiveSnapshot = queuePlayer != nil
+    }
 
     var isLoopPlaying: Bool { loopPlaying }
 
@@ -172,6 +197,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         queue.play()
         queuePlayer = queue
         playerLooper = looper
+        syncActiveSnapshot()
     }
 
     private func tearDownPlayback() {
@@ -190,6 +216,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         queuePlayer = nil
         playbackBackend = ""
         loopSourceLabel = ""
+        syncActiveSnapshot()
     }
 
     private func stopFully() {
@@ -312,12 +339,15 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             MPMediaItemPropertyPlaybackDuration: duration,
             MPMediaItemPropertyArtwork: Self.lockScreenArtwork,
         ]
-        let showCard = forceLockScreenCard || ExportKeepAliveSettings.preferLockScreenControls
+        // During export (or forced reclaim), always publish Now Playing so iOS treats us as a
+        // background audio app. Idle mix mode still clears the card so other apps can own it.
+        let showCard = forceLockScreenCard
+            || ExportKeepAliveSettings.preferLockScreenControls
+            || exportSessionEligible
         if showCard {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
             MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
         } else {
-            // Mix mode: no Now Playing card while another app may own lock screen; playbackState helps background audio.
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             MPNowPlayingInfoCenter.default().playbackState = playbackRate > 0 ? .playing : .paused
         }
@@ -357,13 +387,17 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
                 guard !Task.isCancelled, exportSessionEligible, ExportKeepAliveSettings.isEnabled else {
                     return
                 }
+                if userPausedFromLockScreen { continue }
                 if !isActive {
                     logKeepAlive("Keep Alive: watchdog restart (player missing during export)")
                     startPlayback()
                     continue
                 }
-                guard loopPlaying, let queue = queuePlayer else { continue }
-                if queue.timeControlStatus == .playing { continue }
+                guard let queue = queuePlayer else { continue }
+                if queue.timeControlStatus == .playing {
+                    loopPlaying = true
+                    continue
+                }
                 logKeepAlive("Keep Alive: watchdog resume (player stalled)")
                 do {
                     try configureAudioSession()
@@ -371,6 +405,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
                     logKeepAlive("Keep Alive: watchdog session failed — \(Self.describeError(error))")
                 }
                 queue.play()
+                syncLoopPlayingFromQueue()
             }
         }
     }
