@@ -82,10 +82,11 @@ py -3.12 -m pip install -U pymobiledevice3
 
 | Topic | Notes |
 |-------|--------|
-| Bundle id | Usually `com.loopsegments.app`; AltStore may use `com.loopsegments.app.<TEAMID>` — auto-detected |
+| Bundle id | Usually `com.loopsegments.app`; AltStore may resign as `com.loopsegments.app.<suffix>`. **USB launch lookup is independent of that suffix** (and of whatever alphanumeric suffix AltStore shows in App IDs / the app name): each run re-resolves on the phone (`Resolve-LoopSegmentsBundleId.py` — prefix `com.loopsegments.app.*` or display name **Loop Segments**). LAN companion talks `:8765` only (ignores bundle id). |
+| App ID renew vs suffix | AltStore **Renew App IDs** extends the same Apple slot — it does **not** change the resigned suffix. A new suffix appears only if AltStore **registers a new** App ID (e.g. delete + reinstall after the old slot expired). USB launch still finds the app either way. |
 | Unlock | Needed when LAN is down (USB launch) **and** for finish-time Home press. Exit **3** if locked during launch — companion will not start Chromium. If `:8765/browse` is already reachable, USB launch is skipped; Home on quit still needs unlock if you want the app backgrounded |
 | Home on quit | Companion finish presses **Home** over USB (`Go-IphoneHomeViaUsb.ps1`) to background Loop Segments. Requires USB + **unlocked** phone; otherwise skipped. `-SkipGoHome` leaves the app foreground. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
-| Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh. **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. USB detect failure auto-starts AltServer when installed |
+| Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh (cert refresh — separate from App ID renew above). **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. USB detect failure auto-starts AltServer when installed |
 | AltServer | Companion / USB launch / Setup always report status + the unavailable-app resolution. Optional logon start: `.\Register-AltServerAtLogon.ps1` |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
 | Background launch | **Not supported** — USB launch opens the app; lock only after Keep Alive is running (app setting) |
