@@ -362,12 +362,26 @@ AltStore (iPhone)  ──requests refresh──►  AltServer (PC)  ──signs�
 
 **AltStore Patreon** (optional, paid to AltStore’s authors) adds more app slots and stronger background refresh; free Apple ID still means **~7-day** Apple certs.
 
+**Refresh failed: “AltStore could not determine this device's UDID” (error 1006)**
+
+AltStore couldn’t read the device UDID that **AltServer embeds when installing AltStore** ([FAQ 1006](https://faq.altstore.io/altstore-classic/error-codes)). Not a Loop Segments IPA issue — AltStore itself was installed the wrong way or is stale.
+
+| Step | Action |
+|------|--------|
+| 1 | Update **AltServer** from [altstore.io](https://altstore.io); leave tray running |
+| 2 | Phone **USB** → unlock → **Trust This Computer** |
+| 3 | AltServer tray → **Install AltStore** (this iPhone) — **not** Sideloadly / Files / random AltStore IPA |
+| 4 | Open AltStore → sign in → **My Apps → Refresh All** (USB still connected) |
+
+If it still fails: delete **AltStore** from the phone, optionally clear `%ProgramData%\Apple\Lockdown\*`, USB re-trust, then **Install AltStore** from AltServer again. Your docs’ reliable habit remains **USB + Refresh All** (Wi‑Fi refresh is flaky on Win11).
+
 **Refresh failed: “The data couldn’t be read because it isn’t in the correct format”**
 
 Same message on **Install** (My Apps → +) or **Refresh** — almost always **AltServer ↔ Apple login** (invalid *anisette*), **not** a broken Loop Segments IPA. AltStore expected JSON from Apple and got garbage or an HTML error page.
 
 | AltStore error (if shown) | Meaning |
 |---------------------------|---------|
+| **1006** UDID unknown | AltStore not installed by latest AltServer — see UDID section above |
 | **2013** / **3023** / anisette invalid | iCloud/iTunes from **Microsoft Store**, or not signed in, or stale `adi` cache |
 | **1007** / **2007** app invalid format | Rare for our IPA — re-download `LoopSegments.ipa` from GitHub Actions |
 

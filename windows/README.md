@@ -30,6 +30,8 @@ cd <repo>\windows
 
 If Loop Segments won’t open after ~7 days: start **AltServer** → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → DEVELOPER APP → iPhone Developer: \<email\> → Trust** (entry may appear only after a failed open) → open app once → retry.
 
+**AltStore “could not determine this device's UDID” (error 1006):** AltStore was not installed (or was corrupted) by AltServer — UDID is embedded only when AltServer installs AltStore. Update AltServer → USB + unlock → tray **Install AltStore** (not Sideloadly / random IPA) → open AltStore → **Refresh All**. Details: [../ios/BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md).
+
 ## First time on a PC
 
 ```powershell
@@ -87,6 +89,7 @@ py -3.12 -m pip install -U pymobiledevice3
 | Unlock | Needed when LAN is down (USB launch) **and** for finish-time Home press. Exit **3** if locked during launch — companion will not start Chromium. If `:8765/browse` is already reachable, USB launch is skipped; Home on quit still needs unlock if you want the app backgrounded |
 | Home on quit | Companion finish presses **Home** over USB (`Go-IphoneHomeViaUsb.ps1`) to background Loop Segments. Requires USB + **unlocked** phone; otherwise skipped. `-SkipGoHome` leaves the app foreground. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
 | Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh (cert refresh — separate from App ID renew above). **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. USB detect failure auto-starts AltServer when installed |
+| AltStore UDID (1006) | **“could not determine this device's UDID”** — AltStore missing the UDID AltServer embeds at install. Reinstall AltStore from **latest AltServer** over USB (not Sideloadly); then **Refresh All**. See tip above / [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) |
 | AltServer | Companion / USB launch / Setup always report status + the unavailable-app resolution. Optional logon start: `.\Register-AltServerAtLogon.ps1` |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
 | Background launch | **Not supported** — USB launch opens the app; lock only after Keep Alive is running (app setting) |
