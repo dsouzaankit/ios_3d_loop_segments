@@ -54,7 +54,7 @@ Each launch:
 - Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
 - Starts a local REST log sink
-- **USB-launches Loop Segments** via `..\usb\Launch-LoopSegmentsViaUsb.ps1` on every start (prints LAN UP/DOWN first). Phone must be unlocked; **exit 3 / locked aborts Chromium**. Use `-SkipUsbLaunch` for Chromium only. Always prints AltServer status and the fix if the app becomes unavailable after ~7 days (**AltServer → USB → AltStore Refresh All → Settings → General → VPN & Device Management → Developer App → Trust → open once**). USB detect failure tries to start AltServer then retries.
+- **USB-launches Loop Segments** via `..\usb\Launch-LoopSegmentsViaUsb.ps1` on every start (prints LAN UP/DOWN first). **Locked (exit 3) still aborts Chromium.** If USB is missing / launch fails but phone LAN is already reachable, prints a warning and continues to Chromium. Use `-SkipUsbLaunch` for Chromium only. Always prints AltServer status and the fix if the app becomes unavailable after ~7 days (**AltServer → USB → AltStore Refresh All → Settings → General → VPN & Device Management → Developer App → Trust → open once**). USB detect failure tries to start AltServer then retries.
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded; waits for exit unless `-DetachChromium`
@@ -110,3 +110,13 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 - Loop Segments app LAN server on port 8765 (USB launch opens the app first when possible)
 - `windows\loop-segments-windows.json` with `phoneLanHost`
 - USB: iPhone plugged in, trusted, **unlocked**; prefer `..\setup\Setup-LoopSegmentsWindows.ps1` (or `py -3.12 -m pip install -U pymobiledevice3`)
+
+## Clash / system proxy
+
+The extension must reach `http://<phoneLanHost>:8765/`. **Clash TUN** often black-holes Chromium service-worker `fetch` to private IPs (LAN tab may still work), so export POSTs hang and a pCloud CDN tab/download eventually wins.
+
+**Fix in 1.7.4+:** phone LAN API calls go through `http://127.0.0.1:18765/phone-lan` (companion PowerShell sink) which talks to the phone with an **empty WinHTTP proxy** (DIRECT). Loopback is normally excluded from TUN. CDN tabs are closed earlier (`webNavigation`) and in-progress pCloud downloads are re-cancelled while the pipeline runs.
+
+`run_chromium.ps1` also sets `--proxy-bypass-list` for system-proxy Clash. Keep the companion console open so the local sink stays up.
+
+**Still need Clash DIRECT for private ranges** if even the LAN monitor tab fails under TUN.

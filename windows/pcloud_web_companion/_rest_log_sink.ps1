@@ -32,7 +32,7 @@ function Read-HttpRequest {
     param([System.Net.Sockets.TcpClient]$Client)
 
     $stream = $Client.GetStream()
-    $stream.ReadTimeout = 5000
+    $stream.ReadTimeout = 30000
     $buffer = New-Object byte[] 65536
     $ms = New-Object System.IO.MemoryStream
     while ($true) {
@@ -82,7 +82,9 @@ function Write-HttpResponse {
     )
     $reason = switch ($StatusCode) {
         200 { "OK" }
+        400 { "Bad Request" }
         404 { "Not Found" }
+        502 { "Bad Gateway" }
         default { "Error" }
     }
     $payload = [Text.Encoding]::UTF8.GetBytes($Body)
@@ -91,6 +93,119 @@ function Write-HttpResponse {
     $Stream.Write($headerBytes, 0, $headerBytes.Length)
     $Stream.Write($payload, 0, $payload.Length)
     $Stream.Flush()
+}
+
+function Test-IsPrivateLanHttpUrl {
+    param([string]$Url)
+    try {
+        $u = [Uri]$Url
+    } catch {
+        return $false
+    }
+    if ($u.Scheme -ne 'http') { return $false }
+    $h = $u.Host
+    if ([string]::IsNullOrWhiteSpace($h)) { return $false }
+    if ($h -eq '127.0.0.1' -or $h -eq 'localhost' -or $h -eq '::1') { return $false }
+    if ($h -match '^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return $true }
+    if ($h -match '^192\.168\.\d{1,3}\.\d{1,3}$') { return $true }
+    if ($h -match '^172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}$') { return $true }
+    return $false
+}
+
+# Clash TUN often black-holes Chromium SW fetch to RFC1918. This relay uses WinHTTP
+# with an empty proxy so phone LAN stays DIRECT even when TUN is on.
+function Invoke-PhoneLanRelay {
+    param([string]$JsonBody)
+
+    $obj = $JsonBody | ConvertFrom-Json
+    $targetUrl = [string]$obj.url
+    if (-not (Test-IsPrivateLanHttpUrl $targetUrl)) {
+        return @{ ok = $false; status = 400; body = 'url must be http:// to a private LAN IP' }
+    }
+    $method = [string]$obj.method
+    if ([string]::IsNullOrWhiteSpace($method)) { $method = 'GET' }
+    $timeoutMs = 10000
+    if ($null -ne $obj.timeoutMs -and [int]$obj.timeoutMs -gt 0) {
+        $timeoutMs = [Math]::Min(60000, [int]$obj.timeoutMs)
+    }
+
+    $req = [System.Net.HttpWebRequest]::Create($targetUrl)
+    $req.Method = $method.ToUpperInvariant()
+    $req.Timeout = $timeoutMs
+    $req.ReadWriteTimeout = $timeoutMs
+    $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+    $req.KeepAlive = $false
+
+    if ($null -ne $obj.headers) {
+        foreach ($p in $obj.headers.PSObject.Properties) {
+            $name = [string]$p.Name
+            $val = [string]$p.Value
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+            if ($name -match '(?i)^Content-Type$') {
+                $req.ContentType = $val
+            } elseif ($name -match '(?i)^Accept$') {
+                $req.Accept = $val
+            } elseif ($name -match '(?i)^User-Agent$') {
+                $req.UserAgent = $val
+            } else {
+                try { [void]$req.Headers.Add($name, $val) } catch {}
+            }
+        }
+    }
+
+    $bodyText = $null
+    if ($null -ne $obj.body) {
+        if ($obj.body -is [string]) {
+            $bodyText = [string]$obj.body
+        } else {
+            $bodyText = ($obj.body | ConvertTo-Json -Compress -Depth 20)
+        }
+    }
+    if ($req.Method -ne 'GET' -and $req.Method -ne 'HEAD' -and $null -ne $bodyText) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($bodyText)
+        $req.ContentLength = $bytes.Length
+        if ([string]::IsNullOrWhiteSpace($req.ContentType)) {
+            $req.ContentType = 'application/json; charset=utf-8'
+        }
+        $reqStream = $req.GetRequestStream()
+        try {
+            $reqStream.Write($bytes, 0, $bytes.Length)
+        } finally {
+            $reqStream.Close()
+        }
+    }
+
+    $resp = $null
+    try {
+        $resp = $req.GetResponse()
+        $status = [int]$resp.StatusCode
+        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
+        try {
+            $respBody = $reader.ReadToEnd()
+        } finally {
+            $reader.Close()
+        }
+        return @{ ok = $true; status = $status; body = $respBody; via = 'direct-relay' }
+    } catch [System.Net.WebException] {
+        $ex = $_.Exception
+        if ($null -ne $ex.Response) {
+            $errResp = $ex.Response
+            $status = [int]$errResp.StatusCode
+            $reader = New-Object System.IO.StreamReader($errResp.GetResponseStream(), [Text.Encoding]::UTF8)
+            try {
+                $respBody = $reader.ReadToEnd()
+            } finally {
+                $reader.Close()
+            }
+            return @{ ok = $true; status = $status; body = $respBody; via = 'direct-relay' }
+        }
+        return @{ ok = $false; status = 502; body = "relay fetch failed: $($ex.Message)"; via = 'direct-relay' }
+    } finally {
+        if ($null -ne $resp) {
+            try { $resp.Close() } catch {}
+            try { $resp.Dispose() } catch {}
+        }
+    }
 }
 
 while ($true) {
@@ -107,13 +222,31 @@ while ($true) {
             if ([string]::IsNullOrWhiteSpace($body)) { $body = "{}" }
             Write-LogLine $body
             Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body '{"ok":true}'
+        } elseif ($line -match '^POST\s+/phone-lan\b') {
+            try {
+                $result = Invoke-PhoneLanRelay -JsonBody $req.Body
+                $statusOut = 200
+                if (-not $result.ok -and [int]$result.status -eq 400) { $statusOut = 400 }
+                elseif (-not $result.ok -and [int]$result.status -eq 502) { $statusOut = 502 }
+                $payload = ($result | ConvertTo-Json -Compress -Depth 5)
+                Write-HttpResponse -Stream $req.Stream -StatusCode $statusOut -Body $payload
+            } catch {
+                Write-LogLine "$(Get-Date -Format o) PHONE_LAN_RELAY_ERROR $_"
+                Write-HttpResponse -Stream $req.Stream -StatusCode 502 -Body '{"ok":false,"status":502,"body":"relay exception"}'
+            }
         } elseif ($line -match '^GET\s+/health\b') {
-            Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body '{"ok":true}'
+            Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body '{"ok":true,"phoneLanRelay":true}'
         } else {
             Write-HttpResponse -Stream $req.Stream -StatusCode 404 -Body '{"ok":false}'
         }
     } catch {
-        try { Write-LogLine "$(Get-Date -Format o) SINK_ERROR $_" } catch {}
+        $msg = "$_"
+        # Client abort / Clash reset on health poll — not fatal for the sink loop.
+        if ($msg -match 'forcibly closed|aborted by the software|Cannot access a disposed object') {
+            # quiet
+        } else {
+            try { Write-LogLine "$(Get-Date -Format o) SINK_ERROR $_" } catch {}
+        }
     } finally {
         if ($null -ne $client) { $client.Close() }
     }

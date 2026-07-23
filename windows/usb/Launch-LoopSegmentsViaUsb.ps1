@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   Force-open Loop Segments on a USB-connected iPhone via pymobiledevice3.
@@ -166,7 +166,6 @@ Loop Segments (free/Personal Team) stops working after ~7 days.
 $(Get-LoopSegmentsAppUnavailableResolution)
 
 "@ -ForegroundColor Yellow
-        [void](Write-LoopSegmentsAltServerNotice)
         exit 2
     }
     Write-Host "USB device visible after AltServer recovery." -ForegroundColor Green
@@ -207,7 +206,6 @@ Write-CommandLines -Lines $resolve.Lines
 if ($resolve.ExitCode -ne 0) {
     Write-Host "Loop Segments not found on device. Install/refresh via AltStore, then retry." -ForegroundColor Yellow
     Write-Host (Get-LoopSegmentsAppUnavailableResolution) -ForegroundColor Yellow
-    [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
     exit 2
 }
 $resolvedBundleId = (
@@ -312,7 +310,6 @@ $(Get-LoopSegmentsAppUnavailableResolution)
 
 Bundle id used: $BundleId
 "@ -ForegroundColor Yellow
-        [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
     } else {
         Write-Host @"
 Launch failed (last exit $lastErr). Check:
@@ -328,7 +325,6 @@ $(Get-LoopSegmentsAppUnavailableResolution)
 
 Bundle id used: $BundleId
 "@ -ForegroundColor Yellow
-        [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
     }
     exit 1
 }

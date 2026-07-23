@@ -429,21 +429,31 @@ function Start-RestLogSink {
             "-Port", "18765"
         ))
 
-    # Child powershell cold-start often exceeds 400ms; poll briefly before warning.
-    $deadline = [datetime]::UtcNow.AddSeconds(12)
+    # Child powershell cold-start + sink's own "kill previous" sleep. Clash TUN can break
+    # WinHTTP to 127.0.0.1 — probe with raw TCP HTTP, not HttpWebRequest.
+    $deadline = [datetime]::UtcNow.AddSeconds(20)
     $ok = $false
     while ([datetime]::UtcNow -lt $deadline) {
-        try {
-            $health = Invoke-WebRequest -Uri "http://127.0.0.1:18765/health" -UseBasicParsing -TimeoutSec 1
-            Write-Host "[rest-log] Sink OK ($($health.StatusCode))"
-            $ok = $true
-            break
-        } catch {
-            Start-Sleep -Milliseconds 400
+        if (Test-TcpPortOpen -HostName '127.0.0.1' -Port 18765 -TimeoutMs 400) {
+            try {
+                $health = Invoke-LoopbackHttpGet -Path '/health' -Port 18765 -TimeoutMs 1500
+                if ($health.StatusCode -eq 200) {
+                    Write-Host "[rest-log] Sink OK ($($health.StatusCode))"
+                    $ok = $true
+                    break
+                }
+            } catch {
+                # Port open but HTTP not ready yet
+            }
         }
+        Start-Sleep -Milliseconds 300
     }
     if (-not $ok) {
-        Write-Warning "[rest-log] Sink not reachable after 12s (extension logs may miss this run)"
+        if (Test-TcpPortOpen -HostName '127.0.0.1' -Port 18765 -TimeoutMs 500) {
+            Write-Host "[rest-log] Sink port 18765 is listening (HTTP health still flaky — continuing)" -ForegroundColor DarkYellow
+        } else {
+            Write-Warning "[rest-log] Sink not reachable after 20s (extension logs / phone-lan relay may miss this run)"
+        }
     }
 }
 
@@ -468,6 +478,142 @@ function Test-TcpPortOpen {
         if ($null -ne $client) {
             try { $client.Close() } catch {}
         }
+    }
+}
+
+# Raw loopback HTTP — avoids WinHTTP/Clash resetting HttpWebRequest to 127.0.0.1.
+function Invoke-LoopbackHttpGet {
+    param(
+        [string]$Path = '/health',
+        [int]$Port = 18765,
+        [int]$TimeoutMs = 2000
+    )
+    $client = $null
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
+            throw "connect timeout ${TimeoutMs}ms"
+        }
+        $client.EndConnect($iar)
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = $TimeoutMs
+        $stream.WriteTimeout = $TimeoutMs
+        $req = "GET $Path HTTP/1.1`r`nHost: 127.0.0.1:$Port`r`nConnection: close`r`n`r`n"
+        $bytes = [Text.Encoding]::ASCII.GetBytes($req)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+        $reader = New-Object System.IO.StreamReader($stream, [Text.Encoding]::ASCII)
+        $response = $reader.ReadToEnd()
+        if ($response -notmatch 'HTTP/1\.[01]\s+(\d+)') {
+            throw "no HTTP status in response"
+        }
+        return @{
+            StatusCode = [int]$Matches[1]
+            Body       = $response
+        }
+    } finally {
+        if ($null -ne $client) {
+            try { $client.Close() } catch {}
+        }
+    }
+}
+
+# Clash / system HTTP proxies often send RFC1918 phone LAN through a remote node.
+# Probe and Chromium must go DIRECT to loopback + private ranges.
+function Get-CompanionProxyBypassList {
+    param([string]$PhoneHost = '')
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in @(
+            '<-loopback>'
+            '127.0.0.1'
+            'localhost'
+            '*.local'
+            '10.0.0.0/8'
+            '172.16.0.0/12'
+            '192.168.0.0/16'
+            '169.254.0.0/16'
+        )) {
+        [void]$parts.Add($p)
+    }
+    $phone = $PhoneHost.Trim()
+    if ($phone -and -not $parts.Contains($phone)) {
+        [void]$parts.Add($phone)
+    }
+    return ($parts -join ';')
+}
+
+function Get-SystemHttpProxyServer {
+    foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'https_proxy', 'http_proxy', 'all_proxy')) {
+        $v = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($v)) {
+            return $v.Trim().TrimEnd('/')
+        }
+    }
+    try {
+        $key = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+        if ($key.ProxyEnable -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$key.ProxyServer)) {
+            $s = [string]$key.ProxyServer
+            if ($s -match '(?i)(?:https?|all)=([^;]+)') {
+                return $Matches[1].Trim()
+            }
+            return $s.Trim()
+        }
+    } catch {}
+    # Common Clash / Clash Verge / Clash Meta mixed ports when system proxy is not yet written.
+    foreach ($port in @(7890, 7897, 7891, 10809, 1080)) {
+        if (Test-TcpPortOpen -HostName '127.0.0.1' -Port $port -TimeoutMs 150) {
+            return "127.0.0.1:$port"
+        }
+    }
+    return $null
+}
+
+function ConvertTo-ChromeProxyServerArg {
+    param([string]$ProxyServer)
+    if ([string]::IsNullOrWhiteSpace($ProxyServer)) { return $null }
+    $p = $ProxyServer.Trim()
+    if ($p -match '^(?i)socks5h?://') {
+        return $p
+    }
+    if ($p -match '^(?i)https?://') {
+        return $p
+    }
+    return "http://$p"
+}
+
+function Invoke-DirectHttpGet {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [int]$TimeoutSec = 3
+    )
+    $req = [System.Net.HttpWebRequest]::Create($Uri)
+    $req.Method = 'GET'
+    $req.Timeout = [Math]::Max(1, $TimeoutSec) * 1000
+    $req.ReadWriteTimeout = $req.Timeout
+    $req.AllowAutoRedirect = $true
+    # Empty proxy = do not use WinINET/Clash system proxy (PS 5.1 has no -NoProxy).
+    $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+    $resp = $null
+    try {
+        $resp = $req.GetResponse()
+        return @{ StatusCode = [int]$resp.StatusCode }
+    } finally {
+        if ($null -ne $resp) {
+            try { $resp.Close() } catch {}
+            try { $resp.Dispose() } catch {}
+        }
+    }
+}
+
+function Get-LanConfigPhoneHost {
+    $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
+    if (-not (Test-Path -LiteralPath $lanConfigPath)) { return '' }
+    try {
+        $lan = Get-Content -LiteralPath $lanConfigPath -Raw | ConvertFrom-Json
+        return ([string]$lan.phoneLanHost).Trim()
+    } catch {
+        return ''
     }
 }
 
@@ -500,13 +646,13 @@ function Test-PhoneLanPageReachable {
         return $false
     }
 
-    # Prefer /browse (companion target); fall back to /status.json.
+    # Prefer /browse (companion target); fall back to /status.json. Bypass Clash/system proxy.
     $paths = @("/browse", "/status.json")
     foreach ($path in $paths) {
         $uri = "http://${hostName}:${port}${path}"
         try {
-            Write-Host "[lan] HTTP probe $uri ..."
-            $resp = Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 3
+            Write-Host "[lan] HTTP probe $uri (direct, no proxy) ..."
+            $resp = Invoke-DirectHttpGet -Uri $uri -TimeoutSec 3
             if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
                 Write-Host "[lan] Reachable ($($resp.StatusCode)): $uri"
                 return $true
@@ -567,20 +713,30 @@ Chromium was not started.
 "@
     }
     if ($code -eq 2) {
+        if ($lanUp) {
+            Write-Warning @"
+[usb] No iPhone on USB (exit 2) — continuing because phone LAN is reachable.
+Plug in USB later for Home-on-quit / foreground. Chromium will start anyway.
+"@
+            return
+        }
         throw @"
 [usb] No iPhone on USB (exit 2). Plug in, Trust This Computer, unlock.
-If AltServer is not installed, install from https://altstore.io - without weekly AltStore refresh,
-Loop Segments (free/Personal Team) stops working after ~7 days.
-
-$(Get-LoopSegmentsAppUnavailableResolution)
+Phone LAN is also down, so the companion cannot talk to Loop Segments yet.
+Install AltServer if missing: https://altstore.io
 Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launch.
 "@
     }
     if ($code -ne 0) {
+        if ($lanUp) {
+            Write-Warning @"
+[usb] Launch-LoopSegmentsViaUsb.ps1 failed (exit $code) — continuing because phone LAN is reachable.
+Fix USB / Developer Mode / cert trust when you need foreground or Home-on-quit.
+"@
+            return
+        }
         throw @"
 [usb] Launch-LoopSegmentsViaUsb.ps1 failed (exit $code). Fix USB / Developer Mode / cert trust, then re-run.
-
-$(Get-LoopSegmentsAppUnavailableResolution)
 Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launch.
 "@
     }
@@ -1079,16 +1235,30 @@ $ChromeExtension = ConvertTo-ChromeSwitchPath $ExtensionLoadDir
 
 # Load the unpacked MV3 extension. DisableLoadExtensionCommandLineSwitch keeps
 # --load-extension working on newer Chromium builds.
-$ChromeArgString = @(
-    "--user-data-dir=`"$ChromeUserData`""
-    "--disable-extensions-except=`"$ChromeExtension`""
-    "--load-extension=`"$ChromeExtension`""
-    "--disable-features=DisableLoadExtensionCommandLineSwitch,BlockInsecurePrivateNetworkRequests"
-    "--disable-restore-session-state"
-    "--no-first-run"
-    "--no-default-browser-check"
-    "`"$StartUrl`""
-) -join " "
+# Clash/system proxy: re-apply detected proxy WITH a LAN/loopback bypass so phone
+# :8765 and 127.0.0.1 REST sink stay DIRECT (extension fetch has no per-request bypass).
+$phoneLanHost = Get-LanConfigPhoneHost
+$proxyBypass = Get-CompanionProxyBypassList -PhoneHost $phoneLanHost
+$proxyServer = ConvertTo-ChromeProxyServerArg -ProxyServer (Get-SystemHttpProxyServer)
+
+$chromeArgList = [System.Collections.Generic.List[string]]::new()
+[void]$chromeArgList.Add("--user-data-dir=`"$ChromeUserData`"")
+[void]$chromeArgList.Add("--disable-extensions-except=`"$ChromeExtension`"")
+[void]$chromeArgList.Add("--load-extension=`"$ChromeExtension`"")
+[void]$chromeArgList.Add("--disable-features=DisableLoadExtensionCommandLineSwitch,BlockInsecurePrivateNetworkRequests")
+[void]$chromeArgList.Add("--disable-restore-session-state")
+[void]$chromeArgList.Add("--no-first-run")
+[void]$chromeArgList.Add("--no-default-browser-check")
+[void]$chromeArgList.Add("--proxy-bypass-list=`"$proxyBypass`"")
+if ($proxyServer) {
+    [void]$chromeArgList.Add("--proxy-server=`"$proxyServer`"")
+    Write-Host "[run] Proxy $proxyServer (LAN/loopback bypassed for Clash)"
+} else {
+    Write-Host "[run] No HTTP proxy detected; Chromium uses direct connections + bypass list"
+}
+Write-Host "[run] Proxy bypass: $proxyBypass"
+[void]$chromeArgList.Add("`"$StartUrl`"")
+$ChromeArgString = $chromeArgList -join " "
 
 Write-Host "[run] Launching Chromium with extension loaded from:"
 Write-Host "      $ChromeExtension"

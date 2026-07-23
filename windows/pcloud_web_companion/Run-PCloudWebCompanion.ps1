@@ -7,7 +7,8 @@
   Wrapper around run_chromium.ps1 in this folder.
   Before Chromium starts, prints phone LAN status, then always USB-launches
   Loop Segments to foreground the app (unless -SkipUsbLaunch).
-  Exit code 3 (phone locked) or other USB launch failures abort Chromium.
+  Exit code 3 (phone locked) aborts Chromium. No USB / other USB failures abort only when
+  phone LAN is also down; if LAN is up, warns and continues.
   On error, waits for Enter so a double-clicked console window does not close immediately.
   While Chromium is running, Ctrl+C or closing the console (X) kills that Chromium profile
   and syncs/clears the profile the same as a normal exit. On finish, presses iPhone Home

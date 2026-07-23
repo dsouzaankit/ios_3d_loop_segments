@@ -56,11 +56,10 @@ See ios/BUILD-WITHOUT-MAC.md (Trust the developer on iPhone).
 }
 
 function Get-LoopSegmentsAltServerSevenDayWarning {
+    # Short only — do not embed Get-LoopSegmentsAppUnavailableResolution (callers were printing that 5x).
     return @"
 Without AltServer + AltStore refresh, a free / Personal Team sideload of Loop Segments
 expires in about 7 days: the app icon may still show, but opens fail until you refresh.
-
-$(Get-LoopSegmentsAppUnavailableResolution)
 Install AltServer: https://altstore.io
 Optional: .\sideload\Register-AltServerAtLogon.ps1  (tray at logon)
 "@
@@ -68,9 +67,9 @@ Optional: .\sideload\Register-AltServerAtLogon.ps1  (tray at logon)
 
 function Write-LoopSegmentsAltServerNotice {
     param(
-        # When true, print a short OK line if AltServer is installed (running or not).
+        # When true, print a short OK / missing line (never dumps the 5-step resolution).
         [switch] $AlwaysStatus,
-        # Always print how to fix the app when it becomes unavailable (~7-day expiry).
+        # Print the full 5-step unavailable resolution once (use only on real failure paths).
         [switch] $IncludeResolution
     )
 
@@ -79,6 +78,9 @@ function Write-LoopSegmentsAltServerNotice {
         Write-Host ""
         Write-Host "[altserver] NOT INSTALLED on this PC." -ForegroundColor Yellow
         Write-Host (Get-LoopSegmentsAltServerSevenDayWarning) -ForegroundColor Yellow
+        if ($IncludeResolution) {
+            Write-Host (Get-LoopSegmentsAppUnavailableResolution) -ForegroundColor Yellow
+        }
         return [pscustomobject]@{
             Installed = $false
             Running   = $false
@@ -95,13 +97,10 @@ function Write-LoopSegmentsAltServerNotice {
             Write-Host "[altserver] Installed but not running: $path" -ForegroundColor DarkYellow
             Write-Host "[altserver] Needed for AltStore refresh so Loop Segments does not die after ~7 days." -ForegroundColor DarkYellow
         }
+        Write-Host "[altserver] If app unavailable after ~7 days: AltServer -> USB -> AltStore Refresh All -> Trust developer -> open once." -ForegroundColor DarkYellow
     }
-    if ($IncludeResolution -or $AlwaysStatus) {
-        Write-Host "[altserver] If Loop Segments becomes unavailable after ~7 days:" -ForegroundColor DarkYellow
-        Write-Host "  Start AltServer -> USB + unlock -> AltStore Refresh All -> open app once." -ForegroundColor DarkYellow
-        Write-Host "  Trust developer cert: Settings -> General -> VPN & Device Management" -ForegroundColor DarkYellow
-        Write-Host "    -> DEVELOPER APP -> iPhone Developer: <your Apple ID email> -> Trust -> Trust" -ForegroundColor DarkYellow
-        Write-Host "    (If not listed yet: AltStore Complete -> open/fail-open app once -> return to Settings and trust.)" -ForegroundColor DarkYellow
+    if ($IncludeResolution) {
+        Write-Host (Get-LoopSegmentsAppUnavailableResolution) -ForegroundColor Yellow
     }
     return [pscustomobject]@{
         Installed = $true

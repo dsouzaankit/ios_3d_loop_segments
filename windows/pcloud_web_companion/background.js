@@ -7,6 +7,9 @@ const CAPTURE_DEDUP_MS = 10000;
 const MAX_CAPTURES = 200;
 const MAX_REST_LOGS = 100;
 const LOCAL_LOG_URL = "http://127.0.0.1:18765/log";
+/** Clash TUN-safe: SW fetch to RFC1918 often hangs; PowerShell relay uses DIRECT. */
+const LOCAL_LAN_RELAY_URL = "http://127.0.0.1:18765/phone-lan";
+const LAN_FETCH_TIMEOUT_MS = 12000;
 
 /** @type {Map<number, { url: string, filename: string|null, referrer: string|null, timer: ReturnType<typeof setTimeout>|null, done: boolean }>} */
 const pending = new Map();
@@ -174,6 +177,98 @@ async function loadLanConfig() {
 
 function lanBaseUrl(cfg) {
   return `http://${cfg.phoneLanHost}:${cfg.lanPort}`;
+}
+
+/** Clash/TUN often proxies RFC1918 phone LAN; surface a hint when fetch dies. */
+function formatLanFetchError(err) {
+  const base = `fetch failed: ${err && err.message ? err.message : err}`;
+  return (
+    `${base} — phone LAN goes via 127.0.0.1:18765 relay (Clash TUN-safe). ` +
+    `If this persists, check the companion console is still running and phone :8765 is up`
+  );
+}
+
+/**
+ * POST/GET the phone LAN API through the local PowerShell sink (empty WinHTTP proxy).
+ * Falls back to direct fetch only if the relay is down.
+ */
+async function fetchPhoneLan(targetUrl, { method = "POST", headers = {}, body = null } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LAN_FETCH_TIMEOUT_MS);
+  const headerObj = { ...headers };
+  try {
+    try {
+      const relayRes = await fetch(LOCAL_LAN_RELAY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: targetUrl,
+          method,
+          headers: headerObj,
+          body,
+          timeoutMs: LAN_FETCH_TIMEOUT_MS,
+        }),
+        signal: controller.signal,
+      });
+      const wrap = await relayRes.json().catch(() => null);
+      if (wrap && typeof wrap.status === "number") {
+        const textBody = wrap.body == null ? "" : String(wrap.body);
+        return {
+          ok: wrap.status >= 200 && wrap.status < 300,
+          status: wrap.status,
+          via: wrap.via || "relay",
+          async text() {
+            return textBody;
+          },
+        };
+      }
+      if (!relayRes.ok) {
+        throw new Error(`lan relay HTTP ${relayRes.status}`);
+      }
+    } catch (relayErr) {
+      // Sink not up yet / crashed — try direct (works without Clash TUN).
+      console.warn("phone-lan relay failed, trying direct:", relayErr);
+    }
+
+    const res = await fetch(targetUrl, {
+      method,
+      headers: headerObj,
+      body,
+      signal: controller.signal,
+    });
+    return {
+      ok: res.ok,
+      status: res.status,
+      via: "direct",
+      async text() {
+        return res.text();
+      },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function cancelAllInFlightPcloudDownloads(reason) {
+  try {
+    const items = await chrome.downloads.search({ state: "in_progress" });
+    let n = 0;
+    for (const item of items || []) {
+      if (!isPcloudDownload(item)) continue;
+      await cancelDownloadQuiet(item.id);
+      n += 1;
+    }
+    if (n > 0) {
+      await appendRestLog({
+        phase: "download_cancel",
+        ok: true,
+        message: reason,
+        cancelled: n,
+      });
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function basicAuthHeader(user, password) {
@@ -1248,7 +1343,7 @@ async function postLanExport({ saveName, folderPath }) {
 
   let res;
   try {
-    res = await fetch(endpoint, {
+    res = await fetchPhoneLan(endpoint, {
       method: "POST",
       headers: {
         Authorization: basicAuthHeader(cfg.webdavUser, cfg.webdavPassword),
@@ -1257,7 +1352,7 @@ async function postLanExport({ saveName, folderPath }) {
       body,
     });
   } catch (err) {
-    const error = `fetch failed: ${err && err.message ? err.message : err}`;
+    const error = formatLanFetchError(err);
     await appendRestLog({
       phase: "response",
       ok: false,
@@ -1289,6 +1384,7 @@ async function postLanExport({ saveName, folderPath }) {
     folderPath: folderListing,
     ms: Date.now() - started,
     httpStatus: res.status,
+    via: res.via || null,
     responseText: rawText.slice(0, 2000),
     payload,
     error: ok ? null : `HTTP ${res.status}: ${rawText.slice(0, 500)}`,
@@ -1637,7 +1733,7 @@ async function postLanExportQueue(items, { mode = "prepend", startFirst = true }
 
   let res;
   try {
-    res = await fetch(endpoint, {
+    res = await fetchPhoneLan(endpoint, {
       method: "POST",
       headers: {
         Authorization: basicAuthHeader(cfg.webdavUser, cfg.webdavPassword),
@@ -1646,7 +1742,7 @@ async function postLanExportQueue(items, { mode = "prepend", startFirst = true }
       body,
     });
   } catch (err) {
-    const error = `fetch failed: ${err && err.message ? err.message : err}`;
+    const error = formatLanFetchError(err);
     await appendRestLog({
       phase: "response",
       ok: false,
@@ -1674,6 +1770,7 @@ async function postLanExportQueue(items, { mode = "prepend", startFirst = true }
     mode: "queue",
     ms: Date.now() - started,
     httpStatus: res.status,
+    via: res.via || null,
     responseText: rawText.slice(0, 2000),
     payload,
     error: ok ? null : `HTTP ${res.status}: ${rawText.slice(0, 500)}`,
@@ -2099,8 +2196,17 @@ function trackPcloudDownload(item, filenameHint) {
   const filename = filenameHint || existing?.filename || baseName(item.filename);
 
   // Cancel immediately so Chromium does not open/save the CDN file while we resolve.
+  // Under Clash TUN, CDN transfer is slow — keep cancelling so a late Content-Disposition
+  // download does not win the race.
   void cancelDownloadQuiet(item.id);
   void closeMatchingCdnTabs(url);
+  void (async () => {
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      await cancelDownloadQuiet(item.id);
+      await closeMatchingCdnTabs(url);
+    }
+  })();
 
   if (existing) {
     if (filename) existing.filename = filename;
@@ -2201,8 +2307,25 @@ chrome.downloads.onCreated.addListener((item) => {
   trackPcloudDownload(item, baseName(item.filename));
 });
 
+chrome.downloads.onChanged.addListener((delta) => {
+  if (delta.id == null) return;
+  if (delta.state?.current === "in_progress" || delta.filename || delta.url) {
+    void (async () => {
+      try {
+        const [item] = await chrome.downloads.search({ id: delta.id });
+        if (item && isPcloudDownload(item)) {
+          await cancelDownloadQuiet(item.id);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }
+});
+
 // pCloud often opens the signed CDN URL in a new tab (inline media) instead of
 // firing downloads.onCreated — especially on the first click after launch.
+// Clash TUN makes that tab hang for a long time before Content-Disposition download.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || (changeInfo.status === "loading" ? tab.url : null);
   if (!url || !isPcloudCdnFileUrl(url)) return;
@@ -2214,16 +2337,27 @@ chrome.tabs.onCreated.addListener((tab) => {
   void handleCdnFileNavigation(tab.id, tab.url);
 });
 
+// Earlier than tabs.onUpdated when possible (closes CDN tab before body download).
+if (chrome.webNavigation?.onBeforeNavigate) {
+  chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+    if (details.frameId !== 0) return;
+    if (!details.url || !isPcloudCdnFileUrl(details.url)) return;
+    void handleCdnFileNavigation(details.tabId, details.url);
+  });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   void appendRestLog({
     phase: "startup",
     ok: true,
     message: "extension installed/updated",
   });
+  void cancelAllInFlightPcloudDownloads("onInstalled");
 });
 
 chrome.runtime.onStartup.addListener(() => {
   void logServiceWorkerBoot("onStartup");
+  void cancelAllInFlightPcloudDownloads("onStartup");
 });
 
 async function logServiceWorkerBoot(reason) {
@@ -2236,6 +2370,7 @@ async function logServiceWorkerBoot(reason) {
       host: cfg.phoneLanHost,
       port: cfg.lanPort,
       endpoint: `${lanBaseUrl(cfg)}/export_from_folder.json`,
+      lanRelay: LOCAL_LAN_RELAY_URL,
     });
   } catch (err) {
     await appendRestLog({
@@ -2249,3 +2384,4 @@ async function logServiceWorkerBoot(reason) {
 
 // Runs when the service worker starts (including --load-extension launches).
 void logServiceWorkerBoot("service_worker_eval");
+void cancelAllInFlightPcloudDownloads("service_worker_eval");

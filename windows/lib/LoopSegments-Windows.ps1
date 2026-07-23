@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 # Shared per-PC settings for Loop Segments windows scripts (lib/, setup/, usb/, rclone/, …).
 # This file lives in windows\lib\; config JSON stays in windows\ (parent of lib).
 # Capture windows\ at load time so config paths stay correct even when callers live in a subfolder
