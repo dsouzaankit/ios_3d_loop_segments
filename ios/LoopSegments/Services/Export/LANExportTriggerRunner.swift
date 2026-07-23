@@ -27,7 +27,7 @@ enum LANExportTriggerRunner {
     private static func tick(session: AppSession) async {
         let reference = LANExportContext.referenceOrActive(from: session)
             ?? WebDAVItem(href: "/", name: "Root", isDirectory: true, contentLength: nil)
-        _ = await LANExportTriggerControl.pollAndConsume(
+        let note = await LANExportTriggerControl.pollAndConsume(
             credentials: session.credentials,
             currentItem: reference,
             isExportRunning: session.isExportRunning,
@@ -50,7 +50,17 @@ enum LANExportTriggerRunner {
             onClearMedia: { session.clearExportMedia(referenceItem: reference) },
             onTrimMedia: { session.trimExportMediaArchives() }
         )
-        // Backup drain if finish/stop missed a tick (e.g. race with coordinator busy).
-        PendingExportQueue.shared.drainIfIdle(session: session)
+        // Do not drain in the same tick that just scheduled startExport — flags may still be idle
+        // and would pop+overwrite the next queue item before the first run begins.
+        let startedExport: Bool = {
+            guard let note else { return false }
+            return note.hasPrefix("LAN trigger — export")
+                || note.hasPrefix("LAN trigger — resume")
+                || note.hasPrefix("LAN trigger — random")
+                || note.hasPrefix("LAN trigger — URL")
+        }()
+        if !startedExport {
+            PendingExportQueue.shared.drainIfIdle(session: session)
+        }
     }
 }

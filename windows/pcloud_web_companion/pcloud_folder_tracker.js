@@ -144,26 +144,13 @@
     }
   }
 
-  function parseFileIdsFromUrl(url) {
-    try {
-      const u = new URL(url, location.href);
-      const raw = u.searchParams.get("fileids") || u.searchParams.get("fileid");
-      if (!raw) return [];
-      return String(raw)
-        .split(/[,%2C]+/i)
-        .map((s) => s.trim())
-        .filter((s) => /^\d+$/.test(s));
-    } catch {
-      return [];
-    }
-  }
-
-  function rememberFileIds(ids) {
+  function rememberFileIds(ids, sourceUrl) {
     if (!ids || !ids.length) return;
     const payload = {
       fileIds: ids.map(String),
       at: Date.now(),
       href: location.href,
+      sourceUrl: sourceUrl || null,
     };
     try {
       chrome.runtime.sendMessage({ type: "pcloud-selected-fileids", payload });
@@ -177,49 +164,15 @@
     }
   }
 
-  // Capture multi-select fileids from getthumbslinks / getziplink XHR (archive download path).
-  try {
-    const origFetch = window.fetch;
-    if (typeof origFetch === "function") {
-      window.fetch = function (input, init) {
-        try {
-          const url = typeof input === "string" ? input : input && input.url;
-          if (url && /getthumbslinks|getziplink|getzip\b/i.test(url)) {
-            const ids = parseFileIdsFromUrl(url);
-            if (ids.length) rememberFileIds(ids);
-          }
-        } catch {
-          // ignore
-        }
-        return origFetch.apply(this, arguments);
-      };
-    }
-  } catch {
-    // ignore
-  }
-
-  try {
-    const XO = XMLHttpRequest.prototype.open;
-    const XS = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (method, url) {
-      this.__lsUrl = url;
-      return XO.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.send = function () {
-      try {
-        const url = this.__lsUrl;
-        if (url && /getthumbslinks|getziplink|getzip\b/i.test(String(url))) {
-          const ids = parseFileIdsFromUrl(String(url));
-          if (ids.length) rememberFileIds(ids);
-        }
-      } catch {
-        // ignore
-      }
-      return XS.apply(this, arguments);
-    };
-  } catch {
-    // ignore
-  }
+  // MAIN-world hook (pcloud_fileid_hook_main.js) posts fileids here — isolated
+  // fetch hooks never see my.pcloud.com's own fetch/XHR.
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const data = event.data;
+    if (!data || data.source !== "loop-segments-fileids") return;
+    if (!Array.isArray(data.fileIds) || !data.fileIds.length) return;
+    rememberFileIds(data.fileIds, data.url || null);
+  });
 
   publish();
   window.addEventListener("hashchange", publish);

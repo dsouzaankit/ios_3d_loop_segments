@@ -277,6 +277,7 @@ function Sync-ExtensionToLocalDisk {
     $files = @(
         "manifest.json"
         "background.js"
+        "pcloud_fileid_hook_main.js"
         "pcloud_folder_tracker.js"
         "offscreen.html"
         "offscreen.js"

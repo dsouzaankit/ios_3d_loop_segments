@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "pCloud Download → Loop Segments",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Cancels pCloud downloads/CDN tabs ASAP; multi-select archive → phone export_queue.json FIFO; single file → export_from_folder.json.",
   "permissions": [
     "downloads",
@@ -12,7 +12,8 @@
     "tabs",
     "windows",
     "scripting",
-    "cookies"
+    "cookies",
+    "webRequest"
   ],
   "host_permissions": [
     "http://*:8765/*",
@@ -25,6 +26,16 @@
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://my.pcloud.com/*",
+        "https://e.pcloud.com/*",
+        "https://*.pcloud.com/*"
+      ],
+      "js": ["pcloud_fileid_hook_main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://my.pcloud.com/*",

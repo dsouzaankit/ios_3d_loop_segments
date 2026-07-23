@@ -97,11 +97,13 @@ final class PendingExportQueue: ObservableObject {
         persist()
     }
 
-    /// Start next pending job when idle. Skips while user Pause is held or an export is active.
+    /// Start next pending job when idle. Skips while user/auto Pause is held or an export is active.
+    /// Soft-paused checkpoints (Paused tab) must NOT block drain — only `userRequestedExportPause`.
     func drainIfIdle(session: AppSession) {
         guard !session.isExportRunning, !session.isExportCoordinatorBusy else { return }
         guard !session.userRequestedExportPause else { return }
-        if LANExportSourceDisplay.resolve()?.phase == "paused" { return }
+        // Avoid overwriting an unconsumed trigger (e.g. startFirst just wrote one).
+        if LANExportTriggerControl.hasPendingTriggerFile { return }
         guard let next = popFront() else { return }
         let folder = next.folderPath ?? ""
         let queued = LANExportTriggerControl.queueStartExportFromFolder(

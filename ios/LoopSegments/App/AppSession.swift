@@ -288,10 +288,16 @@ final class AppSession: ObservableObject {
                 LANExportSourceDisplay.setFinished(item.name)
             }
             // Defer drain until after `isExportRunning` clears in defer {}.
+            // Soft-paused leftovers must not block (see drainIfIdle); retry briefly if coordinator is still winding down.
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                PendingExportQueue.shared.drainIfIdle(session: self)
+                for _ in 0 ..< 8 {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    PendingExportQueue.shared.drainIfIdle(session: self)
+                    if self.isExportRunning || self.isExportCoordinatorBusy { return }
+                    if self.userRequestedExportPause { return }
+                    if PendingExportQueue.shared.count == 0 { return }
+                }
             }
         } catch let error {
             guard generation == exportGeneration else { throw error }

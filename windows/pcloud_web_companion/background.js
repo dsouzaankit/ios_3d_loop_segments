@@ -1317,6 +1317,116 @@ function isLikelyVideoName(name) {
   );
 }
 
+function parseFileIdsFromUrl(urlString) {
+  if (!urlString) return [];
+  try {
+    const u = new URL(urlString);
+    const raw = u.searchParams.get("fileids") || u.searchParams.get("fileid");
+    if (raw) {
+      return String(raw)
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => /^\d+$/.test(s));
+    }
+  } catch {
+    // fall through
+  }
+  const m = String(urlString).match(/[?&]fileids?=([^&#]+)/i);
+  if (!m) return [];
+  try {
+    return decodeURIComponent(m[1])
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => /^\d+$/.test(s));
+  } catch {
+    return [];
+  }
+}
+
+function parseFileIdsFromRequestBody(requestBody) {
+  if (!requestBody) return [];
+  const texts = [];
+  if (requestBody.formData) {
+    for (const [key, values] of Object.entries(requestBody.formData)) {
+      if (!/fileids?/i.test(key)) continue;
+      for (const v of values || []) texts.push(String(v));
+    }
+  }
+  if (requestBody.raw && Array.isArray(requestBody.raw)) {
+    for (const part of requestBody.raw) {
+      try {
+        if (part?.bytes) {
+          texts.push(new TextDecoder("utf-8").decode(part.bytes));
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  const ids = [];
+  for (const text of texts) {
+    const m = String(text).match(/(?:^|&)?fileids?=([^&]+)/i);
+    const chunk = m ? m[1] : text;
+    try {
+      const decoded = decodeURIComponent(String(chunk).replace(/\+/g, " "));
+      ids.push(
+        ...decoded
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => /^\d+$/.test(s))
+      );
+    } catch {
+      // ignore
+    }
+    try {
+      const j = JSON.parse(text);
+      const raw = j?.fileids ?? j?.fileIds ?? j?.fileid ?? j?.fileId;
+      if (Array.isArray(raw)) {
+        ids.push(...raw.map(String).filter((s) => /^\d+$/.test(s)));
+      } else if (raw != null) {
+        ids.push(
+          ...String(raw)
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => /^\d+$/.test(s))
+        );
+      }
+    } catch {
+      // not JSON
+    }
+  }
+  return [...new Set(ids)];
+}
+
+async function persistSelectedFileIds(fileIds, meta = {}) {
+  const ids = [...new Set((fileIds || []).map(String).filter((s) => /^\d+$/.test(s)))];
+  if (!ids.length) return;
+  const payload = {
+    fileIds: ids,
+    at: Date.now(),
+    source: meta.source || null,
+    sourceUrl: meta.sourceUrl || null,
+  };
+  try {
+    await chrome.storage.session.set({ pcloudSelectedFileIds: payload });
+  } catch {
+    // ignore
+  }
+  try {
+    await chrome.storage.local.set({ pcloudSelectedFileIds: payload });
+  } catch {
+    // ignore
+  }
+  void appendRestLog({
+    phase: "selected_fileids",
+    ok: true,
+    fileIds: ids,
+    source: payload.source,
+    sourceUrl: payload.sourceUrl,
+    count: ids.length,
+  });
+}
+
 async function loadSelectedFileIds() {
   try {
     const session = await chrome.storage.session.get("pcloudSelectedFileIds");
@@ -1337,6 +1447,17 @@ async function loadSelectedFileIds() {
     // ignore
   }
   return [];
+}
+
+/** Archive download can race ahead of getthumbslinks/getziplink persistence. */
+async function waitForSelectedFileIds({ timeoutMs = 2500, intervalMs = 150 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let ids = await loadSelectedFileIds();
+  while (!ids.length && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    ids = await loadSelectedFileIds();
+  }
+  return ids;
 }
 
 async function pcloudApiFilePath(fileId, auth, preferredHost, cdnUrl) {
@@ -1614,7 +1735,21 @@ async function runArchiveQueuePipeline({ url, filename, referrer, downloadId }) 
     folder.apiError = String(err && err.message ? err.message : err);
   }
 
-  const fileIds = await loadSelectedFileIds();
+  // Prefer ids already stored; also parse download URL (rare) and wait briefly
+  // for MAIN-world / webRequest capture of getthumbslinks|getziplink.
+  let fileIds = await loadSelectedFileIds();
+  if (!fileIds.length) {
+    fileIds = parseFileIdsFromUrl(url);
+    if (fileIds.length) {
+      await persistSelectedFileIds(fileIds, {
+        source: "archive_download_url",
+        sourceUrl: url,
+      });
+    }
+  }
+  if (!fileIds.length) {
+    fileIds = await waitForSelectedFileIds({ timeoutMs: 2500 });
+  }
   await appendRestLog({
     phase: "archive_queue",
     ok: fileIds.length > 0,
@@ -1625,7 +1760,7 @@ async function runArchiveQueuePipeline({ url, filename, referrer, downloadId }) 
     message:
       fileIds.length > 0
         ? `Archive download cancelled; resolving ${fileIds.length} selected fileid(s)`
-        : "Archive download cancelled but no recent getthumbslinks fileids — select files and retry Download",
+        : "Archive download cancelled but no recent getthumbslinks/getziplink fileids — select files and retry Download",
   });
 
   if (!fileIds.length) {
@@ -1910,20 +2045,48 @@ function trackPcloudDownload(item, filenameHint) {
   return rec;
 }
 
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    try {
+      const url = details.url || "";
+      if (!/getthumbslinks|getziplink|getzip\b|savezip|pubzip/i.test(url)) {
+        return;
+      }
+      const fromUrl = parseFileIdsFromUrl(url);
+      const fromBody = parseFileIdsFromRequestBody(details.requestBody);
+      const ids = [...new Set([...fromUrl, ...fromBody])];
+      if (!ids.length) return;
+      void persistSelectedFileIds(ids, {
+        source: "webRequest",
+        sourceUrl: url.slice(0, 500),
+      });
+    } catch {
+      // ignore
+    }
+  },
+  {
+    urls: [
+      "https://*.pcloud.com/*getthumbslinks*",
+      "https://*.pcloud.com/*getziplink*",
+      "https://*.pcloud.com/*getzip*",
+      "https://*.pcloud.com/*savezip*",
+      "https://*.pcloud.com/*pubzip*",
+      "https://pcloud.com/*getthumbslinks*",
+      "https://pcloud.com/*getziplink*",
+      "https://pcloud.com/*getzip*",
+    ],
+  },
+  ["requestBody"]
+);
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "pcloud-selected-fileids") {
     const payload = message.payload || {};
     void (async () => {
-      try {
-        await chrome.storage.session.set({ pcloudSelectedFileIds: payload });
-      } catch {
-        // ignore
-      }
-      try {
-        await chrome.storage.local.set({ pcloudSelectedFileIds: payload });
-      } catch {
-        // ignore
-      }
+      await persistSelectedFileIds(payload.fileIds || [], {
+        source: "content_message",
+        sourceUrl: payload.sourceUrl || payload.href || null,
+      });
       sendResponse({ ok: true });
     })();
     return true;

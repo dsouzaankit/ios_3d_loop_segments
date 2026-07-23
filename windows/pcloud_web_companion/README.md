@@ -16,7 +16,7 @@ On a **single-file** pCloud download click:
 On **multi-select Download** (pCloud builds a **zip archive**):
 
 1. Cancels the archive download (not used by the phone)
-2. Reads recently captured selection `fileid`s from `getthumbslinks` / `getziplink` (page fetch hook)
+2. Reads recently captured selection `fileid`s from `getthumbslinks` / `getziplink` (`webRequest` + MAIN-world fetch/XHR hook)
 3. Resolves each video via pCloud `getpath` → `{ folderPath, displayName }`
 4. `POST /export_queue.json` with `{ mode: "prepend", startFirst: true, items: […] }` — phone FIFO; first item soft-pauses any running export
 5. Remaining items show under the app **Paused** tab → **Queued** until idle (finish/Stop drains; user Pause holds)

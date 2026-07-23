@@ -62,6 +62,12 @@ enum LANExportTriggerControl {
         ExportPaths.urlForLANWritableMedia(relativePath: triggerRelativePath)
     }
 
+    /// True when `export_trigger.json` exists and has not been consumed yet.
+    static var hasPendingTriggerFile: Bool {
+        guard let url = triggerURL else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
     static var ackURL: URL? {
         ExportPaths.urlForLANWritableMedia(relativePath: ackRelativePath)
     }
