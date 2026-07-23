@@ -289,16 +289,7 @@ final class AppSession: ObservableObject {
             }
             // Defer drain until after `isExportRunning` clears in defer {}.
             // Soft-paused leftovers must not block (see drainIfIdle); retry briefly if coordinator is still winding down.
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                for _ in 0 ..< 8 {
-                    try? await Task.sleep(nanoseconds: 300_000_000)
-                    PendingExportQueue.shared.drainIfIdle(session: self)
-                    if self.isExportRunning || self.isExportCoordinatorBusy { return }
-                    if self.userRequestedExportPause { return }
-                    if PendingExportQueue.shared.count == 0 { return }
-                }
-            }
+            schedulePendingQueueDrain()
         } catch let error {
             guard generation == exportGeneration else { throw error }
             if exportCoordinator.isBusy {
@@ -308,6 +299,8 @@ final class AppSession: ObservableObject {
                 LANExportSourceDisplay.setPaused(item.name)
             } else if userRequestedExportCancel {
                 LANExportSourceDisplay.clearActive()
+                // Stop may have raced ahead of coordinator idle — keep trying to start the next queued item.
+                schedulePendingQueueDrain()
             } else if ResumeStore.shared.exportWasInterrupted(for: item) {
                 LANExportSourceDisplay.setPaused(item.name)
             } else {
@@ -381,8 +374,23 @@ final class AppSession: ObservableObject {
                 await SegmentCleanup.performStopCleanup(log: { SearchDebugLog.log("Stop: \($0)") })
             }
         }
-        // Stop clears the live job; continue pending FIFO if any.
-        PendingExportQueue.shared.drainIfIdle(session: self)
+        // Stop clears the live job; continue pending FIFO once the coordinator is idle.
+        // Immediate drain often no-ops while `exportCoordinator.isBusy` during Stop cleanup.
+        schedulePendingQueueDrain()
+    }
+
+    /// Retry pending-FIFO drain until the next job starts, the queue is empty, or user Pause holds it.
+    func schedulePendingQueueDrain() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for _ in 0 ..< 24 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                PendingExportQueue.shared.drainIfIdle(session: self)
+                if self.isExportRunning || self.isExportCoordinatorBusy { return }
+                if self.userRequestedExportPause { return }
+                if PendingExportQueue.shared.count == 0 { return }
+            }
+        }
     }
 
     /// Mirrors Export UI **Clear media** (permanent; not export logs).

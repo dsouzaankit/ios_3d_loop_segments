@@ -21,6 +21,8 @@ On **multi-select Download** (pCloud builds a **zip archive**):
 4. `POST /export_queue.json` with `{ mode: "prepend", startFirst: true, items: […] }` — phone FIFO; first item soft-pauses any running export
 5. Remaining items show under the app **Paused** tab → **Queued** until idle (finish/Stop drains; user Pause holds)
 
+**Tip — select only videos in my.pcloud.com:** the web UI can filter the current folder by type. Click the **`v`** (view / type filter) control, then pick one of the **five** type filters (including **Video**). With **Video** active, multi-select + Download queues video files for Loop Segments without grabbing photos/docs from the same folder.
+
 ## Run
 
 Integrated under **`windows\pcloud_web_companion`** (preferred):

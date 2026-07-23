@@ -10,6 +10,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 277 (1.2.41):** LAN `/` and `/browse` show **Queued exports** with per-item **Remove** and **Clear queue** (`POST /export_queue.json` `action=remove|clear`). Stop retries pending-FIFO drain after coordinator cleanup (was a one-shot no-op while still busy). Companion docs: my.pcloud.com **`v`** type filter (5 types, including **Video**) before multi-select Download.
+
 **Build 276 (1.2.40):** Haptic feedback on app button taps (light/soft; medium for destructive).
 
 **Build 275 (1.2.39):** Fix pending FIFO drain stuck after the first item — soft-paused checkpoints no longer block the queue (only user/auto Pause does). Also avoid draining in the same poll tick that just started an export.
@@ -224,7 +226,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
 | **`/export_from_url.json`** (PUT or POST, Basic auth) | Queue **Export from URL**: `{ "url": "https://…", "saveName": "clip.mp4", "id": "<optional uuid>" }`. Returns **202** `{ status: "queued", … }`. Phone picks it up like other triggers (~2s). For pCloud files prefer **`/export_from_folder.json`** (avoids CDN IP binding). |
 | **`/export_from_folder.json`** (PUT or POST, Basic auth) | Queue **Export from folder/filename**: `{ "folderPath"?: "/Videos/MyFolder/", "displayName": "clip.mp4", "seekMs"?: 0, "id"?: "…" }`. Returns **202**. With `folderPath`: one-level PROPFIND, then walk on failure. **Without `folderPath`:** WebDAV filename walk only. `saveName` / `name` alias `displayName`. Used by [`windows/pcloud_web_companion`](../windows/pcloud_web_companion) — when folder resolve fails, POST `{ "saveName": "…" }` (omit folderPath). |
-| **`/export_queue.json`** (PUT or POST, Basic auth) | **Pending FIFO** (not Paused): `{ "mode"?: "append\|prepend\|replace", "startFirst"?: true, "items": [{ "folderPath"?, "displayName", "seekMs"?, "id"? }] }`. Returns **202**. Default `prepend` + `startFirst` soft-pauses a running export and starts the first item; rest wait on disk. `status.json` may include `pendingExportQueue`. |
+| **`/export_queue.json`** (PUT or POST, Basic auth) | **Pending FIFO** (not Paused): enqueue `{ "mode"?: "append\|prepend\|replace", "startFirst"?: true, "items": [{ "folderPath"?, "displayName", "seekMs"?, "id"? }] }` → **202**. Or manage `{ "action": "remove", "id" }` / `{ "action": "clear" }` → **200**. LAN `/` + `/browse` list the queue with **Remove** / **Clear queue**. `status.json` always includes `pendingExportQueue`. |
 | **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
 | **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
 

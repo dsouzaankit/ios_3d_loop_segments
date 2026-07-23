@@ -1851,6 +1851,7 @@ enum ExportLANServer {
               .then(function (j) {
                 applyExportSource(j.exportSource);
                 applyLive(j.lanLive);
+                applyPendingQueue(j.pendingExportQueue);
                 if (typeof j.playbackStatusHTML === "string") {
                   var status = document.getElementById("lan-playback-status");
                   if (status) status.innerHTML = j.playbackStatusHTML;
@@ -1858,6 +1859,8 @@ enum ExportLANServer {
               })
               .catch(function () {});
           }
+          \(htmlPendingQueueClientHelpersJS())
+          wirePendingQueue();
           \(autoPollStart)
         })();
         </script>
@@ -2105,6 +2108,122 @@ enum ExportLANServer {
         return " <button type=\"button\" class=\"export-parked\" data-name=\"\(name)\" data-href=\"\(hrefEsc)\" data-folder-path=\"\(folder)\" data-seek-ms=\"\(seek)\">\(htmlEscape(label))</button>"
     }
 
+    private static func htmlPendingQueueListItems(from items: [[String: Any]]) -> String {
+        guard !items.isEmpty else {
+            return #"<li class="muted"><em>No queued exports</em></li>"#
+        }
+        return items.map { row in
+            let id = htmlEscape("\(row["id"] ?? "")")
+            let name = htmlEscape("\(row["displayName"] ?? "")")
+            var meta = ""
+            if let folder = row["folderPath"] as? String, !folder.isEmpty {
+                meta = " <span class=\"muted\">\(htmlEscape(folder))</span>"
+            }
+            return """
+            <li data-id="\(id)"><span class="pending-name">\(name)</span>\(meta) \
+            <button type="button" class="pending-remove" data-id="\(id)">Remove</button></li>
+            """
+        }.joined()
+    }
+
+    /// Queued (not-started) FIFO — same as phone Paused tab Queued section.
+    private static func htmlPendingQueueSection() -> String {
+        let queue = pendingExportQueueStatusPayload()
+        let count = queue["count"] as? Int ?? 0
+        let items = queue["items"] as? [[String: Any]] ?? []
+        let actionsHidden = count == 0 ? " style=\"display:none\"" : ""
+        return """
+        <section id="lan-pending-queue-wrap" class="lan-pending-queue">
+          <h2 id="lan-pending-queue-heading">Queued exports (\(count))</h2>
+          <p class="muted">Not started yet. Auto-starts when idle after finish/Stop. User Pause holds the queue.</p>
+          <ul id="lan-pending-queue">
+          \(htmlPendingQueueListItems(from: items))
+          </ul>
+          <p id="lan-pending-queue-actions"\(actionsHidden)>
+            <button type="button" id="lan-pending-clear">Clear queue</button>
+          </p>
+        </section>
+        """
+    }
+
+    /// JS helpers for queue list + Remove/Clear (Basic auth required by `/export_queue.json`).
+    private static func htmlPendingQueueClientHelpersJS() -> String {
+        let user = lanWebDAVUsername
+        let pass = lanWebDAVPassword
+        return """
+          var QUEUE_AUTH = "Basic " + btoa("\(user):\(pass)");
+          function applyPendingQueue(q) {
+            var ul = document.getElementById("lan-pending-queue");
+            var heading = document.getElementById("lan-pending-queue-heading");
+            var actions = document.getElementById("lan-pending-queue-actions");
+            if (!ul) return;
+            var items = (q && q.items) ? q.items : [];
+            var count = (q && typeof q.count === "number") ? q.count : items.length;
+            if (heading) heading.textContent = "Queued exports (" + count + ")";
+            if (actions) actions.style.display = count ? "" : "none";
+            if (!items.length) {
+              ul.innerHTML = '<li class="muted"><em>No queued exports</em></li>';
+              return;
+            }
+            ul.innerHTML = items.map(function (it) {
+              var id = esc(it.id || "");
+              var name = esc(it.displayName || "");
+              var folder = it.folderPath ? (' <span class="muted">' + esc(it.folderPath) + '</span>') : "";
+              return '<li data-id="' + id + '"><span class="pending-name">' + name + '</span>' + folder
+                + ' <button type="button" class="pending-remove" data-id="' + id + '">Remove</button></li>';
+            }).join("");
+          }
+          function postQueueAction(body) {
+            return fetch("export_queue.json", {
+              method: "POST",
+              headers: { "Authorization": QUEUE_AUTH, "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+              cache: "no-store"
+            }).then(function (r) {
+              return r.json().then(function (j) { return { ok: r.ok, j: j }; }).catch(function () {
+                return { ok: r.ok, j: null };
+              });
+            });
+          }
+          function wirePendingQueue() {
+            var ul = document.getElementById("lan-pending-queue");
+            if (ul && !ul.getAttribute("data-ls-wired")) {
+              ul.setAttribute("data-ls-wired", "1");
+              ul.addEventListener("click", function (ev) {
+                var t = ev.target;
+                var btn = (t && t.closest) ? t.closest(".pending-remove") : null;
+                if (!btn && t && t.classList && t.classList.contains("pending-remove")) btn = t;
+                if (!btn) return;
+                var id = btn.getAttribute("data-id") || "";
+                if (!id) return;
+                btn.disabled = true;
+                postQueueAction({ action: "remove", id: id })
+                  .then(function (res) {
+                    if (res.j && res.j.pendingExportQueue) applyPendingQueue(res.j.pendingExportQueue);
+                  })
+                  .catch(function () {})
+                  .finally(function () { btn.disabled = false; });
+              });
+            }
+            var clearBtn = document.getElementById("lan-pending-clear");
+            if (clearBtn && !clearBtn.getAttribute("data-ls-wired")) {
+              clearBtn.setAttribute("data-ls-wired", "1");
+              clearBtn.addEventListener("click", function () {
+                if (!window.confirm("Clear all queued exports?")) return;
+                clearBtn.disabled = true;
+                postQueueAction({ action: "clear" })
+                  .then(function (res) {
+                    if (res.j && res.j.pendingExportQueue) applyPendingQueue(res.j.pendingExportQueue);
+                    else applyPendingQueue({ count: 0, items: [] });
+                  })
+                  .catch(function () {})
+                  .finally(function () { clearBtn.disabled = false; });
+              });
+            }
+          }
+        """
+    }
+
     private static func htmlLANExportLogListItems(relativePaths: [String]) -> String {
         relativePaths.map { rel in
             let escaped = htmlEscape(rel)
@@ -2292,6 +2411,7 @@ enum ExportLANServer {
               .then(function (j) {
                 applyExportSource(j.exportSource);
                 applyLive(j.lanLive);
+                applyPendingQueue(j.pendingExportQueue);
                 if (typeof j.playbackStatusHTML === "string") {
                   var status = document.getElementById("lan-playback-status");
                   if (status) status.innerHTML = j.playbackStatusHTML;
@@ -2357,6 +2477,8 @@ enum ExportLANServer {
               putTrigger({ version: 1, command: "resume_export", id: uuid() }).catch(function () {});
             };
           }
+          \(htmlPendingQueueClientHelpersJS())
+          wirePendingQueue();
         })();
         </script>
         """
@@ -2488,6 +2610,11 @@ enum ExportLANServer {
             .lan-playback-logs-scroll ul { margin: 0; padding-left: 1.25rem; }
             #lan-export-logs li { word-break: break-all; }
             #trigger-status { min-height: 1.2em; }
+            .lan-pending-queue { margin: 0.75rem 0 1rem; }
+            .lan-pending-queue ul { margin: 0.25rem 0 0.5rem; padding-left: 1.25rem; }
+            .lan-pending-queue .pending-name { font-weight: 600; }
+            .lan-pending-queue .pending-remove { margin-left: 0.45rem; }
+            #lan-pending-queue-actions { margin: 0.25rem 0 0; }
             </style>
             <script>
             (function () {
@@ -2550,6 +2677,7 @@ enum ExportLANServer {
                   <span id="lan-export-pending-detail">Keep Loop Segments open in the foreground on the phone.</span>
                 </div>
                 \(htmlExportSourceLineShell())
+                \(htmlPendingQueueSection())
                 <div id="lan-playback-status">\(playbackStatusInitial)</div>
                 <p class="muted">No auto-refresh (tap buttons). Use direct log link while export runs.</p>
                 <p>
@@ -2607,6 +2735,7 @@ enum ExportLANServer {
               <span id="lan-export-pending-detail">Please wait — keep Loop Segments open in the foreground on the phone.</span>
             </div>
             \(htmlExportSourceLineBlock())
+            \(htmlPendingQueueSection())
             <p>Serving on port \(defaultPort): logs and media under <code>pcld_ios_media/</code> (private on phone, not in Files app). Legacy URLs <code>/export_latest.txt</code>, <code>/logs/export_*.txt</code>, and <code>/loop_segments_ok.txt</code> still work.</p>
             <p>JSON: \(htmlMonitorQuickLogLinks())</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
@@ -2861,18 +2990,17 @@ enum ExportLANServer {
         }
     }
 
-    /// Disk snapshot for `status.json` (LAN callbacks are not on the main actor).
-    private static func pendingExportQueueStatusPayload() -> [String: Any]? {
+    /// Disk snapshot for `status.json` / LAN UI (LAN callbacks are not on the main actor).
+    private static func pendingExportQueueStatusPayload() -> [String: Any] {
         guard let url = ExportPaths.urlForLANWritableMedia(relativePath: PendingExportQueue.relativePath),
               FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),
-              let items = try? JSONDecoder().decode([PendingExportItem].self, from: data),
-              !items.isEmpty else {
-            return nil
+              let items = try? JSONDecoder().decode([PendingExportItem].self, from: data) else {
+            return ["count": 0, "items": []]
         }
         return [
             "count": items.count,
-            "items": items.prefix(20).map { item -> [String: Any] in
+            "items": items.prefix(50).map { item -> [String: Any] in
                 var row: [String: Any] = [
                     "id": item.id,
                     "displayName": item.displayName,
@@ -2885,12 +3013,16 @@ enum ExportLANServer {
     }
 
     private static func sendExportQueueUsageJSON(connection: NWConnection, done: @escaping () -> Void) {
+        let queue = pendingExportQueueStatusPayload()
         let payload: [String: Any] = [
             "endpoint": "/export_queue.json",
             "methods": ["GET", "PUT", "POST"],
+            "queue": queue,
             "body": [
                 "mode": "append|prepend|replace (default prepend)",
                 "startFirst": "bool (default true) — pop first item into export_trigger (soft-pauses if busy)",
+                "action": "remove|clear — manage queue without enqueuing (remove needs id)",
+                "id": "uuid — required with action=remove",
                 "items": [
                     [
                         "folderPath": "optional pCloud folder listing path",
@@ -2904,6 +3036,7 @@ enum ExportLANServer {
                 "Pending FIFO on phone (not Paused). Survives companion close.",
                 "On finish/stop, next pending item auto-starts. User Pause holds the queue.",
                 "Companion multi-select archive → cancel zip → POST items with mode=prepend.",
+                "LAN page lists queue with Remove / Clear (POST action).",
             ],
         ]
         sendJSONPayload(payload, connection: connection, done: done, status: 200)
@@ -2935,9 +3068,26 @@ enum ExportLANServer {
                         connection: connection,
                         status: 400,
                         contentType: "text/plain; charset=utf-8",
-                        body: Data("Expected JSON { \"mode\"?, \"startFirst\"?, \"items\":[{displayName, folderPath?, …}] }".utf8),
+                        body: Data("Expected JSON { \"mode\"?, \"startFirst\"?, \"items\":[{displayName, folderPath?, …}] } or { \"action\": \"remove|clear\", \"id\"? }".utf8),
                         done: done
                     )
+                    return
+                }
+                if let action = (object["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !action.isEmpty {
+                    let id = (object["id"] as? String)
+                        ?? (object["itemId"] as? String)
+                    Task { @MainActor in
+                        let managed = PendingExportQueue.manageFromREST(action: action, id: id)
+                        var payload = managed.payload
+                        payload["pendingExportQueue"] = pendingExportQueueStatusPayload()
+                        sendJSONPayload(
+                            payload,
+                            connection: connection,
+                            done: done,
+                            status: managed.httpStatus
+                        )
+                    }
                     return
                 }
                 let modeRaw = (object["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "prepend"
@@ -3676,9 +3826,7 @@ enum ExportLANServer {
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
         }
-        if let pendingPayload = pendingExportQueueStatusPayload() {
-            payload["pendingExportQueue"] = pendingPayload
-        }
+        payload["pendingExportQueue"] = pendingExportQueueStatusPayload()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return

@@ -91,10 +91,70 @@ final class PendingExportQueue: ObservableObject {
         if items.count != before { persist() }
     }
 
+    @discardableResult
+    func removeReturningChanged(id: String) -> Bool {
+        let before = items.count
+        items.removeAll { $0.id == id }
+        let changed = items.count != before
+        if changed { persist() }
+        return changed
+    }
+
     func clear() {
         guard !items.isEmpty else { return }
         items = []
         persist()
+    }
+
+    /// REST manage: `action=remove` (needs `id`) or `action=clear`.
+    static func manageFromREST(action: String, id: String?) -> (httpStatus: Int, payload: [String: Any]) {
+        let act = action.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch act {
+        case "clear":
+            let before = shared.count
+            shared.clear()
+            return (
+                200,
+                [
+                    "status": "ok",
+                    "action": "clear",
+                    "removed": before,
+                    "pendingCount": shared.count,
+                    "message": before == 0 ? "Queue already empty" : "Cleared \(before) queued item(s)",
+                ]
+            )
+        case "remove":
+            let trimmed = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty else {
+                return (
+                    400,
+                    [
+                        "status": "rejected",
+                        "action": "remove",
+                        "message": "id required",
+                    ]
+                )
+            }
+            let changed = shared.removeReturningChanged(id: trimmed)
+            return (
+                changed ? 200 : 404,
+                [
+                    "status": changed ? "ok" : "not_found",
+                    "action": "remove",
+                    "id": trimmed,
+                    "pendingCount": shared.count,
+                    "message": changed ? "Removed from queue" : "No queued item with that id",
+                ]
+            )
+        default:
+            return (
+                400,
+                [
+                    "status": "rejected",
+                    "message": "Unknown action — use remove (with id) or clear",
+                ]
+            )
+        }
     }
 
     /// Start next pending job when idle. Skips while user/auto Pause is held or an export is active.
