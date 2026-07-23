@@ -1,9 +1,11 @@
 import SwiftUI
 
 /// Lists every paused / interrupted export (multi-pause handoff). Browse keeps only the last-finished pin.
+/// Also shows **Queued** pending FIFO (not started yet) above paused rows.
 struct PausedExportsView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
+    @ObservedObject private var pendingQueue = PendingExportQueue.shared
 
     @State private var selectedEntry: ResumeEntry?
     @State private var entries: [ResumeEntry] = []
@@ -11,45 +13,85 @@ struct PausedExportsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if entries.isEmpty {
+                if entries.isEmpty && pendingQueue.items.isEmpty {
                     ContentUnavailableView(
-                        "No paused exports",
+                        "No paused or queued exports",
                         systemImage: "pause.circle",
                         description: Text(
-                            "When you start another export while one is running, the previous file stays here with its checkpoint."
+                            "Paused: start another export while one is running. Queued: multi-select from the PC companion (archive download)."
                         )
                     )
                 } else {
                     List {
-                        Section {
-                            ForEach(entries) { entry in
-                                Button {
-                                    selectedEntry = entry
-                                } label: {
-                                    HStack(alignment: .center) {
-                                        pausedRow(entry: entry)
-                                        Spacer(minLength: 4)
-                                        Image(systemName: "chevron.right")
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(.tertiary)
+                        if !pendingQueue.items.isEmpty {
+                            Section {
+                                ForEach(pendingQueue.items) { item in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.displayName)
+                                            .lineLimit(2)
+                                        Text("Queued · waiting")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        if let folder = item.folderPath, !folder.isEmpty {
+                                            Text(folder)
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                                .lineLimit(1)
+                                        }
                                     }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .swipeActions(edge: .trailing) {
-                                    Button("Remove", role: .destructive) {
-                                        resumeStore.dismissPausedExport(entry)
+                                    .swipeActions(edge: .trailing) {
+                                        Button("Remove", role: .destructive) {
+                                            pendingQueue.remove(id: item.id)
+                                        }
                                     }
                                 }
+                                Button("Clear queue", role: .destructive) {
+                                    pendingQueue.clear()
+                                }
+                            } header: {
+                                Text("Queued (\(pendingQueue.count))")
+                            } footer: {
+                                Text(
+                                    "Not started yet. Auto-starts when the phone is idle after an export finishes or Stop. " +
+                                        "User Pause holds the queue. Cap \(PendingExportQueue.maxItems). Companion multi-select prepends here."
+                                )
+                                .font(.footnote)
                             }
-                        } footer: {
-                            Text(
-                                "Cap is \(ResumeStore.maxPausedExports) in-progress slots total (includes the live export). " +
-                                    "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
-                                    "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
-                                    "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove."
-                            )
-                            .font(.footnote)
+                        }
+
+                        if !entries.isEmpty {
+                            Section {
+                                ForEach(entries) { entry in
+                                    Button {
+                                        selectedEntry = entry
+                                    } label: {
+                                        HStack(alignment: .center) {
+                                            pausedRow(entry: entry)
+                                            Spacer(minLength: 4)
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .swipeActions(edge: .trailing) {
+                                        Button("Remove", role: .destructive) {
+                                            resumeStore.dismissPausedExport(entry)
+                                        }
+                                    }
+                                }
+                            } header: {
+                                Text("Paused (\(entries.count))")
+                            } footer: {
+                                Text(
+                                    "Cap is \(ResumeStore.maxPausedExports) in-progress slots total (includes the live export). " +
+                                        "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
+                                        "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
+                                        "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove."
+                                )
+                                .font(.footnote)
+                            }
                         }
                     }
                 }
@@ -78,6 +120,7 @@ struct PausedExportsView: View {
             }
             .onAppear { refresh() }
             .onChange(of: resumeStore.revision) { _, _ in refresh() }
+            .onChange(of: pendingQueue.revision) { _, _ in refresh() }
             .onChange(of: session.isExportRunning) { _, _ in refresh() }
             .onChange(of: session.isExportSessionActive) { _, _ in refresh() }
             .onChange(of: session.activeExportItem?.fileKey) { _, _ in refresh() }

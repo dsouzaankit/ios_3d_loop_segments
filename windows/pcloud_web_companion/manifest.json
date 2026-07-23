@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "pCloud Download → Loop Segments",
-  "version": "1.6.5",
-  "description": "Cancels pCloud downloads/CDN tabs ASAP, derives API host from CDN, POSTs export_from_folder.json, opens /browse.",
+  "version": "1.7.0",
+  "description": "Cancels pCloud downloads/CDN tabs ASAP; multi-select archive → phone export_queue.json FIFO; single file → export_from_folder.json.",
   "permissions": [
     "downloads",
     "offscreen",

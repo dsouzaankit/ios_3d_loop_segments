@@ -50,5 +50,7 @@ enum LANExportTriggerRunner {
             onClearMedia: { session.clearExportMedia(referenceItem: reference) },
             onTrimMedia: { session.trimExportMediaArchives() }
         )
+        // Backup drain if finish/stop missed a tick (e.g. race with coordinator busy).
+        PendingExportQueue.shared.drainIfIdle(session: session)
     }
 }

@@ -1302,6 +1302,214 @@ async function postLanExport({ saveName, folderPath }) {
   return { endpoint, status: res.status, payload, cfg, mode: "folder" };
 }
 
+function isArchiveDownload(filename, url) {
+  const name = String(filename || "");
+  const u = String(url || "");
+  if (/\.zip$/i.test(name)) return true;
+  if (/getzip|getziplink|savezip|pubzip/i.test(u)) return true;
+  if (/application\/zip|application\/x-zip/i.test(u)) return true;
+  return false;
+}
+
+function isLikelyVideoName(name) {
+  return /\.(mp4|m4v|mov|mkv|webm|avi|wmv|ts|m2ts|mpg|mpeg|m4a)$/i.test(
+    String(name || "")
+  );
+}
+
+async function loadSelectedFileIds() {
+  try {
+    const session = await chrome.storage.session.get("pcloudSelectedFileIds");
+    const payload = session.pcloudSelectedFileIds;
+    if (payload?.fileIds?.length && Date.now() - (payload.at || 0) < 120_000) {
+      return payload.fileIds.map(String);
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    const local = await chrome.storage.local.get("pcloudSelectedFileIds");
+    const payload = local.pcloudSelectedFileIds;
+    if (payload?.fileIds?.length && Date.now() - (payload.at || 0) < 120_000) {
+      return payload.fileIds.map(String);
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+async function pcloudApiFilePath(fileId, auth, preferredHost, cdnUrl) {
+  const uniqueHosts = pcloudApiHosts(preferredHost, cdnUrl);
+  const errors = [];
+  for (const host of uniqueHosts) {
+    try {
+      const pathUrl =
+        `https://${host}/getpath?fileid=${encodeURIComponent(fileId)}` +
+        `&auth=${encodeURIComponent(auth)}`;
+      const pathRes = await fetch(pathUrl);
+      const pathJson = await pathRes.json();
+      if (pathJson && pathJson.result === 0 && typeof pathJson.path === "string") {
+        return { path: pathJson.path, host, method: "getpath" };
+      }
+      errors.push(`${host}/getpath result=${pathJson?.result}`);
+    } catch (err) {
+      errors.push(`${host}/getpath ${err}`);
+    }
+    try {
+      const statUrl =
+        `https://${host}/stat?fileid=${encodeURIComponent(fileId)}` +
+        `&auth=${encodeURIComponent(auth)}`;
+      const statRes = await fetch(statUrl);
+      const statJson = await statRes.json();
+      if (statJson?.result === 0 && statJson.metadata) {
+        const meta = statJson.metadata;
+        const path = typeof meta.path === "string" ? meta.path : null;
+        const name = typeof meta.name === "string" ? meta.name : null;
+        if (path) return { path, name, host, method: "stat" };
+        if (name) return { path: null, name, host, method: "stat-name" };
+      }
+      errors.push(`${host}/stat result=${statJson?.result}`);
+    } catch (err) {
+      errors.push(`${host}/stat ${err}`);
+    }
+  }
+  return { error: errors.slice(0, 6).join("; ") };
+}
+
+function splitPathToFolderAndName(fullPath) {
+  const p = String(fullPath || "").replace(/\\/g, "/");
+  if (!p) return { folderPath: null, displayName: null };
+  const parts = p.split("/").filter(Boolean);
+  if (!parts.length) return { folderPath: null, displayName: null };
+  const displayName = parts[parts.length - 1];
+  const folderPath =
+    parts.length > 1 ? "/" + parts.slice(0, -1).join("/") + "/" : "/";
+  return { folderPath, displayName };
+}
+
+async function resolveFileIdsToExportItems(fileIds, folderHint) {
+  const authCandidates = await readAuthCandidatesFromCookies();
+  const items = [];
+  const errors = [];
+  for (const fileId of fileIds) {
+    let resolved = null;
+    for (const cand of authCandidates.slice(0, 4)) {
+      resolved = await pcloudApiFilePath(
+        fileId,
+        cand.auth,
+        folderHint?.apiHost || cand.apiHost,
+        null
+      );
+      if (resolved?.path || resolved?.name) break;
+    }
+    if (resolved?.path) {
+      const { folderPath, displayName } = splitPathToFolderAndName(resolved.path);
+      if (displayName && isLikelyVideoName(displayName)) {
+        items.push({
+          folderPath,
+          displayName,
+          seekMs: 0,
+          id: crypto.randomUUID(),
+          fileId,
+        });
+      } else if (displayName) {
+        errors.push(`${fileId}: skip non-video ${displayName}`);
+      }
+    } else if (resolved?.name && isLikelyVideoName(resolved.name)) {
+      items.push({
+        folderPath: folderHint?.folderPath || null,
+        displayName: resolved.name,
+        seekMs: 0,
+        id: crypto.randomUUID(),
+        fileId,
+      });
+    } else {
+      errors.push(`${fileId}: ${resolved?.error || "unresolved"}`);
+    }
+  }
+  return { items, errors };
+}
+
+async function postLanExportQueue(items, { mode = "prepend", startFirst = true } = {}) {
+  const cfg = await loadLanConfig();
+  const endpoint = `${lanBaseUrl(cfg)}/export_queue.json`;
+  const bodyObj = {
+    mode,
+    startFirst,
+    items: items.map((it) => ({
+      folderPath: it.folderPath || undefined,
+      displayName: it.displayName,
+      seekMs: it.seekMs ?? 0,
+      id: it.id || crypto.randomUUID(),
+    })),
+  };
+  const body = JSON.stringify(bodyObj);
+  const started = Date.now();
+
+  await appendRestLog({
+    phase: "request",
+    ok: true,
+    endpoint,
+    mode: "queue",
+    queueMode: mode,
+    itemCount: bodyObj.items.length,
+    body: bodyObj,
+    host: cfg.phoneLanHost,
+    port: cfg.lanPort,
+  });
+
+  let res;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: basicAuthHeader(cfg.webdavUser, cfg.webdavPassword),
+        "Content-Type": "application/json",
+      },
+      body,
+    });
+  } catch (err) {
+    const error = `fetch failed: ${err && err.message ? err.message : err}`;
+    await appendRestLog({
+      phase: "response",
+      ok: false,
+      endpoint,
+      mode: "queue",
+      ms: Date.now() - started,
+      error,
+    });
+    throw new Error(error);
+  }
+
+  const rawText = await res.text();
+  let payload = null;
+  try {
+    payload = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    payload = null;
+  }
+
+  const ok = res.ok;
+  await appendRestLog({
+    phase: "response",
+    ok,
+    endpoint,
+    mode: "queue",
+    ms: Date.now() - started,
+    httpStatus: res.status,
+    responseText: rawText.slice(0, 2000),
+    payload,
+    error: ok ? null : `HTTP ${res.status}: ${rawText.slice(0, 500)}`,
+  });
+
+  if (!ok) {
+    throw new Error(`Loop Segments API ${res.status}: ${rawText.slice(0, 500)}`);
+  }
+
+  return { endpoint, status: res.status, payload, cfg, mode: "queue" };
+}
+
 async function openLanBrowse(cfg) {
   const base = lanBaseUrl(cfg);
   const browseUrl = `${base}/browse`;
@@ -1388,7 +1596,134 @@ async function finalize(downloadId) {
   });
 }
 
+async function runArchiveQueuePipeline({ url, filename, referrer, downloadId }) {
+  let folder = {
+    folderId: null,
+    folderPath: null,
+    folderName: null,
+    apiHost: null,
+    apiError: null,
+  };
+  try {
+    folder = await resolvePcloudFolderContext({
+      referrer: referrer || null,
+      url,
+      cdnUrl: url,
+    });
+  } catch (err) {
+    folder.apiError = String(err && err.message ? err.message : err);
+  }
+
+  const fileIds = await loadSelectedFileIds();
+  await appendRestLog({
+    phase: "archive_queue",
+    ok: fileIds.length > 0,
+    downloadId: downloadId ?? null,
+    url,
+    saveName: filename,
+    fileIds,
+    message:
+      fileIds.length > 0
+        ? `Archive download cancelled; resolving ${fileIds.length} selected fileid(s)`
+        : "Archive download cancelled but no recent getthumbslinks fileids — select files and retry Download",
+  });
+
+  if (!fileIds.length) {
+    try {
+      await chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icon.png",
+        title: "Loop Segments: no selection ids",
+        message:
+          "Multi-select Download was cancelled, but fileids were not captured. Select files again and Download.",
+        priority: 2,
+      });
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  const { items, errors } = await resolveFileIdsToExportItems(fileIds, folder);
+  await appendRestLog({
+    phase: "archive_resolve",
+    ok: items.length > 0,
+    itemCount: items.length,
+    items: items.map((i) => ({
+      displayName: i.displayName,
+      folderPath: i.folderPath,
+      fileId: i.fileId,
+    })),
+    errors: errors.slice(0, 12),
+  });
+
+  if (!items.length) {
+    try {
+      await chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icon.png",
+        title: "Loop Segments: queue empty",
+        message: "No video files resolved from selection.",
+        priority: 2,
+      });
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  let api = null;
+  let apiError = null;
+  let lanCfg = null;
+  try {
+    api = await postLanExportQueue(items, { mode: "prepend", startFirst: true });
+    lanCfg = api.cfg || null;
+  } catch (err) {
+    apiError = String(err && err.message ? err.message : err);
+  }
+
+  if (!lanCfg) {
+    try {
+      lanCfg = await loadLanConfig();
+    } catch {
+      // ignore
+    }
+  }
+  if (lanCfg) await openLanBrowse(lanCfg);
+
+  try {
+    await chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icon.png",
+      title: apiError
+        ? "Loop Segments: queue failed"
+        : `Loop Segments: queued ${items.length}`,
+      message: apiError
+        ? String(apiError).slice(0, 180)
+        : items.map((i) => i.displayName).slice(0, 4).join(", "),
+      priority: 2,
+    });
+  } catch {
+    // ignore
+  }
+
+  await recordCapture({
+    url,
+    filename,
+    folderPath: folder.folderPath,
+    at: new Date().toISOString(),
+    apiStatus: api ? api.status : null,
+    apiError,
+    queueCount: items.length,
+  });
+}
+
 async function runCapturePipeline({ url, filename, referrer, downloadId }) {
+  if (isArchiveDownload(filename, url)) {
+    await runArchiveQueuePipeline({ url, filename, referrer, downloadId });
+    return;
+  }
+
   let folder = {
     folderId: null,
     folderPath: null,
@@ -1576,6 +1911,23 @@ function trackPcloudDownload(item, filenameHint) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "pcloud-selected-fileids") {
+    const payload = message.payload || {};
+    void (async () => {
+      try {
+        await chrome.storage.session.set({ pcloudSelectedFileIds: payload });
+      } catch {
+        // ignore
+      }
+      try {
+        await chrome.storage.local.set({ pcloudSelectedFileIds: payload });
+      } catch {
+        // ignore
+      }
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
   if (message?.type !== "pcloud-folder-context") return;
   const payload = message.payload || {};
   void (async () => {

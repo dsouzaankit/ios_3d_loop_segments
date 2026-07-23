@@ -729,6 +729,10 @@ enum ExportLANServer {
             sendExportFromFolderUsageJSON(connection: connection, done: done)
             return
         }
+        if resourcePath == "export_queue.json" {
+            sendExportQueueUsageJSON(connection: connection, done: done)
+            return
+        }
         guard let fileURL = resolveExportFile(relativePath: resourcePath) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -1260,6 +1264,16 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "export_queue.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleExportQueueWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         guard let rel = relativeExportPath(fromDAVPath: path) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -1345,11 +1359,21 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "export_queue.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleExportQueueWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         sendResponse(
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json and /export_from_folder.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, and /export_queue.json".utf8),
             done: done
         )
     }
@@ -2835,6 +2859,115 @@ enum ExportLANServer {
         }
     }
 
+    private static func sendExportQueueUsageJSON(connection: NWConnection, done: @escaping () -> Void) {
+        let payload: [String: Any] = [
+            "endpoint": "/export_queue.json",
+            "methods": ["GET", "PUT", "POST"],
+            "body": [
+                "mode": "append|prepend|replace (default prepend)",
+                "startFirst": "bool (default true) — pop first item into export_trigger (soft-pauses if busy)",
+                "items": [
+                    [
+                        "folderPath": "optional pCloud folder listing path",
+                        "displayName": "required filename",
+                        "seekMs": 0,
+                        "id": "optional uuid",
+                    ],
+                ],
+            ],
+            "notes": [
+                "Pending FIFO on phone (not Paused). Survives companion close.",
+                "On finish/stop, next pending item auto-starts. User Pause holds the queue.",
+                "Companion multi-select archive → cancel zip → POST items with mode=prepend.",
+            ],
+        ]
+        sendJSONPayload(payload, connection: connection, done: done, status: 200)
+    }
+
+    private static func handleExportQueueWrite(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 256_000
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain; charset=utf-8",
+                        body: Data("Expected JSON { \"mode\"?, \"startFirst\"?, \"items\":[{displayName, folderPath?, …}] }".utf8),
+                        done: done
+                    )
+                    return
+                }
+                let modeRaw = (object["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "prepend"
+                let mode = PendingExportEnqueueMode(rawValue: modeRaw) ?? .prepend
+                let startFirst: Bool = {
+                    if let b = object["startFirst"] as? Bool { return b }
+                    if let n = object["startFirst"] as? Int { return n != 0 }
+                    return true
+                }()
+                var parsed: [PendingExportItem] = []
+                if let arr = object["items"] as? [[String: Any]] {
+                    for row in arr {
+                        let name = (row["displayName"] as? String)
+                            ?? (row["saveName"] as? String)
+                            ?? (row["name"] as? String)
+                            ?? ""
+                        let folder = (row["folderPath"] as? String)
+                            ?? (row["path"] as? String)
+                            ?? (row["listingPath"] as? String)
+                        let seek: Int64? = {
+                            if let n = row["seekMs"] as? Int64 { return n }
+                            if let n = row["seekMs"] as? Int { return Int64(n) }
+                            if let n = row["seekMs"] as? Double { return Int64(n) }
+                            return nil
+                        }()
+                        let id = (row["id"] as? String) ?? UUID().uuidString
+                        parsed.append(
+                            PendingExportItem(
+                                id: id,
+                                folderPath: folder,
+                                displayName: name,
+                                seekMs: seek
+                            )
+                        )
+                    }
+                }
+                let busy = ExportPlaybackState.shared.isLANExportActive
+                Task { @MainActor in
+                    let queued = PendingExportQueue.queueFromREST(
+                        items: parsed,
+                        mode: mode,
+                        startFirst: startFirst,
+                        sessionIsBusy: busy
+                    )
+                    sendJSONPayload(
+                        queued.payload,
+                        connection: connection,
+                        done: done,
+                        status: queued.httpStatus
+                    )
+                }
+            }
+        }
+    }
+
     private static func handlePCloudBookmarksPUT(
         requestHeaders: String,
         bodyPrefix: Data,
@@ -3517,6 +3650,26 @@ enum ExportLANServer {
         }
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
+        }
+        let pendingSnapshot: [PendingExportItem] = {
+            if Thread.isMainThread {
+                return PendingExportQueue.shared.snapshot()
+            }
+            return DispatchQueue.main.sync { PendingExportQueue.shared.snapshot() }
+        }()
+        if !pendingSnapshot.isEmpty {
+            payload["pendingExportQueue"] = [
+                "count": pendingSnapshot.count,
+                "items": pendingSnapshot.prefix(20).map { item -> [String: Any] in
+                    var row: [String: Any] = [
+                        "id": item.id,
+                        "displayName": item.displayName,
+                    ]
+                    if let folder = item.folderPath { row["folderPath"] = folder }
+                    if let seek = item.seekMs { row["seekMs"] = seek }
+                    return row
+                },
+            ]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)

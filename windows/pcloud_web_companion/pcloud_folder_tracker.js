@@ -144,6 +144,83 @@
     }
   }
 
+  function parseFileIdsFromUrl(url) {
+    try {
+      const u = new URL(url, location.href);
+      const raw = u.searchParams.get("fileids") || u.searchParams.get("fileid");
+      if (!raw) return [];
+      return String(raw)
+        .split(/[,%2C]+/i)
+        .map((s) => s.trim())
+        .filter((s) => /^\d+$/.test(s));
+    } catch {
+      return [];
+    }
+  }
+
+  function rememberFileIds(ids) {
+    if (!ids || !ids.length) return;
+    const payload = {
+      fileIds: ids.map(String),
+      at: Date.now(),
+      href: location.href,
+    };
+    try {
+      chrome.runtime.sendMessage({ type: "pcloud-selected-fileids", payload });
+    } catch {
+      // ignore
+    }
+    try {
+      chrome.storage.session.set({ pcloudSelectedFileIds: payload });
+    } catch {
+      // ignore
+    }
+  }
+
+  // Capture multi-select fileids from getthumbslinks / getziplink XHR (archive download path).
+  try {
+    const origFetch = window.fetch;
+    if (typeof origFetch === "function") {
+      window.fetch = function (input, init) {
+        try {
+          const url = typeof input === "string" ? input : input && input.url;
+          if (url && /getthumbslinks|getziplink|getzip\b/i.test(url)) {
+            const ids = parseFileIdsFromUrl(url);
+            if (ids.length) rememberFileIds(ids);
+          }
+        } catch {
+          // ignore
+        }
+        return origFetch.apply(this, arguments);
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const XO = XMLHttpRequest.prototype.open;
+    const XS = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this.__lsUrl = url;
+      return XO.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function () {
+      try {
+        const url = this.__lsUrl;
+        if (url && /getthumbslinks|getziplink|getzip\b/i.test(String(url))) {
+          const ids = parseFileIdsFromUrl(String(url));
+          if (ids.length) rememberFileIds(ids);
+        }
+      } catch {
+        // ignore
+      }
+      return XS.apply(this, arguments);
+    };
+  } catch {
+    // ignore
+  }
+
   publish();
   window.addEventListener("hashchange", publish);
   window.addEventListener("popstate", publish);

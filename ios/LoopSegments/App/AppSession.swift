@@ -287,6 +287,12 @@ final class AppSession: ObservableObject {
             if generation == exportGeneration {
                 LANExportSourceDisplay.setFinished(item.name)
             }
+            // Defer drain until after `isExportRunning` clears in defer {}.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                PendingExportQueue.shared.drainIfIdle(session: self)
+            }
         } catch let error {
             guard generation == exportGeneration else { throw error }
             if exportCoordinator.isBusy {
@@ -369,6 +375,8 @@ final class AppSession: ObservableObject {
                 await SegmentCleanup.performStopCleanup(log: { SearchDebugLog.log("Stop: \($0)") })
             }
         }
+        // Stop clears the live job; continue pending FIFO if any.
+        PendingExportQueue.shared.drainIfIdle(session: self)
     }
 
     /// Mirrors Export UI **Clear media** (permanent; not export logs).
@@ -377,6 +385,7 @@ final class AppSession: ObservableObject {
         guard !isExportRunning, !exportCoordinator.isBusy else { return 0 }
         ResumeStore.shared.clearPinnedCompletedExports()
         ResumeStore.shared.clearPausedExports()
+        PendingExportQueue.shared.clear()
         // Drop seek/checkpoint for the file whose Export screen triggered clear (row may not have been in-progress).
         ResumeStore.shared.clearResume(for: referenceItem)
         LANExportSourceDisplay.clearActive()

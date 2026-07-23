@@ -2,13 +2,15 @@
 
 **Cellular → pCloud WebDAV → segment export → LAN (or USB) → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
 
-**Quick notes:** LAN below Mbps cutoff → preload/full file only; at/above → `op_*.mp4` when codec allows. **`_working.mp4`** full-timeline play is reliable at seek **0:00** (seek &gt; 0 → see below). AV1 not supported — prefer H.265. **Keep Alive** defaults **on** (build **272+**) — see **Background / lock screen**. Optional: Settings → Display & Brightness → Auto-Lock → Never.
+**Quick notes:** LAN below Mbps cutoff → preload/full file only; at/above → `op_*.mp4` when codec allows. **`_working.mp4`** full-timeline play is reliable at seek **0:00** (seek &gt; 0 → see below). AV1 not supported — prefer H.265. **Keep Alive** defaults **on** (build **272+**) — see **Background / lock screen**. Companion **multi-select** → phone **pending FIFO** (build **273+**). Optional: Settings → Display & Brightness → Auto-Lock → Never.
 
 **IPA / install (no Mac):** [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) · [ios-build workflow](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml). AltStore refresh/troubleshooting lives there (and [../windows/README.md](../windows/README.md) for AltServer on the PC).
 
-**PC tools:** [../windows/README.md](../windows/README.md) — companion, USB launch/Home, rclone, LAN probe. Companion requests exports via phone LAN REST (`/export_from_folder.json`, triggers) while the phone uses **cellular** to pCloud.
+**PC tools:** [../windows/README.md](../windows/README.md) — companion, USB launch/Home, rclone, LAN probe. Companion requests exports via phone LAN REST (`/export_from_folder.json`, `/export_queue.json`, triggers) while the phone uses **cellular** to pCloud.
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
+
+**Build 273 (1.2.37):** **Pending export FIFO** on the phone (`pcld_ios_media/scripts/export_pending_queue.json`). Companion multi-select archive Download is cancelled → selected `fileid`s resolved → `POST /export_queue.json` (`mode=prepend`, `startFirst=true`). Paused tab shows **Queued** (not started) above **Paused** (checkpoints). Drain on finish/Stop; **user Pause holds** the queue. Interrupt prepends; old pending stays. Cap **50** pending / **10** paused slots.
 
 **Build 272 (1.2.36):** **Keep Alive** defaults **on** (fresh install / unset preference).
 
@@ -216,6 +218,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
 | **`/export_from_url.json`** (PUT or POST, Basic auth) | Queue **Export from URL**: `{ "url": "https://…", "saveName": "clip.mp4", "id": "<optional uuid>" }`. Returns **202** `{ status: "queued", … }`. Phone picks it up like other triggers (~2s). For pCloud files prefer **`/export_from_folder.json`** (avoids CDN IP binding). |
 | **`/export_from_folder.json`** (PUT or POST, Basic auth) | Queue **Export from folder/filename**: `{ "folderPath"?: "/Videos/MyFolder/", "displayName": "clip.mp4", "seekMs"?: 0, "id"?: "…" }`. Returns **202**. With `folderPath`: one-level PROPFIND, then walk on failure. **Without `folderPath`:** WebDAV filename walk only. `saveName` / `name` alias `displayName`. Used by [`windows/pcloud_web_companion`](../windows/pcloud_web_companion) — when folder resolve fails, POST `{ "saveName": "…" }` (omit folderPath). |
+| **`/export_queue.json`** (PUT or POST, Basic auth) | **Pending FIFO** (not Paused): `{ "mode"?: "append\|prepend\|replace", "startFirst"?: true, "items": [{ "folderPath"?, "displayName", "seekMs"?, "id"? }] }`. Returns **202**. Default `prepend` + `startFirst` soft-pauses a running export and starts the first item; rest wait on disk. `status.json` may include `pendingExportQueue`. |
 | **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
 | **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
 

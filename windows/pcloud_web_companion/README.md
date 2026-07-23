@@ -4,7 +4,7 @@ Chromium MV3 extension (`pcloud_web_companion`) that intercepts pCloud downloads
 
 ## What it does
 
-On a pCloud download click:
+On a **single-file** pCloud download click:
 
 1. Cancels the Chromium download (or closes a CDN file tab) immediately, then removes it from the shelf
 2. Resolves the open my.pcloud `folder=` id to a folder **path/name** via `listfolder` / parent walk — `folderPath` is the full pCloud path (root segment kept). API host is derived from the download CDN domain when possible (`pnyc1.pcloud.com` → `apinyc1.pcloud.com`), with `api.pcloud.com` / `eapi` as fallbacks
@@ -12,6 +12,14 @@ On a pCloud download click:
 4. Copies clipboard lines: download URL, filename, folder path, folder name (when known)
 5. `POST /export_from_folder.json` with `{ folderPath, displayName, seekMs, id }` only — CDN download URLs are **not** posted to the phone
 6. Opens `http://<phoneLanHost>:8765/browse` in a new tab (or focuses it if already open)
+
+On **multi-select Download** (pCloud builds a **zip archive**):
+
+1. Cancels the archive download (not used by the phone)
+2. Reads recently captured selection `fileid`s from `getthumbslinks` / `getziplink` (page fetch hook)
+3. Resolves each video via pCloud `getpath` → `{ folderPath, displayName }`
+4. `POST /export_queue.json` with `{ mode: "prepend", startFirst: true, items: […] }` — phone FIFO; first item soft-pauses any running export
+5. Remaining items show under the app **Paused** tab → **Queued** until idle (finish/Stop drains; user Pause holds)
 
 ## Run
 

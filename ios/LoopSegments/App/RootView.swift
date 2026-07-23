@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
+    @ObservedObject private var pendingQueue = PendingExportQueue.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var nightModeEnabled = AppearanceSettings.isNightModeEnabled
 
@@ -15,6 +16,7 @@ struct RootView: View {
 
     private var pausedTabBadge: Int {
         resumeStore.interruptedEntries(excludingFileKey: session.activeExportFileKey).count
+            + pendingQueue.count
     }
 
     var body: some View {
