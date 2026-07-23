@@ -11,7 +11,7 @@ On a **single-file** pCloud download click:
 3. If `folderPath` is missing/garbled (e.g. search UI text like `"darina" in "/All Files/"`), runs **right-click → Open Location** on the file, then re-resolves; falls back to pCloud `search` API if needed
 4. Copies clipboard lines: download URL, filename, folder path, folder name (when known)
 5. `POST /export_from_folder.json` with `{ folderPath, displayName, seekMs, id }` only — CDN download URLs are **not** posted to the phone
-6. Opens `http://<phoneLanHost>:8765/browse` in a new tab (or focuses it if already open)
+6. Opens `http://<phoneLanHost>:8765/` (LAN monitor root) in a new tab (or focuses/navigates an existing phone LAN tab)
 
 On **multi-select Download** (pCloud builds a **zip archive**):
 
@@ -90,7 +90,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | File | Role |
 |------|------|
 | `manifest.json` | MV3 permissions |
-| `background.js` | Download intercept, REST POST, `/browse` tab |
+| `background.js` | Download intercept, REST POST, LAN root `/` tab |
 | `offscreen.html` / `offscreen.js` | Clipboard write |
 | `logs.html` / `logs.js` | In-browser REST log UI |
 | `lan_config.json` | Phone LAN target (synced on launch) |

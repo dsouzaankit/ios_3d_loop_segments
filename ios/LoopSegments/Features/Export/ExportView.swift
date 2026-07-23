@@ -552,7 +552,7 @@ struct ExportView: View {
                             resumeStore.saveSeekMs(seekMs, for: item)
                             syncLANResumeHintFromStore()
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.hapticBordered)
                     }
                 }
             }

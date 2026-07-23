@@ -70,7 +70,7 @@ struct PausedExportsView: View {
                                 }
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.hapticPlain)
                             .swipeActions(edge: .trailing) {
                                 Button("Remove", role: .destructive) {
                                     resumeStore.dismissPausedExport(entry)
@@ -98,7 +98,7 @@ struct PausedExportsView: View {
                     } label: {
                         exportActivityBanner(for: item)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hapticPlain)
                 }
             }
             .navigationDestination(item: $selectedEntry) { entry in

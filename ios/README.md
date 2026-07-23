@@ -10,6 +10,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 276 (1.2.40):** Haptic feedback on app button taps (light/soft; medium for destructive).
+
 **Build 275 (1.2.39):** Fix pending FIFO drain stuck after the first item — soft-paused checkpoints no longer block the queue (only user/auto Pause does). Also avoid draining in the same poll tick that just started an export.
 
 **Build 274 (1.2.38):** Paused tab always shows **Queued** / **Paused** sections (empty state text when none). LAN monitor/browse quick links include **`export_queue.json`** and **`export_pending_queue.json`**.

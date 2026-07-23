@@ -79,7 +79,7 @@ struct BrowserView: View {
                                         }
                                         .contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.hapticPlain)
                                     .swipeActions(edge: .trailing) {
                                         Button("Remove", role: .destructive) {
                                             folderBookmarkStore.remove(bookmark)
@@ -108,7 +108,7 @@ struct BrowserView: View {
                                         }
                                         .contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.hapticPlain)
                                     .swipeActions(edge: .trailing) {
                                         Button("Remove", role: .destructive) {
                                             resumeStore.dismissPinnedCompleted(entry)
@@ -181,7 +181,7 @@ struct BrowserView: View {
                     NavigationLink(value: item) {
                         exportActivityBanner(for: item)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hapticPlain)
                 }
             }
             .navigationDestination(for: WebDAVItem.self) { item in

@@ -40,12 +40,14 @@ struct RootView: View {
                 AuthView()
             }
         }
+        .buttonStyle(.appHaptic)
         .preferredColorScheme(nightModeEnabled ? .dark : .light)
         .background {
             NowPlayingFirstResponderAnchor()
                 .frame(width: 0, height: 0)
         }
         .onAppear {
+            AppHaptics.prepare()
             nightModeEnabled = AppearanceSettings.isNightModeEnabled
             if scenePhase == .active {
                 ExportBackgroundKeepAlive.shared.beginAppForegroundSession()

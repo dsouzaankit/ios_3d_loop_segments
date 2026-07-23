@@ -1633,48 +1633,68 @@ async function postLanExportQueue(items, { mode = "prepend", startFirst = true }
 
 async function openLanBrowse(cfg) {
   const base = lanBaseUrl(cfg);
-  const browseUrl = `${base}/browse`;
+  const rootUrl = `${base}/`;
   try {
     const tabs = await chrome.tabs.query({});
-    const existing = tabs.find((t) => {
+    const sameHost = tabs.filter((t) => {
       if (!t.url) return false;
       try {
         const u = new URL(t.url);
-        return (
-          `${u.protocol}//${u.host}` === base &&
-          (u.pathname === "/browse" || u.pathname === "/browse/")
-        );
+        return `${u.protocol}//${u.host}` === base;
       } catch {
         return false;
       }
     });
+    const existing =
+      sameHost.find((t) => {
+        try {
+          const p = new URL(t.url).pathname;
+          return p === "/" || p === "";
+        } catch {
+          return false;
+        }
+      }) || sameHost[0];
 
     if (existing?.id != null) {
-      await chrome.tabs.update(existing.id, { active: true });
+      // Prefer LAN monitor root; navigate away from /browse if that was the old target.
+      const needRoot = (() => {
+        try {
+          const p = new URL(existing.url).pathname;
+          return p !== "/" && p !== "";
+        } catch {
+          return true;
+        }
+      })();
+      await chrome.tabs.update(
+        existing.id,
+        needRoot ? { url: rootUrl, active: true } : { active: true }
+      );
       if (existing.windowId != null) {
         await chrome.windows.update(existing.windowId, { focused: true });
       }
       await appendRestLog({
         phase: "browse",
         ok: true,
-        browseUrl,
-        message: "focused existing Loop Segments /browse tab",
+        browseUrl: rootUrl,
+        message: needRoot
+          ? "focused existing Loop Segments LAN tab → /"
+          : "focused existing Loop Segments LAN root tab",
       });
       return;
     }
 
-    await chrome.tabs.create({ url: browseUrl, active: true });
+    await chrome.tabs.create({ url: rootUrl, active: true });
     await appendRestLog({
       phase: "browse",
       ok: true,
-      browseUrl,
-      message: "opened new Loop Segments /browse tab",
+      browseUrl: rootUrl,
+      message: "opened new Loop Segments LAN root tab",
     });
   } catch (err) {
     await appendRestLog({
       phase: "browse",
       ok: false,
-      browseUrl,
+      browseUrl: rootUrl,
       error: String(err && err.message ? err.message : err),
     });
   }
