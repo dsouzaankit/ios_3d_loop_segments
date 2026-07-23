@@ -10,6 +10,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 279 (1.2.43):** LAN **Queued exports** (`/` + `/browse`) is collapsed by default (`<details>`); summary still shows the count.
+
 **Build 278 (1.2.42):** Soft-pause for REST/queue resolve no longer holds the pending FIFO — only explicit user/auto Pause does. Failed name resolve **pops that item and drains the next** (expected). **No** phone alert, LAN banner, or companion desktop notify on skip — only `export_trigger.ack.json` (`rejected`) + `search_debug.txt`.
 
 **Build 277 (1.2.41):** LAN `/` and `/browse` show **Queued exports** with per-item **Remove** and **Clear queue** (`POST /export_queue.json` `action=remove|clear`). Stop retries pending-FIFO drain after coordinator cleanup (was a one-shot no-op while still busy). Companion docs: my.pcloud.com **`v`** type filter (5 types, including **Video**) before multi-select Download.

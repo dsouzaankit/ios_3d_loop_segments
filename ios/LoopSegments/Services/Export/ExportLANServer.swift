@@ -2132,9 +2132,10 @@ enum ExportLANServer {
         let count = queue["count"] as? Int ?? 0
         let items = queue["items"] as? [[String: Any]] ?? []
         let actionsHidden = count == 0 ? " style=\"display:none\"" : ""
+        // Collapsed by default (`<details>` without `open`); count stays visible on the summary.
         return """
-        <section id="lan-pending-queue-wrap" class="lan-pending-queue">
-          <h2 id="lan-pending-queue-heading">Queued exports (\(count))</h2>
+        <details id="lan-pending-queue-wrap" class="lan-pending-queue">
+          <summary id="lan-pending-queue-heading">Queued exports (\(count))</summary>
           <p class="muted">Not started yet. Auto-starts when idle after finish/Stop. User Pause holds the queue.</p>
           <ul id="lan-pending-queue">
           \(htmlPendingQueueListItems(from: items))
@@ -2142,7 +2143,7 @@ enum ExportLANServer {
           <p id="lan-pending-queue-actions"\(actionsHidden)>
             <button type="button" id="lan-pending-clear">Clear queue</button>
           </p>
-        </section>
+        </details>
         """
     }
 
@@ -2611,6 +2612,11 @@ enum ExportLANServer {
             #lan-export-logs li { word-break: break-all; }
             #trigger-status { min-height: 1.2em; }
             .lan-pending-queue { margin: 0.75rem 0 1rem; }
+            .lan-pending-queue > summary {
+              cursor: pointer;
+              font-size: 1.17em;
+              font-weight: 600;
+            }
             .lan-pending-queue ul { margin: 0.25rem 0 0.5rem; padding-left: 1.25rem; }
             .lan-pending-queue .pending-name { font-weight: 600; }
             .lan-pending-queue .pending-remove { margin-left: 0.45rem; }
