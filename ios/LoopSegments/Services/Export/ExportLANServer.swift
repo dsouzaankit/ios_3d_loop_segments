@@ -2859,6 +2859,29 @@ enum ExportLANServer {
         }
     }
 
+    /// Disk snapshot for `status.json` (LAN callbacks are not on the main actor).
+    private static func pendingExportQueueStatusPayload() -> [String: Any]? {
+        guard let url = ExportPaths.urlForLANWritableMedia(relativePath: PendingExportQueue.relativePath),
+              FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let items = try? JSONDecoder().decode([PendingExportItem].self, from: data),
+              !items.isEmpty else {
+            return nil
+        }
+        return [
+            "count": items.count,
+            "items": items.prefix(20).map { item -> [String: Any] in
+                var row: [String: Any] = [
+                    "id": item.id,
+                    "displayName": item.displayName,
+                ]
+                if let folder = item.folderPath { row["folderPath"] = folder }
+                if let seek = item.seekMs { row["seekMs"] = seek }
+                return row
+            },
+        ]
+    }
+
     private static func sendExportQueueUsageJSON(connection: NWConnection, done: @escaping () -> Void) {
         let payload: [String: Any] = [
             "endpoint": "/export_queue.json",
@@ -3651,25 +3674,8 @@ enum ExportLANServer {
         if let exportSource = LANExportSourceDisplay.statusPayload() {
             payload["exportSource"] = exportSource
         }
-        let pendingSnapshot: [PendingExportItem] = {
-            if Thread.isMainThread {
-                return PendingExportQueue.shared.snapshot()
-            }
-            return DispatchQueue.main.sync { PendingExportQueue.shared.snapshot() }
-        }()
-        if !pendingSnapshot.isEmpty {
-            payload["pendingExportQueue"] = [
-                "count": pendingSnapshot.count,
-                "items": pendingSnapshot.prefix(20).map { item -> [String: Any] in
-                    var row: [String: Any] = [
-                        "id": item.id,
-                        "displayName": item.displayName,
-                    ]
-                    if let folder = item.folderPath { row["folderPath"] = folder }
-                    if let seek = item.seekMs { row["seekMs"] = seek }
-                    return row
-                },
-            ]
+        if let pendingPayload = pendingExportQueueStatusPayload() {
+            payload["pendingExportQueue"] = pendingPayload
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)

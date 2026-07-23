@@ -26,7 +26,8 @@ final class PendingExportQueue: ObservableObject {
     static let shared = PendingExportQueue()
 
     static let maxItems = 50
-    static let relativePath = "\(ExportPaths.mediaExportFolderName)/scripts/export_pending_queue.json"
+    /// Readable off the main actor (LAN `status.json`).
+    nonisolated static let relativePath = "pcld_ios_media/scripts/export_pending_queue.json"
 
     @Published private(set) var items: [PendingExportItem] = []
     @Published private(set) var revision: Int = 0
