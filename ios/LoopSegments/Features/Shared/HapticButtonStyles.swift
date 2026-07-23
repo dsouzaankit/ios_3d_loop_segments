@@ -15,23 +15,29 @@ struct AppHapticPrimitiveButtonStyle: PrimitiveButtonStyle {
     }
 }
 
-/// System bordered chrome + light press haptic.
-struct HapticBorderedButtonStyle: ButtonStyle {
+/// System bordered chrome + light tap haptic.
+struct HapticBorderedButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        BorderedButtonStyle().makeBody(configuration: configuration)
-            .onChange(of: configuration.isPressed) { _, pressed in
-                if pressed { AppHaptics.tap(.light) }
-            }
+        Button(role: configuration.role) {
+            AppHaptics.tap(.light)
+            configuration.trigger()
+        } label: {
+            configuration.label
+        }
+        .buttonStyle(.bordered)
     }
 }
 
-/// System plain chrome + soft press haptic (list / navigation rows).
-struct HapticPlainButtonStyle: ButtonStyle {
+/// System plain chrome + soft tap haptic (list / navigation rows).
+struct HapticPlainButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        PlainButtonStyle().makeBody(configuration: configuration)
-            .onChange(of: configuration.isPressed) { _, pressed in
-                if pressed { AppHaptics.tap(.soft) }
-            }
+        Button(role: configuration.role) {
+            AppHaptics.tap(.soft)
+            configuration.trigger()
+        } label: {
+            configuration.label
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -39,10 +45,10 @@ extension PrimitiveButtonStyle where Self == AppHapticPrimitiveButtonStyle {
     static var appHaptic: AppHapticPrimitiveButtonStyle { AppHapticPrimitiveButtonStyle() }
 }
 
-extension ButtonStyle where Self == HapticBorderedButtonStyle {
+extension PrimitiveButtonStyle where Self == HapticBorderedButtonStyle {
     static var hapticBordered: HapticBorderedButtonStyle { HapticBorderedButtonStyle() }
 }
 
-extension ButtonStyle where Self == HapticPlainButtonStyle {
+extension PrimitiveButtonStyle where Self == HapticPlainButtonStyle {
     static var hapticPlain: HapticPlainButtonStyle { HapticPlainButtonStyle() }
 }
