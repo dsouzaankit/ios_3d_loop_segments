@@ -10,6 +10,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 274 (1.2.38):** Paused tab always shows **Queued** / **Paused** sections (empty state text when none). LAN monitor/browse quick links include **`export_queue.json`** and **`export_pending_queue.json`**.
+
 **Build 273 (1.2.37):** **Pending export FIFO** on the phone (`pcld_ios_media/scripts/export_pending_queue.json`). Companion multi-select archive Download is cancelled → selected `fileid`s resolved → `POST /export_queue.json` (`mode=prepend`, `startFirst=true`). Paused tab shows **Queued** (not started) above **Paused** (checkpoints). Drain on finish/Stop; **user Pause holds** the queue. Interrupt prepends; old pending stays. Cap **50** pending / **10** paused slots.
 
 **Build 272 (1.2.36):** **Keep Alive** defaults **on** (fresh install / unset preference).

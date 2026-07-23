@@ -1,7 +1,7 @@
 function render(logs) {
   const list = document.getElementById("list");
   const meta = document.getElementById("meta");
-  meta.textContent = `${logs.length} entries · disk log: %LOCALAPPDATA%\\pcloud_web_companion\\rest.log`;
+  meta.textContent = `${logs.length} entries · disk log: windows\\pcloud_web_companion\\rest.log (P:)`;
   list.replaceChildren();
   for (const entry of logs) {
     const div = document.createElement("div");

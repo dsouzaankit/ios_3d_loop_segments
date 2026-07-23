@@ -407,7 +407,8 @@ public static class CompanionDetachedProc {
 
 function Start-RestLogSink {
     $sinkScript = Join-Path $ScriptDir "_rest_log_sink.ps1"
-    $logFile = Join-Path $env:LOCALAPPDATA "pcloud_web_companion\rest.log"
+    # Keep on P: / repo companion folder (not LOCALAPPDATA) so logs sync with the project tree.
+    $logFile = Join-Path $ScriptDir "rest.log"
     if (-not (Test-Path -LiteralPath $sinkScript)) {
         Write-Warning "[rest-log] Missing $sinkScript"
         return
@@ -1086,7 +1087,7 @@ Write-Host "      $ChromeExtension"
 Write-Host "[run] Profile (local): $ChromeUserData"
 Write-Host "[run] Profile (repo):  $RepoProfileDir"
 Write-Host "[run] URL: $StartUrl"
-Write-Host "[run] REST disk log: $(Join-Path $env:LOCALAPPDATA 'pcloud_web_companion\rest.log')"
+Write-Host "[run] REST disk log: $(Join-Path $ScriptDir 'rest.log')"
 Write-Host "[run] In-browser logs: click the extension icon"
 Write-Host "[run] Args: $ChromeArgString"
 

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Lists every paused / interrupted export (multi-pause handoff). Browse keeps only the last-finished pin.
-/// Also shows **Queued** pending FIFO (not started yet) above paused rows.
+/// Also shows **Queued** pending FIFO (not started yet) above paused rows — section always visible.
 struct PausedExportsView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
@@ -12,88 +12,82 @@ struct PausedExportsView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if entries.isEmpty && pendingQueue.items.isEmpty {
-                    ContentUnavailableView(
-                        "No paused or queued exports",
-                        systemImage: "pause.circle",
-                        description: Text(
-                            "Paused: start another export while one is running. Queued: multi-select from the PC companion (archive download)."
-                        )
-                    )
-                } else {
-                    List {
-                        if !pendingQueue.items.isEmpty {
-                            Section {
-                                ForEach(pendingQueue.items) { item in
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.displayName)
-                                            .lineLimit(2)
-                                        Text("Queued · waiting")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        if let folder = item.folderPath, !folder.isEmpty {
-                                            Text(folder)
-                                                .font(.caption2)
-                                                .foregroundStyle(.tertiary)
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                    .swipeActions(edge: .trailing) {
-                                        Button("Remove", role: .destructive) {
-                                            pendingQueue.remove(id: item.id)
-                                        }
-                                    }
+            List {
+                Section {
+                    if pendingQueue.items.isEmpty {
+                        Text("No queued exports")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(pendingQueue.items) { item in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.displayName)
+                                    .lineLimit(2)
+                                Text("Queued · waiting")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if let folder = item.folderPath, !folder.isEmpty {
+                                    Text(folder)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
                                 }
-                                Button("Clear queue", role: .destructive) {
-                                    pendingQueue.clear()
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button("Remove", role: .destructive) {
+                                    pendingQueue.remove(id: item.id)
                                 }
-                            } header: {
-                                Text("Queued (\(pendingQueue.count))")
-                            } footer: {
-                                Text(
-                                    "Not started yet. Auto-starts when the phone is idle after an export finishes or Stop. " +
-                                        "User Pause holds the queue. Cap \(PendingExportQueue.maxItems). Companion multi-select prepends here."
-                                )
-                                .font(.footnote)
                             }
                         }
+                        Button("Clear queue", role: .destructive) {
+                            pendingQueue.clear()
+                        }
+                    }
+                } header: {
+                    Text("Queued (\(pendingQueue.count))")
+                } footer: {
+                    Text(
+                        "Not started yet. Auto-starts when the phone is idle after an export finishes or Stop. " +
+                            "User Pause holds the queue. Cap \(PendingExportQueue.maxItems). Companion multi-select prepends here."
+                    )
+                    .font(.footnote)
+                }
 
-                        if !entries.isEmpty {
-                            Section {
-                                ForEach(entries) { entry in
-                                    Button {
-                                        selectedEntry = entry
-                                    } label: {
-                                        HStack(alignment: .center) {
-                                            pausedRow(entry: entry)
-                                            Spacer(minLength: 4)
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .swipeActions(edge: .trailing) {
-                                        Button("Remove", role: .destructive) {
-                                            resumeStore.dismissPausedExport(entry)
-                                        }
-                                    }
+                Section {
+                    if entries.isEmpty {
+                        Text("No paused exports")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(entries) { entry in
+                            Button {
+                                selectedEntry = entry
+                            } label: {
+                                HStack(alignment: .center) {
+                                    pausedRow(entry: entry)
+                                    Spacer(minLength: 4)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.tertiary)
                                 }
-                            } header: {
-                                Text("Paused (\(entries.count))")
-                            } footer: {
-                                Text(
-                                    "Cap is \(ResumeStore.maxPausedExports) in-progress slots total (includes the live export). " +
-                                        "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
-                                        "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
-                                        "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove."
-                                )
-                                .font(.footnote)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing) {
+                                Button("Remove", role: .destructive) {
+                                    resumeStore.dismissPausedExport(entry)
+                                }
                             }
                         }
                     }
+                } header: {
+                    Text("Paused (\(entries.count))")
+                } footer: {
+                    Text(
+                        "Cap is \(ResumeStore.maxPausedExports) in-progress slots total (includes the live export). " +
+                            "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
+                            "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
+                            "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove."
+                    )
+                    .font(.footnote)
                 }
             }
             .navigationTitle("Paused")

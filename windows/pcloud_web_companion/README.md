@@ -81,7 +81,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 | Where | What |
 |-------|------|
-| `%LOCALAPPDATA%\pcloud_web_companion\rest.log` | JSON lines: `sw_boot`, `capture`, `request`, `response`, `browse`, … (cleared each `run_chromium.ps1` start) |
+| `windows\pcloud_web_companion\rest.log` (P:) | JSON lines: `sw_boot`, `capture`, `request`, `response`, `browse`, … (cleared each `run_chromium.ps1` start; gitignored) |
 | Extension toolbar icon | Same events in a popup |
 | Desktop notification | Queued / REST failed |
 

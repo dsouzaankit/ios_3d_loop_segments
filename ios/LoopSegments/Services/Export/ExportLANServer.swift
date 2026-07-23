@@ -2127,6 +2127,8 @@ enum ExportLANServer {
             #"<a href="status.json">status.json</a>"#,
             "<a href=\"\(LANExportTriggerControl.ackRelativePath)\">export_trigger.ack.json</a>",
             #"<a href="export_from_folder.json">export_from_folder.json</a>"#,
+            #"<a href="export_queue.json">export_queue.json</a>"#,
+            "<a href=\"\(PendingExportQueue.relativePath)\">export_pending_queue.json</a>",
         ]
         if FileManager.default.fileExists(atPath: ExportPaths.searchDebugLogURL.path) {
             links.append(#"<a href="search_debug.txt">search_debug.txt</a>"#)

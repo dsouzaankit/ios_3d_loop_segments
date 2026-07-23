@@ -1,5 +1,5 @@
 param(
-    [string]$LogFile = $(Join-Path $env:LOCALAPPDATA "pcloud_web_companion\rest.log"),
+    [string]$LogFile = $(Join-Path $PSScriptRoot "rest.log"),
     [int]$Port = 18765
 )
 
