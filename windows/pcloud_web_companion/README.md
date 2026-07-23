@@ -18,8 +18,8 @@ On **multi-select Download** (pCloud builds a **zip archive**):
 1. Cancels the archive download (not used by the phone)
 2. Reads recently captured selection `fileid`s from `getthumbslinks` / `getziplink` (`webRequest` + MAIN-world fetch/XHR hook)
 3. Resolves each video via pCloud `getpath` / `stat` + **parent folder path** → `{ folderPath, displayName }` (name-only fallback forces a slow bookmark WebDAV walk and often misses deep files)
-4. `POST /export_queue.json` with `{ mode: "prepend", startFirst: true, items: […] }` — phone FIFO; first item soft-pauses any running export
-5. Remaining items show under the app **Paused** tab → **Queued** until idle (finish/Stop drains; user Pause holds)
+4. `POST /export_queue.json` with `{ mode: "prepend", startFirst: true, items: […] }` — phone FIFO; first item soft-pauses any running export → that clip goes to **Paused** (parked) and is **not** auto-resumed when later queue items finish
+5. Remaining items show under the app **Paused** tab → **Queued** until idle (finish/Stop drains; user Pause holds). Resume interrupted titles manually from **Paused** / LAN
 
 **Tip — select only videos in my.pcloud.com:** the web UI can filter the current folder by type. Click the **`v`** (view / type filter) control, then pick one of the **five** type filters (including **Video**). With **Video** active, multi-select + Download queues video files for Loop Segments without grabbing photos/docs from the same folder.
 
