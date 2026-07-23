@@ -10,7 +10,7 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 278 (1.2.42):** Soft-pause for REST/queue resolve no longer holds the pending FIFO — only explicit user/auto Pause does. Failed name resolve can drain the next queued item.
+**Build 278 (1.2.42):** Soft-pause for REST/queue resolve no longer holds the pending FIFO — only explicit user/auto Pause does. Failed name resolve **pops that item and drains the next** (expected). **No** phone alert, LAN banner, or companion desktop notify on skip — only `export_trigger.ack.json` (`rejected`) + `search_debug.txt`.
 
 **Build 277 (1.2.41):** LAN `/` and `/browse` show **Queued exports** with per-item **Remove** and **Clear queue** (`POST /export_queue.json` `action=remove|clear`). Stop retries pending-FIFO drain after coordinator cleanup (was a one-shot no-op while still busy). Companion docs: my.pcloud.com **`v`** type filter (5 types, including **Video**) before multi-select Download.
 
@@ -228,7 +228,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`/pcloud_bookmarks.json`** (PUT, Basic auth) | Toggle bookmark: `{ "action": "toggle", "listingPath": "/…/", "displayName": "…" }`. |
 | **`/export_from_url.json`** (PUT or POST, Basic auth) | Queue **Export from URL**: `{ "url": "https://…", "saveName": "clip.mp4", "id": "<optional uuid>" }`. Returns **202** `{ status: "queued", … }`. Phone picks it up like other triggers (~2s). For pCloud files prefer **`/export_from_folder.json`** (avoids CDN IP binding). |
 | **`/export_from_folder.json`** (PUT or POST, Basic auth) | Queue **Export from folder/filename**: `{ "folderPath"?: "/Videos/MyFolder/", "displayName": "clip.mp4", "seekMs"?: 0, "id"?: "…" }`. Returns **202**. With `folderPath`: one-level PROPFIND, then walk on failure. **Without `folderPath`:** WebDAV filename walk only. `saveName` / `name` alias `displayName`. Used by [`windows/pcloud_web_companion`](../windows/pcloud_web_companion) — when folder resolve fails, POST `{ "saveName": "…" }` (omit folderPath). |
-| **`/export_queue.json`** (PUT or POST, Basic auth) | **Pending FIFO** (not Paused): enqueue `{ "mode"?: "append\|prepend\|replace", "startFirst"?: true, "items": [{ "folderPath"?, "displayName", "seekMs"?, "id"? }] }` → **202**. Or manage `{ "action": "remove", "id" }` / `{ "action": "clear" }` → **200**. LAN `/` + `/browse` list the queue with **Remove** / **Clear queue**. `status.json` always includes `pendingExportQueue`. |
+| **`/export_queue.json`** (PUT or POST, Basic auth) | **Pending FIFO** (not Paused): enqueue `{ "mode"?: "append\|prepend\|replace", "startFirst"?: true, "items": [{ "folderPath"?, "displayName", "seekMs"?, "id"? }] }` → **202**. Or manage `{ "action": "remove", "id" }` / `{ "action": "clear" }` → **200**. LAN `/` + `/browse` list the queue with **Remove** / **Clear queue**. `status.json` always includes `pendingExportQueue`. **Resolve miss (278+):** item already popped → ack `rejected` → next drains; **no** in-app/LAN/companion user alert (poll ack or `search_debug.txt`). |
 | **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
 | **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
 
@@ -280,7 +280,7 @@ Or with a known WebDAV path `href` (phone-relative path, not a PC/CDN URL):
 
 Triggers are polled while the app is **foreground**, **exporting**, or **Keep Alive** is playing (~2s). Optional fields: **`pool`**, **`folderPath`** (for random / folder resolve), **`url`** / **`saveName`** (for download; `saveName` also aliases `displayName` for folder resolve), **`id`** (UUID — duplicate ids are ignored).
 
-**Ack** (`export_trigger.ack.json`): `{ "receivedAt", "command", "status", "message", "triggerId" }` where **`status`** is `accepted` \| `rejected` \| `ignored`.
+**Ack** (`export_trigger.ack.json`): `{ "receivedAt", "command", "status", "message", "triggerId" }` where **`status`** is `accepted` \| `rejected` \| `ignored`. Phone-side WebDAV/name resolve misses (single **`/export_from_folder.json`** / `start_export` **or** a FIFO item) write **`rejected`** — **silent** in the app (no alert/banner). Queue (278+): item already popped → next drains. Single request: nothing starts (if an export was running, soft-pause leaves it paused). Companion “queued” / REST notify is only the LAN **202** (or POST failure), **not** a later resolve miss — poll ack or `search_debug.txt`. LAN Export buttons that poll ack can show `rejected` in the page status line.
 
 Example (PowerShell) — **Export from folder** via REST (preferred for pCloud):
 

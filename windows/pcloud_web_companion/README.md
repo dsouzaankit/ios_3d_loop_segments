@@ -85,7 +85,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 |-------|------|
 | `windows\pcloud_web_companion\rest.log` (P:) | JSON lines: `sw_boot`, `capture`, `request`, `response`, `browse`, … (cleared each `run_chromium.ps1` start; gitignored) |
 | Extension toolbar icon | Same events in a popup |
-| Desktop notification | Queued / REST failed |
+| Desktop notification | Archive/queue POST: queued OK, no fileids, empty resolve, or REST failed — **not** phone mid-FIFO resolve skips (those are silent; see phone `export_trigger.ack.json`) |
 
 ## Extension files
 
