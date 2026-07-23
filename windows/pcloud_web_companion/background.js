@@ -1470,7 +1470,7 @@ async function pcloudApiFilePath(fileId, auth, preferredHost, cdnUrl) {
         `&auth=${encodeURIComponent(auth)}`;
       const pathRes = await fetch(pathUrl);
       const pathJson = await pathRes.json();
-      if (pathJson && pathJson.result === 0 && typeof pathJson.path === "string") {
+      if (pathJson && pathJson.result === 0 && typeof pathJson.path === "string" && pathJson.path) {
         return { path: pathJson.path, host, method: "getpath" };
       }
       errors.push(`${host}/getpath result=${pathJson?.result}`);
@@ -1485,8 +1485,57 @@ async function pcloudApiFilePath(fileId, auth, preferredHost, cdnUrl) {
       const statJson = await statRes.json();
       if (statJson?.result === 0 && statJson.metadata) {
         const meta = statJson.metadata;
-        const path = typeof meta.path === "string" ? meta.path : null;
+        let path = typeof meta.path === "string" && meta.path ? meta.path : null;
         const name = typeof meta.name === "string" ? meta.name : null;
+        const parentId =
+          meta.parentfolderid != null ? String(meta.parentfolderid) : null;
+
+        // stat-by-fileid often omits metadata.path — rebuild via parent folder.
+        if (!path && name && parentId != null) {
+          const parentMeta = await pcloudApiFolderMeta(
+            parentId,
+            auth,
+            host,
+            cdnUrl
+          );
+          if (parentMeta?.path) {
+            const parentPath = String(parentMeta.path).replace(/\/+$/, "") || "";
+            path =
+              !parentPath || parentPath === "/"
+                ? `/${name}`
+                : `${parentPath}/${name}`;
+            return {
+              path,
+              name,
+              host,
+              method: parentMeta.method
+                ? `stat+parent(${parentMeta.method})`
+                : "stat+parent",
+            };
+          }
+          try {
+            const folderPathUrl =
+              `https://${host}/getpath?folderid=${encodeURIComponent(parentId)}` +
+              `&auth=${encodeURIComponent(auth)}`;
+            const folderPathRes = await fetch(folderPathUrl);
+            const folderPathJson = await folderPathRes.json();
+            if (
+              folderPathJson?.result === 0 &&
+              typeof folderPathJson.path === "string" &&
+              folderPathJson.path
+            ) {
+              const parentPath = String(folderPathJson.path).replace(/\/+$/, "");
+              path =
+                !parentPath || parentPath === "/"
+                  ? `/${name}`
+                  : `${parentPath}/${name}`;
+              return { path, name, host, method: "stat+getpath-folder" };
+            }
+          } catch (err) {
+            errors.push(`${host}/getpath-folder ${err}`);
+          }
+        }
+
         if (path) return { path, name, host, method: "stat" };
         if (name) return { path: null, name, host, method: "stat-name" };
       }
@@ -1495,7 +1544,7 @@ async function pcloudApiFilePath(fileId, auth, preferredHost, cdnUrl) {
       errors.push(`${host}/stat ${err}`);
     }
   }
-  return { error: errors.slice(0, 6).join("; ") };
+  return { error: errors.slice(0, 8).join("; ") };
 }
 
 function splitPathToFolderAndName(fullPath) {
@@ -1533,17 +1582,23 @@ async function resolveFileIdsToExportItems(fileIds, folderHint) {
           seekMs: 0,
           id: crypto.randomUUID(),
           fileId,
+          resolveMethod: resolved.method || "path",
         });
       } else if (displayName) {
         errors.push(`${fileId}: skip non-video ${displayName}`);
       }
     } else if (resolved?.name && isLikelyVideoName(resolved.name)) {
+      errors.push(
+        `${fileId}: name-only “${resolved.name}” (no folderPath; ${resolved.method || "stat-name"}) — phone would WebDAV-walk bookmarks only`
+      );
+      // Still queue with null folder as last resort (deep files often miss bookmarks).
       items.push({
         folderPath: folderHint?.folderPath || null,
         displayName: resolved.name,
         seekMs: 0,
         id: crypto.randomUUID(),
         fileId,
+        resolveMethod: resolved.method || "stat-name",
       });
     } else {
       errors.push(`${fileId}: ${resolved?.error || "unresolved"}`);
@@ -1808,8 +1863,11 @@ async function runArchiveQueuePipeline({ url, filename, referrer, downloadId }) 
       displayName: i.displayName,
       folderPath: i.folderPath,
       fileId: i.fileId,
+      resolveMethod: i.resolveMethod || null,
     })),
     errors: errors.slice(0, 12),
+    withFolderPath: items.filter((i) => i.folderPath).length,
+    nameOnly: items.filter((i) => !i.folderPath).length,
   });
 
   if (!items.length) {
