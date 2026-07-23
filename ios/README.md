@@ -10,6 +10,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 278 (1.2.42):** Soft-pause for REST/queue resolve no longer holds the pending FIFO — only explicit user/auto Pause does. Failed name resolve can drain the next queued item.
+
 **Build 277 (1.2.41):** LAN `/` and `/browse` show **Queued exports** with per-item **Remove** and **Clear queue** (`POST /export_queue.json` `action=remove|clear`). Stop retries pending-FIFO drain after coordinator cleanup (was a one-shot no-op while still busy). Companion docs: my.pcloud.com **`v`** type filter (5 types, including **Video**) before multi-select Download.
 
 **Build 276 (1.2.40):** Haptic feedback on app button taps (light/soft; medium for destructive).

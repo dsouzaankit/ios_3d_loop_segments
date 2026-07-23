@@ -60,6 +60,7 @@ enum LANExportTriggerRunner {
                 || note.hasPrefix("LAN trigger — URL")
         }()
         if !startedExport {
+            // Includes resolve failures ("Trigger rejected — …") so the next pending item can start.
             PendingExportQueue.shared.drainIfIdle(session: session)
         }
     }

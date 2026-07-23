@@ -328,6 +328,7 @@ enum LANExportTriggerControl {
                             message: message,
                             triggerId: trigger.id
                         )
+                        // First queue item already popped; allow FIFO drain on the next runner tick.
                         return "Trigger rejected — \(message)"
                     }
                 }

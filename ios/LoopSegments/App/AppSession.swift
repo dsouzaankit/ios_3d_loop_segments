@@ -486,6 +486,7 @@ final class AppSession: ObservableObject {
 
     /// Pause only (checkpoint + media stay on root). Used while REST resolves folder/filename so a failed
     /// lookup does not archive/destroy the previous run.
+    /// Soft-pause must **not** hold the pending FIFO (`drainIfIdle` keys off `userRequestedExportPause`).
     func pauseRunningExportForResolve() async {
         guard isExportRunning || exportCoordinator.isBusy else { return }
         if isExportRunning {
@@ -508,7 +509,10 @@ final class AppSession: ObservableObject {
         for _ in 0 ..< 300 where exportCoordinator.isBusy {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        // Leave pause flags set until prepareForNewExportHandoff / startExport clears them.
+        // Checkpoint stays in ResumeStore / LAN "paused" line. Clear the *user Pause* hold so a
+        // failed resolve (or the rest of the FIFO) can drain. startExport clears these again on success.
+        userRequestedExportPause = false
+        exportCoordinator.userRequestedPause = false
     }
 
     /// Pause the running export (checkpoint kept), park root media under `parked/<filename>/`, then allow a fresh start.
