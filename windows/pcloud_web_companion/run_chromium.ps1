@@ -23,13 +23,15 @@ if (-not $ScriptDir) { throw "Cannot resolve script directory; run with: powersh
 $ExtensionDir = $ScriptDir
 $ManifestPath = Join-Path $ExtensionDir "manifest.json"
 $WindowsDir = Split-Path -Parent $ScriptDir
-$PythonHelper = Join-Path $WindowsDir "Get-LoopSegmentsPython.ps1"
+$LibDir = Join-Path $WindowsDir "lib"
+$UsbDir = Join-Path $WindowsDir "usb"
+$PythonHelper = Join-Path $LibDir "Get-LoopSegmentsPython.ps1"
 if (-not (Test-Path -LiteralPath $PythonHelper)) {
     throw "Missing shared Python helper: $PythonHelper"
 }
 . $PythonHelper
 
-$AltServerHelper = Join-Path $WindowsDir "Get-LoopSegmentsAltServer.ps1"
+$AltServerHelper = Join-Path $LibDir "Get-LoopSegmentsAltServer.ps1"
 if (-not (Test-Path -LiteralPath $AltServerHelper)) {
     throw "Missing shared AltServer helper: $AltServerHelper"
 }
@@ -113,7 +115,7 @@ if (-not (Test-Path -LiteralPath $legacyVenvMarker)) {
         "Do not create .venv in this folder."
         "The companion virtualenv is machine-local:"
         "  %LOCALAPPDATA%\pcloud_web_companion\venv"
-        "Run ..\Setup-LoopSegmentsWindows.ps1 on each PC."
+        "Run ..\setup\Setup-LoopSegmentsWindows.ps1 on each PC."
     ) -join [Environment]::NewLine | Set-Content -LiteralPath $legacyVenvMarker -Encoding utf8
 }
 
@@ -494,7 +496,7 @@ function Test-PhoneLanPageReachable {
 
     Write-Host "[lan] TCP probe ${hostName}:${port} ..."
     if (-not (Test-TcpPortOpen -HostName $hostName -Port $port -TimeoutMs 2000)) {
-        Write-Host "[lan] Port closed/unreachable - will USB-launch if needed"
+        Write-Host "[lan] Port closed/unreachable"
         return $false
     }
 
@@ -517,23 +519,24 @@ function Test-PhoneLanPageReachable {
 }
 
 function Invoke-LoopSegmentsUsbLaunch {
-    # Always warn if AltServer missing (7-day AltStore cert), even when LAN skip / -SkipUsbLaunch.
+    # Always warn if AltServer missing (7-day AltStore cert), even with -SkipUsbLaunch.
     [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
+
+    $lanUp = Test-PhoneLanPageReachable
+    if ($lanUp) {
+        Write-Host "[lan] Status: UP (phone LAN responding)"
+    } else {
+        Write-Host "[lan] Status: DOWN (phone LAN not responding)"
+    }
 
     if ($SkipUsbLaunch) {
         Write-Host "[usb] Skipping Loop Segments USB launch (-SkipUsbLaunch)"
         return
     }
 
-    if (Test-PhoneLanPageReachable) {
-        Write-Host "[usb] Phone LAN already up - skipping unlock probe and USB launch"
-        return
-    }
-
-    $windowsDir = Split-Path -Parent $ScriptDir
-    $launchPs1 = Join-Path $windowsDir "Launch-LoopSegmentsViaUsb.ps1"
+    $launchPs1 = Join-Path $UsbDir "Launch-LoopSegmentsViaUsb.ps1"
     if (-not (Test-Path -LiteralPath $launchPs1)) {
-        throw "[usb] Missing $launchPs1 - expected integrated windows/Launch-LoopSegmentsViaUsb.ps1"
+        throw "[usb] Missing $launchPs1 - expected windows/usb/Launch-LoopSegmentsViaUsb.ps1"
     }
 
     $psArgs = [System.Collections.Generic.List[string]]::new()
@@ -547,7 +550,11 @@ function Invoke-LoopSegmentsUsbLaunch {
         [void]$psArgs.Add("-SkipMount")
     }
 
-    Write-Host "[usb] LAN not reachable - launching Loop Segments on phone before Chromium..."
+    if ($lanUp) {
+        Write-Host "[usb] Foregrounding Loop Segments on phone before Chromium (LAN already up)..."
+    } else {
+        Write-Host "[usb] LAN not reachable - launching Loop Segments on phone before Chromium..."
+    }
     Write-Host "[usb] > powershell $($psArgs -join ' ')"
     & powershell.exe @psArgs
     $code = $LASTEXITCODE
@@ -823,7 +830,7 @@ function Invoke-GoIphoneHome {
         Write-Host "[home] Skipping iPhone Home press (-SkipGoHome)"
         return
     }
-    $homePs1 = Join-Path $WindowsDir "Go-IphoneHomeViaUsb.ps1"
+    $homePs1 = Join-Path $UsbDir "Go-IphoneHomeViaUsb.ps1"
     if (-not (Test-Path -LiteralPath $homePs1)) {
         Write-Warning "[home] Missing $homePs1"
         return

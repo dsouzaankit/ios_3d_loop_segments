@@ -11,7 +11,7 @@
   Print resolved paths (rclone, WinFsp) without changing config.
 
 .EXAMPLE
-  Copy-Item loop-segments-windows.example.json loop-segments-windows.json
+  Copy-Item ..\loop-segments-windows.example.json ..\loop-segments-windows.json
   .\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 
 .EXAMPLE
@@ -34,7 +34,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\LoopSegments-Windows.ps1"
+. "$PSScriptRoot\..\lib\LoopSegments-Windows.ps1"
 
 if ($Show) {
     Show-LoopSegmentsWindowsDiagnostics
@@ -129,4 +129,4 @@ Save-LoopSegmentsWindowsSettings -Settings $settings
 Write-Host ''
 Show-LoopSegmentsWindowsDiagnostics
 Write-Host ''
-Write-Host 'Next: .\Mount-LoopSegmentsRclone.ps1 -TestOnly   # then .\Mount-LoopSegmentsRclone.ps1 to mount'
+Write-Host 'Next: ..\rclone\Mount-LoopSegmentsRclone.ps1 -TestOnly   # then ..\rclone\Mount-LoopSegmentsRclone.ps1 to mount'

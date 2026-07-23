@@ -29,7 +29,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PythonHelper = Join-Path $PSScriptRoot "Get-LoopSegmentsPython.ps1"
+$PythonHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsPython.ps1"
 if (-not (Test-Path -LiteralPath $PythonHelper)) {
     throw "Missing shared Python helper: $PythonHelper"
 }

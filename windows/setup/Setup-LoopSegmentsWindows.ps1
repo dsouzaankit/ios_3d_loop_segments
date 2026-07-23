@@ -24,10 +24,10 @@
   Recreate the companion venv even if it looks healthy.
 
 .EXAMPLE
-  .\Setup-LoopSegmentsWindows.ps1
+  .\setup\Setup-LoopSegmentsWindows.ps1
 
 .EXAMPLE
-  .\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
+  .\setup\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 #>
 [CmdletBinding()]
 param(
@@ -40,17 +40,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-. "$PSScriptRoot\LoopSegments-Windows.ps1"
-. "$PSScriptRoot\Get-LoopSegmentsPython.ps1"
-. "$PSScriptRoot\Get-LoopSegmentsAltServer.ps1"
+$WindowsRoot = Split-Path -Parent $PSScriptRoot
+$LibDir = Join-Path $WindowsRoot 'lib'
+. (Join-Path $LibDir 'LoopSegments-Windows.ps1')
+. (Join-Path $LibDir 'Get-LoopSegmentsPython.ps1')
+. (Join-Path $LibDir 'Get-LoopSegmentsAltServer.ps1')
 
-$exampleJson = Join-Path $PSScriptRoot "loop-segments-windows.example.json"
-$liveJson = Join-Path $PSScriptRoot "loop-segments-windows.json"
-$companionDir = Join-Path $PSScriptRoot "pcloud_web_companion"
+$exampleJson = Join-Path $WindowsRoot "loop-segments-windows.example.json"
+$liveJson = Join-Path $WindowsRoot "loop-segments-windows.json"
+$companionDir = Join-Path $WindowsRoot "pcloud_web_companion"
 $runChromium = Join-Path $companionDir "run_chromium.ps1"
 
 Write-Host "=== Loop Segments Windows setup (portable) ===" -ForegroundColor Cyan
-Write-Host "Repo windows folder: $PSScriptRoot"
+Write-Host "Repo windows folder: $WindowsRoot"
 Write-Host "Machine-local companion data: $(Join-Path $env:LOCALAPPDATA 'pcloud_web_companion')"
 Write-Host ""
 [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
@@ -98,7 +100,7 @@ if ($configDirty) {
 }
 
 if ([string]::IsNullOrWhiteSpace($settings.phoneLanHost)) {
-    Write-Warning "[config] phoneLanHost is empty. Set it with: .\Set-LoopSegmentsWindows.ps1 -PhoneHost <ip>"
+    Write-Warning "[config] phoneLanHost is empty. Set it with: .\setup\Set-LoopSegmentsWindows.ps1 -PhoneHost <ip>"
 } else {
     Write-Host "[config] phoneLanHost = $($settings.phoneLanHost)"
 }
@@ -162,8 +164,8 @@ Write-Host ""
 Write-Host "=== Setup complete ===" -ForegroundColor Green
 Write-Host @"
 Next:
-  .\Set-LoopSegmentsWindows.ps1 -Show
-  .\Run-PCloudWebCompanion.ps1
+  .\setup\Set-LoopSegmentsWindows.ps1 -Show
+  .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
 
 Portable notes:
   - loop-segments-windows.json is per-PC (gitignored). Prefer empty rcloneConfigPath.
@@ -175,6 +177,6 @@ Portable notes:
   - If the app becomes unavailable: AltServer running -> USB + unlock -> AltStore Refresh All
     -> Settings -> General -> VPN & Device Management -> Developer App -> Trust
     -> open Loop Segments once -> retry companion/USB launch.
-  - Optional: .\Register-AltServerAtLogon.ps1
+  - Optional: .\sideload\Register-AltServerAtLogon.ps1
 "@
 [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)

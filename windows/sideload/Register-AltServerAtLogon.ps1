@@ -25,7 +25,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$AltServerHelper = Join-Path $PSScriptRoot 'Get-LoopSegmentsAltServer.ps1'
+$AltServerHelper = Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\Get-LoopSegmentsAltServer.ps1'
 if (-not (Test-Path -LiteralPath $AltServerHelper)) {
     throw "Missing shared AltServer helper: $AltServerHelper"
 }

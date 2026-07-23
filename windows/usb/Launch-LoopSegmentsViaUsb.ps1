@@ -67,13 +67,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PythonHelper = Join-Path $PSScriptRoot "Get-LoopSegmentsPython.ps1"
+$PythonHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsPython.ps1"
 if (-not (Test-Path -LiteralPath $PythonHelper)) {
     throw "Missing shared Python helper: $PythonHelper"
 }
 . $PythonHelper
 
-$AltServerHelper = Join-Path $PSScriptRoot "Get-LoopSegmentsAltServer.ps1"
+$AltServerHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsAltServer.ps1"
 if (-not (Test-Path -LiteralPath $AltServerHelper)) {
     throw "Missing shared AltServer helper: $AltServerHelper"
 }

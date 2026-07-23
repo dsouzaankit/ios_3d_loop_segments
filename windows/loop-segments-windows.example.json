@@ -14,5 +14,5 @@
   "dlnaFolder": "",
   "webdavUser": "admin",
   "webdavPassword": "iosadmin",
-  "notes": "Per-PC file (gitignored). Copy to loop-segments-windows.json on each Windows PC. Empty rcloneConfigPath = auto-detect. phoneLanHosts pools multiple iPhones for Get-LoopSegmentsUnifiedLANListing.ps1; phoneLanHost remains the primary mount target for rclone."
+  "notes": "Per-PC file (gitignored). Copy to loop-segments-windows.json on each Windows PC. Empty rcloneConfigPath = auto-detect. phoneLanHosts pools multiple iPhones for lan\\Get-LoopSegmentsUnifiedLANListing.ps1; phoneLanHost remains the primary mount target for rclone."
 }

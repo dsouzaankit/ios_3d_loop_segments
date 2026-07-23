@@ -62,7 +62,7 @@ expires in about 7 days: the app icon may still show, but opens fail until you r
 
 $(Get-LoopSegmentsAppUnavailableResolution)
 Install AltServer: https://altstore.io
-Optional: .\Register-AltServerAtLogon.ps1  (tray at logon)
+Optional: .\sideload\Register-AltServerAtLogon.ps1  (tray at logon)
 "@
 }
 

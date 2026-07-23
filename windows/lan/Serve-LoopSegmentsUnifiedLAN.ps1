@@ -32,7 +32,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\LoopSegments-Windows.ps1"
+. "$PSScriptRoot\..\lib\LoopSegments-Windows.ps1"
 
 if ($ListenPort -le 0 -or $ListenPort -gt 65535) {
     throw 'ListenPort must be 1-65535.'

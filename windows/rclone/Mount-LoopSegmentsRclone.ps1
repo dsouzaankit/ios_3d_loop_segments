@@ -7,8 +7,8 @@
   Loop Segments on the phone serves HTTP + WebDAV on port 8765 (PROPFIND, GET, Basic auth admin/iosadmin).
   This script writes/updates a [loopsegments] block in rclone.conf and runs rclone mount (WinFsp).
 
-  Per-PC settings: loop-segments-windows.json in this folder (see Set-LoopSegmentsWindows.ps1).
-  Scripts use $PSScriptRoot — copy or clone the repo anywhere; only the json file differs per PC.
+  Per-PC settings: loop-segments-windows.json in the parent windows\ folder (see ..\setup\Set-LoopSegmentsWindows.ps1).
+  Scripts resolve paths from the shared helper — copy or clone the repo anywhere; only the json file differs per PC.
 
 .PARAMETER RemovePort80Proxy
   Admin: remove netsh portproxy rules (PC :80 or :8080 -> phone :8765) from legacy WebDAV mapping.
@@ -22,8 +22,8 @@
   loop/, _working.mp4, and export segments stay read-only on the phone even when L: is writable.
 
 .EXAMPLE
-  Copy-Item loop-segments-windows.example.json loop-segments-windows.json
-  .\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.1.42
+  Copy-Item ..\loop-segments-windows.example.json ..\loop-segments-windows.json
+  ..\setup\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.1.42
   .\Mount-LoopSegmentsRclone.ps1 -TestOnly
   .\Mount-LoopSegmentsRclone.ps1
 
@@ -46,7 +46,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\LoopSegments-Windows.ps1"
+. "$PSScriptRoot\..\lib\LoopSegments-Windows.ps1"
 
 function Ensure-RcloneRemote {
     param(
@@ -239,7 +239,7 @@ if (-not $Remove -and -not $TestOnly) {
     if (-not (Test-LoopSegmentsWinFspInstalled)) {
         Write-Warning @'
 WinFsp not detected. Set winfspDllPath or skipWinFspCheck in loop-segments-windows.json.
-If Koofr rclone mount already works, run: .\Set-LoopSegmentsWindows.ps1 -SkipWinFspCheck
+If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -SkipWinFspCheck
 '@
     }
 }

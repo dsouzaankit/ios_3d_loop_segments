@@ -37,7 +37,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\..\LoopSegments-Windows.ps1"
+. "$PSScriptRoot\..\lib\LoopSegments-Windows.ps1"
 
 function Normalize-PhoneLanRemoteDir {
     param([string] $Dir)

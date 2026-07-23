@@ -58,13 +58,13 @@ Large files on cellular: first segment waits for index + dense window (`Download
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
 Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # first time on this PC
-.\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.x.x
-.\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional HTTP check
+.\setup\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.x.x
+.\rclone\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional HTTP check
 ```
 
 Open **`http://192.168.x.x:8765/`** in a browser and save files, use **`Invoke-WebRequest`**, or **[windows/archive/Sync-FromPhoneLAN.ps1](windows/archive/Sync-FromPhoneLAN.ps1)**. Per-PC json: [windows/README.md](windows/README.md).
 
-Copy segment MP4s into your DLNA folder (or use **`Run-SegmentCopy.ps1`** from the sibling **`3d_loop_segments`** repo for pCloud → PC). Optional **rclone mount**: [windows/RCLONE-PHONE-MOUNT.md](windows/RCLONE-PHONE-MOUNT.md).
+Copy segment MP4s into your DLNA folder (or use **`Run-SegmentCopy.ps1`** from the sibling **`3d_loop_segments`** repo for pCloud → PC). Optional **rclone mount**: [windows/rclone/RCLONE-PHONE-MOUNT.md](windows/rclone/RCLONE-PHONE-MOUNT.md).
 
 ### Manual (USB / Apple Devices)
 

@@ -1,12 +1,16 @@
-#Requires -Version 5.1
-# Shared per-PC settings for Loop Segments windows/*.ps1 (dot-source from $PSScriptRoot).
+﻿#Requires -Version 5.1
+# Shared per-PC settings for Loop Segments windows scripts (lib/, setup/, usb/, rclone/, …).
+# This file lives in windows\lib\; config JSON stays in windows\ (parent of lib).
+# Capture windows\ at load time so config paths stay correct even when callers live in a subfolder
+# (dot-sourced $PSScriptRoot would otherwise follow the caller).
+$script:LoopSegmentsWindowsRoot = Split-Path -Parent $PSScriptRoot
 
 function Get-LoopSegmentsWindowsConfigPath {
-    Join-Path $PSScriptRoot 'loop-segments-windows.json'
+    Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-windows.json'
 }
 
 function Get-LoopSegmentsWindowsExamplePath {
-    Join-Path $PSScriptRoot 'loop-segments-windows.example.json'
+    Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-windows.example.json'
 }
 
 function Get-DefaultLoopSegmentsWindowsSettings {
@@ -77,7 +81,7 @@ function Merge-LoopSegmentsWindowsSettings {
 
 function Import-LoopSegmentsLegacyLanHost {
     param([hashtable] $Settings)
-    $legacy = Join-Path $PSScriptRoot 'loop-segments-lan-host.txt'
+    $legacy = Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-lan-host.txt'
     if (-not [string]::IsNullOrWhiteSpace($Settings.phoneLanHost)) { return $Settings }
     if (-not (Test-Path -LiteralPath $legacy)) { return $Settings }
     $ip = (Get-Content -LiteralPath $legacy -Raw).Trim().Trim('"')
@@ -104,7 +108,7 @@ function Save-LoopSegmentsWindowsSettings {
     $json = $ordered | ConvertTo-Json -Depth 4
     Set-Content -LiteralPath $path -Value $json -Encoding UTF8
     Write-Host "Saved: $path"
-    $legacy = Join-Path $PSScriptRoot 'loop-segments-lan-host.txt'
+    $legacy = Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-lan-host.txt'
     if (-not [string]::IsNullOrWhiteSpace($Settings.phoneLanHost)) {
         $Settings.phoneLanHost.Trim() | Set-Content -LiteralPath $legacy -Encoding UTF8 -NoNewline
     }
@@ -174,7 +178,7 @@ function Find-RcloneConfigPath {
     if (-not [string]::IsNullOrWhiteSpace($override)) {
         # Copied json from another PC/user: ignore foreign absolute paths.
         if (Test-RcloneConfigPathForeignUser $override) {
-            Write-Warning "Ignoring rcloneConfigPath from another Windows user; using auto-detect. Clear it with Set-LoopSegmentsWindows.ps1 or Setup-LoopSegmentsWindows.ps1."
+            Write-Warning "Ignoring rcloneConfigPath from another Windows user; using auto-detect. Clear it with setup\Set-LoopSegmentsWindows.ps1 or setup\Setup-LoopSegmentsWindows.ps1."
             $override = $null
         }
     }
@@ -187,7 +191,7 @@ function Find-RcloneConfigPath {
 rcloneConfigPath not found: $override
 
   Set rcloneConfigPath to "" in loop-segments-windows.json for auto (%APPDATA%\rclone\rclone.conf), or create that file, or fix the path if this json was copied from another PC.
-  Tip: .\Setup-LoopSegmentsWindows.ps1 clears foreign/stale absolute paths.
+  Tip: .\setup\Setup-LoopSegmentsWindows.ps1 clears foreign/stale absolute paths.
 "@
     }
     if (-not [string]::IsNullOrWhiteSpace($env:RCLONE_CONFIG)) {
@@ -269,8 +273,8 @@ function Get-LoopSegmentsLANHost {
 phoneLanHost is required.
 
   Copy loop-segments-windows.example.json to loop-segments-windows.json
-  Run: .\Set-LoopSegmentsWindows.ps1
-  Or:  .\Set-LoopSegmentsLANHost.ps1 <phone-ip>
+  Run: .\setup\Set-LoopSegmentsWindows.ps1
+  Or:  .\setup\Set-LoopSegmentsLANHost.ps1 <phone-ip>
 "@
     }
     return $resolved.Trim()

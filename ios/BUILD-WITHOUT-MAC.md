@@ -115,7 +115,7 @@ Wi‑Fi + **AltServer**. AltStore’s [Windows guide](https://faq.altstore.io/ge
 1. Install [AltServer for Windows](https://altstore.io).
 2. Install [iTunes 64-bit](https://www.apple.com/itunes/download/win64) + [iCloud for Windows](https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe) from Apple; sign **iCloud** in with your Apple ID.
 3. **One-time Wi‑Fi pairing** (USB first) — see [Wi‑Fi sync checkbox](#wifi-sync-for-altstore-one-time) below.
-4. Enable **AltServer at logon** (installer option, or [Register-AltServerAtLogon.ps1](../windows/Register-AltServerAtLogon.ps1)).
+4. Enable **AltServer at logon** (installer option, or [Register-AltServerAtLogon.ps1](../windows/sideload/Register-AltServerAtLogon.ps1)).
 5. iPhone and PC on the **same Wi‑Fi** (USB for first AltStore install is OK — [AltStore FAQ](https://faq.altstore.io)).
 6. AltServer tray → **Install AltStore** on the phone.
 7. Sign in to AltStore with your **free Apple ID**.
@@ -332,7 +332,7 @@ AltStore (iPhone)  ──requests refresh──►  AltServer (PC)  ──signs�
 | **Wi‑Fi** | **AltStore** (background, before expiry) | **Sometimes** — same Wi‑Fi, AltServer running, Background App Refresh on; iOS may delay |
 | **USB** | **You** — open AltStore → **My Apps → Refresh All** | **No** — cable only helps AltServer be reachable; no plug-in-and-refresh |
 
-[Register-AltServerAtLogon.ps1](../windows/Register-AltServerAtLogon.ps1) only keeps **AltServer in the tray** at logon; it does not trigger refresh on USB attach. For USB-only refresh without opening AltStore manually, use [Sideloadly fallback](#5-sideloadly-fallback-only-if-altstore-fails) (daemon refreshes on USB when enrolled).
+[Register-AltServerAtLogon.ps1](../windows/sideload/Register-AltServerAtLogon.ps1) only keeps **AltServer in the tray** at logon; it does not trigger refresh on USB attach. For USB-only refresh without opening AltStore manually, use [Sideloadly fallback](#5-sideloadly-fallback-only-if-altstore-fails) (daemon refreshes on USB when enrolled).
 
 | Piece | Role |
 |-------|------|
@@ -343,7 +343,7 @@ AltStore (iPhone)  ──requests refresh──►  AltServer (PC)  ──signs�
 
 **One-time setup**
 
-1. **AltServer** running at Windows logon ([Register-AltServerAtLogon.ps1](../windows/Register-AltServerAtLogon.ps1) if the installer did not add it).
+1. **AltServer** running at Windows logon ([Register-AltServerAtLogon.ps1](../windows/sideload/Register-AltServerAtLogon.ps1) if the installer did not add it).
 2. iPhone **Background App Refresh** enabled for AltStore (above).
 3. After install, open AltStore once on Wi‑Fi so it pairs with AltServer.
 
@@ -433,7 +433,7 @@ Then [WORKFLOW.md](../WORKFLOW.md): export → `Sync-FromPhoneLAN.ps1 -Watch` �
 
 Use only when AltStore cannot install or refresh. Requires **iTunes (64-bit from Apple)** + USB. See [Sideloadly fallback details](#sideloadly-fallback-details) at the end of this doc.
 
-Brief steps: install iTunes → USB **Trust This Computer** → [Sideloadly](https://sideloadly.io) → drag IPA → enable **Automatic App Refresh** → [trust developer](#trust-the-developer-on-iphone-required-once-not-weekly). Optional PC helper: `.\Register-SideloadlyAutoRefresh.ps1 -WatchUsb` (see [windows/README.md](../windows/README.md)).
+Brief steps: install iTunes → USB **Trust This Computer** → [Sideloadly](https://sideloadly.io) → drag IPA → enable **Automatic App Refresh** → [trust developer](#trust-the-developer-on-iphone-required-once-not-weekly). Optional PC helper: `.\sideload\Register-SideloadlyAutoRefresh.ps1 -WatchUsb` (see [windows/README.md](../windows/README.md)).
 
 ---
 
@@ -489,7 +489,7 @@ Only if [AltStore](#2-install-with-altstore-primary--windows) fails. Requires **
 1. Sideloadly → drag **`LoopSegments.ipa`** → sign in with Apple ID.
 2. Check **Automatic App Refresh** at install.
 3. Sideloadly → Settings → **Daemon** / launch at startup.
-4. Optional: `.\Register-SideloadlyAutoRefresh.ps1 -WatchUsb` ([windows/README.md](../windows/README.md)).
+4. Optional: `.\sideload\Register-SideloadlyAutoRefresh.ps1 -WatchUsb` ([windows/README.md](../windows/README.md)).
 5. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly).
 
 **Login fails?** Accept agreement at [developer.apple.com](https://developer.apple.com), update Sideloadly, clear `%LOCALAPPDATA%\cache\sideloadly`, try **Anisette → Remote**. Prefer fixing AltStore instead.

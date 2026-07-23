@@ -130,7 +130,7 @@ struct ExportView: View {
                 Text("WebDAV auth: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword)")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("PC: windows/Mount-PhoneL.cmd (or windows/Mount-LoopSegmentsRclone.ps1) maps pcld_ios_media/ over Wi‑Fi; use the LAN IP above.")
+                Text("PC: windows/rclone/Mount-PhoneL.cmd (or Mount-LoopSegmentsRclone.ps1) maps pcld_ios_media/ over Wi‑Fi; use the LAN IP above.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text(inProgressLANFootnote)

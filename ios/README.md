@@ -429,7 +429,7 @@ Implementation: `ExportMediaArchive.swift`, `ExportRetentionSourceCatalog.swift`
 - **Full movie on pCloud** — pCloud WebDAV in Skybox.
 - **Phone export** — Skybox WebDAV to the phone, **Pigasus** / browser HTTP URLs, or copy to a PC folder for DLNA.
 
-**PC probe / mount:** [../windows/README.md](../windows/README.md) (`Mount-LoopSegmentsRclone.ps1 -TestOnly`). Expect **GET** **`status.json`** and index **`/`** OK. rclone drive mapping is optional and may be slow.
+**PC probe / mount:** [../windows/README.md](../windows/README.md) (`rclone\Mount-LoopSegmentsRclone.ps1 -TestOnly`). Expect **GET** **`status.json`** and index **`/`** OK. rclone drive mapping is optional and may be slow.
 
 ### Download modes by scenario
 

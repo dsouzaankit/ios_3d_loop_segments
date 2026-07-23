@@ -110,7 +110,7 @@ Start-Sleep -Milliseconds 500
 Sync-Upload -Src $ProfileDir -Dst $RepoProfileDir
 Clear-Local -Dir $ProfileDir
 
-$homePs1 = Join-Path (Split-Path -Parent $PSScriptRoot) "Go-IphoneHomeViaUsb.ps1"
+$homePs1 = Join-Path (Split-Path -Parent $PSScriptRoot) "usb\Go-IphoneHomeViaUsb.ps1"
 if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {
     Write-Host "[watchdog] Pressing iPhone Home to background Loop Segments..."
     try {

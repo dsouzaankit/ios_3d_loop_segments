@@ -4,9 +4,9 @@
   Start integrated pcloud_web_companion Chromium helper (USB-launches Loop Segments first).
 
 .DESCRIPTION
-  Wrapper around windows\pcloud_web_companion\run_chromium.ps1.
-  Before Chromium starts, probes phone LAN (:8765/browse). If reachable, skips USB
-  unlock/launch; otherwise runs Launch-LoopSegmentsViaUsb.ps1.
+  Wrapper around run_chromium.ps1 in this folder.
+  Before Chromium starts, prints phone LAN status, then always USB-launches
+  Loop Segments to foreground the app (unless -SkipUsbLaunch).
   Exit code 3 (phone locked) or other USB launch failures abort Chromium.
   On error, waits for Enter so a double-clicked console window does not close immediately.
   While Chromium is running, Ctrl+C or closing the console (X) kills that Chromium profile
@@ -49,7 +49,7 @@ function Wait-EnterOnError {
 }
 
 try {
-    $target = Join-Path $PSScriptRoot "pcloud_web_companion\run_chromium.ps1"
+    $target = Join-Path $PSScriptRoot "run_chromium.ps1"
     if (-not (Test-Path -LiteralPath $target)) {
         throw "Missing $target"
     }

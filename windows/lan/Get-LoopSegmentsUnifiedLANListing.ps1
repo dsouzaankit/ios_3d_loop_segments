@@ -37,7 +37,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\LoopSegments-Windows.ps1"
+. "$PSScriptRoot\..\lib\LoopSegments-Windows.ps1"
 
 $listing = Get-LoopSegmentsUnifiedLANListing -PhoneHost $PhoneHost -Port $Port -TimeoutSec $TimeoutSec
 $html = ConvertTo-LoopSegmentsUnifiedLANHtml -Listing $listing

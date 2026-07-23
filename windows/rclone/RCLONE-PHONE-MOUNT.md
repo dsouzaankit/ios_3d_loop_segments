@@ -13,14 +13,17 @@ On **Windows**, you can map the same URL with **`rclone mount`** (WinFsp + `type
 ```powershell
 cd windows
 Copy-Item loop-segments-windows.example.json loop-segments-windows.json
-.\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
+.\setup\Set-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
+cd rclone
 .\Mount-LoopSegmentsRclone.ps1 -TestOnly
 .\Mount-LoopSegmentsRclone.ps1
 ```
 
-The mount script writes/updates **`[loopsegments]`** in your **`rclone.conf`** (same file as Koofr if you use one). Settings: **`loop-segments-windows.json`** — see **[README.md](README.md)**.
+Or day-to-day: double-click **`Mount-PhoneL.cmd`** in this folder.
 
-**`L:` is read/write by default.** Copy a bootstrap **`.ps1`** to **`L:\pcld_ios_media\`**, then run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per file. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** = DLNA-only. Without a mount, see **`archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
+The mount script writes/updates **`[loopsegments]`** in your **`rclone.conf`** (same file as Koofr if you use one). Settings: **`../loop-segments-windows.json`** — see **[../README.md](../README.md)**.
+
+**`L:` is read/write by default.** Copy a bootstrap **`.ps1`** to **`L:\pcld_ios_media\`**, then run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per file. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** = DLNA-only. Without a mount, see **`../archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
 
 Mounted paths:
 
@@ -34,17 +37,18 @@ Use a different **`mountDriveLetter`** if **`L:`** is already Koofr.
 ## When to skip rclone on the PC
 
 - **Quest Skybox** with **WebDAV** to the phone — prefer if the goal is headset playback.
-- **PC DLNA** without a mapped drive: browser, **`Invoke-WebRequest`**, or **`archive/Sync-FromPhoneLAN.ps1`** into a local folder.
+- **PC DLNA** without a mapped drive: browser, **`Invoke-WebRequest`**, or **`../archive/Sync-FromPhoneLAN.ps1`** into a local folder.
 
 ## Scripts
 
 | Script | Role |
 |--------|------|
 | **`Mount-LoopSegmentsRclone.ps1`** | **Active** — test, mount, `-Remove`, `-RemovePort80Proxy` |
-| **`Set-LoopSegmentsWindows.ps1`** | Per-PC json (IP, drive letter, rclone paths) |
-| **`archive/Map-LoopSegmentsWebDAV.ps1`** | Legacy `net use` / port 80 proxy (not recommended) |
+| **`Mount-PhoneL.cmd`** | Day-to-day launcher → mount script |
+| **`../setup/Set-LoopSegmentsWindows.ps1`** | Per-PC json (IP, drive letter, rclone paths) |
+| **`../archive/Map-LoopSegmentsWebDAV.ps1`** | Legacy `net use` / port 80 proxy (not recommended) |
 
 ## See also
 
-- **[README.md](README.md)** — portable Windows config  
-- **[../ios/README.md](../ios/README.md)** — Skybox WebDAV, LAN writable scripts
+- **[../README.md](../README.md)** — portable Windows config  
+- **[../../ios/README.md](../../ios/README.md)** — Skybox WebDAV, LAN writable scripts

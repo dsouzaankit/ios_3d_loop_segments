@@ -29,8 +29,8 @@ Integrated under **`windows\pcloud_web_companion`** (preferred):
 
 ```powershell
 cd <repo>\windows
-.\Setup-LoopSegmentsWindows.ps1    # once per PC
-.\Run-PCloudWebCompanion.ps1
+.\setup\Setup-LoopSegmentsWindows.ps1    # once per PC
+.\pcloud_web_companion\Run-PCloudWebCompanion.ps1
 # same as:
 .\pcloud_web_companion\run_chromium.ps1
 ```
@@ -40,7 +40,7 @@ cd <repo>\windows
 | `-RecreateVenv` | Recreate machine-local venv under `%LOCALAPPDATA%\pcloud_web_companion\venv` |
 | `-ForceDeps` | Reinstall pip deps + Chromium |
 | `-NoLaunch` | Setup + USB launch only (no Chromium) |
-| `-SkipUsbLaunch` | Do not run `Launch-LoopSegmentsViaUsb.ps1` |
+| `-SkipUsbLaunch` | Do not run `usb\Launch-LoopSegmentsViaUsb.ps1` |
 | `-UsbLaunchMount` | Remount Developer Disk Image (default skips mount) |
 | `-SkipProfileSync` | Do not sync Chromium profile to/from repo |
 | `-DetachChromium` | Do not wait for browser exit (upload + local clear on next run) |
@@ -54,7 +54,7 @@ Each launch:
 - Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
 - Starts a local REST log sink
-- **USB-launches Loop Segments** via `..\Launch-LoopSegmentsViaUsb.ps1` only if `http://<phone>:8765/browse` (or `/status.json`) is not reachable. If LAN is already up, unlock/USB launch is skipped. Otherwise phone must be unlocked; **exit 3 / locked aborts Chromium**. Always prints AltServer status and the fix if the app becomes unavailable after ~7 days (**AltServer → USB → AltStore Refresh All → Settings → General → VPN & Device Management → Developer App → Trust → open once**). USB detect failure tries to start AltServer then retries.
+- **USB-launches Loop Segments** via `..\usb\Launch-LoopSegmentsViaUsb.ps1` on every start (prints LAN UP/DOWN first). Phone must be unlocked; **exit 3 / locked aborts Chromium**. Use `-SkipUsbLaunch` for Chromium only. Always prints AltServer status and the fix if the app becomes unavailable after ~7 days (**AltServer → USB → AltStore Refresh All → Settings → General → VPN & Device Management → Developer App → Trust → open once**). USB detect failure tries to start AltServer then retries.
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded; waits for exit unless `-DetachChromium`
@@ -96,6 +96,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | `offscreen.html` / `offscreen.js` | Clipboard write |
 | `logs.html` / `logs.js` | In-browser REST log UI |
 | `lan_config.json` | Phone LAN target (synced on launch) |
+| `Run-PCloudWebCompanion.ps1` | Thin wrapper → `run_chromium.ps1` (preferred entry) |
 | `run_chromium.ps1` | Venv, Playwright Chromium, USB launch, profile sync, extension copy, browser launch |
 | `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium + sync/clear profile |
 | `requirements.txt` | `playwright` (launcher Chromium fetch only) |
@@ -108,4 +109,4 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 - Windows + Python (`py`) — for the launcher’s Chromium install via Playwright
 - Loop Segments app LAN server on port 8765 (USB launch opens the app first when possible)
 - `windows\loop-segments-windows.json` with `phoneLanHost`
-- USB: iPhone plugged in, trusted, **unlocked**; prefer `..\Setup-LoopSegmentsWindows.ps1` (or `py -3.12 -m pip install -U pymobiledevice3`)
+- USB: iPhone plugged in, trusted, **unlocked**; prefer `..\setup\Setup-LoopSegmentsWindows.ps1` (or `py -3.12 -m pip install -U pymobiledevice3`)
