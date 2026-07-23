@@ -373,6 +373,8 @@ AltStore couldn’t read the device UDID that **AltServer embeds when installing
 | 3 | AltServer tray → **Install AltStore** (this iPhone) — **not** Sideloadly / Files / random AltStore IPA |
 | 4 | Open AltStore → sign in → **My Apps → Refresh All** (USB still connected) |
 
+**After UDID fix — Loop Segments “not available”:** Reinstalling AltStore does **not** require a new Loop Segments build. If Refresh All fails or My Apps shows **not available** / the app is missing: **My Apps → +** → install the same `LoopSegments.ipa` again (or delete the home-screen icon first, then **+**). Trust developer if prompted, open once.
+
 If it still fails: delete **AltStore** from the phone, optionally clear `%ProgramData%\Apple\Lockdown\*`, USB re-trust, then **Install AltStore** from AltServer again. Your docs’ reliable habit remains **USB + Refresh All** (Wi‑Fi refresh is flaky on Win11).
 
 **Refresh failed: “The data couldn’t be read because it isn’t in the correct format”**

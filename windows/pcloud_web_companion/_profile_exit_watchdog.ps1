@@ -120,7 +120,12 @@ if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         $hp = [System.Diagnostics.Process]::Start($psi)
-        if ($null -ne $hp) { [void]$hp.WaitForExit(90000) }
+        if ($null -ne $hp) {
+            if (-not $hp.WaitForExit(120000)) {
+                try { & taskkill.exe /PID $hp.Id /T /F 2>&1 | Out-Null } catch {}
+                try { $hp.Kill() } catch {}
+            }
+        }
     } catch {}
 }
 exit 0

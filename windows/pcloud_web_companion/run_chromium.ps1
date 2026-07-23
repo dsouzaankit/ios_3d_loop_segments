@@ -826,25 +826,27 @@ function Invoke-GoIphoneHome {
         Write-Warning "[home] Missing $homePs1"
         return
     }
-    Write-Host "[home] Backgrounding Loop Segments (USB Home button)..."
+    Write-Host "[home] Backgrounding Loop Segments (USB Home button; per-attempt timeout, skip with -SkipGoHome)..."
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $code = 1
     try {
-        $p = Start-HiddenPowerShell -ArgumentList @(
-            "-ExecutionPolicy", "Bypass",
-            "-File", $homePs1
-        )
-        if ($p -is [System.Diagnostics.Process]) {
-            if (-not $p.WaitForExit(90000)) {
-                try { $p.Kill() } catch {}
-                $code = 1
-            } else {
-                $code = [int]$p.ExitCode
-            }
-        } else {
-            # Unexpected shape from Start-HiddenPowerShell
+        # Same console so pymobiledevice3 progress/timeouts are visible (hidden child looked "stuck").
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = (Get-Command powershell.exe).Source
+        $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`""
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $false
+        $p = [System.Diagnostics.Process]::Start($psi)
+        # Outer cap: import + list + up to 3 hid attempts (~25s each) in Go-IphoneHomeViaUsb.ps1.
+        $outerMs = 120000
+        if (-not $p.WaitForExit($outerMs)) {
+            Write-Warning "[home] Outer timeout (${outerMs}ms) - killing Home script process tree"
+            try { & taskkill.exe /PID $p.Id /T /F 2>&1 | Out-Null } catch {}
+            try { $p.Kill() } catch {}
             $code = 1
+        } else {
+            $code = [int]$p.ExitCode
         }
     } finally {
         $ErrorActionPreference = $prev
