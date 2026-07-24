@@ -46,3 +46,5 @@ windows/pcloud_web_companion/__pycache__/
 windows/pcloud_web_companion/chromium-profile/
 
 windows/pcloud_web_companion/rest.log
+
+windows/rclone/loopsegments-rclone-mount.log
