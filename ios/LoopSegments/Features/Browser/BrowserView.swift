@@ -164,10 +164,12 @@ struct BrowserView: View {
                                 } label: {
                                     Label(item.name, systemImage: "folder")
                                 }
+                                .buttonStyle(.hapticPlain)
                             } else if item.isVideo {
                                 NavigationLink(value: item) {
                                     videoRowLabel(for: item)
                                 }
+                                .buttonStyle(.hapticPlain)
                             }
                         }
                     }
@@ -201,11 +203,15 @@ struct BrowserView: View {
             .searchable(text: $searchText, prompt: "Search pCloud")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Sign out") { session.signOut() }
+                    Button("Sign out") {
+                        AppHaptics.tap(.light)
+                        session.signOut()
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if !isSearchActive, currentPath != "/" {
                         Button {
+                            AppHaptics.tap(.light)
                             folderBookmarkStore.toggleBookmark(
                                 listingPath: currentPath,
                                 displayName: currentFolderDisplayName
@@ -226,6 +232,7 @@ struct BrowserView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Refresh") {
+                        AppHaptics.tap(.light)
                         if isSearchActive {
                             searchToken += 1
                         } else {

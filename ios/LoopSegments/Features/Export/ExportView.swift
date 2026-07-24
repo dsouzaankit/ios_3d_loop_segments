@@ -578,6 +578,7 @@ struct ExportView: View {
             ) {
                 session.runExportUITask { await startExport() }
             }
+            .buttonStyle(.hapticBordered)
             .disabled(isThisFileExporting)
 
             if isThisFileExporting {
@@ -585,6 +586,7 @@ struct ExportView: View {
                     session.pauseExport()
                     status = "Paused — tap Start export to continue from checkpoint"
                 }
+                .buttonStyle(.hapticBordered)
                 Button("Stop", role: .destructive) {
                     session.cancelExport()
                     status = "Stopping…"

@@ -15,7 +15,7 @@ struct AppHapticPrimitiveButtonStyle: PrimitiveButtonStyle {
     }
 }
 
-/// System bordered chrome + light tap haptic.
+/// System bordered chrome + medium tap haptic.
 struct HapticBorderedButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Button(role: configuration.role) {
@@ -28,11 +28,11 @@ struct HapticBorderedButtonStyle: PrimitiveButtonStyle {
     }
 }
 
-/// System plain chrome + soft tap haptic (list / navigation rows).
+/// System plain chrome + medium tap haptic (list / navigation rows).
 struct HapticPlainButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Button(role: configuration.role) {
-            AppHaptics.tap(.soft)
+            AppHaptics.tap(.light)
             configuration.trigger()
         } label: {
             configuration.label

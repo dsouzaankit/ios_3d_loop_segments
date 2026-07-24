@@ -9,29 +9,25 @@ enum AppHaptics {
         case soft
     }
 
-    private static let lightGen = UIImpactFeedbackGenerator(style: .light)
     private static let mediumGen = UIImpactFeedbackGenerator(style: .medium)
-    private static let softGen = UIImpactFeedbackGenerator(style: .soft)
+    private static let rigidGen = UIImpactFeedbackGenerator(style: .rigid)
     private static let notifyGen = UINotificationFeedbackGenerator()
 
     static func prepare() {
-        lightGen.prepare()
         mediumGen.prepare()
-        softGen.prepare()
+        rigidGen.prepare()
         notifyGen.prepare()
     }
 
-    static func tap(_ kind: Kind = .light) {
+    /// Default is a clear medium impact (soft/light aliases map here so list taps are feelable).
+    static func tap(_ kind: Kind = .medium) {
         switch kind {
-        case .light:
-            lightGen.impactOccurred(intensity: 0.85)
-            lightGen.prepare()
-        case .medium:
-            mediumGen.impactOccurred(intensity: 0.9)
+        case .light, .soft:
+            mediumGen.impactOccurred(intensity: 1.0)
             mediumGen.prepare()
-        case .soft:
-            softGen.impactOccurred(intensity: 0.7)
-            softGen.prepare()
+        case .medium:
+            rigidGen.impactOccurred(intensity: 1.0)
+            rigidGen.prepare()
         }
     }
 

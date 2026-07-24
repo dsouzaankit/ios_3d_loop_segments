@@ -10,6 +10,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 281 (1.2.45):** Stronger tap haptics (medium/rigid) and coverage for Browse folder/video rows + toolbar; Export Start/Pause use bordered haptic.
+
 **Build 280 (1.2.44):** Paused tab + LAN: **Clear queue** at top of Queued; **Clear paused** at top of Paused (keeps live export; LAN `POST /paused_exports.json` `{ "action": "clear" }`). LAN Paused is its own collapsed section (not mixed into the playback file list).
 
 **Build 279 (1.2.43):** LAN **Queued exports** (`/` + `/browse`) is collapsed by default (`<details>`); summary still shows the count.
@@ -18,7 +20,7 @@ Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` 
 
 **Build 277 (1.2.41):** LAN `/` and `/browse` show **Queued exports** with per-item **Remove** and **Clear queue** (`POST /export_queue.json` `action=remove|clear`). Stop retries pending-FIFO drain after coordinator cleanup (was a one-shot no-op while still busy). Companion docs: my.pcloud.com **`v`** type filter (5 types, including **Video**) before multi-select Download.
 
-**Build 276 (1.2.40):** Haptic feedback on app button taps (light/soft; medium for destructive).
+**Build 276 (1.2.40):** Haptic feedback on app button taps (later strengthened in **281**).
 
 **Build 275 (1.2.39):** Fix pending FIFO drain stuck after the first item — soft-paused checkpoints no longer block the queue (only user/auto Pause does). Also avoid draining in the same poll tick that just started an export.
 
