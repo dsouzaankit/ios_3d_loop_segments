@@ -163,7 +163,7 @@ If Loop Segments is on the home screen and **`com.loopsegments.app` is in App ID
 4. Wait until AltStore shows install complete — **Loop Segments** should appear under **My Apps**.
 5. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
 
-If **+** install fails with **incorrect data format**, see [Fix install / refresh](#fix-install--refresh--do-in-order-usb) below — try **iTunes → Account → Authorizations → Deauthorize → Authorize** first (USB; confirmed working). Otherwise check **Store iCloud** or unsigned-in iTunes, not the IPA. If error is **1007** only, use a fresh IPA from **Actions → ios-build → Run workflow** (build **243+**). Do not mix Sideloadly and AltStore for the same app.
+If **+** install fails with **incorrect data format**, first check whether the IPA came from **iCloud Drive / Downloads**: wait until the file is fully downloaded (no cloud badge / “waiting…”), then **retry Install several times** — confirmed to clear once sync finishes (partial cloud copy looks like a corrupt IPA). If that does not help, see [Fix install / refresh](#fix-install--refresh--do-in-order-usb) — try **iTunes → Account → Authorizations → Deauthorize → Authorize** first (USB; confirmed working). Otherwise check **Store iCloud** or unsigned-in iTunes, not the IPA. If error is **1007** only, use a fresh IPA from **Actions → ios-build → Run workflow** (build **243+**). Do not mix Sideloadly and AltStore for the same app.
 
 #### Wi‑Fi sync for AltStore (one-time) — often broken on Windows 11
 
@@ -377,15 +377,18 @@ AltStore couldn’t read the device UDID that **AltServer embeds when installing
 
 If it still fails: delete **AltStore** from the phone, optionally clear `%ProgramData%\Apple\Lockdown\*`, USB re-trust, then **Install AltStore** from AltServer again. Your docs’ reliable habit remains **USB + Refresh All** (Wi‑Fi refresh is flaky on Win11).
 
-**Refresh failed: “The data couldn’t be read because it isn’t in the correct format”**
+**Refresh / Install failed: “The data couldn’t be read because it isn’t in the correct format”**
 
-Same message on **Install** (My Apps → +) or **Refresh** — almost always **AltServer ↔ Apple login** (invalid *anisette*), **not** a broken Loop Segments IPA. AltStore expected JSON from Apple and got garbage or an HTML error page.
+Same message on **Install** (My Apps → +) or **Refresh**. Two common causes:
+
+1. **IPA from iCloud not fully synced** (install from Files / iCloud Drive / Downloads) — file still downloading or a stub. Wait for sync to finish, then **retry AltStore Install several times** (confirmed: clears once the full IPA is local). Prefer copying a known-good local `LoopSegments.ipa` if retries keep failing.
+2. **AltServer ↔ Apple login** (invalid *anisette*) — AltStore expected JSON from Apple and got garbage or an HTML error page. Not usually a broken Loop Segments IPA.
 
 | AltStore error (if shown) | Meaning |
 |---------------------------|---------|
 | **1006** UDID unknown | AltStore not installed by latest AltServer — see UDID section above |
 | **2013** / **3023** / anisette invalid | iCloud/iTunes from **Microsoft Store**, or not signed in, or stale `adi` cache |
-| **1007** / **2007** app invalid format | Rare for our IPA — re-download `LoopSegments.ipa` from GitHub Actions |
+| **1007** / **2007** app invalid format | Rare for our IPA — re-download `LoopSegments.ipa` from GitHub Actions; if installed from iCloud, wait for full sync + retry |
 
 ### Fix install / refresh — do in order (USB)
 

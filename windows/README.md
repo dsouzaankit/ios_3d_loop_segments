@@ -46,6 +46,8 @@ If Loop Segments won’t open after ~7 days: start **AltServer** → USB + unloc
 
 **AltStore “could not determine this device's UDID” (error 1006):** AltStore was not installed (or was corrupted) by AltServer — UDID is embedded only when AltServer installs AltStore. Update AltServer → USB + unlock → tray **Install AltStore** (not Sideloadly / random IPA) → Trust developer if prompted → open AltStore → **Refresh All**. If Loop Segments then says **“not available”** (or is missing from My Apps): no new build required — **My Apps → +** → same `LoopSegments.ipa` (or delete the home-screen icon and install again). Details: [../ios/BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md).
 
+**AltStore “data isn’t in the correct format” on Install from iCloud Downloads:** often the IPA is still syncing (partial file). Wait for iCloud to finish, then **retry My Apps → + several times** — confirmed to succeed once the full IPA is local. If it persists after a fully local file, see [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) (iTunes authorize / anisette steps).
+
 ## First time on a PC
 
 ```powershell
