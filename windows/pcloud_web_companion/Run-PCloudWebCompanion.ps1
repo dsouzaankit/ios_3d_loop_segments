@@ -6,7 +6,8 @@
 .DESCRIPTION
   Wrapper around run_chromium.ps1 in this folder.
   Before Chromium starts, prints phone LAN status, then always USB-launches
-  Loop Segments to foreground the app (unless -SkipUsbLaunch).
+  Loop Segments to foreground the app (unless -SkipUsbLaunch), then attempts an
+  rclone WebDAV mount (unless -SkipRcloneMount) in a separate window when LAN is up.
   Exit code 3 (phone locked) aborts Chromium. No USB / other USB failures abort only when
   phone LAN is also down; if LAN is up, warns and continues.
   On error, waits for Enter so a double-clicked console window does not close immediately.
@@ -19,6 +20,9 @@
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -SkipRcloneMount
 #>
 [CmdletBinding()]
 param(
@@ -27,6 +31,7 @@ param(
     [switch] $NoLaunch,
     [switch] $SkipUsbLaunch,
     [switch] $UsbLaunchMount,
+    [switch] $SkipRcloneMount,
     [switch] $SkipProfileSync,
     [switch] $DetachChromium,
     [switch] $KeepLocalProfile,
@@ -61,6 +66,7 @@ try {
         NoLaunch         = $NoLaunch
         SkipUsbLaunch    = $SkipUsbLaunch
         UsbLaunchMount   = $UsbLaunchMount
+        SkipRcloneMount  = $SkipRcloneMount
         SkipProfileSync  = $SkipProfileSync
         DetachChromium   = $DetachChromium
         KeepLocalProfile = $KeepLocalProfile

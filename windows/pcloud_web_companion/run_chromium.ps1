@@ -5,6 +5,8 @@
     [switch]$SkipUsbLaunch,
     # By default USB launch uses -SkipMount (DDI already mounted). Set this to remount.
     [switch]$UsbLaunchMount,
+    # Do not open rclone WebDAV mount (default: attempt after USB launch when LAN is up).
+    [switch]$SkipRcloneMount,
     [switch]$SkipProfileSync,
     # Do not wait for Chromium exit (upload runs at the start of the next launch instead).
     [switch]$DetachChromium,
@@ -618,6 +620,8 @@ function Get-LanConfigPhoneHost {
 }
 
 function Test-PhoneLanPageReachable {
+    param([switch]$Quiet)
+
     $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
     if (-not (Test-Path -LiteralPath $lanConfigPath)) {
         return $false
@@ -626,7 +630,9 @@ function Test-PhoneLanPageReachable {
     try {
         $lan = Get-Content -LiteralPath $lanConfigPath -Raw | ConvertFrom-Json
     } catch {
-        Write-Warning "[lan] Could not read $lanConfigPath : $_"
+        if (-not $Quiet) {
+            Write-Warning "[lan] Could not read $lanConfigPath : $_"
+        }
         return $false
     }
 
@@ -640,9 +646,13 @@ function Test-PhoneLanPageReachable {
         $port = [int]$lan.lanPort
     }
 
-    Write-Host "[lan] TCP probe ${hostName}:${port} ..."
+    if (-not $Quiet) {
+        Write-Host "[lan] TCP probe ${hostName}:${port} ..."
+    }
     if (-not (Test-TcpPortOpen -HostName $hostName -Port $port -TimeoutMs 2000)) {
-        Write-Host "[lan] Port closed/unreachable"
+        if (-not $Quiet) {
+            Write-Host "[lan] Port closed/unreachable"
+        }
         return $false
     }
 
@@ -651,14 +661,51 @@ function Test-PhoneLanPageReachable {
     foreach ($path in $paths) {
         $uri = "http://${hostName}:${port}${path}"
         try {
-            Write-Host "[lan] HTTP probe $uri (direct, no proxy) ..."
+            if (-not $Quiet) {
+                Write-Host "[lan] HTTP probe $uri (direct, no proxy) ..."
+            }
             $resp = Invoke-DirectHttpGet -Uri $uri -TimeoutSec 3
             if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
-                Write-Host "[lan] Reachable ($($resp.StatusCode)): $uri"
+                if (-not $Quiet) {
+                    Write-Host "[lan] Reachable ($($resp.StatusCode)): $uri"
+                }
                 return $true
             }
         } catch {
-            Write-Host "[lan] Not reachable: $uri ($($_.Exception.Message))"
+            if (-not $Quiet) {
+                Write-Host "[lan] Not reachable: $uri ($($_.Exception.Message))"
+            }
+        }
+    }
+    return $false
+}
+
+function Wait-PhoneLanPageReachable {
+    param(
+        [int]$TimeoutSec = 45,
+        [int]$IntervalMs = 1500,
+        [string]$Label = 'lan'
+    )
+
+    if (Test-PhoneLanPageReachable) {
+        return $true
+    }
+
+    Write-Host "[$Label] Waiting up to ${TimeoutSec}s for phone LAN (app may still be starting)..."
+    $deadline = [datetime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSec))
+    $nextStatus = [datetime]::UtcNow.AddSeconds(5)
+    while ([datetime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds $IntervalMs
+        if (Test-PhoneLanPageReachable -Quiet) {
+            Write-Host "[$Label] Phone LAN is up"
+            # One verbose probe for the log
+            [void](Test-PhoneLanPageReachable)
+            return $true
+        }
+        if ([datetime]::UtcNow -ge $nextStatus) {
+            $left = [int][Math]::Ceiling(($deadline - [datetime]::UtcNow).TotalSeconds)
+            Write-Host "[$Label] Still waiting for :8765 ($left s left)..."
+            $nextStatus = [datetime]::UtcNow.AddSeconds(5)
         }
     }
     return $false
@@ -743,10 +790,118 @@ Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launc
     Write-Host "[usb] Loop Segments launch OK"
 }
 
+function Get-CompanionMountDriveLetter {
+    $settingsPath = Join-Path $WindowsDir "loop-segments-windows.json"
+    $letter = 'L'
+    if (Test-Path -LiteralPath $settingsPath) {
+        try {
+            $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+            if (-not [string]::IsNullOrWhiteSpace([string]$settings.mountDriveLetter)) {
+                $letter = [string]$settings.mountDriveLetter
+            }
+        } catch {}
+    }
+    return $letter.Trim().ToUpperInvariant()[0]
+}
+
+function Test-RcloneMountProcessForDrive {
+    param([Parameter(Mandatory = $true)][string]$DriveLetter)
+    $escape = [regex]::Escape("${DriveLetter}:")
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='rclone.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $cmd = [string]$_.CommandLine
+            $cmd -match '(?i)\bmount\b' -and $cmd -match $escape
+        })
+    return ($procs.Count -gt 0)
+}
+
+function Invoke-AttemptRcloneMount {
+    # Soft attempt: open Mount-LoopSegmentsRclone.ps1 in a separate console so Chromium is not blocked.
+    # Failures only warn — companion continues (same spirit as USB missing when LAN is up).
+    if ($SkipRcloneMount) {
+        Write-Host "[rclone] Skipping phone mount (-SkipRcloneMount)"
+        return
+    }
+
+    $mountPs1 = Join-Path $WindowsDir "rclone\Mount-LoopSegmentsRclone.ps1"
+    if (-not (Test-Path -LiteralPath $mountPs1)) {
+        Write-Warning "[rclone] Missing $mountPs1 — skip mount attempt"
+        return
+    }
+
+    # USB launch may have just foregrounded the app; LAN server often needs a few seconds.
+    if (-not (Wait-PhoneLanPageReachable -TimeoutSec 45 -Label 'rclone')) {
+        Write-Warning "[rclone] Phone LAN not reachable after wait — skip mount attempt (open Loop Segments / Keep Alive, check phoneLanHost)"
+        return
+    }
+
+    $letter = Get-CompanionMountDriveLetter
+    $driveRoot = "${letter}:\"
+
+    if (Test-RcloneMountProcessForDrive -DriveLetter $letter) {
+        Write-Host "[rclone] ${letter}: already mounted (rclone) — ok"
+        return
+    }
+
+    if (Test-Path -LiteralPath $driveRoot) {
+        Write-Warning "[rclone] ${driveRoot} already in use — skip mount (change mountDriveLetter in loop-segments-windows.json if needed)"
+        return
+    }
+
+    try {
+        Write-Host "[rclone] Attempting mount ${letter}: via $mountPs1 -Quick (separate window; Ctrl+C there to unmount)..."
+        # -File path MUST be quoted: Start-Process ArgumentList array does not escape spaces
+        # (path under "iOS apps" otherwise exits -196608 and never mounts).
+        # -Quick skips slow "rclone ls" so L: appears before the companion wait expires.
+        $proc = Start-Process -FilePath "powershell.exe" -PassThru -ArgumentList @(
+            '-NoProfile'
+            '-ExecutionPolicy'
+            'Bypass'
+            '-File'
+            "`"$mountPs1`""
+            '-Quick'
+        ) -WorkingDirectory (Split-Path -Parent $mountPs1)
+        if ($null -eq $proc) {
+            Write-Warning "[rclone] Start-Process returned no process - continuing without ${letter}:"
+            return
+        }
+        Write-Host "[rclone] Mount window started (PID $($proc.Id))"
+    } catch {
+        Write-Warning "[rclone] Could not start mount window: $($_.Exception.Message) - continuing without ${letter}:"
+        return
+    }
+
+    $deadline = [datetime]::UtcNow.AddSeconds(60)
+    while ([datetime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $driveRoot) {
+            Write-Host "[rclone] ${driveRoot} is up"
+            return
+        }
+        if ($proc.HasExited) {
+            Write-Warning "[rclone] Mount window exited early (code $($proc.ExitCode)) - check that console. Continuing with Chromium."
+            return
+        }
+        if (Test-RcloneMountProcessForDrive -DriveLetter $letter) {
+            # Process started; WinFsp may still be attaching the letter.
+            Start-Sleep -Milliseconds 500
+            continue
+        }
+        Start-Sleep -Milliseconds 400
+    }
+
+    if ((Test-Path -LiteralPath $driveRoot) -or (Test-RcloneMountProcessForDrive -DriveLetter $letter)) {
+        Write-Host "[rclone] ${driveRoot} mount in progress / up"
+        return
+    }
+
+    Write-Warning "[rclone] Mount window started but ${driveRoot} not ready yet - check that console (WinFsp/rclone). Continuing with Chromium."
+}
+
 Sync-LanConfigFromLoopSegments
 $ExtensionLoadDir = Sync-ExtensionToLocalDisk
 Start-RestLogSink
 Invoke-LoopSegmentsUsbLaunch
+Invoke-AttemptRcloneMount
 
 if ($NoLaunch) {
     Write-Host "[run] Setup complete (-NoLaunch). Extension: $ExtensionDir"

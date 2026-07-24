@@ -1,5 +1,5 @@
-#Requires -Version 5.1
-# Shared per-PC settings for Loop Segments windows scripts (lib/, setup/, usb/, rclone/, …).
+﻿#Requires -Version 5.1
+# Shared per-PC settings for Loop Segments windows scripts (lib/, setup/, usb/, rclone/, ...).
 # This file lives in windows\lib\; config JSON stays in windows\ (parent of lib).
 # Capture windows\ at load time so config paths stay correct even when callers live in a subfolder
 # (dot-sourced $PSScriptRoot would otherwise follow the caller).
@@ -593,8 +593,8 @@ function ConvertTo-LoopSegmentsUnifiedLANHtml {
         }
         $section = @"
 <section>
-  <h2>$(ConvertTo-LoopSegmentsHtmlEncoded -Text ([string]$device.label)) <small>($(ConvertTo-LoopSegmentsHtmlEncoded -Text ([string]$device.host)):$($device.port) · $statusLine)</small></h2>
-  <p><a href="$($device.baseUrl)/">Open phone monitor</a> · <a href="$($device.baseUrl)/browse">Browse / export</a></p>
+  <h2>$(ConvertTo-LoopSegmentsHtmlEncoded -Text ([string]$device.label)) <small>($(ConvertTo-LoopSegmentsHtmlEncoded -Text ([string]$device.host)):$($device.port) - $statusLine)</small></h2>
+  <p><a href="$($device.baseUrl)/">Open phone monitor</a> - <a href="$($device.baseUrl)/browse">Browse / export</a></p>
   $exportLine
   $errorLine
   <h3>Media on phone</h3>
@@ -605,14 +605,14 @@ function ConvertTo-LoopSegmentsUnifiedLANHtml {
         [void]$deviceSections.Add($section)
     }
 
-    $summary = "Unified listing — $($Listing.reachableCount)/$($Listing.deviceCount) phone(s) reachable · generated $($Listing.generatedAt)"
+    $summary = "Unified listing - $($Listing.reachableCount)/$($Listing.deviceCount) phone(s) reachable - generated $($Listing.generatedAt)"
     return @"
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Loop Segments — unified LAN media</title>
+  <title>Loop Segments - unified LAN media</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 1rem 1.25rem; line-height: 1.4; }
     h1 { font-size: 1.25rem; margin-bottom: 0.25rem; }
@@ -624,8 +624,8 @@ function ConvertTo-LoopSegmentsUnifiedLANHtml {
   </style>
 </head>
 <body>
-  <h1>Loop Segments — unified LAN media</h1>
-  <p class="meta">$summary · <a href="listing.json">listing.json</a></p>
+  <h1>Loop Segments - unified LAN media</h1>
+  <p class="meta">$summary - <a href="listing.json">listing.json</a></p>
   $($deviceSections -join "`n")
 </body>
 </html>
@@ -787,7 +787,7 @@ function Remove-LoopSegmentsPortProxyOne {
         [string] $ListenAddress,
         [int] $ListenPort
     )
-    # PowerShell expands * when passing args to native exes — use cmd /c single string.
+    # PowerShell expands * when passing args to native exes - use cmd /c single string.
     $cmdLine = 'netsh interface portproxy delete v4tov4 listenaddress={0} listenport={1}' -f $ListenAddress, $ListenPort
     $null = cmd.exe /c $cmdLine 2>&1
     return $LASTEXITCODE

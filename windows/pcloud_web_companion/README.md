@@ -42,6 +42,7 @@ cd <repo>\windows
 | `-NoLaunch` | Setup + USB launch only (no Chromium) |
 | `-SkipUsbLaunch` | Do not run `usb\Launch-LoopSegmentsViaUsb.ps1` |
 | `-UsbLaunchMount` | Remount Developer Disk Image (default skips mount) |
+| `-SkipRcloneMount` | Do not open `rclone\Mount-LoopSegmentsRclone.ps1` (default attempts mount when LAN is up) |
 | `-SkipProfileSync` | Do not sync Chromium profile to/from repo |
 | `-DetachChromium` | Do not wait for browser exit (upload + local clear on next run) |
 | `-KeepLocalProfile` | Do not wipe local AppData profile after upload |
@@ -55,6 +56,7 @@ Each launch:
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
 - Starts a local REST log sink
 - **USB-launches Loop Segments** via `..\usb\Launch-LoopSegmentsViaUsb.ps1` on every start (prints LAN UP/DOWN first). **Locked (exit 3) still aborts Chromium.** If USB is missing / launch fails but phone LAN is already reachable, prints a warning and continues to Chromium. Use `-SkipUsbLaunch` for Chromium only. Always prints AltServer status and the fix if the app becomes unavailable after ~7 days (**AltServer → USB → AltStore Refresh All → Settings → General → VPN & Device Management → Developer App → Trust → open once**). USB detect failure tries to start AltServer then retries.
+- **Attempts rclone mount** via `..\rclone\Mount-LoopSegmentsRclone.ps1` in a **separate** console when phone LAN is up (drive letter from `loop-segments-windows.json`, default `L:`). Skips if already mounted / letter in use / LAN down; failures only warn. Use `-SkipRcloneMount` to leave mounting to `Mount-PhoneL.cmd`. Mount window is independent of Chromium — **Ctrl+C** there to unmount.
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded; waits for exit unless `-DetachChromium`

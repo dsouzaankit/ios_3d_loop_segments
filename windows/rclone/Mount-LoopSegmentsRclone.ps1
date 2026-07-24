@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Mount the phone LAN export folder as a Windows drive via rclone WebDAV (or test connectivity).
@@ -8,7 +8,7 @@
   This script writes/updates a [loopsegments] block in rclone.conf and runs rclone mount (WinFsp).
 
   Per-PC settings: loop-segments-windows.json in the parent windows\ folder (see ..\setup\Set-LoopSegmentsWindows.ps1).
-  Scripts resolve paths from the shared helper — copy or clone the repo anywhere; only the json file differs per PC.
+  Scripts resolve paths from the shared helper - copy or clone the repo anywhere; only the json file differs per PC.
 
 .PARAMETER RemovePort80Proxy
   Admin: remove netsh portproxy rules (PC :80 or :8080 -> phone :8765) from legacy WebDAV mapping.
@@ -20,6 +20,10 @@
   Mount with rclone --read-only (safer for DLNA-only; blocks Explorer copy to L:).
   Default mount is read/write where the phone allows (pcld_ios_media/scripts/ and subfolders).
   loop/, _working.mp4, and export segments stay read-only on the phone even when L: is writable.
+
+.PARAMETER Quick
+  Skip the slow pre-mount "rclone ls" WebDAV listing (HTTP status.json + remote config only).
+  Used by the web companion so L: appears sooner; full -TestOnly still runs the ls check.
 
 .EXAMPLE
   Copy-Item ..\loop-segments-windows.example.json ..\loop-segments-windows.json
@@ -42,7 +46,8 @@ param(
     [switch] $Remove,
     [switch] $RemovePort80Proxy,
     [switch] $TestOnly,
-    [switch] $ReadOnly
+    [switch] $ReadOnly,
+    [switch] $Quick
 )
 
 $ErrorActionPreference = 'Stop'
@@ -215,93 +220,123 @@ function Test-RcloneWebDAVRemote {
     Write-Host '  Phone Exports visible via WebDAV - good'
 }
 
-$hostIp = Get-LoopSegmentsLANHost -Override $PhoneHost
-$portNum = Get-LoopSegmentsLanPort -Override $Port
-$driveLetter = Get-LoopSegmentsMountDriveLetter -Override $DriveLetter
-$remote = Get-LoopSegmentsRcloneRemoteName -Override $RemoteName
-$creds = Get-LoopSegmentsWebDAVCredentials -UserOverride $WebDAVUser -PasswordOverride $WebDAVPassword
-$webdavUrl = "http://${hostIp}:${portNum}/"
-$driveRoot = "${driveLetter}:\"
-$mountLabel = "${remote}:"
-
-if ($RemovePort80Proxy) {
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator
-    )
-    if (-not $isAdmin) {
-        Write-Warning 'Run PowerShell as Administrator to delete portproxy rules (netsh).'
+function Wait-EnterOnError {
+    param([int] $ExitCode = 1)
+    Write-Host ""
+    Write-Host "Press Enter to close..." -ForegroundColor Yellow
+    try {
+        [void][Console]::ReadLine()
+    } catch {
+        Read-Host | Out-Null
     }
-    Clear-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $portNum -DriveLetter $driveLetter
-    exit 0
+    exit $ExitCode
 }
 
-if (-not $Remove -and -not $TestOnly) {
-    if (-not (Test-LoopSegmentsWinFspInstalled)) {
-        Write-Warning @'
+try {
+    $hostIp = Get-LoopSegmentsLANHost -Override $PhoneHost
+    $portNum = Get-LoopSegmentsLanPort -Override $Port
+    $driveLetter = Get-LoopSegmentsMountDriveLetter -Override $DriveLetter
+    $remote = Get-LoopSegmentsRcloneRemoteName -Override $RemoteName
+    $creds = Get-LoopSegmentsWebDAVCredentials -UserOverride $WebDAVUser -PasswordOverride $WebDAVPassword
+    $webdavUrl = "http://${hostIp}:${portNum}/"
+    $driveRoot = "${driveLetter}:\"
+    $mountLabel = "${remote}:"
+
+    if ($RemovePort80Proxy) {
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator
+        )
+        if (-not $isAdmin) {
+            Write-Warning 'Run PowerShell as Administrator to delete portproxy rules (netsh).'
+        }
+        Clear-LoopSegmentsPort80Proxy -PhoneHost $hostIp -PhonePort $portNum -DriveLetter $driveLetter
+        exit 0
+    }
+
+    if (-not $Remove -and -not $TestOnly) {
+        if (-not (Test-LoopSegmentsWinFspInstalled)) {
+            Write-Warning @'
 WinFsp not detected. Set winfspDllPath or skipWinFspCheck in loop-segments-windows.json.
 If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -SkipWinFspCheck
 '@
+        }
     }
-}
 
-if ($TestOnly) {
+    if ($TestOnly) {
+        Test-PhoneLANExport -HostName $hostIp -PortNum $portNum -User $creds.User -Pass $creds.Password
+        Ensure-RcloneRemote -Name $remote -Url $webdavUrl -User $creds.User -Pass $creds.Password
+        Test-RcloneWebDAVRemote -Name $remote
+        Write-Host 'OK - run without -TestOnly to mount.'
+        exit 0
+    }
+
+    if ($Remove) {
+        Write-Host "Stopping rclone mount processes for ${driveLetter}: ..."
+        $stopped = 0
+        Get-CimInstance Win32_Process -Filter "Name='rclone.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match [regex]::Escape('mount') -and $_.CommandLine -match [regex]::Escape("${driveLetter}:") } |
+            ForEach-Object {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                $stopped++
+            }
+        if ($stopped -eq 0) {
+            Write-Warning 'No matching rclone mount process - close the mount window or Ctrl+C the running mount.'
+        }
+        exit 0
+    }
+
     Test-PhoneLANExport -HostName $hostIp -PortNum $portNum -User $creds.User -Pass $creds.Password
     Ensure-RcloneRemote -Name $remote -Url $webdavUrl -User $creds.User -Pass $creds.Password
-    Test-RcloneWebDAVRemote -Name $remote
-    Write-Host 'OK - run without -TestOnly to mount.'
-    exit 0
-}
+    if ($Quick) {
+        Write-Host 'Quick mode: skipping rclone ls (companion already verified phone LAN).'
+    } else {
+        Test-RcloneWebDAVRemote -Name $remote
+    }
 
-if ($Remove) {
-    Write-Host "Stopping rclone mount processes for ${driveLetter}: ..."
-    $stopped = 0
-    Get-CimInstance Win32_Process -Filter "Name='rclone.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match [regex]::Escape('mount') -and $_.CommandLine -match [regex]::Escape("${driveLetter}:") } |
-        ForEach-Object {
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-            $stopped++
+    if (Test-Path -LiteralPath $driveRoot) {
+        $used = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
+        if ($used) {
+            Write-Warning "$driveRoot already in use (Koofr?). Change mountDriveLetter in loop-segments-windows.json or -DriveLetter."
         }
-    if ($stopped -eq 0) {
-        Write-Warning 'No matching rclone mount process - close the mount window or Ctrl+C the running mount.'
     }
-    exit 0
-}
 
-Test-PhoneLANExport -HostName $hostIp -PortNum $portNum -User $creds.User -Pass $creds.Password
-Ensure-RcloneRemote -Name $remote -Url $webdavUrl -User $creds.User -Pass $creds.Password
-Test-RcloneWebDAVRemote -Name $remote
-
-if (Test-Path -LiteralPath $driveRoot) {
-    $used = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
-    if ($used) {
-        Write-Warning "$driveRoot already in use (Koofr?). Change mountDriveLetter in loop-segments-windows.json or -DriveLetter."
+    $settings = Get-LoopSegmentsWindowsSettings
+    Write-Host ''
+    $mountMode = if ($ReadOnly) { 'read-only' } else { 'read/write (phone blocks loop/, _working*, etc.)' }
+    Write-Host "Mounting ${mountLabel} on $driveRoot ($mountMode). Ctrl+C stops the mount."
+    if (-not $ReadOnly) {
+        Write-Host "Bootstrap: copy your .ps1 to ${driveRoot}pcld_ios_media\ then run it (syncs scripts/ subfolders; <= 2 MB per file)."
     }
-}
+    Write-Host "DLNA / Explorer: ${driveRoot}pcld_ios_media\loop\ (op_00|op_01) or ${driveRoot}pcld_ios_media\ (_working.mp4)"
+    if (-not [string]::IsNullOrWhiteSpace($settings.dlnaFolder)) {
+        Write-Host "Configured DLNA folder: $($settings.dlnaFolder)"
+        Write-Host "  cmd /c mklink /J `"$($settings.dlnaFolder)\phone_exports`" `"$driveRoot`""
+    }
+    Write-Host ''
 
-$settings = Get-LoopSegmentsWindowsSettings
-Write-Host ''
-$mountMode = if ($ReadOnly) { 'read-only' } else { 'read/write (phone blocks loop/, _working*, etc.)' }
-Write-Host "Mounting ${mountLabel} on $driveRoot ($mountMode). Ctrl+C stops the mount."
-if (-not $ReadOnly) {
-    Write-Host "Bootstrap: copy your .ps1 to ${driveRoot}pcld_ios_media\ then run it (syncs scripts/ subfolders; ≤ 2 MB per file)."
+    $mountArgs = @(
+        'mount', "${remote}:", $driveRoot,
+        '--vfs-cache-mode', 'full',
+        '--dir-cache-time', '5s',
+        '--poll-interval', '10s',
+        '--attr-timeout', '5s',
+        '--volname', 'LoopSegments'
+    )
+    if ($ReadOnly) {
+        $mountArgs += '--read-only'
+    }
+    Invoke-LoopSegmentsRclone @mountArgs
+    $code = 0
+    if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+    if ($code -ne 0) {
+        Write-Host "[Mount-LoopSegmentsRclone] rclone mount failed (exit $code)." -ForegroundColor Red
+        Wait-EnterOnError -ExitCode $code
+    }
+} catch {
+    Write-Host ""
+    Write-Host "[Mount-LoopSegmentsRclone] $($_.Exception.Message)" -ForegroundColor Red
+    if ($_.ScriptStackTrace) {
+        Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+    }
+    Wait-EnterOnError -ExitCode 1
 }
-Write-Host "DLNA / Explorer: ${driveRoot}pcld_ios_media\loop\ (op_00|op_01) or ${driveRoot}pcld_ios_media\ (_working.mp4)"
-if (-not [string]::IsNullOrWhiteSpace($settings.dlnaFolder)) {
-    Write-Host "Configured DLNA folder: $($settings.dlnaFolder)"
-    Write-Host "  cmd /c mklink /J `"$($settings.dlnaFolder)\phone_exports`" `"$driveRoot`""
-}
-Write-Host ''
-
-$mountArgs = @(
-    'mount', "${remote}:", $driveRoot,
-    '--vfs-cache-mode', 'full',
-    '--dir-cache-time', '5s',
-    '--poll-interval', '10s',
-    '--attr-timeout', '5s',
-    '--volname', 'LoopSegments'
-)
-if ($ReadOnly) {
-    $mountArgs += '--read-only'
-}
-Invoke-LoopSegmentsRclone @mountArgs
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
