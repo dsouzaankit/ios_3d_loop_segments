@@ -122,9 +122,11 @@ After setup, double-click **`rclone\Mount-PhoneL.cmd`** or run:
 rclone\Mount-PhoneL.cmd
 ```
 
-Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. If the IP changed: `.\setup\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
+Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. While mounted, the script polls phone `status.json` and **kills rclone + exits** if LAN stays down ~90s (avoids Explorer hangs). Mount log: **`rclone\loopsegments-rclone-mount.log`**. If the IP changed: `.\setup\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
 
-Optional args: **`rclone\Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestOnly`**.
+Optional args: **`rclone\Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestOnly`**, **`-Unstick`**, **`-Quick`**, **`-NoLanWatch`**, **`-LanDownSeconds`**, **`-LanPollSeconds`**.
+
+**Explorer frozen after LAN dies:** wait for auto-unmount, or run **`rclone\Unstick-PhoneL.cmd`** (kills mount + restarts Explorer). If Explorer is already wedged: Task Manager → File → Run new task → full path to `Unstick-PhoneL.cmd`.
 
 ## Multiple iPhones — unified LAN listing
 
@@ -206,7 +208,9 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `lan\Get-LoopSegmentsUnifiedLANListing.ps1` | **Pool media listings** from all `phoneLanHosts` → JSON or HTML |
 | `lan\Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
 | `rclone\Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
-| `rclone\Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** / mount / **`-Remove`** / **`-RemovePort80Proxy`** |
+| `rclone\Unstick-PhoneL.cmd` | Kill dead phone mount + restart Explorer |
+| `rclone\Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** / mount / **`-Remove`** / **`-Unstick`** / **`-Quick`** / LAN watch / **`-RemovePort80Proxy`** |
+| `rclone\loopsegments-rclone-mount.log` | rclone mount log (local; gitignored) |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: USB-launch Loop Segments, sync profile, start browser |
 | `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); exit **3** if phone locked |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Press Home over USB to background the app (companion finish); needs USB + unlocked; exit **3** if locked |
