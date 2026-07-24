@@ -14,6 +14,11 @@ struct PausedExportsView: View {
         NavigationStack {
             List {
                 Section {
+                    if pendingQueue.count > 0 {
+                        Button("Clear queue", role: .destructive) {
+                            pendingQueue.clear()
+                        }
+                    }
                     if pendingQueue.items.isEmpty {
                         Text("No queued exports")
                             .foregroundStyle(.secondary)
@@ -38,9 +43,6 @@ struct PausedExportsView: View {
                                 }
                             }
                         }
-                        Button("Clear queue", role: .destructive) {
-                            pendingQueue.clear()
-                        }
                     }
                 } header: {
                     Text("Queued (\(pendingQueue.count))")
@@ -53,6 +55,12 @@ struct PausedExportsView: View {
                 }
 
                 Section {
+                    if !entries.isEmpty {
+                        Button("Clear paused", role: .destructive) {
+                            resumeStore.clearPausedExports(exceptFileKey: session.activeExportFileKey)
+                            refresh()
+                        }
+                    }
                     if entries.isEmpty {
                         Text("No paused exports")
                             .foregroundStyle(.secondary)
@@ -85,7 +93,8 @@ struct PausedExportsView: View {
                         "Cap is \(ResumeStore.maxPausedExports) in-progress slots total (includes the live export). " +
                             "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
                             "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
-                            "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove."
+                            "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove. " +
+                            "Clear paused removes checkpoints (and parked media) but keeps a live export running."
                     )
                     .font(.footnote)
                 }

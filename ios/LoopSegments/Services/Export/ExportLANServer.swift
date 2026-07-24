@@ -733,6 +733,10 @@ enum ExportLANServer {
             sendExportQueueUsageJSON(connection: connection, done: done)
             return
         }
+        if resourcePath == "paused_exports.json" {
+            sendPausedExportsUsageJSON(connection: connection, done: done)
+            return
+        }
         guard let fileURL = resolveExportFile(relativePath: resourcePath) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -1369,11 +1373,21 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "paused_exports.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handlePausedExportsWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         sendResponse(
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, and /export_queue.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, and /paused_exports.json".utf8),
             done: done
         )
     }
@@ -1852,6 +1866,7 @@ enum ExportLANServer {
                 applyExportSource(j.exportSource);
                 applyLive(j.lanLive);
                 applyPendingQueue(j.pendingExportQueue);
+                applyPausedExports(j.pausedExports);
                 if (typeof j.playbackStatusHTML === "string") {
                   var status = document.getElementById("lan-playback-status");
                   if (status) status.innerHTML = j.playbackStatusHTML;
@@ -1937,7 +1952,6 @@ enum ExportLANServer {
 
     private static func playbackMediaFileListHTML() -> String {
         var items: [String] = []
-        items.append(contentsOf: htmlPausedExportListItems())
         let entries = listExportFilesForPlaybackIndex()
         let limit = ExportPaths.lanPlaybackArchiveIndexLimit + 12
         let capped = entries.count > limit
@@ -2137,17 +2151,61 @@ enum ExportLANServer {
         <details id="lan-pending-queue-wrap" class="lan-pending-queue">
           <summary id="lan-pending-queue-heading">Queued exports (\(count))</summary>
           <p class="muted">Not started yet. Auto-starts when idle after finish/Stop. User Pause holds the queue.</p>
-          <ul id="lan-pending-queue">
-          \(htmlPendingQueueListItems(from: items))
-          </ul>
           <p id="lan-pending-queue-actions"\(actionsHidden)>
             <button type="button" id="lan-pending-clear">Clear queue</button>
           </p>
+          <ul id="lan-pending-queue">
+          \(htmlPendingQueueListItems(from: items))
+          </ul>
         </details>
         """
     }
 
-    /// JS helpers for queue list + Remove/Clear (Basic auth required by `/export_queue.json`).
+    /// Paused checkpoints — same rows as phone Paused tab (not pending FIFO).
+    private static func htmlPausedExportsSection() -> String {
+        let excludeKey = ExportPlaybackState.shared.isLANExportActive
+            ? ExportRetentionSourceCatalog.read()?.fileKey
+            : nil
+        let paused = ResumeStore.pausedExportsForLAN(excludingFileKey: excludeKey, limit: 16)
+        let count = paused.count
+        let actionsHidden = count == 0 ? " style=\"display:none\"" : ""
+        let listHTML: String = {
+            let rows = htmlPausedExportListItems()
+            if rows.isEmpty {
+                return #"<li class="muted"><em>No paused exports</em></li>"#
+            }
+            return rows.joined()
+        }()
+        return """
+        <details id="lan-paused-wrap" class="lan-paused-exports">
+          <summary id="lan-paused-heading">Paused exports (\(count))</summary>
+          <p class="muted">Checkpoints from soft-pause / Pause. Clear removes parked media; live export is kept. Queued FIFO is separate.</p>
+          <p id="lan-paused-actions"\(actionsHidden)>
+            <button type="button" id="lan-paused-clear">Clear paused</button>
+          </p>
+          <ul id="lan-paused-list">
+          \(listHTML)
+          </ul>
+        </details>
+        """
+    }
+
+    private static func pausedExportsStatusPayload() -> [String: Any] {
+        let excludeKey = ExportPlaybackState.shared.isLANExportActive
+            ? ExportRetentionSourceCatalog.read()?.fileKey
+            : nil
+        let paused = ResumeStore.pausedExportsForLAN(excludingFileKey: excludeKey, limit: 16)
+        let rows = htmlPausedExportListItems()
+        let listHTML = rows.isEmpty
+            ? #"<li class="muted"><em>No paused exports</em></li>"#
+            : rows.joined()
+        return [
+            "count": paused.count,
+            "listHTML": listHTML,
+        ]
+    }
+
+    /// JS helpers for queue list + Remove/Clear and paused Clear (Basic auth).
     private static func htmlPendingQueueClientHelpersJS() -> String {
         let user = lanWebDAVUsername
         let pass = lanWebDAVPassword
@@ -2174,8 +2232,34 @@ enum ExportLANServer {
                 + ' <button type="button" class="pending-remove" data-id="' + id + '">Remove</button></li>';
             }).join("");
           }
+          function applyPausedExports(p) {
+            var ul = document.getElementById("lan-paused-list");
+            var heading = document.getElementById("lan-paused-heading");
+            var actions = document.getElementById("lan-paused-actions");
+            if (!ul) return;
+            var count = (p && typeof p.count === "number") ? p.count : 0;
+            if (heading) heading.textContent = "Paused exports (" + count + ")";
+            if (actions) actions.style.display = count ? "" : "none";
+            if (p && typeof p.listHTML === "string") {
+              ul.innerHTML = p.listHTML;
+              return;
+            }
+            ul.innerHTML = '<li class="muted"><em>No paused exports</em></li>';
+          }
           function postQueueAction(body) {
             return fetch("export_queue.json", {
+              method: "POST",
+              headers: { "Authorization": QUEUE_AUTH, "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+              cache: "no-store"
+            }).then(function (r) {
+              return r.json().then(function (j) { return { ok: r.ok, j: j }; }).catch(function () {
+                return { ok: r.ok, j: null };
+              });
+            });
+          }
+          function postPausedAction(body) {
+            return fetch("paused_exports.json", {
               method: "POST",
               headers: { "Authorization": QUEUE_AUTH, "Content-Type": "application/json" },
               body: JSON.stringify(body),
@@ -2221,6 +2305,24 @@ enum ExportLANServer {
                   .finally(function () { clearBtn.disabled = false; });
               });
             }
+            var clearPaused = document.getElementById("lan-paused-clear");
+            if (clearPaused && !clearPaused.getAttribute("data-ls-wired")) {
+              clearPaused.setAttribute("data-ls-wired", "1");
+              clearPaused.addEventListener("click", function () {
+                if (!window.confirm("Clear all paused exports? Parked media is removed. Live export is kept.")) return;
+                clearPaused.disabled = true;
+                postPausedAction({ action: "clear" })
+                  .then(function (res) {
+                    if (res.j && res.j.pausedExports) applyPausedExports(res.j.pausedExports);
+                    else applyPausedExports({ count: 0, listHTML: '<li class="muted"><em>No paused exports</em></li>' });
+                    if (window.refreshLANPlayback) {
+                      try { window.refreshLANPlayback(); } catch (e) {}
+                    }
+                  })
+                  .catch(function () {})
+                  .finally(function () { clearPaused.disabled = false; });
+              });
+            }
           }
         """
     }
@@ -2248,6 +2350,7 @@ enum ExportLANServer {
             "<a href=\"\(LANExportTriggerControl.ackRelativePath)\">export_trigger.ack.json</a>",
             #"<a href="export_from_folder.json">export_from_folder.json</a>"#,
             #"<a href="export_queue.json">export_queue.json</a>"#,
+            #"<a href="paused_exports.json">paused_exports.json</a>"#,
             "<a href=\"\(PendingExportQueue.relativePath)\">export_pending_queue.json</a>",
         ]
         if FileManager.default.fileExists(atPath: ExportPaths.searchDebugLogURL.path) {
@@ -2340,7 +2443,6 @@ enum ExportLANServer {
                 : "<a href=\"\(esc)\">\(esc)</a>"
             items.append("<li>\(link) (sparse)</li>")
         }
-        items.append(contentsOf: htmlPausedExportListItems())
         if ExportPlaybackState.shared.isLANExportActive {
             for rel in ExportPaths.listLANPlaybackIndexRelativePaths(
                 maxArchiveEntries: ExportPaths.lanPlaybackArchiveIndexLimitDuringExport
@@ -2413,6 +2515,7 @@ enum ExportLANServer {
                 applyExportSource(j.exportSource);
                 applyLive(j.lanLive);
                 applyPendingQueue(j.pendingExportQueue);
+                applyPausedExports(j.pausedExports);
                 if (typeof j.playbackStatusHTML === "string") {
                   var status = document.getElementById("lan-playback-status");
                   if (status) status.innerHTML = j.playbackStatusHTML;
@@ -2465,6 +2568,16 @@ enum ExportLANServer {
           var playbackFiles = document.getElementById("lan-playback-files");
           if (playbackFiles) {
             playbackFiles.onclick = function (ev) {
+              var parkedBtn = ev.target.closest ? ev.target.closest(".export-parked") : null;
+              if (!parkedBtn && ev.target.classList && ev.target.classList.contains("export-parked")) {
+                parkedBtn = ev.target;
+              }
+              if (parkedBtn) queueParkedResume(parkedBtn);
+            };
+          }
+          var pausedList = document.getElementById("lan-paused-list");
+          if (pausedList) {
+            pausedList.onclick = function (ev) {
               var parkedBtn = ev.target.closest ? ev.target.closest(".export-parked") : null;
               if (!parkedBtn && ev.target.classList && ev.target.classList.contains("export-parked")) {
                 parkedBtn = ev.target;
@@ -2612,15 +2725,20 @@ enum ExportLANServer {
             #lan-export-logs li { word-break: break-all; }
             #trigger-status { min-height: 1.2em; }
             .lan-pending-queue { margin: 0.75rem 0 1rem; }
-            .lan-pending-queue > summary {
+            .lan-pending-queue > summary,
+            .lan-paused-exports > summary {
               cursor: pointer;
               font-size: 1.17em;
               font-weight: 600;
             }
-            .lan-pending-queue ul { margin: 0.25rem 0 0.5rem; padding-left: 1.25rem; }
-            .lan-pending-queue .pending-name { font-weight: 600; }
+            .lan-pending-queue ul,
+            .lan-paused-exports ul { margin: 0.25rem 0 0.5rem; padding-left: 1.25rem; }
+            .lan-pending-queue .pending-name,
+            .lan-paused-exports .pending-name { font-weight: 600; }
             .lan-pending-queue .pending-remove { margin-left: 0.45rem; }
-            #lan-pending-queue-actions { margin: 0.25rem 0 0; }
+            #lan-pending-queue-actions,
+            #lan-paused-actions { margin: 0.25rem 0 0.35rem; }
+            .lan-paused-exports { margin: 0.75rem 0 1rem; }
             </style>
             <script>
             (function () {
@@ -2684,6 +2802,7 @@ enum ExportLANServer {
                 </div>
                 \(htmlExportSourceLineShell())
                 \(htmlPendingQueueSection())
+                \(htmlPausedExportsSection())
                 <div id="lan-playback-status">\(playbackStatusInitial)</div>
                 <p class="muted">No auto-refresh (tap buttons). Use direct log link while export runs.</p>
                 <p>
@@ -2742,6 +2861,7 @@ enum ExportLANServer {
             </div>
             \(htmlExportSourceLineBlock())
             \(htmlPendingQueueSection())
+            \(htmlPausedExportsSection())
             <p>Serving on port \(defaultPort): logs and media under <code>pcld_ios_media/</code> (private on phone, not in Files app). Legacy URLs <code>/export_latest.txt</code>, <code>/logs/export_*.txt</code>, and <code>/loop_segments_ok.txt</code> still work.</p>
             <p>JSON: \(htmlMonitorQuickLogLinks())</p>
             <p>PC: <code>Mount-LoopSegmentsRclone.ps1</code> (maps <code>pcld_ios_media/</code> and logs).</p>
@@ -3046,6 +3166,72 @@ enum ExportLANServer {
             ],
         ]
         sendJSONPayload(payload, connection: connection, done: done, status: 200)
+    }
+
+    private static func sendPausedExportsUsageJSON(connection: NWConnection, done: @escaping () -> Void) {
+        let paused = pausedExportsStatusPayload()
+        let payload: [String: Any] = [
+            "endpoint": "/paused_exports.json",
+            "methods": ["GET", "POST"],
+            "pausedExports": paused,
+            "body": [
+                "action": "clear — remove paused checkpoints (keeps live export; does not clear Queued FIFO)",
+            ],
+            "notes": [
+                "Same paused list as phone Paused tab (excluding the live export).",
+                "Clear also removes parked/ media for those checkpoints.",
+            ],
+        ]
+        sendJSONPayload(payload, connection: connection, done: done, status: 200)
+    }
+
+    private static func handlePausedExportsWrite(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 4_096
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                      let action = (object["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                      action == "clear" else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain; charset=utf-8",
+                        body: Data("Expected JSON { \"action\": \"clear\" }".utf8),
+                        done: done
+                    )
+                    return
+                }
+                Task { @MainActor in
+                    let exceptKey = ExportPlaybackState.shared.isLANExportActive
+                        ? ExportRetentionSourceCatalog.read()?.fileKey
+                        : nil
+                    ResumeStore.shared.clearPausedExports(exceptFileKey: exceptKey)
+                    let payload: [String: Any] = [
+                        "status": "ok",
+                        "action": "clear",
+                        "pausedExports": pausedExportsStatusPayload(),
+                    ]
+                    sendJSONPayload(payload, connection: connection, done: done, status: 200)
+                }
+            }
+        }
     }
 
     private static func handleExportQueueWrite(
@@ -3769,6 +3955,16 @@ enum ExportLANServer {
               if (parkedBtn) queueParkedResume(parkedBtn);
             };
           }
+          var pausedList = document.getElementById("lan-paused-list");
+          if (pausedList) {
+            pausedList.onclick = function (ev) {
+              var parkedBtn = ev.target.closest ? ev.target.closest(".export-parked") : null;
+              if (!parkedBtn && ev.target.classList && ev.target.classList.contains("export-parked")) {
+                parkedBtn = ev.target;
+              }
+              if (parkedBtn) queueParkedResume(parkedBtn);
+            };
+          }
           loadPins().then(function () { loadPCloud(); }).catch(function () { loadPCloud(); });
           window.refreshLANBookmarks = loadPins;
         })();
@@ -3833,6 +4029,7 @@ enum ExportLANServer {
             payload["exportSource"] = exportSource
         }
         payload["pendingExportQueue"] = pendingExportQueueStatusPayload()
+        payload["pausedExports"] = pausedExportsStatusPayload()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return
