@@ -713,7 +713,8 @@ function Wait-PhoneLanPageReachable {
 
 function Invoke-LoopSegmentsUsbLaunch {
     # Always warn if AltServer missing (7-day AltStore cert), even with -SkipUsbLaunch.
-    [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
+    # If installed but idle, start it so AltStore can refresh before the ~7-day expiry.
+    [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureStarted)
 
     $lanUp = Test-PhoneLanPageReachable
     if ($lanUp) {

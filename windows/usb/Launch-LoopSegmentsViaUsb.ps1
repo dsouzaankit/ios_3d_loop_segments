@@ -138,7 +138,8 @@ $(Get-LoopSegmentsPythonInstallHint)
 Write-Host "pymobiledevice3 import OK"
 
 # Always surface AltServer install status (7-day AltStore cert depends on it).
-[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
+# Start it when installed but idle (do not wait for USB-detect failure).
+[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureStarted)
 
 function Invoke-UsbmuxList {
     Write-Host "Listing USB / usbmux devices..."

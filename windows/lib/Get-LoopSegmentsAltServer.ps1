@@ -70,7 +70,9 @@ function Write-LoopSegmentsAltServerNotice {
         # When true, print a short OK / missing line (never dumps the 5-step resolution).
         [switch] $AlwaysStatus,
         # Print the full 5-step unavailable resolution once (use only on real failure paths).
-        [switch] $IncludeResolution
+        [switch] $IncludeResolution,
+        # When installed but not running, start AltServer (companion / USB launch).
+        [switch] $EnsureStarted
     )
 
     $path = Get-LoopSegmentsAltServerPath
@@ -90,9 +92,20 @@ function Write-LoopSegmentsAltServerNotice {
     }
 
     $running = Test-LoopSegmentsAltServerRunning
+    $started = $false
+    if ($EnsureStarted -and -not $running) {
+        $startResult = Start-LoopSegmentsAltServer -WaitSeconds 4
+        $running = [bool]$startResult.Running
+        $started = [bool]$startResult.Started
+    }
+
     if ($AlwaysStatus) {
         if ($running) {
-            Write-Host "[altserver] Running: $path"
+            if ($started) {
+                Write-Host "[altserver] Started: $path"
+            } else {
+                Write-Host "[altserver] Running: $path"
+            }
         } else {
             Write-Host "[altserver] Installed but not running: $path" -ForegroundColor DarkYellow
             Write-Host "[altserver] Needed for AltStore refresh so Loop Segments does not die after ~7 days." -ForegroundColor DarkYellow
@@ -106,7 +119,7 @@ function Write-LoopSegmentsAltServerNotice {
         Installed = $true
         Running   = $running
         Path      = $path
-        Started   = $false
+        Started   = $started
     }
 }
 
@@ -138,7 +151,7 @@ function Start-LoopSegmentsAltServer {
         }
     }
 
-    Write-Host "[altserver] Starting AltServer (USB detect failed / recovery): $path"
+    Write-Host "[altserver] Starting AltServer: $path"
     try {
         Start-Process -FilePath $path | Out-Null
     } catch {
