@@ -4,7 +4,7 @@
 
 **Quick notes:** LAN below Mbps cutoff → preload/full file only; at/above → `op_*.mp4` when codec allows. **`_working.mp4`** full-timeline play is reliable at seek **0:00** (seek &gt; 0 → see below). AV1 not supported — prefer H.265. **Keep Alive** defaults **on** (build **272+**) — see **Background / lock screen**. Companion **multi-select** → phone **pending FIFO** (build **273+**). Optional: Settings → Display & Brightness → Auto-Lock → Never.
 
-**IPA / install (no Mac):** [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) · [ios-build workflow](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml). AltStore refresh/troubleshooting lives there (and [../windows/README.md](../windows/README.md) for AltServer on the PC).
+**IPA / install (no Mac):** from repo root run **`.\deploy.ps1`** (triggers [ios-build](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml), downloads the IPA, then runs **`.\copy-to-icloud.ps1`**). Paste-only: **`.\copy-to-icloud.ps1`** (stamped `LoopSegments-b{build}-{time}.ipa`, same pattern as web_auto_parking). Details / AltStore: [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md). PC AltServer notes: [../windows/README.md](../windows/README.md).
 
 **PC tools:** [../windows/README.md](../windows/README.md) — companion, USB launch/Home, rclone, LAN probe. Companion requests exports via phone LAN REST (`/export_from_folder.json`, `/export_queue.json`, triggers) while the phone uses **cellular** to pCloud.
 
@@ -188,21 +188,27 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 ## PC sync (LAN — HTTP + WebDAV)
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (Export tab → **Export another file**, above **Exports folder**) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
-2. **URLs:** **`http://<phone-ip>:8765/`** — **light monitor** (playback, logs, resume when paused; **manual refresh only**). **`http://<phone-ip>:8765/browse`** — full page with pCloud folder browser (auto-refresh **60 s** / **120 s** when idle). Also **`status.json`**, **`status_lists.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL for scripts under `pcld_ios_media/`, LOCK, etc.). Use monitor **`/`** during large exports; open **`/browse`** only when you need LAN export-from-folder. Direct **`/export_latest.txt`** is always safe. mDNS: **`http://<iphone-name>.local:8765/`** (Bonjour **`loopsegments._http._tcp`**).
+2. **URLs:** **`http://<phone-ip>:8765/`** — **light monitor** (playback, logs, resume when paused; **manual refresh only**). **`http://<phone-ip>:8765/browse`** — full page with pCloud folder browser (auto-refresh **60 s** / **120 s** when idle). Also **`status.json`**, **`status_lists.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL/DELETE/**MOVE** under writable `pcld_ios_media/` paths, LOCK, etc.). Use monitor **`/`** during large exports; open **`/browse`** only when you need LAN export-from-folder. Direct **`/export_latest.txt`** is always safe. mDNS: **`http://<iphone-name>.local:8765/`** (Bonjour **`loopsegments._http._tcp`**).
 3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). PC DLNA/copy/mount options: [../windows/README.md](../windows/README.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
 LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, **`search_debug.txt`** when search has run); the LAN index lists **`search_debug.txt`** when on disk (legacy **`/search_debug.txt`** URL still works). Legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
 
-**PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** / **MOVE** (Basic auth **`admin` / `iosadmin`**) can create nested folders, small files (e.g. `pcld_ios_media/scripts/run.ps1`, ≤ 2 MB per PUT), and rename/relocate on the phone (no download). **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, **`parked/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
+**PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** / **MOVE** (Basic auth **`admin` / `iosadmin`**) can create nested folders, small files (≤ 2 MB per PUT), and rename/relocate on the phone (local **`MOVE`** — no download). Typical homes: **`scripts/`** or **`archive/*.ps1`** (robocopy helpers that use `$PSScriptRoot` next to retained videos). **No server `COPY` yet** — same-folder Explorer paste still GET+PUT over LAN. **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, **`parked/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
 
 ```powershell
 $base = "http://10.0.0.42:8765/pcld_ios_media"
 $cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
-Invoke-WebRequest -Method MKCOL -Uri "$base/scripts" -Headers @{ Authorization = "Basic $cred" }
-Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers @{ Authorization = "Basic $cred" } `
+$hdr = @{ Authorization = "Basic $cred" }
+Invoke-WebRequest -Method MKCOL -Uri "$base/scripts" -Headers $hdr
+Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers $hdr `
   -Body 'Write-Host "from PC"' -ContentType "text/plain"
+# Rename on phone (build 282+); Destination must be absolute or path on the same host
+Invoke-WebRequest -Method MOVE -Uri "$base/archive/clip_2026-08-01_12-00-00.mp4" -Headers ($hdr + @{
+  Destination = "$base/archive/clip.mp4"
+  Overwrite = "T"
+})
 ```
 
 ### LAN HTTP page (browser control)
@@ -284,7 +290,7 @@ Or with a known WebDAV path `href` (phone-relative path, not a PC/CDN URL):
 | **`start_export_random`** | Random video in `folderPath` or `pool` (`same_folder` \| `bookmarks`). **Auto-pauses** + archives any running export first. LAN **Export random in folder** uses the **current browse path only** (one WebDAV `PROPFIND` level — videos in that folder, not subfolders). Bookmarks pool lists each bookmarked folder the same way (non-recursive). |
 | **`resume_export`** | Resume the most recent **paused** export from its checkpoint (`href` / `displayName` optional). LAN page **Start export** button only. |
 | **`trim_media`** | Same as **Trim media (keep last 2)** (rejected while export running). |
-| **`clear_media`** | Same as **Clear media** — deletes active + `archive/` + `downloads/` (rejected while export running). |
+| **`clear_media`** | Same as **Clear media** — deletes active root videos, all **videos** under `archive/` (stamped + unstamped), `parked/`, `downloads/`, `loop/` (rejected while export running). Keeps non-media in `archive/` (e.g. `.ps1`). |
 | **`download_url`** | Starts a full export from HTTP(S) `url` using `saveName` as display name (same pipeline as browse Export: vanilla download → 60s segments → archive). **Auto-pauses** + archives any running export first. For **pCloud CDN / publink** URLs (often IP-bound → **HTTP 410**), prefer **`/export_from_folder.json`** / `start_export` with `folderPath` instead. |
 
 Triggers are polled while the app is **foreground**, **exporting**, or **Keep Alive** is playing (~2s). Optional fields: **`pool`**, **`folderPath`** (for random / folder resolve), **`url`** / **`saveName`** (for download; `saveName` also aliases `displayName` for folder resolve), **`id`** (UUID — duplicate ids are ignored).
@@ -381,7 +387,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | **Export finished** | **Copy** to `archive/` (root `_working*` / `_vanilla_*` / transcode **stay on LAN**); `loop/` unchanged. Same root slot is **not** copied again on Stop or fresh Start — only removed from root if already retained. |
 | **Stop** (in-app only) | `loop/` removed (+ Photos when enabled); active root files **moved** into `archive/` |
 | **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
-| **Clear media** / **`clear_media`** | Removes active root files, all `archive/` / `parked/` retains, `downloads/`, `loop/` segments, and **deletes** paused/in-progress resume rows (Paused tab empties) |
+| **Clear media** / **`clear_media`** | Removes active root videos, **all browsable videos** under `archive/` (stamped + unstamped — stamp-stripped keeps are not immortal), `parked/`, `downloads/`, `loop/` segments, and **deletes** paused/in-progress resume rows (Paused tab empties). **Keeps** non-media under `archive/` (e.g. location-dependent `.ps1` robocopy helpers) and does not touch `scripts/` or logs |
 
 **Filename pattern:** `<pCloud-basename>[_3D_<nK>][_appFast_]yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`**. Example: `archive/MyMovie_3D_4K_2026-05-22_14-30-52.mp4`; after in-app moov-at-end remux: `archive/MyMovie_3D_4K_appFast_2026-05-22_14-30-52.mp4`. Legacy `_working_*` / `_vanilla_*` archive names are kept if already on disk. Prune/trim batches still key on the timestamp only (`_appFast_` does not split batches).
 

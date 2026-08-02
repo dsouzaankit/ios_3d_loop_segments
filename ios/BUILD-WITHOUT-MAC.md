@@ -79,10 +79,24 @@ Pick one:
 
 **A — GitHub Actions (free macOS minutes)**  
 
+**One-shot on Windows (preferred):** from the repo root (needs [`gh`](https://cli.github.com/) + `gh auth login` + iCloud for Windows):
+
+```powershell
+.\deploy.ps1              # trigger ios-build → download → calls copy-to-icloud.ps1
+.\deploy.ps1 -UseLatest   # skip trigger; fetch newest successful workflow_dispatch IPA → copy-to-icloud
+.\deploy.ps1 -SkipICloud  # local ios\build artifacts\ipa\ only (no iCloud)
+.\copy-to-icloud.ps1      # iCloud paste only — unique LoopSegments-b{build}-{time}.ipa (like web_auto_parking)
+.\copy-to-icloud.ps1 -FetchIfMissing   # if local IPA missing, gh -UseLatest first then paste
+```
+
+**`deploy.ps1` reuses `copy-to-icloud.ps1`** for the iCloud step (unless `-SkipICloud`). That helper prunes older `LoopSegments*.ipa` in iCloud Downloads, then copies a **new stamped name** so Files refreshes reliably. Optional override: set **`iCloudDownloads`** in `windows\loop-segments-windows.json`.
+
+**Manual:**
+
 1. Push this repo to **GitHub** (public repos get **unlimited** macOS runner time; private repos share ~2,000 min/month on the free plan).
 2. Open the repo → **Actions** → **ios-build** → **Run workflow** (manual run builds the IPA; pushes only run the simulator smoke test).
 3. When the run finishes, open the run → **Artifacts** → download **`LoopSegments-ipa`** → unzip → `LoopSegments.ipa`.  
-   On this PC you can keep it at `ios\build artifacts\ipa\LoopSegments.ipa` (see [Refresh the IPA later](#refresh-the-ipa-later)).
+   On this PC you can keep it at `ios\build artifacts\ipa\LoopSegments.ipa` (see [Refresh the IPA later](#refresh-the-ipa-later)), or copy to iCloud Drive → Downloads for AltStore on the phone.
 4. Install with [AltStore](#2-install-with-altstore-primary--windows).
 
 **Signing on GitHub (optional)**
@@ -457,21 +471,29 @@ Free Apple ID certificates last **~7 days**. See **[§3 Automate weekly refresh]
 | Goal | What to do |
 |------|------------|
 | **Extend the same install** | **AltStore → Refresh All** on home Wi‑Fi ([§3](#3-automate-weekly-refresh-altserver--altstore)) |
-| **New build** | GitHub → **Actions** → **ios-build** → **Run workflow** → **`LoopSegments-ipa`** → reinstall in AltStore |
+| **New build** | Repo root: **`.\deploy.ps1`** (or Actions → **ios-build** → **Run workflow**) → wait for iCloud sync → reinstall in AltStore |
 
 **Local IPA path (this repo on Windows):**
 
 `ios\build artifacts\ipa\LoopSegments.ipa`
 
-**Download latest artifact with GitHub CLI** (after `gh auth login`):
+**iCloud path (after `deploy.ps1` / `copy-to-icloud.ps1`):**
+
+`%USERPROFILE%\iCloudDrive\Downloads\LoopSegments-b{build}-{yyyyMMdd-HHmmss}.ipa`  
+(older `LoopSegments*.ipa` in that folder are removed first)
+
+**Download latest artifact with GitHub CLI** (after `gh auth login`) — or just `.\deploy.ps1 -UseLatest`:
 
 ```powershell
-cd P:\all_scripts\ios_3d_loop_segments\ios\build artifacts\ipa
-gh run list --workflow=ios-build.yml --limit 1
-gh run download <RUN_ID> -n LoopSegments-ipa
+cd "P:\all_scripts\iOS apps\ios_3d_loop_segments"
+.\deploy.ps1 -UseLatest
+# manual equivalent:
+# cd "ios\build artifacts\ipa"
+# gh run list --workflow=ios-build.yml --event=workflow_dispatch --status=success --limit 1
+# gh run download <RUN_ID> -n LoopSegments-ipa
 ```
 
-Use the newest successful **workflow_dispatch** run ID from `gh run list`. Reinstall with **AltStore**.
+Reinstall with **AltStore** after iCloud finishes syncing the IPA on the phone.
 
 ---
 

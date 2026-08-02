@@ -2,6 +2,8 @@
 
 Scripts work on **any Windows PC** after you copy or clone this repo. Machine-specific paths live in **`loop-segments-windows.json`** (gitignored) in this folder. Shared helpers live in **`lib\`**; entry-point scripts are grouped by role under subfolders.
 
+**IPA → iCloud:** from the **repo root** (parent of this folder), run **`..\deploy.ps1`** (build/fetch, then calls **`copy-to-icloud.ps1`**) or **`..\copy-to-icloud.ps1`** alone (stamped `LoopSegments-b{build}-{time}.ipa`, like web_auto_parking). See [../ios/BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md).
+
 **PowerShell:** scripts target **Windows PowerShell 5.1** (`#Requires -Version 5.1`, built into Windows — no PowerShell 7 / `pwsh` install needed). Child helpers (REST log sink, exit watchdog, USB launch) also call **`powershell.exe`** (5.1), not `pwsh`. That is why a blue console can appear for USB launch; background helpers use a no-window start so they should not flash.
 
 ## Layout
@@ -63,7 +65,7 @@ cd <repo>\windows   # e.g. where this README lives
 
 Or step by step: copy `loop-segments-windows.example.json` → `loop-segments-windows.json`, then `.\setup\Set-LoopSegmentsWindows.ps1`.
 
-Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**.
+Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). Writable paths support **PUT** (≤ 2 MB), **MKCOL**, **DELETE**, and **MOVE** (build **282+**; Explorer rename stays on-phone). No server **COPY** yet. **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**.
 
 ## pCloud web helper (integrated)
 
@@ -172,6 +174,7 @@ Links in the unified view point back to each phone’s `:8765` URL — playback 
 | `winfspDllPath` | **Empty** = search Program Files; set full path if detection fails |
 | `skipWinFspCheck` | `true` if Koofr mount already proves WinFsp works |
 | `webdavUser` / `webdavPassword` | Phone LAN WebDAV (defaults match app) |
+| `iCloudDownloads` | **Empty** = `%USERPROFILE%\iCloudDrive\Downloads` — target for repo-root **`copy-to-icloud.ps1`** (also used by **`deploy.ps1`**) |
 | `dlnaFolder` | Optional note for Skybox / junction target |
 | `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
 

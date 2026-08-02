@@ -41,6 +41,8 @@ Copy segment files into your DLNA folder (or use [WORKFLOW.md](WORKFLOW.md)). Se
 
 Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md)** — **AltStore + AltServer** (primary) or paid TestFlight; Sideloadly only if AltStore fails.
 
+**Deploy IPA to iCloud (Windows):** from repo root, `.\deploy.ps1` triggers GitHub **ios-build**, downloads the IPA locally, then **calls `.\copy-to-icloud.ps1`** (requires `gh auth login`). Paste-only (no build): `.\copy-to-icloud.ps1` — stamped `LoopSegments-b{build}-{time}.ipa` + prune older `LoopSegments*.ipa` (same idea as `web_auto_parking\deploy.ps1`).
+
 **Free install (~7-day certs):**
 
 | Piece | Notes |
@@ -66,6 +68,8 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 |------|------|
 | [WORKFLOW.md](WORKFLOW.md) | Step-by-step cellular / LAN / DLNA |
 | [DESIGN.md](DESIGN.md) | Architecture |
+| [deploy.ps1](deploy.ps1) | Windows: Actions IPA → local, then runs [copy-to-icloud.ps1](copy-to-icloud.ps1) |
+| [copy-to-icloud.ps1](copy-to-icloud.ps1) | Stamped iCloud paste + prune (shared by deploy; no build) |
 | [ios/](ios/) | Loop Segments iPhone app |
 | [windows/README.md](windows/README.md) | **Portable PC setup** (`loop-segments-windows.json`) |
 | [windows/rclone/Mount-LoopSegmentsRclone.ps1](windows/rclone/Mount-LoopSegmentsRclone.ps1) | WebDAV **`-TestOnly`** / **mount** / `-Remove` / `-Unstick` / LAN watch — see [RCLONE-PHONE-MOUNT.md](windows/rclone/RCLONE-PHONE-MOUNT.md) |
