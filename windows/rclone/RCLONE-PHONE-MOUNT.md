@@ -25,7 +25,7 @@ Or day-to-day: double-click **`Mount-PhoneL.cmd`** in this folder.
 
 The mount script writes/updates **`[loopsegments]`** in your **`rclone.conf`** (same file as Koofr if you use one). Settings: **`../loop-segments-windows.json`** — see **[../README.md](../README.md)**.
 
-**`L:` is read/write by default.** Copy a bootstrap **`.ps1`** to **`L:\pcld_ios_media\`**, then run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per file. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** = DLNA-only. Without a mount, see **`../archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
+**`L:` is read/write by default.** Copy a bootstrap **`.ps1`** to **`L:\pcld_ios_media\`**, then run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per PUT. **MOVE** (Explorer rename) is supported on writable paths (local on phone — no re-download). Same-folder paste still downloads unless/until server **COPY** exists. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** = DLNA-only. Without a mount, see **`../archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
 
 Mounted paths:
 

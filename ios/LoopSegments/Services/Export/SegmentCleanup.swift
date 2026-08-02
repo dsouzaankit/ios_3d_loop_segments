@@ -56,6 +56,7 @@ enum SegmentCleanup {
             removed += 1
         }
         removed += ExportMediaArchive.removeAllRetainedMedia(log: log)
+        removed += ExportMediaArchive.removeAllRootBrowsableMedia(log: log)
         removed += ExportParkedMedia.removeAll(log: log)
         removed += removeURLDownloads(log: log)
         ExportRetentionSourceCatalog.remove()

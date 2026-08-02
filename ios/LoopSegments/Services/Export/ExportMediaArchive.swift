@@ -516,26 +516,52 @@ enum ExportMediaArchive {
         return removed
     }
 
+    /// Clear media: remove all browsable videos under `archive/` (stamped + unstamped).
+    /// Keeps non-media (e.g. location-dependent `.ps1` robocopy helpers) and subfolders.
     @discardableResult
     static func removeAllRetainedMedia(log: ((String) -> Void)? = nil) -> Int {
         migrateRetainedFilesIntoArchive(log: log)
-        var removed = 0
-        for suffix in collectRetentionStampSuffixes() {
-            removed += removeFiles(forStampSuffix: suffix, log: log)
-        }
         let fm = FileManager.default
-        if let names = try? fm.contentsOfDirectory(atPath: archiveDirectoryURL.path) {
-            for name in names where !isRetentionArchivableMediaFileName(name) {
-                let url = archiveDirectoryURL.appendingPathComponent(name)
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
-                do {
-                    try fm.removeItem(at: url)
-                    removed += 1
-                    log?("Removed non-media archive/ \(name)")
-                } catch {
-                    log?("Could not remove archive/\(name): \(error.localizedDescription)")
-                }
+        guard fm.fileExists(atPath: archiveDirectoryURL.path),
+              let names = try? fm.contentsOfDirectory(atPath: archiveDirectoryURL.path) else {
+            return 0
+        }
+        var removed = 0
+        for name in names {
+            guard isRetentionArchivableMediaFileName(name) else { continue }
+            let url = archiveDirectoryURL.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+            do {
+                try fm.removeItem(at: url)
+                removed += 1
+                log?("Removed \(ExportPaths.pathRelativeToExports(url))")
+            } catch {
+                log?("Could not remove archive/\(name): \(error.localizedDescription)")
+            }
+        }
+        return removed
+    }
+
+    /// Clear media: any leftover browsable videos at `pcld_ios_media/` root (not reserved subfolders).
+    @discardableResult
+    static func removeAllRootBrowsableMedia(log: ((String) -> Void)? = nil) -> Int {
+        let fm = FileManager.default
+        let root = ExportPaths.mediaExportDirectory
+        guard let names = try? fm.contentsOfDirectory(atPath: root.path) else { return 0 }
+        var removed = 0
+        for name in names {
+            if reservedTopLevelNames.contains(name) { continue }
+            guard isRetentionArchivableMediaFileName(name) else { continue }
+            let url = root.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+            do {
+                try fm.removeItem(at: url)
+                removed += 1
+                log?("Removed \(ExportPaths.pathRelativeToExports(url))")
+            } catch {
+                log?("Could not remove \(name): \(error.localizedDescription)")
             }
         }
         return removed

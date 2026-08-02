@@ -4,7 +4,7 @@ import Network
 import UIKit
 
 /// Serves export logs and media from private `Application Support/pcld_ios_media/` on the LAN (HTTP + WebDAV).
-/// `pcld_ios_media/` accepts authenticated PUT/MKCOL for PC scripts and nested folders; export pipeline paths stay read-only.
+/// `pcld_ios_media/` accepts authenticated PUT/MKCOL/DELETE/MOVE for PC scripts and writable media; export pipeline paths stay read-only.
 enum ExportLANServer {
     static let defaultPort: UInt16 = 8765
     /// Per-response cap — open-ended `Range: bytes=0-` must not ship multi-GB (Quest browser / Safari OOM).
@@ -411,6 +411,8 @@ enum ExportLANServer {
             handleMKCOL(path: path, connection: connection, done: done)
         case "DELETE":
             handleDELETE(path: path, connection: connection, done: done)
+        case "MOVE":
+            handleMOVE(path: path, requestHeaders: requestHeaders, connection: connection, done: done)
         case "OPTIONS":
             sendOptions(connection: connection, done: done)
         case "PROPFIND":
@@ -420,7 +422,7 @@ enum ExportLANServer {
         case "UNLOCK":
             sendNoContent(connection: connection, done: done)
         default:
-            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Allowed: GET, HEAD, PUT, POST, MKCOL, DELETE, OPTIONS, PROPFIND, LOCK, UNLOCK".utf8), done: done)
+            sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Allowed: GET, HEAD, PUT, POST, MKCOL, DELETE, MOVE, OPTIONS, PROPFIND, LOCK, UNLOCK".utf8), done: done)
         }
     }
 
@@ -523,7 +525,7 @@ enum ExportLANServer {
     /// Auth on OPTIONS/PROPFIND/LOCK, WebDAV writes, and WebDAV `GET /`. Media GET stays open (Skybox often omits Authorization on play).
     private static func requiresLANWebDAVAuth(method: String, path: String, requestHeaders: String) -> Bool {
         switch method {
-        case "OPTIONS", "PROPFIND", "LOCK", "PUT", "POST", "MKCOL", "DELETE":
+        case "OPTIONS", "PROPFIND", "LOCK", "PUT", "POST", "MKCOL", "DELETE", "MOVE":
             return true
         case "GET", "HEAD":
             return normalizedGETPath(path).isEmpty && !isBrowserLikeRequest(requestHeaders: requestHeaders)
@@ -1467,6 +1469,87 @@ enum ExportLANServer {
         }
     }
 
+    /// Local rename/relocate under writable `pcld_ios_media/` paths (no LAN download). Pipeline slots stay 403.
+    private static func handleMOVE(
+        path: String,
+        requestHeaders: String,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        guard let destinationHeader = headerValue(named: "Destination", in: requestHeaders),
+              !destinationHeader.isEmpty else {
+            sendResponse(connection: connection, status: 400, contentType: "text/plain", body: Data("Destination required".utf8), done: done)
+            return
+        }
+        let destPath = httpRequestPath(from: destinationHeader)
+        guard let sourceRel = relativeExportPath(fromDAVPath: path),
+              let destRel = relativeExportPath(fromDAVPath: destPath) else {
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+            return
+        }
+        guard ExportPaths.isLANWritableMediaRelativePath(sourceRel),
+              ExportPaths.isLANWritableMediaRelativePath(destRel) else {
+            sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Read-only export path".utf8), done: done)
+            return
+        }
+        guard let sourceURL = ExportPaths.urlForLANWritableMedia(relativePath: sourceRel),
+              let destURL = ExportPaths.urlForLANWritableMedia(relativePath: destRel) else {
+            sendResponse(connection: connection, status: 403, contentType: "text/plain", body: Data("Forbidden".utf8), done: done)
+            return
+        }
+        if sourceRel == destRel {
+            sendNoContent(connection: connection, done: done)
+            return
+        }
+        let fm = FileManager.default
+        var sourceIsDir: ObjCBool = false
+        guard fm.fileExists(atPath: sourceURL.path, isDirectory: &sourceIsDir) else {
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+            return
+        }
+        if sourceIsDir.boolValue {
+            let sourcePrefix = sourceURL.standardizedFileURL.path
+            let destStd = destURL.standardizedFileURL.path
+            if destStd == sourcePrefix || destStd.hasPrefix(sourcePrefix + "/") {
+                sendResponse(connection: connection, status: 409, contentType: "text/plain", body: Data("Cannot MOVE into own descendant".utf8), done: done)
+                return
+            }
+        }
+        let overwriteRaw = (headerValue(named: "Overwrite", in: requestHeaders) ?? "T")
+            .trimmingCharacters(in: .whitespaces)
+            .uppercased()
+        let overwriteAllowed = overwriteRaw != "F"
+        var destIsDir: ObjCBool = false
+        let destExists = fm.fileExists(atPath: destURL.path, isDirectory: &destIsDir)
+        if destExists, destIsDir.boolValue {
+            sendResponse(connection: connection, status: 409, contentType: "text/plain", body: Data("Destination is a collection".utf8), done: done)
+            return
+        }
+        if destExists, !overwriteAllowed {
+            sendResponse(connection: connection, status: 412, contentType: "text/plain", body: Data("Destination exists".utf8), done: done)
+            return
+        }
+        let parentURL = destURL.deletingLastPathComponent()
+        var parentIsDir: ObjCBool = false
+        guard fm.fileExists(atPath: parentURL.path, isDirectory: &parentIsDir), parentIsDir.boolValue else {
+            sendResponse(connection: connection, status: 409, contentType: "text/plain", body: Data("Parent collection missing".utf8), done: done)
+            return
+        }
+        do {
+            if destExists {
+                try fm.removeItem(at: destURL)
+            }
+            try fm.moveItem(at: sourceURL, to: destURL)
+            if destExists {
+                sendNoContent(connection: connection, done: done)
+            } else {
+                sendCreated(connection: connection, done: done)
+            }
+        } catch {
+            sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("MOVE failed".utf8), done: done)
+        }
+    }
+
     private static func sendCreated(connection: NWConnection, done: @escaping () -> Void) {
         let header = "HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in
@@ -1476,7 +1559,7 @@ enum ExportLANServer {
     }
 
     private static func sendOptions(connection: NWConnection, done: @escaping () -> Void) {
-        let allow = "GET, HEAD, PUT, POST, MKCOL, DELETE, OPTIONS, PROPFIND, LOCK, UNLOCK"
+        let allow = "GET, HEAD, PUT, POST, MKCOL, DELETE, MOVE, OPTIONS, PROPFIND, LOCK, UNLOCK"
         var lines = [
             "HTTP/1.1 200 OK",
             "DAV: 1, 2",

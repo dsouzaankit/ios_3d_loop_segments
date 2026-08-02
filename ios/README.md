@@ -10,6 +10,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 282 (1.2.46):** LAN WebDAV **`MOVE`** (local rename/relocate under writable `pcld_ios_media/` paths; pipeline slots stay read-only). **Clear media** removes all browsable videos under `archive/` (stamped + unstamped) and leftover root videos — stamp-stripped keeps are no longer immortal. Non-media in `archive/` (e.g. `.ps1` robocopy helpers) is kept.
+
 **Build 281 (1.2.45):** Stronger tap haptics (medium/rigid) and coverage for Browse folder/video rows + toolbar; Export Start/Pause use bordered haptic.
 
 **Build 280 (1.2.44):** Paused tab + LAN: **Clear queue** at top of Queued; **Clear paused** at top of Paused (keeps live export; LAN `POST /paused_exports.json` `{ "action": "clear" }`). LAN Paused is its own collapsed section (not mixed into the playback file list).
@@ -193,7 +195,7 @@ Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the si
 
 LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, **`search_debug.txt`** when search has run); the LAN index lists **`search_debug.txt`** when on disk (legacy **`/search_debug.txt`** URL still works). Legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
 
-**PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** (Basic auth **`admin` / `iosadmin`**) can create nested folders and small files (e.g. `pcld_ios_media/scripts/run.ps1`, ≤ 2 MB per PUT). **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
+**PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** / **MOVE** (Basic auth **`admin` / `iosadmin`**) can create nested folders, small files (e.g. `pcld_ios_media/scripts/run.ps1`, ≤ 2 MB per PUT), and rename/relocate on the phone (no download). **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, **`parked/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
 
 ```powershell
 $base = "http://10.0.0.42:8765/pcld_ios_media"

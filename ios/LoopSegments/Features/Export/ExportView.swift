@@ -598,7 +598,8 @@ struct ExportView: View {
             Text(
                 "Pause keeps checkpoint, _working.mp4, and loop/ segments. Stop clears paused state, removes loop/ segments, " +
                     "and moves _working/vanilla/transcode copies into archive/. Starting a different export while one runs " +
-                    "pauses the current run and archives root media. Clear media deletes active + archive/ (not logs)."
+                    "pauses the current run and archives root media. Clear media deletes active + all archive/ " +
+                    "videos (stamped and unstamped) + leftover root videos (keeps archive/*.ps1; not logs)."
             )
                 .font(.footnote)
         }
@@ -645,7 +646,7 @@ struct ExportView: View {
             .sensoryFeedback(.success, trigger: trimMediaAckTrigger)
             Text(
                 "Active: loop/op_00|01.mp4, _working.mp4, _vanilla_faststart.mp4 (or _vanilla_download.* while downloading). Moov-at-EOF: faststart replaces download when complete. Archive: pCloud basename[_3D_*][_appFast_]<time>. Finish copies to archive/; root stays on LAN. Stop/new export moves to archive/. " +
-                    "10 timestamp batches; loop/ not archived. Trim keeps 2. Clear wipes active + archive/."
+                    "10 timestamp batches; loop/ not archived. Trim keeps 2. Clear wipes active + archive/ videos (keeps .ps1)."
             )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
