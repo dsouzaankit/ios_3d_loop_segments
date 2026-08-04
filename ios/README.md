@@ -8,7 +8,11 @@
 
 **PC tools:** [../windows/README.md](../windows/README.md) — companion, USB launch/Home, rclone, LAN probe. Companion requests exports via phone LAN REST (`/export_from_folder.json`, `/export_queue.json`, triggers) while the phone uses **cellular** to pCloud.
 
+**App icon:** [LoopSegments/Assets.xcassets/AppIcon.appiconset](LoopSegments/Assets.xcassets/AppIcon.appiconset) (1024×1024 dual-segment loop + play). Wired via `ASSETCATALOG_COMPILER_APPICON_NAME` + `CFBundleIconName` in [project.yml](project.yml) / [Info.plist](LoopSegments/Resources/Info.plist). CI fails the IPA if `Assets.car` / `CFBundleIconName` is missing. After install, delete the old app first if the home screen / App Library **Hidden** tile stays blank (iOS caches the previous blank icon).
+
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
+
+**Build 283 (1.2.47):** Ship **AppIcon** (orange dual-segment loop). Packaging hardened in follow-up (`Assets.xcassets` under the app target, not under excluded `Resources/`).
 
 **Build 282 (1.2.46):** LAN WebDAV **`MOVE`** (local rename/relocate under writable `pcld_ios_media/` paths; pipeline slots stay read-only). **Clear media** removes all browsable videos under `archive/` (stamped + unstamped) and leftover root videos — stamp-stripped keeps are no longer immortal. Non-media in `archive/` (e.g. `.ps1` robocopy helpers) is kept.
 

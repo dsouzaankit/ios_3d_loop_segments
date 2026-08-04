@@ -247,6 +247,7 @@ ios_3d_loop_segments/
       Features/Export/
       Services/WebDAV/
       Services/Export/
+      Assets.xcassets/AppIcon.appiconset/   # home-screen / App Library icon
       Resources/Info.plist
   windows/
     Sync-FromPhoneLAN.ps1    # Wi‑Fi → PC DLNA pair
