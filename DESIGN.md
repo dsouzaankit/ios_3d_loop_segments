@@ -1,19 +1,25 @@
-# iOS 3D Loop Segments — System Design
+# Loop Segments — System Design
 
-Greenfield design for an **iOS app** that logs into **pCloud**, browses media via **WebDAV**, exports **two rotating 60s MP4 segments** (AVFoundation, stream copy where possible), stores them where **Windows can read over USB**, and relies on the **existing Windows DLNA server** for LAN playback. **PC-side ffmpeg** (`Run-SegmentCopy.ps1` in the sibling `3d_loop_segments` repo) is **out of scope** for this project. **PotPlayer RememberFiles registry resume** is out of scope.
+Current architecture for the **Loop Segments** iPhone app and Windows companion tools in this repo.
+
+**Division of labor:** the phone pulls from **pCloud over cellular** (WebDAV), writes segments / working media under private app storage, and serves them on **Wi‑Fi LAN `:8765`**. The PC browses/mounts that LAN endpoint (or uses the Chromium companion to queue exports). Windows **DLNA** (or Quest Skybox) plays from the PC/library — the phone is **not** a DLNA server.
+
+Operator steps: [WORKFLOW.md](WORKFLOW.md) · iOS detail: [ios/README.md](ios/README.md) · PC tools: [windows/README.md](windows/README.md).
 
 ---
 
 ## Goals and non-goals
 
-| In scope | Out of scope |
-|----------|----------------|
-| pCloud login + folder browser | PotPlayer `RememberFiles` / registry seek |
-| WebDAV-backed media → **AVFoundation** export | **PC-side ffmpeg** / `Run-SegmentCopy.ps1` |
-| Stream-copy segments: `op_00.mp4` / `op_01.mp4` | Re-encoding (unless required for a codec) |
-| Seek resume in **app storage** (path or stable file id) | iOS DLNA server |
-| Export folder visible in **Files** + USB to PC | PC Wi‑Fi DLNA idle kill (ffmpeg exit 125) |
-| **Windows:** USB sync + existing DLNA server | Full pCloud sync client on PC |
+| In scope (this repo) | Out of scope |
+|----------------------|--------------|
+| pCloud login + WebDAV browse / search | PotPlayer `RememberFiles` / Windows registry seek |
+| AVFoundation export (stream copy when possible) | **PC-side ffmpeg** / sibling `3d_loop_segments\Run-SegmentCopy.ps1` |
+| Rotating `op_00` / `op_01` when Mbps + codec allow | Embedded ffmpeg on iOS (broken on iOS 26) |
+| Sparse `_working.mp4`, vanilla download, optional HLS | iOS DLNA server |
+| LAN HTTP + WebDAV on `:8765` | Full pCloud sync client on the PC |
+| Pending FIFO + Paused checkpoints | Apple Devices USB automation |
+| Keep Alive (silent audio) so export / LAN survive lock | Server WebDAV `COPY` (MOVE is supported) |
+| Windows companion, USB launch, optional rclone mount | |
 
 ---
 
@@ -22,117 +28,102 @@ Greenfield design for an **iOS app** that logs into **pCloud**, browses media vi
 ```mermaid
 sequenceDiagram
     participant User
-    participant iOS as iOS App (AVFoundation)
-    participant PC as WebDAV pCloud
-    participant Files as iPhone Exports folder
+    participant Comp as PC companion (optional)
+    participant iOS as Loop Segments (AVFoundation)
+    participant PC as pCloud WebDAV
+    participant LAN as Phone :8765
     participant Win as Windows PC
-    participant DLNA as Windows DLNA server
-    participant TV as LAN player
+    participant DLNA as DLNA / Skybox
 
     User->>iOS: Login (region + credentials)
-    iOS->>PC: PROPFIND / browse tree
-    User->>iOS: Pick video + optional seek
-    iOS->>PC: HTTPS GET (WebDAV URL + Basic auth)
-    iOS->>iOS: Real-time read + stream copy, 60s × 2 files
-    iOS->>Files: Write op_00/01.mp4
-    User->>Win: Wi‑Fi (Sync-FromPhoneLAN.ps1) or manual USB copy
-    Win->>Win: op_00/01 → F:\f1_media\3d_fullsbs_trans
-    TV->>DLNA: Browse library
-    DLNA->>Win: Serve segment MP4s from library folder
+    alt Companion path
+        Comp->>iOS: POST /export_from_folder.json or /export_queue.json
+    else On-phone path
+        User->>iOS: Browse + Start export
+    end
+    iOS->>PC: HTTPS GET / Range (WebDAV Basic auth)
+    iOS->>iOS: Remux / download → pcld_ios_media/
+    iOS->>LAN: Serve HTTP + WebDAV
+    Win->>LAN: Browser / rclone / Skybox
+    Win->>DLNA: Library folder / player
 ```
-
-**Division of labor:** iPhone **produces** segments on **cellular** (pCloud WebDAV); **Wi‑Fi LAN sync** (or manual USB) copies to the PC; Windows **DLNA on WLAN** serves the library folder. **Personal Hotspot is not used** — the PC never routes through the phone for internet or streaming.
 
 | Traffic | Path |
 |---------|------|
-| pCloud download / remux | iPhone → cellular (or Wi‑Fi if enabled) |
-| Segment files to PC | Wi‑Fi LAN pull (`Sync-FromPhoneLAN.ps1`) or Apple Devices manual save |
-| LAN playback | PC DLNA server → WLAN → TV |
+| pCloud download / remux | iPhone → **cellular** (Wi‑Fi off OK) |
+| Segment / working files to PC | iPhone → PC over **Wi‑Fi** (`:8765`) |
+| LAN playback | PC DLNA / Skybox → WLAN → TV / headset |
 
-See [WORKFLOW.md](WORKFLOW.md) for operator steps.
+**No Personal Hotspot** required — the PC does not route internet through the phone.
 
 ---
 
-## Segment export contract (iPhone only)
+## Segment / export contract (iPhone)
 
-Implemented with **AVFoundation** (`AVAssetReader` / `AVAssetWriter`), not embedded FFmpeg. Behavior matches the old Windows ffmpeg launcher conceptually:
+Implemented with **AVFoundation** (`AVAssetReader` / `AVAssetWriter` / export session), not embedded FFmpeg.
 
 | Behavior | Implementation |
-|----------|------------------|
-| Seek | `AVAssetReader.timeRange` from saved resume / presets (keyframe-aligned) |
-| Real-time pacing | App throttles reads (replaces ffmpeg `-re`) |
-| Stream copy | Passthrough when codec fits MP4 (H.264, HEVC, AV1 + AAC) |
-| Segment length | 60s per file |
-| File count | 2 files, overwrite: `op_00.mp4`, `op_01.mp4` |
-| WebDAV auth | Custom `AVAssetResourceLoader` + `Authorization` header |
+|----------|----------------|
+| Seek | Keyframe-aligned from resume / presets (`0 / 10 / 15 / 30 / 45` min) |
+| Real-time pacing | App throttles reads (ffmpeg `-re` analogue) |
+| Stream copy | H.264 / HEVC (hvc1/hev1) + AAC when source allows |
+| Mbps gate | Below cutoff (default **35** Mbps): full-file / preload only — **no** `op_*.mp4`. At/above + codec OK: ~60s segments |
+| Segments | Alternate `pcld_ios_media/loop/op_00.mp4` ↔ `op_01.mp4` |
+| Working copy | Sparse `_working.mp4` (+ map); vanilla `_vanilla_download.*`; optional HLS `_working_pcloud_transcode.mp4` |
+| AV1 | **Not supported** — prefer H.265 |
+| Containers | WMV / MKV / WebM / TS → vanilla (and optional HLS); no device segments |
+| Concurrency | One live export; new Start / FIFO `startFirst` **soft-pauses** the live run into **Paused** |
+| Stop | Clears pause state; removes `op_*.mp4`; archives root media as needed |
 
-**Concurrency:** one active export job; reject or queue a second start with clear UI.
-
-**Seek past end:** probe duration; skip if seek is past end (~0.25s margin).
-
-**Quick seek UI:** presets `0 / 10 / 15 / 30 / 45` minutes (no PotPlayer registry).
-
-**Stop conditions (iPhone):** user **Stop**, end of source, cancel — **no** intricate idle-timeout / DLNA Wi‑Fi heuristic on the phone (tabled).
+**Recovery order (typical):** vanilla WebDAV download (default on) → sparse `_working` → HLS `gethlslink` if bitrate high enough **and** REST token present.
 
 ---
 
-## pCloud: login and WebDAV
+## pCloud: WebDAV vs REST
 
 ### Regions
 
-| Region | WebDAV base |
-|--------|-------------|
-| US | `https://webdav.pcloud.com` |
-| EU | `https://ewebdav.pcloud.com` |
+| Region | WebDAV | REST API |
+|--------|--------|----------|
+| US | `https://webdav.pcloud.com` | `https://api.pcloud.com` |
+| EU | `https://ewebdav.pcloud.com` | `https://eapi.pcloud.com` |
 
-Credentials: **email + password** (Basic). **2FA:** WebDAV may require email confirmation per login; surface that in UI. Optional future: app-specific password / OAuth via REST only for token, still fetch bytes via WebDAV if required.
+Credentials: **email + password** (WebDAV Basic). Optional REST token for search / HLS.
 
-### Browse (WebDAV)
-
-- `PROPFIND` depth 1 on folders; parse `DAV: href`, `DAV: displayname`, `DAV: getcontentlength`, `DAV: getcontenttype`, `DAV: resourcetype` (collection vs file).
-- Filter listing to video extensions: `.mkv`, `.mp4`, `.avi`, `.mov`, `.m4v`, `.webm` (configurable).
-- Cache folder metadata lightly; no full sync.
-
-### Media URL for export
-
-Build an **HTTPS GET URL** for `AVURLAsset` (custom resource loader):
-
-```text
-https://<host>/<url-encoded-path>
-```
-
-Pass credentials via **`Authorization: Basic`** in the resource loader (not in the URL). WebDAV should support **Range** for seek.
-
-**Path encoding:** encode each path segment; preserve leading slash from WebDAV root (user’s pCloud root).
-
-### Optional REST (phase 2)
-
-pCloud REST (`api.pcloud.com` / `eapi.pcloud.com`) can improve login (`userinfo`, OAuth) and thumbnails; **playback/remux input stays WebDAV** unless you later switch to `getfilelink` direct CDN URLs for bandwidth.
+| Use | WebDAV | REST |
+|-----|--------|------|
+| Browse (PROPFIND), Range GET, vanilla download, sparse export | **Primary** | — |
+| Filename walk / bookmarks search | Fallback | Optional Browse toggle |
+| HLS `gethlslink` | — | **Required** (often unavailable → vanilla-only) |
 
 ---
 
 ## iOS app architecture
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│  SwiftUI shell                                          │
-│  ├─ AuthView (region, email, password → Keychain)       │
-│  ├─ BrowserView (WebDAV PROPFIND navigator)             │
-│  ├─ ExportView (seek, presets, start/stop, progress)    │
-│  └─ SettingsView (export dir, segment time, logs)       │
-├─────────────────────────────────────────────────────────┤
-│  Services                                               │
-│  ├─ WebDAVClient (URLSession + XMLParser)               │
-│  ├─ CredentialStore (Keychain)                          │
-│  ├─ ResumeStore (UserDefaults / SwiftData)              │
-│  ├─ ExportCoordinator (single job, BG task hooks)       │
-│  └─ SegmentExporter (AVFoundation)                      │
-├─────────────────────────────────────────────────────────┤
-│  On-disk layout (app container)                         │
-│  Documents/Exports/op_%02d.mp4   ← DLNA-facing names   │
-│  Documents/Exports/logs/…  (same USB tree as segments)   │
-│  Caches/…                                               │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  SwiftUI                                                     │
+│  ├─ AuthView          region + credentials → Keychain        │
+│  ├─ BrowserView       WebDAV navigate / search / bookmarks   │
+│  ├─ ExportView        seek, Start/Pause/Stop, LAN, Keep Alive│
+│  └─ PausedExportsView Queued (FIFO) + Paused checkpoints     │
+├──────────────────────────────────────────────────────────────┤
+│  AppSession / RootView                                       │
+│  credentials, tab shell, export lifecycle, LAN while up      │
+├──────────────────────────────────────────────────────────────┤
+│  Services                                                    │
+│  ├─ WebDAV*           client, PROPFIND, resource loader      │
+│  ├─ PCloud*           optional REST auth / search / HLS      │
+│  ├─ ExportCoordinator single job; handoff / archive / park   │
+│  ├─ SegmentExporter   AVFoundation passthrough / dense fill  │
+│  ├─ PendingExportQueue  scripts/export_pending_queue.json    │
+│  ├─ ExportLANServer   :8765 HTTP + WebDAV + REST triggers    │
+│  ├─ ResumeStore       seek checkpoints (Paused cap 10)       │
+│  └─ Keep Alive        silent MP3 (default on, 60 min sessions)│
+├──────────────────────────────────────────────────────────────┤
+│  On disk (Application Support — not Files / USB)             │
+│  Library/Application Support/pcld_ios_media/                 │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Tech choices
@@ -140,74 +131,126 @@ pCloud REST (`api.pcloud.com` / `eapi.pcloud.com`) can improve login (`userinfo`
 | Layer | Choice |
 |-------|--------|
 | UI | SwiftUI (iOS 17+) |
-| WebDAV | `URLSession` + lightweight PROPFIND parser (no heavy WebDAV framework required) |
-| Export | AVFoundation (`AVAssetReader` / `AVAssetWriter`); no embedded ffmpeg on device |
-| Secrets | Keychain (`kSecClassGenericPassword`) |
-| Background | `BGProcessingTask` + `UIBackgroundTask` for long remux; declare `audio`/`processing` if needed; expect iOS to throttle |
+| WebDAV | `URLSession` + PROPFIND parser; Basic auth on `AVURLAsset` via resource loader |
+| Export | AVFoundation only |
+| Secrets | Keychain |
+| Background | Keep Alive audio session + `UIBackgroundTask` / BG hooks; Low Power Mode unreliable |
+| Icon | `Assets.xcassets/AppIcon` (1024×1024 dual-segment loop) |
 
-### Export directory (USB-visible)
+### On-disk layout (`pcld_ios_media/`)
 
-Use **App Documents** subfolder shared with Files and USB:
+Served on LAN as `/pcld_ios_media/...`. Legacy `Documents/Exports/` is empty after migration (safe to delete in Files).
 
-```text
-Documents/Exports/
-  op_00.mp4
-  op_01.mp4
-  export_state.json   # optional: last path, seek ms, job id
-```
+| Path | Role |
+|------|------|
+| `loop/op_00.mp4`, `loop/op_01.mp4` | Rotating ~60s segments |
+| `_working.mp4` + `_working.sparse.json` | Sparse full-timeline mirror |
+| `_vanilla_download.<ext>`, `_vanilla_faststart.mp4` | Full WebDAV download (+ faststart when applicable) |
+| `_working_pcloud_transcode.mp4` | Progressive HLS remux (REST token) |
+| `parked/<filename>/` + `_parked_meta.json` | Soft-pause / handoff partials (LAN-playable) |
+| `archive/` | Finished / handed-off root media (PC `.ps1` helpers may live here) |
+| `downloads/` | LAN “export from URL” saves |
+| `logs/` | Live + history export logs |
+| `scripts/` | Triggers, ack, pending FIFO JSON, small PC PUTs |
 
-**Info.plist**
+**WebDAV write policy:** pipeline slots (`loop/`, `parked/`, `_working*`, `_vanilla_*`, `logs/`) are read-only to clients. Writable: `scripts/`, `archive/` (non-pipeline), nested PUTs ≤ **2 MB**. **MOVE** supported (build 282+); no server **COPY**.
 
-- `UIFileSharingEnabled` = YES (legacy iTunes File Sharing)
-- `LSSupportsOpeningDocumentsInPlace` = YES
-- `UISupportsDocumentBrowser` = YES (optional)
+### Queues and pause
 
-On Windows, when the device is trusted and unlocked:
+| Store | Cap | Behavior |
+|-------|-----|----------|
+| Pending FIFO (`export_pending_queue.json`) | **50** | Companion / REST enqueue; drain on finish / Stop; **user Pause holds** drain |
+| Paused (`ResumeStore` / parked) | **10** `exportInProgress` | Soft-pause keeps checkpoint; FIFO does **not** auto-resume interrupted live runs |
 
-```text
-This PC → Apple iPhone → Files → <App Name> → Exports
-```
+### Keep Alive
 
-(or equivalent path in Apple Devices / Explorer). **`Sync-FromPhoneLAN.ps1`** copies `op_00.mp4` into the PC DLNA pair, or the user saves manually via Apple Devices.
-
-### Resume model (replaces PotPlayer)
-
-```json
-{
-  "fileKey": "sha256(webdav_base + normalized_path)",
-  "displayName": "movie.mkv",
-  "lastSeekMs": 1234567,
-  "updatedAt": "2026-05-16T12:00:00Z"
-}
-```
-
-- Update `lastSeekMs` when user sets seek or when export stops (elapsed + start seek).
-- **Do not** read Windows registry.
-- On file pick: pre-fill seek from `ResumeStore`; show same quick presets as Windows script.
+Default **on**. Loops bundled `KeepAlive_silence.mp3` so export + LAN + trigger polling can continue under lock. **Mix** (default) or **Prefer lock screen controls**. Foreground / post-export sessions ~**60 minutes**. See [ios/README.md](ios/README.md).
 
 ---
 
-## Windows integration (DLNA + LAN)
+## LAN API (`:8765`)
 
-### DLNA server
+Basic auth for WebDAV and sensitive JSON: **`admin` / `iosadmin`** (same as Quest Skybox). Media GET often unauthenticated for PC sync convenience.
 
-Keep existing setup: library root = `F:\f1_media\3d_fullsbs_trans` (or your production path). Media server indexes `op_00.mp4` and `op_01.mp4` as a **rolling buffer** of ~2 minutes from the current position.
+| Endpoint | Role |
+|----------|------|
+| `GET /`, `GET /browse` | Monitor / full browse UI (+ PROPFIND for WebDAV clients on `/`) |
+| `GET /status.json` | Live export + pending queue summary |
+| `PUT`/`POST /export_from_folder.json` | Queue by `folderPath` + `displayName` (or filename-only walk) → **202** |
+| `PUT`/`POST /export_queue.json` | Pending FIFO (`append` / `prepend` / `replace`, `startFirst`, remove/clear) |
+| `PUT`/`POST /export_from_url.json` | Queue HTTPS download export |
+| `GET`/`POST /paused_exports.json` | List / clear paused |
+| `…/scripts/export_trigger.json` (+ `.ack.json`) | Imperative commands + last ack |
+| `GET /pcloud_list.json`, `/pcloud_bookmarks.json` | Phone-side pCloud listing / bookmarks (auth) |
+| Legacy | `/export_latest.txt`, `/export_progress.txt`, `/logs/…`, `/loop_segments_ok.txt` |
 
-**This repo’s Windows folder does not run ffmpeg.** Idle-stop / Wi‑Fi upload heuristics from the legacy `Run-SegmentCopy.ps1` pipeline are **not** part of this workflow.
+Prefer **`/export_from_folder.json`** over CDN `getfilelink` URLs (CDN is IP-bound → often **HTTP 410** on the phone).
 
-### `Sync-FromPhoneLAN.ps1`
+---
 
-- Phone serves `Documents/Exports/op_00.mp4` on Wi‑Fi (port **8765**) while the app is open.
-- PC script polls and copies to the older of `op_00.mp4` / `op_01.mp4` in the DLNA folder (atomic install, ffprobe check).
-- Config: `Set-LoopSegmentsLANHost.ps1`, `Set-LoopSegmentsDestination.ps1`.
+## Windows integration
 
-### LAN playback path
+Day-to-day: **companion** (queue exports) + optional **rclone** mount + **USB** launch/Home. Config: gitignored `windows/loop-segments-windows.json`.
 
-```text
-[iOS export] → Wi‑Fi → [PC DLNA folder] → [Windows DLNA] → [TV / receiver / PotPlayer DLNA]
+| Folder | Role |
+|--------|------|
+| `setup/` | One-time PC bootstrap, LAN IP, per-PC json |
+| `pcloud_web_companion/` | Chromium MV3; multi-select Download → phone FIFO; USB-foreground; optional rclone |
+| `usb/` | `pymobiledevice3` Launch / Home |
+| `rclone/` | Optional WinFsp drive letter over phone WebDAV |
+| `sideload/` | AltServer at logon; Sideloadly fallback |
+| `lan/` | Multi-phone listing / PC index `:8766` |
+| `lib/` | Shared helpers (AltServer, Python picker, settings) |
+| `archive/` | Legacy `Sync-FromPhoneLAN.ps1`, `net use`, old mounts |
+
+**Typical sequence**
+
+```powershell
+cd <repo>\windows
+.\setup\Setup-LoopSegmentsWindows.ps1 -PhoneHost <phone-ip>
+.\sideload\Register-AltServerAtLogon.ps1   # optional
+.\pcloud_web_companion\Run-PCloudWebCompanion.ps1
 ```
 
-Manual fallback: Apple Devices → save `op_00.mp4` to the DLNA folder.
+Companion ensures **AltServer** is running when installed, USB-launches Loop Segments (locked phone → abort Chromium), then browses my.pcloud.com while the **phone** does cellular WebDAV.
+
+PC DLNA library path (e.g. `F:\f1_media\3d_fullsbs_trans`) is **your** media server — this repo does not run ffmpeg into it.
+
+---
+
+## Build and deploy (no local Mac)
+
+| Piece | Role |
+|-------|------|
+| `ios/project.yml` | XcodeGen → `LoopSegments.xcodeproj` (iOS 17+, `com.loopsegments.app`) |
+| `.github/workflows/ios-build.yml` | Simulator smoke on push; **workflow_dispatch** IPA artifact |
+| `deploy.ps1` | Trigger/watch Actions → download IPA → `copy-to-icloud.ps1` |
+| `copy-to-icloud.ps1` | Stamp `LoopSegments-b{build}-{time}.ipa` into iCloud Downloads; prune older |
+| Install | AltStore **My Apps → +** on the phone (primary); ~7-day free cert refresh via AltServer |
+
+---
+
+## Project layout
+
+```text
+ios_3d_loop_segments/
+  DESIGN.md                 # this file
+  WORKFLOW.md
+  deploy.ps1 / copy-to-icloud.ps1
+  ios/
+    project.yml             # XcodeGen
+    LoopSegments/
+      App/                  # LoopSegmentsApp, AppSession, RootView
+      Features/{Auth,Browser,Export,Paused,Shared}/
+      Services/{WebDAV,PCloud,Export}/…
+      Models/
+      Assets.xcassets/AppIcon.appiconset/
+      Resources/            # Info.plist, KeepAlive_silence.mp3, PrivacyInfo
+  windows/
+    setup/ usb/ rclone/ sideload/ lan/ lib/
+    pcloud_web_companion/
+    archive/                # legacy sync scripts
+```
 
 ---
 
@@ -215,60 +258,23 @@ Manual fallback: Apple Devices → save `op_00.mp4` to the DLNA folder.
 
 | Topic | Approach |
 |-------|----------|
-| Credentials | Keychain only; never log passwords |
-| TLS | HTTPS WebDAV only |
-| 2FA | Explain WebDAV email approval flow |
-| Network | `-re` limits read rate; warn on cellular |
-| Storage | ~2 × 60s of source bitrate; monitor free space |
-| Errors | Surface export log tail in app (like legacy `segmentcopy_logs`) |
-| Single job | Disable browse-to-export until job ends or user cancels |
+| Credentials | Keychain; never log passwords |
+| TLS | HTTPS WebDAV / REST only for pCloud |
+| LAN | Basic auth on WebDAV + sensitive JSON; private Wi‑Fi assumed |
+| Cellular | Warn / pace reads; dense fill per minute when segmenting |
+| Storage | Rotating ~2×60s segments + working/vanilla; Clear media / archive prune |
+| Single job | Soft-pause handoff instead of hard-kill when starting another |
+| Sideload | AltStore refresh weekly; Trust developer after install |
 
 ---
 
-## UI screens (minimal)
+## UI surfaces
 
-1. **Login** — region US/EU, email, password, test connection (`PROPFIND /`).
-2. **Browser** — breadcrumbs, folders, video list with size/duration (`AVAsset` duration when available).
-3. **Export** — current file, seek field, preset chips (0/10/15/30/45 min), **Start** / **Stop**, live log, output path hint (“Visible in Files → Exports”).
-4. **History** — recent exports + saved seek per `fileKey`.
-
----
-
-## Project layout (suggested)
-
-```text
-ios_3d_loop_segments/
-  DESIGN.md                 # this file
-  ios/
-    LoopSegments/
-      App/
-      Features/Auth/
-      Features/Browser/
-      Features/Export/
-      Services/WebDAV/
-      Services/Export/
-      Assets.xcassets/AppIcon.appiconset/   # home-screen / App Library icon
-      Resources/Info.plist
-  windows/
-    Sync-FromPhoneLAN.ps1    # Wi‑Fi → PC DLNA pair
-    Set-LoopSegmentsLANHost.ps1
-    Set-LoopSegmentsDestination.ps1
-    LoopSegments-Config.ps1
-```
-
----
-
-## Implementation phases
-
-| Phase | Deliverable |
-|-------|-------------|
-| **1** | WebDAV login + folder browser + Keychain |
-| **2** | AVFoundation export: WebDAV → `op_%02d.mp4`, stream copy, 60s × 2 |
-| **3** | Export UI, resume store, single-job lock, logs |
-| **4** | Files/USB visibility + `Sync-FromPhoneLAN.ps1` |
-| **5** | Polish: duration probe, seek clamp, cellular warning, BG export |
-
-Windows folder: **LAN sync** (`Sync-FromPhoneLAN.ps1`). No PC ffmpeg, no pCloud WebDAV on PC.
+1. **Login** — US/EU, email, password, Keychain.
+2. **Browse** — WebDAV tree, search, bookmarks; pin latest finished export; orange **Exporting** bar while busy.
+3. **Export** — seek presets, Start / Pause / Stop, Mbps cutoff, LAN toggle, Keep Alive, logs / clear media.
+4. **Paused** — **Queued** (pending FIFO) above **Paused** (checkpoints); Resume / Clear.
+5. **LAN `/` + `/browse`** — same queues + playback links for the PC browser.
 
 ---
 
@@ -276,14 +282,14 @@ Windows folder: **LAN sync** (`Sync-FromPhoneLAN.ps1`). No PC ffmpeg, no pCloud 
 
 | Risk | Mitigation |
 |------|------------|
-| iOS kills long export | BG tasks; user keeps app foreground for long runs; shorter test files first |
-| WebDAV + seek slow | Keyframe-aligned seek; show “buffering” state |
-| USB path varies by Windows version | Prefer LAN sync; document Apple Devices manual save path |
-| 3D SBS huge files | Stream copy only; warn on cellular |
-| 2FA blocks WebDAV | In-app instructions; app password if pCloud adds support |
+| iOS suspends long export | Keep Alive on; avoid Low Power Mode; optional Auto-Lock → Never |
+| WebDAV seek / moov-at-end HEVC slow | Dense fill + vanilla/HLS fallbacks; show progress in `export_latest.txt` |
+| CDN URLs expire on phone | Companion uses folder+name REST, not `getfilelink` |
+| Free AltStore cert (~7 days) | AltServer + USB **Refresh All**; companion auto-starts AltServer |
+| Icon blank after upgrade | Delete old app before installing new IPA (iOS caches blank icons) |
 
 ---
 
 ## Legacy reference (out of scope)
 
-The older **PC-only** pipeline (`P:\all_scripts\3d_loop_segments\Run-SegmentCopy.ps1`) used ffmpeg on Windows with MKV segment wrap. This project **does not** invoke that script; segment names and timing are kept compatible for the same DLNA folder layout, using **`.mp4`** on the phone.
+The older **PC-only** pipeline (`P:\all_scripts\3d_loop_segments\Run-SegmentCopy.ps1`) uses ffmpeg on Windows. This project does **not** invoke it. Segment names (`op_00` / `op_01`) stay compatible with the same DLNA folder layout; production on the phone uses **`.mp4`** under `pcld_ios_media/`.
