@@ -103,7 +103,11 @@ function Download-IpaArtifact([string] $Id) {
         if (-not $found) {
             throw "No .ipa found after downloading run $Id"
         }
-        Copy-Item -LiteralPath $found -Destination $LocalIpa -Force
+        $foundFull = [System.IO.Path]::GetFullPath($found)
+        $localFull = [System.IO.Path]::GetFullPath($LocalIpa)
+        if ($foundFull -ine $localFull) {
+            Copy-Item -LiteralPath $found -Destination $LocalIpa -Force
+        }
         if (Test-Path -LiteralPath (Join-Path $IpaDir 'LoopSegments-ipa')) {
             Remove-Item -LiteralPath (Join-Path $IpaDir 'LoopSegments-ipa') -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -116,9 +120,9 @@ Assert-Gh
 
 Write-Host ''
 Write-Host 'Deploy workflow:'
-Write-Host '  [PC]  1. This script (GitHub Actions IPA → local + iCloud Downloads)'
+Write-Host '  [PC]  1. This script (GitHub Actions IPA -> local + iCloud Downloads)'
 Write-Host '  [YOU] 2. Wait for iCloud sync on iPhone (no cloud badge)'
-Write-Host '  [YOU] 3. AltStore → My Apps → + → LoopSegments.ipa'
+Write-Host '  [YOU] 3. AltStore -> My Apps -> + -> LoopSegments.ipa'
 Write-Host ''
 
 $resolvedRunId = $RunId.Trim()

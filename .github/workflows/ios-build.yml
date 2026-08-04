@@ -204,6 +204,20 @@ jobs:
               exit 1
             fi
             echo "OK: KeepAlive in IPA at $KEEP"
+            APPICON_CAR="$(find Payload -path '*/LoopSegments.app/Assets.car' -print | head -1)"
+            if [[ -z "$APPICON_CAR" ]]; then
+              echo "ERROR: Assets.car missing from signed IPA (AppIcon will be blank)"
+              find Payload -maxdepth 5 -type f | head -60
+              exit 1
+            fi
+            echo "OK: Assets.car in IPA at $APPICON_CAR"
+            PLIST="$(find Payload -path '*/LoopSegments.app/Info.plist' | head -1)"
+            ICON_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$PLIST" 2>/dev/null || true)"
+            echo "CFBundleIconName=${ICON_NAME:-<missing>}"
+            if [[ "$ICON_NAME" != "AppIcon" ]]; then
+              echo "ERROR: CFBundleIconName must be AppIcon (got '${ICON_NAME:-empty}')"
+              exit 1
+            fi
           else
             echo "No APPLE_ID secret — building unsigned IPA (re-sign in Sideloadly)."
             xcodebuild -project LoopSegments.xcodeproj \
@@ -226,6 +240,20 @@ jobs:
               exit 1
             fi
             echo "OK: KeepAlive in IPA at $KEEP"
+            APPICON_CAR="$(find Payload -path '*/LoopSegments.app/Assets.car' -print | head -1)"
+            if [[ -z "$APPICON_CAR" ]]; then
+              echo "ERROR: Assets.car missing from IPA (AppIcon will be blank)"
+              find Payload -maxdepth 5 -type f | head -60
+              exit 1
+            fi
+            echo "OK: Assets.car in IPA at $APPICON_CAR"
+            PLIST="$(find Payload -path '*/LoopSegments.app/Info.plist' | head -1)"
+            ICON_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$PLIST" 2>/dev/null || true)"
+            echo "CFBundleIconName=${ICON_NAME:-<missing>}"
+            if [[ "$ICON_NAME" != "AppIcon" ]]; then
+              echo "ERROR: CFBundleIconName must be AppIcon (got '${ICON_NAME:-empty}')"
+              exit 1
+            fi
           fi
 
       - name: Upload IPA artifact
