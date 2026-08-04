@@ -71,7 +71,7 @@ Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** �
 
 Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it prints LAN status, USB-launches Loop Segments to foreground the app (blocks if the phone is locked), then **attempts an rclone mount** in a separate window when LAN is up.
 
-**Multi-select tip:** in my.pcloud.com, click the **`v`** control to filter the folder by one of **five** types (including **Video**), then multi-select → Download — the companion cancels the zip and queues videos on the phone FIFO.
+**Multi-select tip:** in my.pcloud.com, click the **`v`** control to filter the folder by one of **five** types (including **Video**), then multi-select → Download — the companion cancels the zip and queues videos on the phone FIFO. **Folder right-click → Download is not supported** (zip cancelled, no `fileid`s → “no selection ids”); open the folder, select the videos, then Download instead. Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
 ```powershell
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
