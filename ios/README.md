@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 286 (1.2.50):** LAN **Move to queued** no longer shows a confirm dialog.
+
 **Build 285 (1.2.49):** App root tabs split: **Queued** (pending FIFO, own badge) and **Paused** (checkpoints, own badge) — no longer two sections on one tab. **Move to queued** stays on Paused. Shared orange Exporting banner on Browse / Queued / Paused.
 
 **Build 284 (1.2.48):** Paused tab + LAN: **Move to queued** moves all paused rows onto the pending FIFO as **fresh** jobs (drops checkpoints / parked media; releases Pause hold so they auto-start when idle). LAN `POST /paused_exports.json` `{ "action": "queue_all" }`.

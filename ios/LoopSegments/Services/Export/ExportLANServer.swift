@@ -2411,7 +2411,6 @@ enum ExportLANServer {
             if (queueAllPaused && !queueAllPaused.getAttribute("data-ls-wired")) {
               queueAllPaused.setAttribute("data-ls-wired", "1");
               queueAllPaused.addEventListener("click", function () {
-                if (!window.confirm("Move all paused exports to Queued as fresh jobs? Checkpoints and parked media are dropped. Live export is kept.")) return;
                 queueAllPaused.disabled = true;
                 postPausedAction({ action: "queue_all" })
                   .then(function (res) {
