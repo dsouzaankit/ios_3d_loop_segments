@@ -1809,6 +1809,7 @@ async function openLanBrowse(cfg) {
 
     if (existing?.id != null) {
       // Prefer LAN monitor root; navigate away from /browse if that was the old target.
+      // Never activate/focus — stay on my.pcloud.com during queue/download clicks.
       const needRoot = (() => {
         try {
           const p = new URL(existing.url).pathname;
@@ -1817,30 +1818,34 @@ async function openLanBrowse(cfg) {
           return true;
         }
       })();
-      await chrome.tabs.update(
-        existing.id,
-        needRoot ? { url: rootUrl, active: true } : { active: true }
-      );
-      if (existing.windowId != null) {
-        await chrome.windows.update(existing.windowId, { focused: true });
+
+      if (needRoot) {
+        await chrome.tabs.update(existing.id, { url: rootUrl });
+        await appendRestLog({
+          phase: "browse",
+          ok: true,
+          browseUrl: rootUrl,
+          message: "navigated existing Loop Segments LAN tab → / (left focus)",
+        });
+        return;
       }
+
       await appendRestLog({
         phase: "browse",
         ok: true,
         browseUrl: rootUrl,
-        message: needRoot
-          ? "focused existing Loop Segments LAN tab → /"
-          : "focused existing Loop Segments LAN root tab",
+        message: "Loop Segments LAN root tab already open; left focus",
       });
       return;
     }
 
-    await chrome.tabs.create({ url: rootUrl, active: true });
+    // Background tab so the first queue after cold start also stays on pCloud.
+    await chrome.tabs.create({ url: rootUrl, active: false });
     await appendRestLog({
       phase: "browse",
       ok: true,
       browseUrl: rootUrl,
-      message: "opened new Loop Segments LAN root tab",
+      message: "opened new Loop Segments LAN root tab (background)",
     });
   } catch (err) {
     await appendRestLog({

@@ -15,20 +15,22 @@ function Get-LoopSegmentsWindowsExamplePath {
 
 function Get-DefaultLoopSegmentsWindowsSettings {
     [ordered]@{
-        phoneLanHost       = ''
-        phoneLanHosts      = @()
-        lanPort            = 8765
-        mountDriveLetter   = 'L'
-        rcloneRemoteName   = 'loopsegments'
-        rcloneConfigPath   = ''
-        rcloneExe          = ''
-        winfspDllPath      = ''
-        skipWinFspCheck    = $false
-        dlnaFolder         = ''
-        webdavUser         = 'admin'
-        webdavPassword     = 'iosadmin'
-        iCloudDownloads    = ''
-        notes              = ''
+        phoneLanHost            = ''
+        phoneLanHosts           = @()
+        lanPort                 = 8765
+        mountDriveLetter        = 'L'
+        rcloneRemoteName        = 'loopsegments'
+        rcloneConfigPath        = ''
+        rcloneExe               = ''
+        winfspDllPath           = ''
+        skipWinFspCheck         = $false
+        # Below this measured LAN Mbps (same-subnet), companion/measure forces gateway Wi-Fi reboot.
+        minLanThroughputMbps    = 45
+        dlnaFolder              = ''
+        webdavUser              = 'admin'
+        webdavPassword          = 'iosadmin'
+        iCloudDownloads         = ''
+        notes                   = ''
     }
 }
 
@@ -305,6 +307,31 @@ function Get-LoopSegmentsLanPort {
     $port = (Get-LoopSegmentsWindowsSettings).lanPort
     if ($null -eq $port -or [int]$port -le 0) { return 8765 }
     return [int]$port
+}
+
+function Get-LoopSegmentsMinLanThroughputMbps {
+    param([double] $Override = 0)
+    if ($Override -gt 0) { return [double]$Override }
+    $settings = Get-LoopSegmentsWindowsSettings
+    $raw = $null
+    # StrictMode-safe: missing key must not throw when older json/defaults omit the field.
+    if ($null -ne $settings) {
+        if ($settings -is [System.Collections.IDictionary]) {
+            if ($settings.Contains('minLanThroughputMbps')) {
+                $raw = $settings['minLanThroughputMbps']
+            }
+        } elseif ($null -ne $settings.PSObject.Properties['minLanThroughputMbps']) {
+            $raw = $settings.PSObject.Properties['minLanThroughputMbps'].Value
+        }
+    }
+    if ($null -eq $raw) { return 45 }
+    try {
+        $n = [double]$raw
+    } catch {
+        return 45
+    }
+    if ($n -le 0) { return 45 }
+    return $n
 }
 
 function Get-LoopSegmentsPhoneLanBaseUrl {
@@ -721,6 +748,7 @@ function Show-LoopSegmentsWindowsDiagnostics {
         # single-host diagnostics still useful when phoneLanHost is empty
     }
     Write-Host "  Mount drive:     $(Get-LoopSegmentsMountDriveLetter):"
+    Write-Host "  Min LAN Mbps:    $(Get-LoopSegmentsMinLanThroughputMbps) (gateway reboot if probe below this on correct subnet)"
     Write-Host "  rclone remote:   $(Get-LoopSegmentsRcloneRemoteName)"
     $creds = Get-LoopSegmentsWebDAVCredentials
     Write-Host "  WebDAV auth:     $($creds.User) / (password in json or default iosadmin)"

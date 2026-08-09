@@ -11,7 +11,7 @@ On a **single-file** pCloud download click:
 3. If `folderPath` is missing/garbled (e.g. search UI text like `"darina" in "/All Files/"`), runs **right-click → Open Location** on the file, then re-resolves; falls back to pCloud `search` API if needed
 4. Copies clipboard lines: download URL, filename, folder path, folder name (when known)
 5. `POST /export_from_folder.json` with `{ folderPath, displayName, seekMs, id }` only — CDN download URLs are **not** posted to the phone
-6. Opens `http://<phoneLanHost>:8765/` (LAN monitor root) in a new tab (or focuses/navigates an existing phone LAN tab)
+6. Opens `http://<phoneLanHost>:8765/` (LAN monitor root) in a **background** tab, or reuses an existing phone LAN tab (navigates to `/` if needed) **without activating/focusing** so queue actions stay on my.pcloud.com
 
 On **multi-select Download** (pCloud builds a **zip archive**):
 
@@ -45,6 +45,9 @@ cd <repo>\windows
 | `-SkipUsbLaunch` | Do not run `usb\Launch-LoopSegmentsViaUsb.ps1` |
 | `-UsbLaunchMount` | Remount Developer Disk Image (default skips mount) |
 | `-SkipRcloneMount` | Do not open `rclone\Mount-LoopSegmentsRclone.ps1` (default attempts mount when LAN is up) |
+| `-SkipGatewayReboot` | Do not check/reboot LAN gateway (wrong-subnet, low-throughput, or off-subnet recovery when LAN page unreachable) |
+| `-SkipLanThroughput` | Do not time a media copy off `L:` after mount (default: up to 64 MB → Mbps) |
+| `-SkipLowThroughputGatewayReboot` | Do not reboot gateway when LAN throughput is below `minLanThroughputMbps` (same-subnet case) |
 | `-SkipProfileSync` | Do not sync Chromium profile to/from repo |
 | `-DetachChromium` | Do not wait for browser exit (upload + local clear on next run) |
 | `-KeepLocalProfile` | Do not wipe local AppData profile after upload |
@@ -57,8 +60,10 @@ Each launch:
 - Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
 - Starts a local REST log sink
+- **Gateway Wi‑Fi reboot (when needed):** compares the PC’s IPv4 default gateway to `phoneLanHost` (app LAN page). If they are **not** on the same subnet, runs `..\lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1`, which picks the matching Telnet Wi‑Fi restart under `P:\all_scripts\5g_router_reboot` for the **current** gateway and waits for it to finish — so devices are forced to re-connect to the gateway that shares the app LAN page subnet. Console messages explain the reboot. Use `-SkipGatewayReboot` to skip.
 - **USB-launches Loop Segments** via `..\usb\Launch-LoopSegmentsViaUsb.ps1` on every start (prints LAN UP/DOWN first). **Locked (exit 3) still aborts Chromium.** If USB is missing / launch fails but phone LAN is already reachable, prints a warning and continues to Chromium. Use `-SkipUsbLaunch` for Chromium only. Always prints AltServer status; **starts AltServer when installed but not running**. If the app becomes unavailable after ~7 days: **AltServer → USB → AltStore Refresh All → Settings → General → VPN & Device Management → Developer App → Trust → open once**. USB detect failure also retries after ensuring AltServer.
-- **Attempts rclone mount** via `..\rclone\Mount-LoopSegmentsRclone.ps1 -Quick` in a **separate** console when phone LAN is up (drive letter from `loop-segments-windows.json`, default `L:`). Waits for LAN after USB launch; reuses an existing mount; failures only warn. Mount polls phone LAN and auto-kills rclone after prolonged outage. Log: `windows\rclone\loopsegments-rclone-mount.log`. Use `-SkipRcloneMount` to leave mounting to `Mount-PhoneL.cmd`. Mount window is independent of Chromium — **Ctrl+C** there to unmount.
+- **Attempts rclone mount** via `..\rclone\Mount-LoopSegmentsRclone.ps1 -Quick` in a **separate** console when phone LAN is up (drive letter from `loop-segments-windows.json`, default `L:`). Waits for LAN after USB launch; reuses an existing mount; failures only warn. If the phone LAN page cannot be reached, **sequentially reboots off-subnet routers** under `P:\all_scripts\5g_router_reboot` (ROUTER_IPs outside `phoneLanHost`’s subnet) to get the phone re-connected on the desired wireless LAN gateway, then retries the LAN wait. Mount polls phone LAN and auto-kills rclone after prolonged outage. Log: `windows\rclone\loopsegments-rclone-mount.log`. Use `-SkipRcloneMount` to leave mounting to `Mount-PhoneL.cmd`. Mount window is independent of Chromium — **Ctrl+C** there to unmount. Use `-SkipGatewayReboot` to skip off-subnet recovery reboots too.
+- **LAN throughput probe:** when `L:` is up, runs `..\lan\Measure-LoopSegmentsLanThroughput.ps1` (largest media under `pcld_ios_media\`, default **64 MB** cap), prints Mbps, recommends a **max media bitrate** for minute segments (80% of LAN), and writes sidecars for `run_batch_vr_hybrid.ps1`. If throughput is below **`minLanThroughputMbps`** in `loop-segments-windows.json` (default **45**) and the default gateway already shares the phone LAN page subnet, **warns**, **reboots Wi‑Fi on the current gateway**, asks you to **retry after Wi‑Fi settles**, waits ~10s, then **exits on Enter** (Chromium not started). Use `-SkipLanThroughput` or `-SkipLowThroughputGatewayReboot` to skip.
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded; waits for exit unless `-DetachChromium`
@@ -101,7 +106,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | `logs.html` / `logs.js` | In-browser REST log UI |
 | `lan_config.json` | Phone LAN target (synced on launch) |
 | `Run-PCloudWebCompanion.ps1` | Thin wrapper → `run_chromium.ps1` (preferred entry) |
-| `run_chromium.ps1` | Venv, Playwright Chromium, USB launch, profile sync, extension copy, browser launch |
+| `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, browser launch |
 | `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium + sync/clear profile |
 | `requirements.txt` | `playwright` (launcher Chromium fetch only) |
 | `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log` |

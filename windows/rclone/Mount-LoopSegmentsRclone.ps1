@@ -39,6 +39,10 @@
 .PARAMETER NoLanWatch
   Do not poll LAN; keep rclone in the foreground until Ctrl+C (legacy behavior).
 
+.PARAMETER SkipOffSubnetRouterReboot
+  If phone LAN page is unreachable, do not sequentially reboot off-subnet routers
+  (P:\all_scripts\5g_router_reboot) to pull the phone onto the desired gateway.
+
 .EXAMPLE
   Copy-Item ..\loop-segments-windows.example.json ..\loop-segments-windows.json
   ..\setup\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.1.42
@@ -70,7 +74,8 @@ param(
     [int] $LanPollSeconds = 15,
     [ValidateRange(15, 3600)]
     [int] $LanDownSeconds = 90,
-    [switch] $NoLanWatch
+    [switch] $NoLanWatch,
+    [switch] $SkipOffSubnetRouterReboot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -226,6 +231,69 @@ function Test-PhoneLANExport {
         }
     } catch {
         Write-Warning "  PROPFIND probe skipped ($($_.Exception.Message)); rclone will verify WebDAV next."
+    }
+}
+
+function Invoke-OffSubnetRouterRebootsForLanRecovery {
+    param([string] $PhoneLanHost = '')
+    if ($SkipOffSubnetRouterReboot) {
+        Write-Host '[gateway] Skipping off-subnet router reboots (-SkipOffSubnetRouterReboot)'
+        return $false
+    }
+    $rebootPs1 = Join-Path $script:LoopSegmentsWindowsRoot 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
+    if (-not (Test-Path -LiteralPath $rebootPs1)) {
+        Write-Warning "[gateway] Missing $rebootPs1 - cannot reboot off-subnet routers for LAN recovery"
+        return $false
+    }
+
+    Write-Host '[gateway] Phone LAN page not reachable - attempting to get the phone re-connected on the desired wireless LAN gateway'
+    Write-Host '[gateway] by sequentially rebooting routers whose IPs are outside the LAN page subnet...'
+    $args = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', $rebootPs1,
+        '-RebootOffSubnetRouters'
+    )
+    if (-not [string]::IsNullOrWhiteSpace($PhoneLanHost)) {
+        $args += @('-PhoneLanHost', $PhoneLanHost)
+    }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & powershell.exe @args
+        $code = 0
+        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($code -ne 0) {
+        Write-Warning "[gateway] Off-subnet router reboot pass failed (exit $code)"
+        return $false
+    }
+    return $true
+}
+
+function Test-PhoneLANExportWithOffSubnetRecovery {
+    param(
+        [string] $HostName,
+        [int] $PortNum,
+        [string] $User,
+        [string] $Pass
+    )
+    try {
+        Test-PhoneLANExport -HostName $HostName -PortNum $PortNum -User $User -Pass $Pass
+        return
+    } catch {
+        $msg = [string]$_.Exception.Message
+        if ($msg -notmatch '(?i)not reachable|timed out|unable to connect|actively refused|No such host|could not be resolved') {
+            throw
+        }
+        Write-Warning "[rclone] $msg"
+        if (-not (Invoke-OffSubnetRouterRebootsForLanRecovery -PhoneLanHost $HostName)) {
+            throw
+        }
+        Write-Host '[rclone] Retrying phone LAN page after off-subnet router reboot pass...'
+        Start-Sleep -Seconds 5
+        Test-PhoneLANExport -HostName $HostName -PortNum $PortNum -User $User -Pass $Pass
     }
 }
 
@@ -464,7 +532,7 @@ function Watch-LoopSegmentsRcloneMount {
             $downFor = [int]([datetime]::UtcNow - $lastOk).TotalSeconds
             $wasDown = $true
             if ($downFor -ge $DownSeconds) {
-                Write-Warning "[lan-watch] Phone LAN unreachable for ${DownSeconds}s - killing rclone and exiting (avoids Explorer hang on dead L:)."
+                Write-Warning ('[lan-watch] Phone LAN unreachable for {0}s - killing rclone and exiting (avoids Explorer hang on dead L:).' -f $DownSeconds)
                 try {
                     if (-not $RcloneProcess.HasExited) {
                         Stop-Process -Id $RcloneProcess.Id -Force -ErrorAction SilentlyContinue
@@ -473,7 +541,7 @@ function Watch-LoopSegmentsRcloneMount {
                 Start-Sleep -Milliseconds 400
                 return 2
             }
-            Write-Host "[lan-watch] LAN down ${downFor}s / ${DownSeconds}s (rclone PID $($RcloneProcess.Id))..."
+            Write-Host ('[lan-watch] LAN down {0}s / {1}s (rclone PID {2})...' -f $downFor, $DownSeconds, $RcloneProcess.Id)
         }
     } finally {
         try { $RcloneProcess.Refresh() } catch {}
@@ -536,14 +604,14 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     }
 
     if ($TestOnly) {
-        Test-PhoneLANExport -HostName $hostIp -PortNum $portNum -User $creds.User -Pass $creds.Password
+        Test-PhoneLANExportWithOffSubnetRecovery -HostName $hostIp -PortNum $portNum -User $creds.User -Pass $creds.Password
         Ensure-RcloneRemote -Name $remote -Url $webdavUrl -User $creds.User -Pass $creds.Password
         Test-RcloneWebDAVRemote -Name $remote
         Write-Host 'OK - run without -TestOnly to mount.'
         exit 0
     }
 
-    Test-PhoneLANExport -HostName $hostIp -PortNum $portNum -User $creds.User -Pass $creds.Password
+    Test-PhoneLANExportWithOffSubnetRecovery -HostName $hostIp -PortNum $portNum -User $creds.User -Pass $creds.Password
     Ensure-RcloneRemote -Name $remote -Url $webdavUrl -User $creds.User -Pass $creds.Password
     if ($Quick) {
         Write-Host 'Quick mode: skipping rclone ls (companion already verified phone LAN).'
@@ -559,7 +627,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     }
 
     $settings = Get-LoopSegmentsWindowsSettings
-    # rclone wants "L:" — trailing "L:\" can break WinFsp / Start-Process argument parsing.
+    # rclone wants "L:" - trailing "L:\" can break WinFsp / Start-Process argument parsing.
     $mountPoint = "${driveLetter}:"
     Write-Host ''
     $mountMode = if ($ReadOnly) { 'read-only' } else { 'read/write (phone blocks loop/, _working*, etc.)' }
@@ -594,7 +662,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         $code = 0
         if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
         if ($code -ne 0) {
-            Write-Host "[Mount-LoopSegmentsRclone] rclone mount failed (exit $code)." -ForegroundColor Red
+            Write-Host ('[Mount-LoopSegmentsRclone] rclone mount failed (exit {0}).' -f $code) -ForegroundColor Red
             Wait-EnterOnError -ExitCode $code
         }
         exit 0
@@ -622,7 +690,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         if ($rcloneProc.HasExited) {
             $early = 1
             try { $early = [int]$rcloneProc.ExitCode } catch {}
-            Write-Host "[Mount-LoopSegmentsRclone] rclone exited immediately (exit $early)." -ForegroundColor Red
+            Write-Host ('[Mount-LoopSegmentsRclone] rclone exited immediately (exit {0}).' -f $early) -ForegroundColor Red
             Show-RcloneMountLogTail -LogFile $rcloneLog
             Write-Host "If ${mountPoint} was already mounted, run: .\Mount-LoopSegmentsRclone.ps1 -Unstick   then remount." -ForegroundColor Yellow
             Wait-EnterOnError -ExitCode $early
@@ -641,13 +709,13 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         exit 2
     }
     if ($code -ne 0) {
-        Write-Host "[Mount-LoopSegmentsRclone] rclone mount failed (exit $code)." -ForegroundColor Red
+        Write-Host ('[Mount-LoopSegmentsRclone] rclone mount failed (exit {0}).' -f $code) -ForegroundColor Red
         Show-RcloneMountLogTail -LogFile $rcloneLog
         Wait-EnterOnError -ExitCode $code
     }
 } catch {
     Write-Host ""
-    Write-Host "[Mount-LoopSegmentsRclone] $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ('[Mount-LoopSegmentsRclone] {0}' -f $_.Exception.Message) -ForegroundColor Red
     if ($_.ScriptStackTrace) {
         Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
     }
