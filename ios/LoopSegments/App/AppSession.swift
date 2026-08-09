@@ -466,6 +466,14 @@ final class AppSession: ObservableObject {
         urlDownloadTask = nil
     }
 
+    /// Clears user/auto Pause hold so the pending FIFO can drain (e.g. after Move to queued).
+    func releaseExportPauseHoldForPendingQueue() {
+        guard userRequestedExportPause else { return }
+        userRequestedExportPause = false
+        exportCoordinator.userRequestedPause = false
+        ExportRuntimeLog.mirror("Pending queue: released Pause hold after moving paused → queued")
+    }
+
     /// Pause export: saves checkpoint, keeps export marked paused, keeps media on disk.
     func pauseExport() {
         guard isExportRunning else { return }

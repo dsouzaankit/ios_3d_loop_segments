@@ -56,6 +56,13 @@ struct PausedExportsView: View {
 
                 Section {
                     if !entries.isEmpty {
+                        Button("Move to queued") {
+                            _ = resumeStore.moveAllPausedExportsToPendingQueue(
+                                exceptFileKey: session.activeExportFileKey
+                            )
+                            PendingExportQueue.shared.drainIfIdle(session: session)
+                            refresh()
+                        }
                         Button("Clear paused", role: .destructive) {
                             resumeStore.clearPausedExports(exceptFileKey: session.activeExportFileKey)
                             refresh()
@@ -94,6 +101,7 @@ struct PausedExportsView: View {
                             "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
                             "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
                             "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove. " +
+                            "Move to queued appends all paused rows onto Queued as fresh jobs (checkpoints and parked media dropped; releases Pause hold) so they auto-start when idle. " +
                             "Clear paused removes checkpoints (and parked media) but keeps a live export running."
                     )
                     .font(.footnote)

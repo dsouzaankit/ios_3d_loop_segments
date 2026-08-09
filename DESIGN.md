@@ -159,8 +159,8 @@ Served on LAN as `/pcld_ios_media/...`. Legacy `Documents/Exports/` is empty aft
 
 | Store | Cap | Behavior |
 |-------|-----|----------|
-| Pending FIFO (`export_pending_queue.json`) | **50** | Companion / REST enqueue; drain on finish / Stop; **user Pause holds** drain |
-| Paused (`ResumeStore` / parked) | **10** `exportInProgress` | Soft-pause keeps checkpoint; FIFO does **not** auto-resume interrupted live runs |
+| Pending FIFO (`export_pending_queue.json`) | **50** | Companion / REST enqueue; drain on finish / Stop; **user Pause holds** drain; **Move to queued** appends paused here as fresh jobs |
+| Paused (`ResumeStore` / parked) | **10** `exportInProgress` | Soft-pause keeps checkpoint; FIFO does **not** auto-resume interrupted live runs; **Move to queued** / `queue_all` drops checkpoints + parks |
 
 ### Keep Alive
 
@@ -179,7 +179,7 @@ Basic auth for WebDAV and sensitive JSON: **`admin` / `iosadmin`** (same as Ques
 | `PUT`/`POST /export_from_folder.json` | Queue by `folderPath` + `displayName` (or filename-only walk) → **202** |
 | `PUT`/`POST /export_queue.json` | Pending FIFO (`append` / `prepend` / `replace`, `startFirst`, remove/clear) |
 | `PUT`/`POST /export_from_url.json` | Queue HTTPS download export |
-| `GET`/`POST /paused_exports.json` | List / clear paused |
+| `GET`/`POST /paused_exports.json` | List / clear paused / `queue_all` (move paused → Queued) |
 | `…/scripts/export_trigger.json` (+ `.ack.json`) | Imperative commands + last ack |
 | `GET /pcloud_list.json`, `/pcloud_bookmarks.json` | Phone-side pCloud listing / bookmarks (auth) |
 | Legacy | `/export_latest.txt`, `/export_progress.txt`, `/logs/…`, `/loop_segments_ok.txt` |
@@ -273,7 +273,7 @@ ios_3d_loop_segments/
 1. **Login** — US/EU, email, password, Keychain.
 2. **Browse** — WebDAV tree, search, bookmarks; pin latest finished export; orange **Exporting** bar while busy.
 3. **Export** — seek presets, Start / Pause / Stop, Mbps cutoff, LAN toggle, Keep Alive, logs / clear media.
-4. **Paused** — **Queued** (pending FIFO) above **Paused** (checkpoints); Resume / Clear.
+4. **Paused** — **Queued** (pending FIFO) above **Paused** (checkpoints); Move to queued / Resume / Clear.
 5. **LAN `/` + `/browse`** — same queues + playback links for the PC browser.
 
 ---

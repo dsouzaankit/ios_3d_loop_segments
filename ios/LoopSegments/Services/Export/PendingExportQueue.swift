@@ -31,6 +31,8 @@ final class PendingExportQueue: ObservableObject {
 
     @Published private(set) var items: [PendingExportItem] = []
     @Published private(set) var revision: Int = 0
+    /// Set when paused checkpoints are moved onto the FIFO — next `drainIfIdle` clears user Pause hold.
+    private var pauseHoldReleaseRequested = false
 
     private init() {
         loadFromDisk()
@@ -39,6 +41,17 @@ final class PendingExportQueue: ObservableObject {
     var count: Int { items.count }
 
     func snapshot() -> [PendingExportItem] { items }
+
+    func requestPauseHoldRelease() {
+        pauseHoldReleaseRequested = true
+    }
+
+    @discardableResult
+    func consumePauseHoldReleaseRequest() -> Bool {
+        guard pauseHoldReleaseRequested else { return false }
+        pauseHoldReleaseRequested = false
+        return true
+    }
 
     @discardableResult
     func enqueue(_ newItems: [PendingExportItem], mode: PendingExportEnqueueMode) -> [PendingExportItem] {
@@ -160,6 +173,9 @@ final class PendingExportQueue: ObservableObject {
     /// Start next pending job when idle. Skips while user/auto Pause is held or an export is active.
     /// Soft-paused checkpoints (Paused tab) must NOT block drain — only `userRequestedExportPause`.
     func drainIfIdle(session: AppSession) {
+        if consumePauseHoldReleaseRequest() {
+            session.releaseExportPauseHoldForPendingQueue()
+        }
         guard !session.isExportRunning, !session.isExportCoordinatorBusy else { return }
         guard !session.userRequestedExportPause else { return }
         // Avoid overwriting an unconsumed trigger (e.g. startFirst just wrote one).

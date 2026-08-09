@@ -2262,8 +2262,9 @@ enum ExportLANServer {
         return """
         <details id="lan-paused-wrap" class="lan-paused-exports">
           <summary id="lan-paused-heading">Paused exports (\(count))</summary>
-          <p class="muted">Checkpoints from soft-pause / Pause. Clear removes parked media; live export is kept. Queued FIFO is separate.</p>
+          <p class="muted">Checkpoints from soft-pause / Pause. Move to queued appends onto FIFO as fresh jobs (drops checkpoints / parked media). Clear removes parked media; live export is kept.</p>
           <p id="lan-paused-actions"\(actionsHidden)>
+            <button type="button" id="lan-paused-queue-all">Move to queued</button>
             <button type="button" id="lan-paused-clear">Clear paused</button>
           </p>
           <ul id="lan-paused-list">
@@ -2288,7 +2289,7 @@ enum ExportLANServer {
         ]
     }
 
-    /// JS helpers for queue list + Remove/Clear and paused Clear (Basic auth).
+    /// JS helpers for queue list + Remove/Clear and paused Clear / Move to queued (Basic auth).
     private static func htmlPendingQueueClientHelpersJS() -> String {
         let user = lanWebDAVUsername
         let pass = lanWebDAVPassword
@@ -2404,6 +2405,25 @@ enum ExportLANServer {
                   })
                   .catch(function () {})
                   .finally(function () { clearPaused.disabled = false; });
+              });
+            }
+            var queueAllPaused = document.getElementById("lan-paused-queue-all");
+            if (queueAllPaused && !queueAllPaused.getAttribute("data-ls-wired")) {
+              queueAllPaused.setAttribute("data-ls-wired", "1");
+              queueAllPaused.addEventListener("click", function () {
+                if (!window.confirm("Move all paused exports to Queued as fresh jobs? Checkpoints and parked media are dropped. Live export is kept.")) return;
+                queueAllPaused.disabled = true;
+                postPausedAction({ action: "queue_all" })
+                  .then(function (res) {
+                    if (res.j && res.j.pausedExports) applyPausedExports(res.j.pausedExports);
+                    else applyPausedExports({ count: 0, listHTML: '<li class="muted"><em>No paused exports</em></li>' });
+                    if (res.j && res.j.pendingExportQueue) applyPendingQueue(res.j.pendingExportQueue);
+                    if (window.refreshLANPlayback) {
+                      try { window.refreshLANPlayback(); } catch (e) {}
+                    }
+                  })
+                  .catch(function () {})
+                  .finally(function () { queueAllPaused.disabled = false; });
               });
             }
           }
@@ -3258,11 +3278,12 @@ enum ExportLANServer {
             "methods": ["GET", "POST"],
             "pausedExports": paused,
             "body": [
-                "action": "clear — remove paused checkpoints (keeps live export; does not clear Queued FIFO)",
+                "action": "clear | queue_all — clear removes checkpoints + parked media; queue_all moves all paused → Queued as fresh jobs (drops checkpoints / parked; live export kept)",
             ],
             "notes": [
                 "Same paused list as phone Paused tab (excluding the live export).",
                 "Clear also removes parked/ media for those checkpoints.",
+                "queue_all appends onto pending FIFO (no seekMs); drops parks/checkpoints; releases Pause hold so drain can start when idle.",
             ],
         ]
         sendJSONPayload(payload, connection: connection, done: done, status: 200)
@@ -3291,12 +3312,12 @@ enum ExportLANServer {
             case .success(let body):
                 guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
                       let action = (object["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-                      action == "clear" else {
+                      action == "clear" || action == "queue_all" else {
                     sendResponse(
                         connection: connection,
                         status: 400,
                         contentType: "text/plain; charset=utf-8",
-                        body: Data("Expected JSON { \"action\": \"clear\" }".utf8),
+                        body: Data("Expected JSON { \"action\": \"clear\" | \"queue_all\" }".utf8),
                         done: done
                     )
                     return
@@ -3305,13 +3326,28 @@ enum ExportLANServer {
                     let exceptKey = ExportPlaybackState.shared.isLANExportActive
                         ? ExportRetentionSourceCatalog.read()?.fileKey
                         : nil
-                    ResumeStore.shared.clearPausedExports(exceptFileKey: exceptKey)
-                    let payload: [String: Any] = [
-                        "status": "ok",
-                        "action": "clear",
-                        "pausedExports": pausedExportsStatusPayload(),
-                    ]
-                    sendJSONPayload(payload, connection: connection, done: done, status: 200)
+                    if action == "queue_all" {
+                        let moved = ResumeStore.shared.moveAllPausedExportsToPendingQueue(exceptFileKey: exceptKey)
+                        let payload: [String: Any] = [
+                            "status": "ok",
+                            "action": "queue_all",
+                            "moved": moved,
+                            "message": moved == 0
+                                ? "No paused exports to move"
+                                : "Moved \(moved) paused export(s) to Queued",
+                            "pausedExports": pausedExportsStatusPayload(),
+                            "pendingExportQueue": pendingExportQueueStatusPayload(),
+                        ]
+                        sendJSONPayload(payload, connection: connection, done: done, status: 200)
+                    } else {
+                        ResumeStore.shared.clearPausedExports(exceptFileKey: exceptKey)
+                        let payload: [String: Any] = [
+                            "status": "ok",
+                            "action": "clear",
+                            "pausedExports": pausedExportsStatusPayload(),
+                        ]
+                        sendJSONPayload(payload, connection: connection, done: done, status: 200)
+                    }
                 }
             }
         }

@@ -121,6 +121,46 @@ final class ResumeStore: ObservableObject {
         }
     }
 
+    /// Moves every paused row (except an optional live export) onto the pending FIFO as fresh jobs.
+    /// Drops checkpoints: clears in-progress flags / seek, removes `parked/` for those keys.
+    /// Does not remove Queued items already present — new rows are appended (oldest paused first).
+    @discardableResult
+    func moveAllPausedExportsToPendingQueue(exceptFileKey: String? = nil) -> Int {
+        let paused = interruptedEntries(excludingFileKey: exceptFileKey)
+        guard !paused.isEmpty else { return 0 }
+
+        // Paused list is newest-first; append oldest-first so FIFO drains chronologically.
+        let oldestFirst = Array(paused.reversed())
+        let queueItems: [PendingExportItem] = oldestFirst.map { entry in
+            PendingExportItem(
+                folderPath: entry.folderPath,
+                displayName: entry.resolvedDisplayName,
+                seekMs: nil
+            )
+        }
+        PendingExportQueue.shared.enqueue(queueItems, mode: .append)
+        PendingExportQueue.shared.requestPauseHoldRelease()
+
+        let keys = Set(paused.map(\.fileKey))
+        var entries = load()
+        var changed = false
+        for index in entries.indices where keys.contains(entries[index].fileKey) {
+            guard entries[index].exportInProgress else { continue }
+            entries[index].exportInProgress = false
+            entries[index].checkpointMediaMs = nil
+            entries[index].lastSeekMs = 0
+            entries[index].updatedAt = Date()
+            changed = true
+        }
+        if changed { persist(entries) }
+        for key in keys {
+            _ = ExportParkedMedia.removePark(forFileKey: key)
+        }
+
+        ExportRuntimeLog.mirror("Moved \(queueItems.count) paused export(s) → Queued (checkpoints dropped)")
+        return queueItems.count
+    }
+
     /// Clears paused / in-progress resume rows (e.g. Clear media).
     /// Removes those entries entirely (not just flags) so Paused cannot resume a wiped export.
     /// Optional `exceptFileKey` keeps one in-progress row and only clears flags on the others.
