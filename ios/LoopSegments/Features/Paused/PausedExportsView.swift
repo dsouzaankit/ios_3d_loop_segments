@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Lists every paused / interrupted export (multi-pause handoff). Browse keeps only the last-finished pin.
-/// Also shows **Queued** pending FIFO (not started yet) above paused rows — section always visible.
+/// Paused / interrupted export checkpoints (multi-pause handoff). Browse keeps only the last-finished pin.
+/// Pending FIFO lives on the Queued tab.
 struct PausedExportsView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
@@ -13,49 +13,8 @@ struct PausedExportsView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    if pendingQueue.count > 0 {
-                        Button("Clear queue", role: .destructive) {
-                            pendingQueue.clear()
-                        }
-                    }
-                    if pendingQueue.items.isEmpty {
-                        Text("No queued exports")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(pendingQueue.items) { item in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.displayName)
-                                    .lineLimit(2)
-                                Text("Queued · waiting")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                if let folder = item.folderPath, !folder.isEmpty {
-                                    Text(folder)
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
-                                }
-                            }
-                            .swipeActions(edge: .trailing) {
-                                Button("Remove", role: .destructive) {
-                                    pendingQueue.remove(id: item.id)
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Queued (\(pendingQueue.count))")
-                } footer: {
-                    Text(
-                        "Not started yet. Auto-starts when the phone is idle after an export finishes or Stop. " +
-                            "User Pause holds the queue. Cap \(PendingExportQueue.maxItems). Companion multi-select prepends here."
-                    )
-                    .font(.footnote)
-                }
-
-                Section {
-                    if !entries.isEmpty {
+                if !entries.isEmpty {
+                    Section {
                         Button("Move to queued") {
                             _ = resumeStore.moveAllPausedExportsToPendingQueue(
                                 exceptFileKey: session.activeExportFileKey
@@ -68,6 +27,8 @@ struct PausedExportsView: View {
                             refresh()
                         }
                     }
+                }
+                Section {
                     if entries.isEmpty {
                         Text("No paused exports")
                             .foregroundStyle(.secondary)
@@ -93,15 +54,13 @@ struct PausedExportsView: View {
                             }
                         }
                     }
-                } header: {
-                    Text("Paused (\(entries.count))")
                 } footer: {
                     Text(
                         "Cap is \(ResumeStore.maxPausedExports) in-progress slots total (includes the live export). " +
                             "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
                             "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
                             "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove. " +
-                            "Move to queued appends all paused rows onto Queued as fresh jobs (checkpoints and parked media dropped; releases Pause hold) so they auto-start when idle. " +
+                            "Move to queued appends all paused rows onto the Queued tab as fresh jobs (checkpoints and parked media dropped; releases Pause hold) so they auto-start when idle. " +
                             "Clear paused removes checkpoints (and parked media) but keeps a live export running."
                     )
                     .font(.footnote)
@@ -113,7 +72,7 @@ struct PausedExportsView: View {
                     NavigationLink {
                         ExportView(item: item)
                     } label: {
-                        exportActivityBanner(for: item)
+                        ExportActivityBanner(itemName: item.name)
                     }
                     .buttonStyle(.hapticPlain)
                 }
@@ -155,29 +114,6 @@ struct PausedExportsView: View {
                     .lineLimit(1)
             }
         }
-    }
-
-    @ViewBuilder
-    private func exportActivityBanner(for item: WebDAVItem) -> some View {
-        HStack(spacing: 10) {
-            ProgressView()
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Exporting")
-                    .font(.subheadline.weight(.semibold))
-                Text(item.name)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Text("Open")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.orange)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.16))
     }
 
     private func refresh() {

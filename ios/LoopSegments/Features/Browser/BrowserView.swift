@@ -181,7 +181,7 @@ struct BrowserView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 if session.isExportRunning, let item = session.activeExportDisplayItem {
                     NavigationLink(value: item) {
-                        exportActivityBanner(for: item)
+                        ExportActivityBanner(itemName: item.name)
                     }
                     .buttonStyle(.hapticPlain)
                 }
@@ -306,29 +306,6 @@ struct BrowserView: View {
 
     private var displayedItems: [WebDAVItem] {
         isSearchActive ? searchResults : items
-    }
-
-    @ViewBuilder
-    private func exportActivityBanner(for item: WebDAVItem) -> some View {
-        HStack(spacing: 10) {
-            ProgressView()
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Exporting")
-                    .font(.subheadline.weight(.semibold))
-                Text(item.name)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Text("Open")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.orange)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.16))
     }
 
     @ViewBuilder

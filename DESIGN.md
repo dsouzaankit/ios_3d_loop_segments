@@ -106,7 +106,8 @@ Credentials: **email + password** (WebDAV Basic). Optional REST token for search
 │  ├─ AuthView          region + credentials → Keychain        │
 │  ├─ BrowserView       WebDAV navigate / search / bookmarks   │
 │  ├─ ExportView        seek, Start/Pause/Stop, LAN, Keep Alive│
-│  └─ PausedExportsView Queued (FIFO) + Paused checkpoints     │
+│  ├─ QueuedExportsView pending FIFO                          │
+│  └─ PausedExportsView checkpoints                           │
 ├──────────────────────────────────────────────────────────────┤
 │  AppSession / RootView                                       │
 │  credentials, tab shell, export lifecycle, LAN while up      │
@@ -273,8 +274,9 @@ ios_3d_loop_segments/
 1. **Login** — US/EU, email, password, Keychain.
 2. **Browse** — WebDAV tree, search, bookmarks; pin latest finished export; orange **Exporting** bar while busy.
 3. **Export** — seek presets, Start / Pause / Stop, Mbps cutoff, LAN toggle, Keep Alive, logs / clear media.
-4. **Paused** — **Queued** (pending FIFO) above **Paused** (checkpoints); Move to queued / Resume / Clear.
-5. **LAN `/` + `/browse`** — same queues + playback links for the PC browser.
+4. **Queued** — pending FIFO; Clear / Remove.
+5. **Paused** — checkpoints; Move to queued / Resume / Clear.
+6. **LAN `/` + `/browse`** — same queues + playback links for the PC browser.
 
 ---
 

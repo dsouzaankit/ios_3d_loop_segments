@@ -16,7 +16,10 @@ struct RootView: View {
 
     private var pausedTabBadge: Int {
         resumeStore.interruptedEntries(excludingFileKey: session.activeExportFileKey).count
-            + pendingQueue.count
+    }
+
+    private var queuedTabBadge: Int {
+        pendingQueue.count
     }
 
     var body: some View {
@@ -28,6 +31,13 @@ struct RootView: View {
                             Label("Browse", systemImage: "folder")
                         }
                         .tag(MainTab.browse)
+
+                    QueuedExportsView()
+                        .tabItem {
+                            Label("Queued", systemImage: "list.bullet")
+                        }
+                        .badge(queuedTabBadge)
+                        .tag(MainTab.queued)
 
                     PausedExportsView()
                         .tabItem {
@@ -78,7 +88,10 @@ struct RootView: View {
     private func syncLANServices() {
         if lanServicesActive {
             ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
+            LANExportTriggerRunner.setAppActive(true, session: session)
+        } else {
+            ExportLANServer.stop()
+            LANExportTriggerRunner.setAppActive(false, session: session)
         }
-        LANExportTriggerRunner.setAppActive(lanServicesActive, session: session)
     }
 }

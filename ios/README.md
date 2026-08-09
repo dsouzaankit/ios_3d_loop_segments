@@ -2,7 +2,7 @@
 
 **Cellular → pCloud WebDAV → segment export → LAN (or USB) → PC DLNA.** See [../WORKFLOW.md](../WORKFLOW.md).
 
-**Quick notes:** LAN below Mbps cutoff → preload/full file only; at/above → `op_*.mp4` when codec allows. **`_working.mp4`** full-timeline play is reliable at seek **0:00** (seek &gt; 0 → see below). AV1 not supported — prefer H.265. **Keep Alive** defaults **on** (build **272+**) — see **Background / lock screen**. Companion **multi-select** → phone **pending FIFO** (build **273+**). Optional: Settings → Display & Brightness → Auto-Lock → Never.
+**Quick notes:** LAN below Mbps cutoff → preload/full file only; at/above → `op_*.mp4` when codec allows. **`_working.mp4`** full-timeline play is reliable at seek **0:00** (seek &gt; 0 → see below). AV1 not supported — prefer H.265. **Keep Alive** defaults **on** (build **272+**) — see **Background / lock screen**. Companion **multi-select** → phone **pending FIFO** (build **273+**). **App tabs (285+):** **Browse** · **Queued** (pending FIFO) · **Paused** (checkpoints). Optional: Settings → Display & Brightness → Auto-Lock → Never.
 
 **IPA / install (no Mac):** from repo root run **`.\deploy.ps1`** (triggers [ios-build](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml), downloads the IPA, then runs **`.\copy-to-icloud.ps1`**). Paste-only: **`.\copy-to-icloud.ps1`** (stamped `LoopSegments-b{build}-{time}.ipa`, same pattern as web_auto_parking). Details / AltStore: [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md). PC AltServer notes: [../windows/README.md](../windows/README.md).
 
@@ -11,6 +11,8 @@
 **App icon:** [LoopSegments/Assets.xcassets/AppIcon.appiconset](LoopSegments/Assets.xcassets/AppIcon.appiconset) (1024×1024 dual-segment loop + play). Wired via `ASSETCATALOG_COMPILER_APPICON_NAME` + `CFBundleIconName` in [project.yml](project.yml) / [Info.plist](LoopSegments/Resources/Info.plist). CI fails the IPA if `Assets.car` / `CFBundleIconName` is missing. After install, delete the old app first if the home screen / App Library **Hidden** tile stays blank (iOS caches the previous blank icon).
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
+
+**Build 285 (1.2.49):** App root tabs split: **Queued** (pending FIFO, own badge) and **Paused** (checkpoints, own badge) — no longer two sections on one tab. **Move to queued** stays on Paused. Shared orange Exporting banner on Browse / Queued / Paused.
 
 **Build 284 (1.2.48):** Paused tab + LAN: **Move to queued** moves all paused rows onto the pending FIFO as **fresh** jobs (drops checkpoints / parked media; releases Pause hold so they auto-start when idle). LAN `POST /paused_exports.json` `{ "action": "queue_all" }`.
 
@@ -137,7 +139,7 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
-- **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse**, **Paused**, and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. Paused mid-run files are listed on the **Paused** tab (not in Browse).
+- **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse**, **Queued**, **Paused**, and **Export** (export keeps running if you leave Export); row badge **Exporting** on the active file. Paused mid-run files are listed on the **Paused** tab (not in Browse).
 - **Keep Alive (default on):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Mix mode** (default) or **Prefer lock screen controls** (exclusive). **Build 225+:** **60-minute** sessions when foregrounded and after export stops; LAN stays up while the loop runs. See **Keep Alive: mix vs lock screen** and **Background / lock screen** below. Not reliable in Low Power Mode.
   - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin` / `iosadmin`**), since they expose pCloud folder/file names.
 

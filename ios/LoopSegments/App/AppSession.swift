@@ -2,6 +2,7 @@ import Foundation
 
 enum MainTab: Hashable {
     case browse
+    case queued
     case paused
 }
 
@@ -13,7 +14,7 @@ final class AppSession: ObservableObject {
     @Published private(set) var isExportSessionActive = false
     /// WebDAV folder path stack for the browser (survives Export push/pop on the NavigationStack).
     @Published var browserPathStack: [String] = ["/"]
-    /// Root tab selection (Browse vs Paused exports).
+    /// Root tab selection (Browse / Queued / Paused).
     @Published var selectedMainTab: MainTab = .browse
     /// When set from the Paused tab, Browse applies this as the search field and switches focus.
     @Published var pendingBrowseSearch: String?
