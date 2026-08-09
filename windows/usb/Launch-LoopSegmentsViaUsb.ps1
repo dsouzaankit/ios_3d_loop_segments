@@ -43,8 +43,11 @@
 .PARAMETER SkipUnlockProbe
   Do not run Probe-IphoneUnlock.py before launch.
 
+.PARAMETER ForceRelaunch
+  Launch even if Loop Segments is already the foreground app (USB DVT proclist).
+
 .EXITCODES
-  0  Launched (or ListOnly ok)
+  0  Launched, already foreground (skipped relaunch), or ListOnly ok
   1  Launch/trust/generic failure
   2  No USB device / app not found
   3  Phone is passcode-locked (unlock and retry)
@@ -61,7 +64,8 @@ param(
     [switch] $SkipMount,
     [switch] $UseTunneld,
     [switch] $ListOnly,
-    [switch] $SkipUnlockProbe
+    [switch] $SkipUnlockProbe,
+    [switch] $ForceRelaunch
 )
 
 Set-StrictMode -Version Latest
@@ -221,6 +225,21 @@ if ($resolvedBundleId -ne $BundleId) {
     Write-Host "Using installed id: $resolvedBundleId (AltStore/Sideloadly suffix)" -ForegroundColor Cyan
 }
 $BundleId = $resolvedBundleId
+
+if (-not $ForceRelaunch) {
+    $fgScript = Join-Path $PSScriptRoot "Probe-LoopSegmentsForeground.py"
+    if (Test-Path -LiteralPath $fgScript) {
+        Write-Host "Checking whether Loop Segments is already foreground (USB DVT proclist)..."
+        $fg = Invoke-PythonRuntime -Runtime $rt -ArgumentList @($fgScript, $BundleId)
+        Write-CommandLines -Lines $fg.Lines
+        $fgBlob = ($fg.Lines -join "`n")
+        if ($fg.ExitCode -eq 0 -or $fgBlob -match '(?m)^FOREGROUND\b') {
+            Write-Host "Loop Segments already foreground over USB - skipping relaunch." -ForegroundColor Green
+            exit 0
+        }
+        Write-Host "Not foreground (or probe inconclusive) - will launch." -ForegroundColor DarkGray
+    }
+}
 
 if (-not $SkipMount) {
     $mounted = $false

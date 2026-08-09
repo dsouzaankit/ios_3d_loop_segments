@@ -96,7 +96,7 @@ Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
 ## Open Loop Segments over USB (pymobiledevice3)
 
-Force-launch the app from the PC when the iPhone is **USB-connected** and trusted (iTunes / Apple Mobile Device Support). Used standalone or by `Run-PCloudWebCompanion.ps1` before Chromium. Scripts: `usb\Launch-LoopSegmentsViaUsb.ps1`, `usb\Resolve-LoopSegmentsBundleId.py`, `usb\Probe-IphoneUnlock.py`.
+Force-launch the app from the PC when the iPhone is **USB-connected** and trusted (iTunes / Apple Mobile Device Support). Used standalone or by `Run-PCloudWebCompanion.ps1` before Chromium. Scripts: `usb\Launch-LoopSegmentsViaUsb.ps1`, `usb\Resolve-LoopSegmentsBundleId.py`, `usb\Probe-IphoneUnlock.py`, `usb\Probe-LoopSegmentsForeground.py`. Skips relaunch when USB DVT already reports the app **foreground** (`-ForceRelaunch` to always launch).
 
 ```powershell
 # Prefer Setup (installs 3.12 tooling). Manual:
@@ -113,7 +113,7 @@ py -3.12 -m pip install -U pymobiledevice3
 |-------|--------|
 | Bundle id | Usually `com.loopsegments.app`; AltStore may resign as `com.loopsegments.app.<suffix>`. **USB launch lookup is independent of that suffix** (and of whatever alphanumeric suffix AltStore shows in App IDs / the app name): each run re-resolves on the phone (`Resolve-LoopSegmentsBundleId.py` — prefix `com.loopsegments.app.*` or display name **Loop Segments**). LAN companion talks `:8765` only (ignores bundle id). |
 | App ID renew vs suffix | AltStore **Renew App IDs** extends the same Apple slot — it does **not** change the resigned suffix. A new suffix appears only if AltStore **registers a new** App ID (e.g. delete + reinstall after the old slot expired). USB launch still finds the app either way. |
-| Unlock | Needed for companion startup USB launch **and** for finish-time Home press. Exit **3** if locked during launch — companion will not start Chromium. Companion always probes LAN (prints UP/DOWN) then USB-launches to foreground the app unless `-SkipUsbLaunch`. If USB is missing but LAN is UP, warns and continues. Home on quit still needs unlock if you want the app backgrounded |
+| Unlock | Needed for companion startup USB launch **and** for finish-time Home press. Exit **3** if locked during launch — companion will not start Chromium. Companion always probes LAN (prints UP/DOWN) then USB-launches to foreground the app unless `-SkipUsbLaunch` (skips relaunch when USB DVT already sees Loop Segments **foreground**). If USB is missing but LAN is UP, warns and continues. Home on quit still needs unlock if you want the app backgrounded |
 | Home on quit | Companion finish presses **Home** over USB (`usb\Go-IphoneHomeViaUsb.ps1`) to background Loop Segments. Requires USB + **unlocked** phone; otherwise skipped. Each pymobiledevice3 attempt times out (~25s) so finish cannot hang forever; `-SkipGoHome` leaves the app foreground. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
 | Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh (cert refresh — separate from App ID renew above). **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. Companion / USB launch auto-start AltServer when installed but idle |
 | AltStore UDID (1006) | **“could not determine this device's UDID”** — reinstall AltStore from AltServer (USB). Then **Refresh All**. If Loop Segments is **“not available”**, reinstall the **same** IPA via My Apps → **+** (new GitHub build not required). See tip above / [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) |
@@ -237,9 +237,9 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `rclone\Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** / mount / **`-Remove`** / **`-Unstick`** / **`-Quick`** / LAN watch / **`-RemovePort80Proxy`** |
 | `rclone\loopsegments-rclone-mount.log` | rclone mount log (local; gitignored) |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: gateway subnet check/reboot, USB-launch Loop Segments, sync profile, start browser |
-| `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); exit **3** if phone locked |
+| `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); skips if already foreground; exit **3** if phone locked |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Press Home over USB to background the app (companion finish); needs USB + unlocked; exit **3** if locked |
-| `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` | Helpers for USB unlock probe + AltStore bundle-id suffix |
+| `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |
 | `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
 | `sideload\Register-AltServerAtLogon.ps1` | **AltServer** at logon ([BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) §3). Wi‑Fi refresh often fails on Win11 — **USB + AltStore Refresh All** weekly is the reliable path |
 | `sideload\Register-SideloadlyAutoRefresh.ps1` | **Fallback only** — Sideloadly daemon if AltStore fails |
