@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Measure LAN throughput by copying a large phone media file off the rclone mount (L:).
@@ -8,8 +8,8 @@
   Picks the largest media file under <drive>:\pcld_ios_media\, copies it to a local temp
   file (or -OutFile), and prints MB transferred + Mbps.
 
-  This measures the PC ↔ phone path through the current gateway Wi‑Fi (rclone/WinFsp +
-  phone HTTP/WebDAV) — not 5G WAN internet speed.
+  This measures the PC ↔ phone path through the current gateway Wi-Fi (rclone/WinFsp +
+  phone HTTP/WebDAV) - not 5G WAN internet speed.
 
 .EXAMPLE
   .\rclone\Mount-LoopSegmentsRclone.ps1   # leave window open
@@ -288,6 +288,9 @@ function Invoke-LowThroughputGatewayRebootAndStop {
         '-File', $rebootPs1,
         '-ForceReboot'
     )
+    if ($NoWaitEnterOnLowThroughputStop) {
+        $psArgs += '-NoWaitEnter'
+    }
     Write-Host ('[lan-bw] > powershell {0}' -f ($psArgs -join ' '))
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'

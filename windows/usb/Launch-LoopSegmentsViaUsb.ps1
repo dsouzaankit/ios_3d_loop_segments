@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Force-open Loop Segments on a USB-connected iPhone via pymobiledevice3.
@@ -165,7 +165,7 @@ if (-not (Test-LoopSegmentsUsbmuxListHasDevice -ExitCode $list.ExitCode -Lines $
         Write-Host @"
 
 usbmux still empty. Plug in USB, unlock, Trust This Computer, keep Apple Mobile Device Support running.
-If AltServer is missing, install it from https://altstore.io — without weekly AltStore refresh,
+If AltServer is missing, install it from https://altstore.io - without weekly AltStore refresh,
 Loop Segments (free/Personal Team) stops working after ~7 days.
 
 $(Get-LoopSegmentsAppUnavailableResolution)

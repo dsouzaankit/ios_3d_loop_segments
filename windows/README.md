@@ -69,7 +69,7 @@ Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** �
 
 ## pCloud web helper (integrated)
 
-Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway** (via `P:\all_scripts\5g_router_reboot`) so devices re-connect to the gateway on the app LAN subnet, then prints LAN status, USB-launches Loop Segments to foreground the app (blocks if the phone is locked), **attempts an rclone mount** in a separate window when LAN is up (if the LAN page is unreachable, **sequentially reboots off-subnet routers** so the phone can rejoin the desired wireless LAN gateway), then **probes LAN Mbps** off `L:` (up to 64 MB).
+Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then prints LAN status, USB-launches Loop Segments to foreground the app (blocks if the phone is locked), **attempts an rclone mount** in a separate window when LAN is up (if the LAN page is unreachable, **sequentially reboots off-subnet routers** so the phone can rejoin the desired wireless LAN gateway), then **probes LAN Mbps** off `L:` (up to 64 MB).
 
 **Multi-select tip:** in my.pcloud.com, click the **`v`** control to filter the folder by one of **five** types (including **Video**), then multi-select → Download — the companion cancels the zip and queues videos on the phone FIFO. **Folder right-click → Download is not supported** (zip cancelled, no `fileid`s → “no selection ids”); open the folder, select the videos, then Download instead. Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
@@ -230,7 +230,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `setup\Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |
 | `lan\Get-LoopSegmentsUnifiedLANListing.ps1` | **Pool media listings** from all `phoneLanHosts` → JSON or HTML |
 | `lan\Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
-| `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1` | Wrong-subnet / forced / **off-subnet sequential** Wi‑Fi reboots (`P:\all_scripts\5g_router_reboot`) so the phone can rejoin the app LAN gateway |
+| `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1` | Wrong-subnet **loop** (reboot → wait new PC LAN IP → re-check, max 3 rounds) / forced / **off-subnet sequential** Wi‑Fi reboots (`P:\all_scripts\5g_router_reboot`) |
 | `lan\Measure-LoopSegmentsLanThroughput.ps1` | Time up to 64 MB from largest `L:\pcld_ios_media\` media → Mbps + recommended max segment bitrate sidecar for hybrid batch |
 | `rclone\Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `rclone\Unstick-PhoneL.cmd` | Kill dead phone mount + restart Explorer |

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Start integrated pcloud_web_companion Chromium helper (USB-launches Loop Segments first).
@@ -6,18 +6,22 @@
 .DESCRIPTION
   Wrapper around run_chromium.ps1 in this folder.
   Before Chromium starts, if the PC default gateway is not on the same subnet as
-  the phone LAN page IP, reboots Wi‑Fi on that current gateway (scripts under
-  P:\all_scripts\5g_router_reboot) so devices rejoin the app LAN subnet; then
+  the phone LAN page IP, reboots Wi-Fi on that current gateway (scripts under
+  P:\all_scripts\5g_router_reboot), waits for this PC to get a new LAN IP, and
+  retries up to 3 rounds until the gateway shares the app LAN subnet (then waits for
+  Enter if still wrong); then
   prints phone LAN status, USB-launches Loop Segments to foreground the app
   (unless -SkipUsbLaunch), then attempts an rclone WebDAV mount (unless
   -SkipRcloneMount) in a separate window when LAN is up, then probes LAN
   throughput off the mount (unless -SkipLanThroughput). If throughput is below
   minLanThroughputMbps in loop-segments-windows.json (default 45) while gateway and
-  LAN page share a subnet, forces a gateway Wi‑Fi reboot,
+  LAN page share a subnet, forces a gateway Wi-Fi reboot,
   asks you to retry later, waits briefly, then exits on Enter (Chromium not started).
   Exit code 3 (phone locked) aborts Chromium. No USB / other USB failures abort only when
   phone LAN is also down; if LAN is up, warns and continues.
-  On error, waits for Enter so a double-clicked console window does not close immediately.
+  On any error / non-zero exit, waits for a single Enter so a double-clicked console
+  does not close immediately (child scripts use -NoWaitEnter / -NoWaitEnterOnFatal
+  so you are not prompted twice).
   While Chromium is running, Ctrl+C or closing the console (X) kills that Chromium profile
   and syncs/clears the profile the same as a normal exit. On finish, presses iPhone Home
   over USB so Loop Segments is backgrounded (Keep Alive can keep running).
@@ -98,6 +102,7 @@ try {
         KeepLocalProfile                = $KeepLocalProfile
         SkipGoHome                      = $SkipGoHome
         NoDarkMode                      = $NoDarkMode
+        NoWaitEnterOnFatal              = $true
         StartUrl                        = $StartUrl
     }
 

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$RecreateVenv,
     [switch]$ForceDeps,
     [switch]$NoLaunch,
@@ -22,10 +22,36 @@ param(
     [switch]$SkipGoHome,
     # Do not force Chromium UI + page dark mode (default: --force-dark-mode + WebContentsForceDark).
     [switch]$NoDarkMode,
+    # Skip local Enter on fatal errors (Run-PCloudWebCompanion prompts once instead).
+    [switch]$NoWaitEnterOnFatal,
     [string]$StartUrl = "https://my.pcloud.com"
 )
 
 $ErrorActionPreference = "Stop"
+
+function Wait-EnterOnFatal {
+    param([int] $ExitCode = 1)
+    if ($NoWaitEnterOnFatal) { return }
+    Write-Host ""
+    Write-Host "Press Enter to close..." -ForegroundColor Yellow
+    try {
+        [void][Console]::ReadLine()
+    } catch {
+        Read-Host | Out-Null
+    }
+}
+
+# When this script is the console entry (not via Run-PCloudWebCompanion), pause on fatal errors.
+# Parent companion passes -NoWaitEnterOnFatal so only one Enter prompt appears.
+trap {
+    Write-Host ""
+    Write-Host ("[run] {0}" -f $_.Exception.Message) -ForegroundColor Red
+    Wait-EnterOnFatal -ExitCode 1
+    if ($NoWaitEnterOnFatal) {
+        throw $_
+    }
+    exit 1
+}
 
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $ScriptDir) { throw "Cannot resolve script directory; run with: powershell -File `"$($MyInvocation.MyCommand.Path)`"" }
@@ -345,7 +371,7 @@ function Start-HiddenPowerShell {
     }
 
     # Detach from the console job so closing the companion window does not kill this child.
-    # PowerShell $null marshals as "" for string P/Invoke — that makes CreateProcess return
+    # PowerShell $null marshals as "" for string P/Invoke - that makes CreateProcess return
     # ERROR_INVALID_NAME. Use IntPtr.Zero for lpApplicationName and a writable StringBuilder.
     if (-not ("CompanionDetachedProc" -as [type])) {
         Add-Type -TypeDefinition @"
@@ -440,7 +466,7 @@ function Start-RestLogSink {
         ))
 
     # Child powershell cold-start + sink's own "kill previous" sleep. Clash TUN can break
-    # WinHTTP to 127.0.0.1 — probe with raw TCP HTTP, not HttpWebRequest.
+    # WinHTTP to 127.0.0.1 - probe with raw TCP HTTP, not HttpWebRequest.
     $deadline = [datetime]::UtcNow.AddSeconds(20)
     $ok = $false
     while ([datetime]::UtcNow -lt $deadline) {
@@ -460,7 +486,7 @@ function Start-RestLogSink {
     }
     if (-not $ok) {
         if (Test-TcpPortOpen -HostName '127.0.0.1' -Port 18765 -TimeoutMs 500) {
-            Write-Host "[rest-log] Sink port 18765 is listening (HTTP health still flaky — continuing)" -ForegroundColor DarkYellow
+            Write-Host "[rest-log] Sink port 18765 is listening (HTTP health still flaky - continuing)" -ForegroundColor DarkYellow
         } else {
             Write-Warning "[rest-log] Sink not reachable after 20s (extension logs / phone-lan relay may miss this run)"
         }
@@ -491,7 +517,7 @@ function Test-TcpPortOpen {
     }
 }
 
-# Raw loopback HTTP — avoids WinHTTP/Clash resetting HttpWebRequest to 127.0.0.1.
+# Raw loopback HTTP - avoids WinHTTP/Clash resetting HttpWebRequest to 127.0.0.1.
 function Invoke-LoopbackHttpGet {
     param(
         [string]$Path = '/health',
@@ -720,11 +746,11 @@ function Wait-PhoneLanPageReachable {
 }
 
 function Invoke-GatewayWifiRebootIfNeeded {
-    # When the PC default gateway is not on the same subnet as phoneLanHost, reboot
-    # Wi-Fi on that current gateway (5g_router_reboot) so clients rejoin the app LAN subnet.
+    # When the PC default gateway is not on the same subnet as phoneLanHost: inform,
+    # reboot current gateway Wi-Fi, wait for a new PC LAN IP, re-check - loop until matched.
     $rebootPs1 = Join-Path $WindowsDir "lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1"
     if (-not (Test-Path -LiteralPath $rebootPs1)) {
-        Write-Warning "[gateway] Missing $rebootPs1 — skip gateway Wi-Fi reboot check"
+        Write-Warning "[gateway] Missing $rebootPs1 - skip gateway Wi-Fi reboot check"
         return
     }
 
@@ -736,6 +762,9 @@ function Invoke-GatewayWifiRebootIfNeeded {
     [void]$psArgs.Add($rebootPs1)
     if ($SkipGatewayReboot) {
         [void]$psArgs.Add("-SkipGatewayReboot")
+    } else {
+        # Parent Run-PCloudWebCompanion waits for Enter on failure; avoid a second prompt in the child.
+        [void]$psArgs.Add("-NoWaitEnter")
     }
 
     Write-Host "[gateway] Checking default gateway vs phone LAN page subnet..."
@@ -744,7 +773,7 @@ function Invoke-GatewayWifiRebootIfNeeded {
     $code = $LASTEXITCODE
     if ($null -eq $code) { $code = 0 }
     if ($code -ne 0) {
-        throw "[gateway] Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 failed (exit $code). Fix gateway/Wi-Fi or use -SkipGatewayReboot."
+        throw "[gateway] Wrong-subnet recovery failed after reboot rounds (exit $code). Fix Wi-Fi to the app LAN page subnet, then re-run (or use -SkipGatewayReboot)."
     }
 }
 
@@ -800,7 +829,7 @@ Chromium was not started.
     if ($code -eq 2) {
         if ($lanUp) {
             Write-Warning @"
-[usb] No iPhone on USB (exit 2) — continuing because phone LAN is reachable.
+[usb] No iPhone on USB (exit 2) - continuing because phone LAN is reachable.
 Plug in USB later for Home-on-quit / foreground. Chromium will start anyway.
 "@
             return
@@ -815,7 +844,7 @@ Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launc
     if ($code -ne 0) {
         if ($lanUp) {
             Write-Warning @"
-[usb] Launch-LoopSegmentsViaUsb.ps1 failed (exit $code) — continuing because phone LAN is reachable.
+[usb] Launch-LoopSegmentsViaUsb.ps1 failed (exit $code) - continuing because phone LAN is reachable.
 Fix USB / Developer Mode / cert trust when you need foreground or Home-on-quit.
 "@
             return
@@ -861,7 +890,7 @@ function Invoke-OffSubnetRouterRebootsForLanRecovery {
     }
     $rebootPs1 = Join-Path $WindowsDir "lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1"
     if (-not (Test-Path -LiteralPath $rebootPs1)) {
-        Write-Warning "[gateway] Missing $rebootPs1 — cannot reboot off-subnet routers for LAN recovery"
+        Write-Warning "[gateway] Missing $rebootPs1 - cannot reboot off-subnet routers for LAN recovery"
         return $false
     }
 
@@ -873,7 +902,7 @@ function Invoke-OffSubnetRouterRebootsForLanRecovery {
     [void]$psArgs.Add($rebootPs1)
     [void]$psArgs.Add("-RebootOffSubnetRouters")
 
-    Write-Host "[gateway] Phone LAN page not reachable — rebooting off-subnet routers so the phone can re-connect to the desired wireless LAN gateway..."
+    Write-Host "[gateway] Phone LAN page not reachable - rebooting off-subnet routers so the phone can re-connect to the desired wireless LAN gateway..."
     Write-Host "[gateway] > powershell $($psArgs -join ' ')"
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -893,7 +922,7 @@ function Invoke-OffSubnetRouterRebootsForLanRecovery {
 
 function Invoke-AttemptRcloneMount {
     # Soft attempt: open Mount-LoopSegmentsRclone.ps1 in a separate console so Chromium is not blocked.
-    # Failures only warn — companion continues (same spirit as USB missing when LAN is up).
+    # Failures only warn - companion continues (same spirit as USB missing when LAN is up).
     # Returns $true when the mount drive root looks ready.
     if ($SkipRcloneMount) {
         Write-Host "[rclone] Skipping phone mount (-SkipRcloneMount)"
@@ -903,22 +932,22 @@ function Invoke-AttemptRcloneMount {
 
     $mountPs1 = Join-Path $WindowsDir "rclone\Mount-LoopSegmentsRclone.ps1"
     if (-not (Test-Path -LiteralPath $mountPs1)) {
-        Write-Warning "[rclone] Missing $mountPs1 — skip mount attempt"
+        Write-Warning "[rclone] Missing $mountPs1 - skip mount attempt"
         return $false
     }
 
     # USB launch may have just foregrounded the app; LAN server often needs a few seconds.
     if (-not (Wait-PhoneLanPageReachable -TimeoutSec 45 -Label 'rclone')) {
-        Write-Warning "[rclone] Phone LAN not reachable after wait — attempting off-subnet router Wi-Fi reboots to pull the phone onto the desired gateway..."
+        Write-Warning "[rclone] Phone LAN not reachable after wait - attempting off-subnet router Wi-Fi reboots to pull the phone onto the desired gateway..."
         if (Invoke-OffSubnetRouterRebootsForLanRecovery) {
             if (Wait-PhoneLanPageReachable -TimeoutSec 90 -Label 'rclone-after-gateway') {
                 Write-Host "[rclone] Phone LAN is up after off-subnet router reboot pass"
             } else {
-                Write-Warning "[rclone] Phone LAN still not reachable after off-subnet router reboots — skip mount attempt (open Loop Segments / Keep Alive, check phoneLanHost / Wi-Fi)"
+                Write-Warning "[rclone] Phone LAN still not reachable after off-subnet router reboots - skip mount attempt (open Loop Segments / Keep Alive, check phoneLanHost / Wi-Fi)"
                 return $false
             }
         } else {
-            Write-Warning "[rclone] Phone LAN not reachable — skip mount attempt (open Loop Segments / Keep Alive, check phoneLanHost)"
+            Write-Warning "[rclone] Phone LAN not reachable - skip mount attempt (open Loop Segments / Keep Alive, check phoneLanHost)"
             return $false
         }
     }
@@ -927,12 +956,12 @@ function Invoke-AttemptRcloneMount {
     $driveRoot = "${letter}:\"
 
     if (Test-RcloneMountProcessForDrive -DriveLetter $letter) {
-        Write-Host "[rclone] ${letter}: already mounted (rclone) — ok"
+        Write-Host "[rclone] ${letter}: already mounted (rclone) - ok"
         return (Test-Path -LiteralPath $driveRoot)
     }
 
     if (Test-Path -LiteralPath $driveRoot) {
-        Write-Warning "[rclone] ${driveRoot} already in use — skip mount (change mountDriveLetter in loop-segments-windows.json if needed)"
+        Write-Warning "[rclone] ${driveRoot} already in use - skip mount (change mountDriveLetter in loop-segments-windows.json if needed)"
         return $true
     }
 
@@ -995,14 +1024,14 @@ function Invoke-MeasureLanThroughputIfMounted {
 
     $measurePs1 = Join-Path $WindowsDir "lan\Measure-LoopSegmentsLanThroughput.ps1"
     if (-not (Test-Path -LiteralPath $measurePs1)) {
-        Write-Warning "[lan-bw] Missing $measurePs1 — skip throughput probe"
+        Write-Warning "[lan-bw] Missing $measurePs1 - skip throughput probe"
         return
     }
 
     $letter = Get-CompanionMountDriveLetter
     $driveRoot = "${letter}:\"
     if (-not (Test-Path -LiteralPath $driveRoot)) {
-        Write-Warning "[lan-bw] Mount $driveRoot not ready — skip throughput probe (mount phone first, or omit -SkipRcloneMount)"
+        Write-Warning "[lan-bw] Mount $driveRoot not ready - skip throughput probe (mount phone first, or omit -SkipRcloneMount)"
         return
     }
 
@@ -1040,7 +1069,7 @@ Chromium was not started.
 "@
     }
     if ($code -ne 0) {
-        Write-Warning "[lan-bw] Measure-LoopSegmentsLanThroughput.ps1 failed (exit $code) — continuing with Chromium."
+        Write-Warning "[lan-bw] Measure-LoopSegmentsLanThroughput.ps1 failed (exit $code) - continuing with Chromium."
     }
 }
 

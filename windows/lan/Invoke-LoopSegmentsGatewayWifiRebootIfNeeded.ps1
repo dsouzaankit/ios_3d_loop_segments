@@ -1,19 +1,21 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Reboot router Wi‑Fi when the PC/phone are on the wrong gateway, or recover LAN reachability.
+  Reboot router Wi-Fi when the PC/phone are on the wrong gateway, or recover LAN reachability.
 
 .DESCRIPTION
   Reads phoneLanHost from loop-segments-windows.json (LAN page / app export host).
 
   Default: if the PC IPv4 default gateway is not on the same subnet as phoneLanHost,
-  runs the matching Telnet Wi‑Fi restart under P:\all_scripts\5g_router_reboot.
+  informs you, reboots Wi-Fi on that current gateway, polls until the PC gets a new
+  LAN IP / gateway, then re-checks - looping up to MaxWrongSubnetRounds times (default 3)
+  until the gateway shares the LAN page subnet (no Enter / manual re-run between rounds).
 
   -ForceReboot: reboot the current default gateway even when subnets already match
-  (e.g. after a low LAN-throughput probe).
+  (e.g. after a low LAN-throughput probe). Same-subnet ForceReboot is a single pass.
 
   -RebootOffSubnetRouters: when the phone LAN page is unreachable, sequentially reboot
-  every known router whose ROUTER_IP is outside the phoneLanHost subnet — so the phone
+  every known router whose ROUTER_IP is outside the phoneLanHost subnet - so the phone
   can re-associate to the desired wireless LAN gateway on that subnet.
 
 .EXAMPLE
@@ -37,7 +39,18 @@ param(
     [string] $PhoneLanHost = '',
     [string] $RebootScriptsRoot = 'P:\all_scripts\5g_router_reboot',
     [int] $PrefixLength = 0,
-    [int] $SettleSecBetweenRouters = 8
+    [int] $SettleSecBetweenRouters = 8,
+    # After a wrong-subnet reboot, poll this often for a new PC LAN IP / gateway.
+    [ValidateRange(2, 60)]
+    [int] $PollSecAfterReboot = 4,
+    # Per-round wait for LAN identity change before re-checking / next reboot (0 = wait forever).
+    [ValidateRange(0, 3600)]
+    [int] $WaitLanIpChangeSec = 300,
+    # Wrong-subnet reboot rounds before giving up (default 3).
+    [ValidateRange(1, 100)]
+    [int] $MaxWrongSubnetRounds = 3,
+    # Skip local Enter on fatal errors (companion parent prompts once instead).
+    [switch] $NoWaitEnter
 )
 
 Set-StrictMode -Version Latest
@@ -91,6 +104,7 @@ function Test-SameIpv4Subnet {
 function Get-LoopSegmentsDefaultGatewayInfo {
     $info = [pscustomobject]@{
         Gateway      = $null
+        LocalIp      = $null
         PrefixLength = 24
     }
 
@@ -107,9 +121,19 @@ function Get-LoopSegmentsDefaultGatewayInfo {
                 continue
             }
             $info.Gateway = $nextHop.Trim()
-            $v4 = @($cfg.IPv4Address) | Select-Object -First 1
-            if ($null -ne $v4 -and $null -ne $v4.PrefixLength -and [int]$v4.PrefixLength -gt 0) {
-                $info.PrefixLength = [int]$v4.PrefixLength
+            $v4 = @($cfg.IPv4Address) |
+                Where-Object { $_.IPAddress -and $_.IPAddress -notlike '169.254.*' } |
+                Select-Object -First 1
+            if ($null -eq $v4) {
+                $v4 = @($cfg.IPv4Address) | Select-Object -First 1
+            }
+            if ($null -ne $v4) {
+                if ($v4.IPAddress) {
+                    $info.LocalIp = ([string]$v4.IPAddress).Trim()
+                }
+                if ($null -ne $v4.PrefixLength -and [int]$v4.PrefixLength -gt 0) {
+                    $info.PrefixLength = [int]$v4.PrefixLength
+                }
             }
             return $info
         }
@@ -128,14 +152,75 @@ function Get-LoopSegmentsDefaultGatewayInfo {
                 $addr = Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction Stop |
                     Where-Object { $_.IPAddress -and $_.IPAddress -notlike '169.254.*' } |
                     Select-Object -First 1
-                if ($addr -and $addr.PrefixLength -gt 0) {
-                    $info.PrefixLength = [int]$addr.PrefixLength
+                if ($addr) {
+                    $info.LocalIp = ([string]$addr.IPAddress).Trim()
+                    if ($addr.PrefixLength -gt 0) {
+                        $info.PrefixLength = [int]$addr.PrefixLength
+                    }
                 }
             } catch {}
         }
     } catch {}
 
     return $info
+}
+
+function Wait-PcLanIdentityChange {
+    param(
+        [string] $PreviousLocalIp = '',
+        [string] $PreviousGateway = '',
+        [int] $TimeoutSec = 300,
+        [int] $PollSec = 4
+    )
+    $poll = [Math]::Max(2, $PollSec)
+    $unlimited = ($TimeoutSec -le 0)
+    $deadline = if ($unlimited) { [datetime]::MaxValue } else { [datetime]::UtcNow.AddSeconds($TimeoutSec) }
+    $prevIp = if ($null -eq $PreviousLocalIp) { '' } else { $PreviousLocalIp.Trim() }
+    $prevGw = if ($null -eq $PreviousGateway) { '' } else { $PreviousGateway.Trim() }
+
+    if ($unlimited) {
+        Write-Host ('[gateway] Waiting for PC LAN IP/gateway to change (was IP={0} gw={1}; poll {2}s; no timeout)...' -f `
+            $(if ($prevIp) { $prevIp } else { '(none)' }),
+            $(if ($prevGw) { $prevGw } else { '(none)' }),
+            $poll)
+    } else {
+        Write-Host ('[gateway] Waiting up to {0}s for PC LAN IP/gateway to change (was IP={1} gw={2}; poll {3}s)...' -f `
+            $TimeoutSec,
+            $(if ($prevIp) { $prevIp } else { '(none)' }),
+            $(if ($prevGw) { $prevGw } else { '(none)' }),
+            $poll)
+    }
+
+    $lastLog = [datetime]::MinValue
+    while ([datetime]::UtcNow -lt $deadline) {
+        Start-Sleep -Seconds $poll
+        $cur = Get-LoopSegmentsDefaultGatewayInfo
+        $curIp = if ($null -eq $cur.LocalIp) { '' } else { [string]$cur.LocalIp.Trim() }
+        $curGw = if ($null -eq $cur.Gateway) { '' } else { [string]$cur.Gateway.Trim() }
+
+        $ipChanged = (-not [string]::IsNullOrWhiteSpace($curIp)) -and ($curIp -ne $prevIp)
+        $gwChanged = (-not [string]::IsNullOrWhiteSpace($curGw)) -and ($curGw -ne $prevGw)
+        if ($ipChanged -or $gwChanged) {
+            Write-Host ('[gateway] LAN identity changed: IP {0} -> {1} | gateway {2} -> {3}' -f `
+                $(if ($prevIp) { $prevIp } else { '(none)' }),
+                $(if ($curIp) { $curIp } else { '(none)' }),
+                $(if ($prevGw) { $prevGw } else { '(none)' }),
+                $(if ($curGw) { $curGw } else { '(none)' })) -ForegroundColor Green
+            return $cur
+        }
+
+        if (([datetime]::UtcNow - $lastLog).TotalSeconds -ge 15) {
+            $lastLog = [datetime]::UtcNow
+            $left = if ($unlimited) { '∞' } else { [int]($deadline - [datetime]::UtcNow).TotalSeconds }
+            Write-Host ('[gateway] Still waiting for new LAN IP/gateway... (now IP={0} gw={1}; {2}s left)' -f `
+                $(if ($curIp) { $curIp } else { '(none)' }),
+                $(if ($curGw) { $curGw } else { '(none)' }),
+                $left)
+        }
+    }
+
+    Write-Warning '[gateway] Timed out waiting for LAN IP/gateway change - re-checking current identity.'
+    return (Get-LoopSegmentsDefaultGatewayInfo)
 }
 
 function Resolve-PhoneLanHost {
@@ -224,6 +309,21 @@ function Get-KnownRouterRebootTargets {
     return @($list.ToArray())
 }
 
+function Wait-EnterOnError {
+    param([int] $ExitCode = 1)
+    if ($NoWaitEnter) {
+        exit $ExitCode
+    }
+    Write-Host ""
+    Write-Host 'Press Enter to close...' -ForegroundColor Yellow
+    try {
+        [void][Console]::ReadLine()
+    } catch {
+        Read-Host | Out-Null
+    }
+    exit $ExitCode
+}
+
 function Invoke-RouterWifiRebootScript {
     param(
         [Parameter(Mandatory = $true)][string] $ScriptPath,
@@ -245,6 +345,7 @@ function Invoke-RouterWifiRebootScript {
     }
 }
 
+try {
 if ($SkipGatewayReboot) {
     Write-Host '[gateway] Skipping gateway Wi-Fi reboot check (-SkipGatewayReboot)'
     exit 0
@@ -314,46 +415,114 @@ if ($RebootOffSubnetRouters) {
 }
 
 # --- Default / ForceReboot: act on the PC's current default gateway ---
+$gwInfo = Get-LoopSegmentsDefaultGatewayInfo
+$gatewayIp = [string]$gwInfo.Gateway
+$localIp = [string]$gwInfo.LocalIp
+$prefix = if ($PrefixLength -gt 0) { $PrefixLength } else { [int]$gwInfo.PrefixLength }
+if ($prefix -le 0) { $prefix = 24 }
+
 if ([string]::IsNullOrWhiteSpace($gatewayIp)) {
     Write-Warning ("[gateway] No IPv4 default gateway found - skip Wi-Fi reboot check (phone LAN page: {0})." -f $phoneHost)
     exit 0
 }
 
 # Avoid "$gateway[...]" parse ambiguity: never put $gatewayIp immediately before "[" in double quotes.
-Write-Host ('[gateway] PC default gateway: {0} (/{1}) | phone LAN page: {2}' -f $gatewayIp, $prefix, $phoneHost)
+Write-Host ('[gateway] PC LAN IP: {0} | default gateway: {1} (/{2}) | phone LAN page: {3}' -f `
+    $(if ($localIp) { $localIp } else { '(unknown)' }), $gatewayIp, $prefix, $phoneHost)
 
 $sameSubnet = Test-SameIpv4Subnet -IpA $gatewayIp -IpB $phoneHost -PrefixLen $prefix
 if ($sameSubnet -and -not $ForceReboot) {
     Write-Host '[gateway] Gateway is on the same subnet as the app LAN page - no reboot.'
     exit 0
 }
-if (-not $sameSubnet -and $ForceReboot) {
-    Write-Warning ('[gateway] -ForceReboot requested but gateway {0} is NOT on the same subnet as LAN page {1} - still rebooting current gateway.' -f $gatewayIp, $phoneHost)
-}
 
-$rebootScript = Find-GatewayWifiRebootScript -GatewayIp $gatewayIp -ScriptsRoot $RebootScriptsRoot
-if (-not $rebootScript) {
-    throw (@"
+# Same-subnet ForceReboot (low-throughput recovery): single pass, then exit.
+if ($ForceReboot -and $sameSubnet) {
+    $rebootScript = Find-GatewayWifiRebootScript -GatewayIp $gatewayIp -ScriptsRoot $RebootScriptsRoot
+    if (-not $rebootScript) {
+        throw (@"
 [gateway] No matching reboot script for current gateway {0} under {1}
 (expected wifi_dx_common_*.py with ROUTER_IP = "{0}" -> telnet_reboot_wlan_*.py).
 Phone LAN page: {2}
 "@ -f $gatewayIp, $RebootScriptsRoot, $phoneHost)
-}
-
-Write-Host ""
-if ($ForceReboot -and $sameSubnet) {
+    }
+    Write-Host ""
     Write-Host ('[gateway] Forcing Wi-Fi reboot on current gateway {0} (same subnet as LAN page {1}).' -f $gatewayIp, $phoneHost) -ForegroundColor Yellow
-} else {
-    Write-Host ('[gateway] Current gateway {0} is not on the same subnet as the app LAN page ({1}).' -f $gatewayIp, $phoneHost) -ForegroundColor Yellow
-    Write-Host '[gateway] Rebooting Wi-Fi on the CURRENT gateway so all devices are forced to re-connect' -ForegroundColor Yellow
-    Write-Host '[gateway] to the gateway that shares the app LAN page subnet.' -ForegroundColor Yellow
-}
-Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
-Invoke-RouterWifiRebootScript -ScriptPath $rebootScript -Runtime $runtime
-
-if ($ForceReboot -and $sameSubnet) {
+    Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
+    Invoke-RouterWifiRebootScript -ScriptPath $rebootScript -Runtime $runtime
     Write-Host '[gateway] Reboot script finished (low-throughput / forced). Wait for Wi-Fi to settle, then retry.' -ForegroundColor Green
-} else {
-    Write-Host '[gateway] Reboot script finished. Devices should re-associate to the LAN-page subnet gateway; companion will wait for phone LAN next.' -ForegroundColor Green
+    exit 0
 }
-exit 0
+
+# Wrong subnet (with or without -ForceReboot): reboot → wait for new LAN IP → re-check → loop.
+Write-Host ""
+Write-Host ('[gateway] Current gateway {0} is NOT on the same subnet as the app LAN page ({1}).' -f $gatewayIp, $phoneHost) -ForegroundColor Yellow
+Write-Host '[gateway] Will reboot Wi-Fi on the CURRENT gateway, wait for this PC to get a new LAN IP,' -ForegroundColor Yellow
+Write-Host ('[gateway] then re-check - up to {0} rounds until the gateway shares the LAN page subnet.' -f $MaxWrongSubnetRounds) -ForegroundColor Yellow
+Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
+
+$round = 0
+while ($true) {
+    $gwInfo = Get-LoopSegmentsDefaultGatewayInfo
+    $gatewayIp = [string]$gwInfo.Gateway
+    $localIp = [string]$gwInfo.LocalIp
+    $prefix = if ($PrefixLength -gt 0) { $PrefixLength } else { [int]$gwInfo.PrefixLength }
+    if ($prefix -le 0) { $prefix = 24 }
+
+    if ([string]::IsNullOrWhiteSpace($gatewayIp)) {
+        Write-Warning '[gateway] No default gateway right now - waiting for LAN to return...'
+        $gwInfo = Wait-PcLanIdentityChange `
+            -PreviousLocalIp $localIp `
+            -PreviousGateway '' `
+            -TimeoutSec $WaitLanIpChangeSec `
+            -PollSec $PollSecAfterReboot
+        continue
+    }
+
+    $sameSubnet = Test-SameIpv4Subnet -IpA $gatewayIp -IpB $phoneHost -PrefixLen $prefix
+    if ($sameSubnet) {
+        Write-Host ('[gateway] OK - gateway {0} now shares the app LAN page subnet ({1}). Continuing.' -f $gatewayIp, $phoneHost) -ForegroundColor Green
+        exit 0
+    }
+
+    $round++
+    if ($round -gt $MaxWrongSubnetRounds) {
+        Write-Host ""
+        Write-Host ('[gateway] Gave up after {0} wrong-subnet reboot rounds (gateway still {1}, LAN page {2}).' -f `
+            $MaxWrongSubnetRounds, $gatewayIp, $phoneHost) -ForegroundColor Red
+        Write-Host '[gateway] Fix Wi-Fi / connect to the LAN-page subnet gateway, then re-run the companion.' -ForegroundColor Yellow
+        Wait-EnterOnError -ExitCode 1
+    }
+
+    $rebootScript = Find-GatewayWifiRebootScript -GatewayIp $gatewayIp -ScriptsRoot $RebootScriptsRoot
+    if (-not $rebootScript) {
+        throw (@"
+[gateway] No matching reboot script for current gateway {0} under {1}
+(expected wifi_dx_common_*.py with ROUTER_IP = "{0}" -> telnet_reboot_wlan_*.py).
+Phone LAN page: {2}
+"@ -f $gatewayIp, $RebootScriptsRoot, $phoneHost)
+    }
+
+    Write-Host ""
+    Write-Host ('[gateway] Round {0}: PC IP={1} gateway={2} still off LAN-page subnet {3} - rebooting current gateway Wi-Fi...' -f `
+        $round,
+        $(if ($localIp) { $localIp } else { '(unknown)' }),
+        $gatewayIp,
+        $phoneHost) -ForegroundColor Cyan
+    Invoke-RouterWifiRebootScript -ScriptPath $rebootScript -Runtime $runtime
+    Write-Host '[gateway] Reboot command finished. Waiting for this PC to reassociate and get another LAN IP...' -ForegroundColor Green
+
+    [void](Wait-PcLanIdentityChange `
+        -PreviousLocalIp $localIp `
+        -PreviousGateway $gatewayIp `
+        -TimeoutSec $WaitLanIpChangeSec `
+        -PollSec $PollSecAfterReboot)
+}
+} catch {
+    Write-Host ""
+    Write-Host ('[gateway] {0}' -f $_.Exception.Message) -ForegroundColor Red
+    if ($_.ScriptStackTrace) {
+        Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+    }
+    Wait-EnterOnError -ExitCode 1
+}
