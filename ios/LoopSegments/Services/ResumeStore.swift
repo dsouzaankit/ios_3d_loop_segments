@@ -53,16 +53,55 @@ struct ResumeStatus {
     let sourceDurationMs: Int64?
 
     var effectiveMs: Int64 {
-        let checkpoint = checkpointMs ?? 0
-        var ms = max(savedSeekMs, checkpoint)
-        if let cap = sourceDurationMs, cap > 500 {
-            ms = min(ms, max(0, cap - 250))
-        }
-        return ms
+        ResumeSeek.effectiveMs(
+            lastSeekMs: savedSeekMs,
+            checkpointMediaMs: checkpointMs,
+            sourceDurationMs: sourceDurationMs
+        )
     }
 
     var hasResumePoint: Bool {
         isPaused || effectiveMs > 0
+    }
+}
+
+/// Shared clamp for resume/checkpoint seeks (LAN button + Paused tab + save path).
+enum ResumeSeek {
+    /// Longer than this is almost always corrupt (e.g. file bytes written as media ms).
+    static let maxPlausibleMs: Int64 = 3 * 60 * 60 * 1000
+
+    static func effectiveMs(
+        lastSeekMs: Int64,
+        checkpointMediaMs: Int64?,
+        sourceDurationMs: Int64?
+    ) -> Int64 {
+        clampMs(max(0, max(lastSeekMs, checkpointMediaMs ?? 0)), sourceDurationMs: sourceDurationMs)
+    }
+
+    static func clampMs(_ rawMs: Int64, sourceDurationMs: Int64?) -> Int64 {
+        var ms = max(0, rawMs)
+        let trustedDuration: Int64? = {
+            guard let cap = sourceDurationMs, cap > 500, cap <= maxPlausibleMs else { return nil }
+            return cap
+        }()
+        if let cap = trustedDuration {
+            ms = min(ms, max(0, cap - 250))
+        } else if ms > maxPlausibleMs {
+            // No trusted duration — drop absurd seeks (often file bytes stored as media ms).
+            ms = 0
+        }
+        return ms
+    }
+}
+
+extension ResumeEntry {
+    /// Seek used for Paused UI + LAN Resume (duration-capped, sanity-clamped).
+    var effectiveResumeSeekMs: Int64 {
+        ResumeSeek.effectiveMs(
+            lastSeekMs: lastSeekMs,
+            checkpointMediaMs: checkpointMediaMs,
+            sourceDurationMs: sourceDurationMs
+        )
     }
 }
 
@@ -102,7 +141,7 @@ final class ResumeStore: ObservableObject {
 
     func saveSeekMs(_ ms: Int64, for item: WebDAVItem) {
         upsert(item: item) { entry in
-            entry.lastSeekMs = max(0, ms)
+            entry.lastSeekMs = ResumeSeek.clampMs(ms, sourceDurationMs: entry.sourceDurationMs)
             entry.updatedAt = Date()
         }
     }
@@ -112,10 +151,11 @@ final class ResumeStore: ObservableObject {
         clearPinnedCompletedExports()
         upsert(item: item) { entry in
             entry.exportInProgress = true
-            entry.lastSeekMs = max(0, seekMs)
-            entry.checkpointMediaMs = max(0, seekMs)
+            let cappedSeek = ResumeSeek.clampMs(seekMs, sourceDurationMs: sourceDurationMs ?? entry.sourceDurationMs)
+            entry.lastSeekMs = cappedSeek
+            entry.checkpointMediaMs = cappedSeek
             if let sourceDurationMs, sourceDurationMs > 0 {
-                entry.sourceDurationMs = sourceDurationMs
+                entry.sourceDurationMs = min(sourceDurationMs, ResumeSeek.maxPlausibleMs)
             }
             entry.updatedAt = Date()
         }
@@ -215,19 +255,16 @@ final class ResumeStore: ObservableObject {
 
     func setSourceDurationMs(_ ms: Int64, for item: WebDAVItem) {
         guard ms > 0 else { return }
+        let capped = min(ms, ResumeSeek.maxPlausibleMs)
         upsert(item: item) { entry in
-            entry.sourceDurationMs = ms
+            entry.sourceDurationMs = capped
         }
     }
 
     func saveCheckpoint(mediaMs: Int64, for item: WebDAVItem) {
         upsert(item: item) { entry in
             entry.exportInProgress = true
-            var ms = max(0, mediaMs)
-            if let cap = entry.sourceDurationMs, cap > 500 {
-                ms = min(ms, max(0, cap - 250))
-            }
-            entry.checkpointMediaMs = ms
+            entry.checkpointMediaMs = ResumeSeek.clampMs(mediaMs, sourceDurationMs: entry.sourceDurationMs)
             entry.updatedAt = Date()
         }
     }
@@ -673,18 +710,19 @@ extension ResumeStore {
 
         let savedMs = entry.lastSeekMs
         let checkpointMs = entry.checkpointMediaMs ?? 0
-        var effectiveMs = max(savedMs, checkpointMs)
-        if let cap = entry.sourceDurationMs, cap > 500 {
-            effectiveMs = min(effectiveMs, max(0, cap - 250))
-        }
+        let effectiveMs = ResumeSeek.effectiveMs(
+            lastSeekMs: savedMs,
+            checkpointMediaMs: checkpointMs,
+            sourceDurationMs: entry.sourceDurationMs
+        )
         let durationSeconds: Double
         if let cap = entry.sourceDurationMs, cap > 0 {
-            durationSeconds = Double(cap) / 1000.0
+            durationSeconds = Double(min(cap, ResumeSeek.maxPlausibleMs)) / 1000.0
         } else {
             durationSeconds = 0
         }
         let playbackStartSeconds = Double(effectiveMs) / 1000.0
-        let exportCursorSeconds = Double(max(effectiveMs, checkpointMs)) / 1000.0
+        let exportCursorSeconds = Double(effectiveMs) / 1000.0
         return LANPlaybackHints(
             fileKey: entry.fileKey,
             href: entry.href,

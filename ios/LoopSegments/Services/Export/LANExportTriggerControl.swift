@@ -377,10 +377,7 @@ enum LANExportTriggerControl {
             if let paused = ResumeStore.mostRecentPausedExport(),
                paused.fileKey == item.fileKey,
                let pausedItem = webDAVItem(from: paused) {
-                var seekMs = max(paused.lastSeekMs, paused.checkpointMediaMs ?? 0)
-                if let cap = paused.sourceDurationMs, cap > 500 {
-                    seekMs = min(seekMs, max(0, cap - 250))
-                }
+                let seekMs = paused.effectiveResumeSeekMs
                 writeAck(
                     command: trigger.command.rawValue,
                     status: "accepted",
@@ -391,7 +388,7 @@ enum LANExportTriggerControl {
                 return "LAN trigger — resume paused \(pausedItem.name)"
             }
             await prepareForFreshStart()
-            let seek = max(0, trigger.seekMs ?? 0)
+            let seek = ResumeSeek.clampMs(max(0, trigger.seekMs ?? 0), sourceDurationMs: nil)
             let via = resolveNote.isEmpty ? "" : " via \(resolveNote)"
             writeAck(
                 command: trigger.command.rawValue,
@@ -488,10 +485,7 @@ enum LANExportTriggerControl {
                 )
                 return "Paused export missing href"
             }
-            var seekMs = max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
-            if let cap = entry.sourceDurationMs, cap > 500 {
-                seekMs = min(seekMs, max(0, cap - 250))
-            }
+            var seekMs = entry.effectiveResumeSeekMs
             writeAck(
                 command: trigger.command.rawValue,
                 status: "accepted",

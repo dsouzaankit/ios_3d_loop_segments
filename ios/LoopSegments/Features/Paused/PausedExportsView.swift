@@ -99,7 +99,7 @@ struct PausedExportsView: View {
 
     @ViewBuilder
     private func pausedRow(entry: ResumeEntry) -> some View {
-        let ms = max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
+        let ms = entry.effectiveResumeSeekMs
         let title = entry.resolvedDisplayName.isEmpty ? "Untitled export" : entry.resolvedDisplayName
         VStack(alignment: .leading, spacing: 2) {
             Text(title)

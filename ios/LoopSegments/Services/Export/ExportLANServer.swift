@@ -2185,7 +2185,7 @@ enum ExportLANServer {
             displayName: entry.resolvedDisplayName,
             href: entry.href,
             folderPath: entry.folderPath,
-            seekMs: max(entry.lastSeekMs, entry.checkpointMediaMs ?? 0)
+            seekMs: entry.effectiveResumeSeekMs
         )
     }
 
@@ -2198,7 +2198,7 @@ enum ExportLANServer {
         let name = htmlEscape(displayName)
         let hrefEsc = htmlEscape(href ?? "")
         let folder = htmlEscape(folderPath ?? "")
-        let seek = max(0, seekMs)
+        let seek = ResumeSeek.clampMs(seekMs, sourceDurationMs: nil)
         let label = seek > 0
             ? "Resume export (\(formatLANClock(Int(seek / 1000))))"
             : "Resume export"
