@@ -20,6 +20,8 @@ param(
     [switch]$KeepLocalProfile,
     # Do not press iPhone Home on companion finish (default: background Loop Segments via USB HID).
     [switch]$SkipGoHome,
+    # Do not force Chromium UI + page dark mode (default: --force-dark-mode + WebContentsForceDark).
+    [switch]$NoDarkMode,
     [string]$StartUrl = "https://my.pcloud.com"
 )
 
@@ -1548,6 +1550,11 @@ $chromeArgList = [System.Collections.Generic.List[string]]::new()
 [void]$chromeArgList.Add("--disable-extensions-except=`"$ChromeExtension`"")
 [void]$chromeArgList.Add("--load-extension=`"$ChromeExtension`"")
 [void]$chromeArgList.Add("--disable-features=DisableLoadExtensionCommandLineSwitch,BlockInsecurePrivateNetworkRequests")
+if (-not $NoDarkMode) {
+    [void]$chromeArgList.Add("--force-dark-mode")
+    [void]$chromeArgList.Add("--enable-features=WebContentsForceDark")
+    Write-Host "[run] Dark mode: Chromium UI + forced dark web contents (omit with -NoDarkMode)"
+}
 [void]$chromeArgList.Add("--disable-restore-session-state")
 [void]$chromeArgList.Add("--no-first-run")
 [void]$chromeArgList.Add("--no-default-browser-check")

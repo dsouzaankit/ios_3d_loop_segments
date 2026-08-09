@@ -52,6 +52,7 @@ cd <repo>\windows
 | `-DetachChromium` | Do not wait for browser exit (upload + local clear on next run) |
 | `-KeepLocalProfile` | Do not wipe local AppData profile after upload |
 | `-SkipGoHome` | Do not press iPhone Home on companion finish |
+| `-NoDarkMode` | Do not force Chromium UI / page dark mode (default enables both) |
 | `-StartUrl "..."` | Override start page (default `https://my.pcloud.com`) |
 
 Each launch:
@@ -66,7 +67,7 @@ Each launch:
 - **LAN throughput probe:** when `L:` is up, runs `..\lan\Measure-LoopSegmentsLanThroughput.ps1` (largest media under `pcld_ios_media\`, default **64 MB** cap), prints Mbps, recommends a **max media bitrate** for minute segments (80% of LAN), and writes sidecars for `run_batch_vr_hybrid.ps1`. If throughput is below **`minLanThroughputMbps`** in `loop-segments-windows.json` (default **45**) and the default gateway already shares the phone LAN page subnet, **warns**, **reboots Wi‑Fi on the current gateway**, asks you to **retry after Wi‑Fi settles**, waits ~10s, then **exits on Enter** (Chromium not started). Use `-SkipLanThroughput` or `-SkipLowThroughputGatewayReboot` to skip.
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
-- Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded; waits for exit unless `-DetachChromium`
+- Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded in **dark mode** (`--force-dark-mode` + `WebContentsForceDark`; `-NoDarkMode` to disable); waits for exit unless `-DetachChromium`
 - **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, uploads full profile to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X), then presses **iPhone Home** over USB to background Loop Segments (use `-SkipGoHome` to leave it foreground)
 
 ## Playwright

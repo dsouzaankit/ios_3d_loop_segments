@@ -39,6 +39,9 @@
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -SkipLowThroughputGatewayReboot
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -NoDarkMode
 #>
 [CmdletBinding()]
 param(
@@ -55,6 +58,7 @@ param(
     [switch] $DetachChromium,
     [switch] $KeepLocalProfile,
     [switch] $SkipGoHome,
+    [switch] $NoDarkMode,
     [string] $StartUrl = "https://my.pcloud.com"
 )
 
@@ -93,6 +97,7 @@ try {
         DetachChromium                  = $DetachChromium
         KeepLocalProfile                = $KeepLocalProfile
         SkipGoHome                      = $SkipGoHome
+        NoDarkMode                      = $NoDarkMode
         StartUrl                        = $StartUrl
     }
 
