@@ -1,10 +1,12 @@
-# Loop Segments — Windows (portable)
+﻿# Loop Segments — Windows (portable)
 
 Scripts work on **any Windows PC** after you copy or clone this repo. Machine-specific paths live in **`loop-segments-windows.json`** (gitignored) in this folder. Shared helpers live in **`lib\`**; entry-point scripts are grouped by role under subfolders.
 
 **IPA → iCloud:** from the **repo root** (parent of this folder), run **`..\deploy.ps1`** (build/fetch, then calls **`copy-to-icloud.ps1`**) or **`..\copy-to-icloud.ps1`** alone (stamped `LoopSegments-b{build}-{time}.ipa`, like web_auto_parking). See [../ios/BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md).
 
-**PowerShell:** scripts target **Windows PowerShell 5.1** (`#Requires -Version 5.1`, built into Windows — no PowerShell 7 / `pwsh` install needed). Child helpers (REST log sink, exit watchdog, USB launch) also call **`powershell.exe`** (5.1), not `pwsh`. That is why a blue console can appear for USB launch; background helpers use a no-window start so they should not flash.
+**PowerShell:** scripts target **PowerShell 7** (`pwsh`). Opening a `.ps1` under Windows PowerShell 5.1 re-launches into 7 when the shared helper is present. Install: https://aka.ms/powershell
+
+Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mount-LoopSegmentsRclone.ps1` (or existing `Mount-PhoneL.cmd`).
 
 ## Layout
 
@@ -33,8 +35,8 @@ cd <repo>\windows
 
 # 3) Day-to-day: pCloud companion (gateway check → LAN status; USB-foregrounds app unless -SkipUsbLaunch)
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
-#    Quit: close Chromium, Ctrl+C, or console X — kills Chromium, syncs profile,
-#    then USB Home (app Keep Alive default on — see ../ios/README.md; -SkipGoHome to skip)
+#    Quit: close Chromium, Ctrl+C, or console X - kills Chromium, syncs profile,
+#    then USB Home (app Keep Alive default on - see ../ios/README.md; -SkipGoHome to skip)
 
 # Optional helpers
 .\setup\Set-LoopSegmentsWindows.ps1 -Show          # show/edit per-PC json
@@ -168,7 +170,7 @@ Links in the unified view point back to each phone’s `:8765` URL — playback 
 
 ### LAN throughput (after rclone mount)
 
-With **`L:`** up, measure PC ↔ phone Wi‑Fi path using the largest media file under `pcld_ios_media\`:
+With **`L:`** up, measure PC ↔ phone Wi‑Fi both ways (phone HTTP + rclone mount copy) using a random media file under `pcld_ios_media\archive\` (≥ `-MinBytes`, default **8 MB**):
 
 ```powershell
 .\rclone\Mount-PhoneL.cmd          # leave open
@@ -231,7 +233,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `lan\Get-LoopSegmentsUnifiedLANListing.ps1` | **Pool media listings** from all `phoneLanHosts` → JSON or HTML |
 | `lan\Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
 | `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1` | Wrong-subnet **loop** (reboot → wait new PC LAN IP → re-check, max 3 rounds) / forced / **off-subnet sequential** Wi‑Fi reboots (`P:\all_scripts\5g_router_reboot`) |
-| `lan\Measure-LoopSegmentsLanThroughput.ps1` | Time up to 64 MB from largest `L:\pcld_ios_media\` media → Mbps + recommended max segment bitrate sidecar for hybrid batch |
+| `lan\Measure-LoopSegmentsLanThroughput.ps1` | Time up to 64 MB via phone HTTP from a random `L:\pcld_ios_media\archive\` media file → Mbps + recommended max segment bitrate sidecar for hybrid batch |
 | `rclone\Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `rclone\Unstick-PhoneL.cmd` | Kill dead phone mount + restart Explorer |
 | `rclone\Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** / mount / **`-Remove`** / **`-Unstick`** / **`-Quick`** / LAN watch / **`-RemovePort80Proxy`** |

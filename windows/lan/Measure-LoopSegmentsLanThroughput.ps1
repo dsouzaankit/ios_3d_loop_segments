@@ -1,15 +1,25 @@
-#Requires -Version 5.1
+﻿# Entry may start under Windows PowerShell 5.1; re-launch with pwsh.
 <#
 .SYNOPSIS
-  Measure LAN throughput by copying a large phone media file off the rclone mount (L:).
+  Measure LAN throughput via phone HTTP and/or rclone mount (L:).
 
 .DESCRIPTION
-  Assumes a successful rclone WebDAV mount (Mount-LoopSegmentsRclone.ps1 / Mount-PhoneL.cmd).
-  Picks the largest media file under <drive>:\pcld_ios_media\, copies it to a local temp
-  file (or -OutFile), and prints MB transferred + Mbps.
+  Prefers a random media file under phone pcld_ios_media/archive/ (>= -MinBytes).
+  If archive/ is empty, falls back to other phone media (loop/root/etc.).
 
-  This measures the PC ↔ phone path through the current gateway Wi-Fi (rclone/WinFsp +
-  phone HTTP/WebDAV) - not 5G WAN internet speed.
+  Default: times both phone HTTP GET and an rclone mount copy of the same file.
+  Bitrate recommendation / low-throughput reboot use the lesser measured Mbps
+  (then RecommendHeadroom). Mount-only numbers can still look cache-inflated; the
+  lesser pick keeps an inflated mount from raising the encode cap.
+
+  -HttpOnly / -ViaMount select a single path. Not 5G WAN internet speed.
+
+  When run directly (double-click / console), waits for Enter before closing so you can
+  read the Mbps result. Pass -NoWaitEnter (or -NoWaitEnterOnLowThroughputStop) when
+  invoked as a child so the parent keeps a single prompt.
+
+  Prefer: pwsh -File .\lan\Measure-LoopSegmentsLanThroughput.ps1 (or companion).
+  Opening under Windows PowerShell 5.1 re-launches pwsh.
 
 .EXAMPLE
   .\rclone\Mount-LoopSegmentsRclone.ps1   # leave window open
@@ -39,7 +49,13 @@ param(
     [double] $LowThroughputMbps = 0,
     [int] $PostRebootSettleSec = 10,
     [switch] $SkipLowThroughputGatewayReboot,
-    # When set (companion child): exit 10 without local Enter; parent prompts instead.
+    # Only time phone HTTP GET (skip rclone mount copy).
+    [switch] $HttpOnly,
+    # Only time a copy from L: (rclone VFS cache can inflate Mbps).
+    [switch] $ViaMount,
+    # When set (companion/automation child): do not wait for Enter; parent prompts instead.
+    [switch] $NoWaitEnter,
+    # Alias of -NoWaitEnter (kept for companion callers).
     [switch] $NoWaitEnterOnLowThroughputStop,
     [switch] $SkipSidecarWrite,
     [switch] $KeepLocal
@@ -47,6 +63,37 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$PwshHelper = Join-Path $PSScriptRoot '..\lib\Get-LoopSegmentsPwsh.ps1'
+if (-not (Test-Path -LiteralPath $PwshHelper)) {
+    throw "Missing $PwshHelper"
+}
+. $PwshHelper
+Ensure-LoopSegmentsPwshHost -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
+
+$skipEnterPrompt = [bool]($NoWaitEnter -or $NoWaitEnterOnLowThroughputStop)
+
+function Wait-EnterToClose {
+    if ($skipEnterPrompt) { return }
+    Write-Host ""
+    Write-Host 'Press Enter to close...' -ForegroundColor Yellow
+    try {
+        [void][Console]::ReadLine()
+    } catch {
+        Read-Host | Out-Null
+    }
+}
+
+# When this script is the console entry (not via companion), pause on fatal errors.
+trap {
+    Write-Host ""
+    Write-Host ("[lan-bw] {0}" -f $_.Exception.Message) -ForegroundColor Red
+    Wait-EnterToClose
+    if ($skipEnterPrompt) {
+        throw $_
+    }
+    exit 1
+}
 
 . "$PSScriptRoot\..\lib\LoopSegments-Windows.ps1"
 
@@ -85,31 +132,258 @@ function Wait-MountRootReady {
     return (Test-MountRootReady -Root $Root)
 }
 
-function Find-LargestPhoneMediaFile {
+function Test-IsArchiveMediaRelativePath {
+    param([Parameter(Mandatory = $true)][string] $RelativePath)
+    $n = $RelativePath.Trim().Replace('\', '/').TrimStart('/').ToLowerInvariant()
+    return ($n -match '(^|/)archive/')
+}
+
+function Find-RandomPhoneMediaFile {
     param(
         [Parameter(Mandatory = $true)][string] $MediaRoot,
         [Parameter(Mandatory = $true)][long] $MinBytes
     )
-    if (-not (Test-Path -LiteralPath $MediaRoot)) {
-        throw "Media root not found: $MediaRoot"
-    }
-
+    $archiveRoot = Join-Path $MediaRoot 'archive'
     $exts = @('.mp4', '.mov', '.m4v', '.mkv', '.webm')
-    $candidates = @(Get-ChildItem -LiteralPath $MediaRoot -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Length -ge $MinBytes -and
-            ($exts -contains $_.Extension.ToLowerInvariant()) -and
-            ($_.FullName -notmatch '(?i)[\\/]scripts[\\/]')
-        } |
-        Sort-Object Length -Descending)
-
+    $candidates = @()
+    if (Test-Path -LiteralPath $archiveRoot) {
+        # Flat archive listing only - recursive WinFsp walks are too slow for a probe.
+        $candidates = @(Get-ChildItem -LiteralPath $archiveRoot -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Length -ge $MinBytes -and
+                ($exts -contains $_.Extension.ToLowerInvariant())
+            })
+    }
+    if ($candidates.Count -eq 0) {
+        Write-Warning '[lan-bw] archive/ empty on mount - falling back to other media under pcld_ios_media/.'
+        if (-not (Test-Path -LiteralPath $MediaRoot)) {
+            throw "Media root not found: $MediaRoot"
+        }
+        $loopRoot = Join-Path $MediaRoot 'loop'
+        $roots = @($MediaRoot)
+        if (Test-Path -LiteralPath $loopRoot) { $roots += $loopRoot }
+        foreach ($root in $roots) {
+            $candidates += @(Get-ChildItem -LiteralPath $root -File -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.Length -ge $MinBytes -and
+                    ($exts -contains $_.Extension.ToLowerInvariant()) -and
+                    ($_.FullName -notmatch '(?i)[\\/]scripts[\\/]')
+                })
+        }
+    }
     if ($candidates.Count -eq 0) {
         throw @"
-No media file >= $(Format-Bytes $MinBytes) under $MediaRoot.
+No media file >= $(Format-Bytes $MinBytes) under $MediaRoot (archive/ empty and no fallback).
 Export a video on the phone (or lower -MinBytes), then retry.
 "@
     }
-    return $candidates[0]
+
+    $pick = Get-Random -InputObject $candidates
+    Write-Host ('[lan-bw] Picked random mount media ({0} candidates >= {1}): {2}' -f `
+        $candidates.Count, (Format-Bytes $MinBytes), $pick.Name)
+    return $pick
+}
+
+function New-PhoneLanMediaUrlFromRelativePath {
+    param([Parameter(Mandatory = $true)][string] $RelativePath)
+    $rel = $RelativePath.Trim().TrimStart('/').Replace('\', '/')
+    $parts = $rel.Split(@('/'), [System.StringSplitOptions]::RemoveEmptyEntries)
+    $encoded = ($parts | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+    return ((Get-LoopSegmentsPhoneLanBaseUrl).TrimEnd('/') + '/' + $encoded)
+}
+
+function Get-PhoneLanStatusListMediaCandidates {
+    param(
+        [Parameter(Mandatory = $true)][long] $MinBytes,
+        [switch] $ArchiveOnly
+    )
+
+    $url = (Get-LoopSegmentsPhoneLanBaseUrl).TrimEnd('/') + '/status_lists.json'
+    $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
+    $req = [System.Net.HttpWebRequest]::Create($url)
+    $req.Method = 'GET'
+    $req.Timeout = 20000
+    $req.ReadWriteTimeout = 20000
+    $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+    foreach ($key in $auth.Keys) {
+        $req.Headers[$key] = [string]$auth[$key]
+    }
+
+    $resp = $null
+    $reader = $null
+    try {
+        $resp = $req.GetResponse()
+        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+        $jsonText = $reader.ReadToEnd()
+    } finally {
+        if ($reader) { $reader.Dispose() }
+        if ($resp) { $resp.Dispose() }
+    }
+
+    $lists = $jsonText | ConvertFrom-Json
+    $exts = @('.mp4', '.mov', '.m4v', '.mkv', '.webm')
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($file in @($lists.files)) {
+        if ($null -eq $file) { continue }
+        $name = [string]$file.name
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $bytes = [long]0
+        if ($null -ne $file.bytes) {
+            try { $bytes = [int64]$file.bytes } catch { $bytes = 0 }
+        }
+        if ($bytes -lt $MinBytes) { continue }
+        $isArchive = Test-IsArchiveMediaRelativePath -RelativePath $name
+        if ($ArchiveOnly -and -not $isArchive) { continue }
+        if (-not $ArchiveOnly -and $isArchive) { continue }
+        $ext = [System.IO.Path]::GetExtension($name).ToLowerInvariant()
+        if ($exts -notcontains $ext) { continue }
+        $sourceTag = if ($isArchive) { 'status_lists/archive' } else { 'status_lists' }
+        [void]$out.Add([pscustomobject]@{
+                Name   = $name.TrimStart('/')
+                Bytes  = $bytes
+                Url    = (New-PhoneLanMediaUrlFromRelativePath -RelativePath $name)
+                Source = $sourceTag
+            })
+    }
+    return @($out.ToArray())
+}
+
+function Add-MountMediaCandidates {
+    param(
+        [Parameter(Mandatory = $true)][string] $ScanRoot,
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
+        [Parameter(Mandatory = $true)][long] $MinBytes,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.IList] $Candidates,
+        [Parameter(Mandatory = $true)][string] $SourceTag,
+        [switch] $ExcludeScripts
+    )
+    if (-not (Test-Path -LiteralPath $ScanRoot)) { return 0 }
+    $seenUrls = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($existing in @($Candidates)) {
+        if ($null -eq $existing) { continue }
+        [void]$seenUrls.Add([string]$existing.Url)
+    }
+    $added = 0
+    # Non-recursive by default: archive/ is flat; recursive WinFsp listings are very slow.
+    $mountFiles = @(Get-ChildItem -LiteralPath $ScanRoot -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Length -ge $MinBytes -and
+            (@('.mp4', '.mov', '.m4v', '.mkv', '.webm') -contains $_.Extension.ToLowerInvariant()) -and
+            ((-not $ExcludeScripts) -or ($_.FullName -notmatch '(?i)[\\/]scripts[\\/]'))
+        })
+    foreach ($item in $mountFiles) {
+        try {
+            $url = Get-PhoneLanUrlForMountPath -DriveRoot $DriveRoot -MountFilePath $item.FullName
+        } catch {
+            continue
+        }
+        if (-not $seenUrls.Add($url)) { continue }
+        [void]$Candidates.Add([pscustomobject]@{
+                Name   = $item.FullName
+                Bytes  = [long]$item.Length
+                Url    = $url
+                Source = $SourceTag
+            })
+        $added++
+    }
+    return $added
+}
+
+function Test-PhoneLanHttpUrlExists {
+    param([Parameter(Mandatory = $true)][string] $Url)
+    $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
+    $req = [System.Net.HttpWebRequest]::Create($Url)
+    $req.Method = 'HEAD'
+    $req.Timeout = 12000
+    $req.ReadWriteTimeout = 12000
+    $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+    foreach ($key in $auth.Keys) {
+        $req.Headers[$key] = [string]$auth[$key]
+    }
+    $resp = $null
+    try {
+        $resp = $req.GetResponse()
+        $code = [int]$resp.StatusCode
+        return ($code -ge 200 -and $code -lt 300)
+    } catch {
+        return $false
+    } finally {
+        if ($resp) { $resp.Dispose() }
+    }
+}
+
+function Find-RandomPhoneLanHttpTarget {
+    param(
+        [Parameter(Mandatory = $true)][long] $MinBytes,
+        [string] $MediaRoot = '',
+        [string] $DriveRoot = '',
+        [int] $MaxHeadAttempts = 8
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[object]
+    try {
+        Write-Host '[lan-bw] Loading archive media candidates from phone status_lists.json ...'
+        $fromStatus = @(Get-PhoneLanStatusListMediaCandidates -MinBytes $MinBytes -ArchiveOnly)
+        Write-Host ('[lan-bw] status_lists.json archive/: {0} media file(s) >= {1}' -f $fromStatus.Count, (Format-Bytes $MinBytes))
+        foreach ($row in $fromStatus) { [void]$candidates.Add($row) }
+    } catch {
+        Write-Warning ("[lan-bw] status_lists.json failed: {0}" -f $_.Exception.Message)
+    }
+
+    # Avoid recursive rclone/WinFsp archive walks when the phone already listed files (very slow).
+    if ($candidates.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($MediaRoot)) {
+        $archiveRoot = Join-Path $MediaRoot 'archive'
+        Write-Host ('[lan-bw] status_lists archive empty - shallow mount list {0} ...' -f $archiveRoot)
+        $added = Add-MountMediaCandidates -ScanRoot $archiveRoot -DriveRoot $DriveRoot -MinBytes $MinBytes `
+            -Candidates $candidates -SourceTag 'mount/archive'
+        Write-Host ('[lan-bw] Mount archive candidates: {0}' -f $added)
+    } elseif ($candidates.Count -gt 0) {
+        Write-Host '[lan-bw] Skipping mount archive scan (using status_lists.json).'
+    }
+
+    if ($candidates.Count -eq 0) {
+        Write-Warning '[lan-bw] archive/ is empty (or no file >= MinBytes) - falling back to other phone media.'
+        try {
+            $fromStatusAny = @(Get-PhoneLanStatusListMediaCandidates -MinBytes $MinBytes)
+            Write-Host ('[lan-bw] status_lists.json (non-archive): {0} media file(s) >= {1}' -f $fromStatusAny.Count, (Format-Bytes $MinBytes))
+            foreach ($row in $fromStatusAny) { [void]$candidates.Add($row) }
+        } catch {
+            Write-Warning ("[lan-bw] status_lists.json fallback failed: {0}" -f $_.Exception.Message)
+        }
+        if ($candidates.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($MediaRoot) -and (Test-Path -LiteralPath $MediaRoot)) {
+            Write-Host ('[lan-bw] Shallow mount list of media root {0} (no recurse)...' -f $MediaRoot)
+            $null = Add-MountMediaCandidates -ScanRoot $MediaRoot -DriveRoot $DriveRoot -MinBytes $MinBytes `
+                -Candidates $candidates -SourceTag 'mount/fallback' -ExcludeScripts
+            $loopRoot = Join-Path $MediaRoot 'loop'
+            if (Test-Path -LiteralPath $loopRoot) {
+                $null = Add-MountMediaCandidates -ScanRoot $loopRoot -DriveRoot $DriveRoot -MinBytes $MinBytes `
+                    -Candidates $candidates -SourceTag 'mount/fallback/loop'
+            }
+            Write-Host ('[lan-bw] Fallback candidates: {0}' -f $candidates.Count)
+        }
+    }
+
+    if ($candidates.Count -eq 0) {
+        throw @"
+No HTTP-reachable media file >= $(Format-Bytes $MinBytes) under pcld_ios_media/ (archive/ empty and no fallback media).
+Export or archive a video on the phone (or lower -MinBytes), then retry.
+"@
+    }
+
+    $take = [Math]::Min([Math]::Max(1, $MaxHeadAttempts), $candidates.Count)
+    $order = @($candidates | Get-Random -Count $take)
+    $tried = 0
+    foreach ($pick in $order) {
+        $tried++
+        if (Test-PhoneLanHttpUrlExists -Url $pick.Url) {
+            Write-Host ('[lan-bw] Picked random LAN media ({0}/{1} tried, via {2}): {3}' -f `
+                $tried, $order.Count, $pick.Source, $pick.Name)
+            return $pick
+        }
+        Write-Warning ("[lan-bw] Skip (HTTP HEAD failed): {0}" -f $pick.Url)
+    }
+
+    throw ('No candidate passed HTTP HEAD after {0} attempt(s). Remount or wait for phone LAN index to refresh, then retry.' -f $tried)
 }
 
 function Copy-FileMeasured {
@@ -152,9 +426,83 @@ function Copy-FileMeasured {
     }
 
     return [pscustomobject]@{
-        Bytes    = $total
-        Seconds  = [Math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+        Bytes     = $total
+        Seconds   = [Math]::Max($sw.Elapsed.TotalSeconds, 0.001)
         Stopwatch = $sw
+        Method    = 'mount'
+        Url       = ''
+    }
+}
+
+function Get-PhoneLanUrlForMountPath {
+    param(
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
+        [Parameter(Mandatory = $true)][string] $MountFilePath
+    )
+    $root = $DriveRoot.TrimEnd('\') + '\'
+    $full = [System.IO.Path]::GetFullPath($MountFilePath)
+    if (-not $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw ("Source is not under mount root {0}: {1}" -f $DriveRoot, $MountFilePath)
+    }
+    $rel = $full.Substring($root.Length).Replace('\', '/')
+    $parts = $rel.Split(@('/'), [System.StringSplitOptions]::RemoveEmptyEntries)
+    $encoded = ($parts | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+    return ((Get-LoopSegmentsPhoneLanBaseUrl).TrimEnd('/') + '/' + $encoded)
+}
+
+function Copy-HttpMeasured {
+    param(
+        [Parameter(Mandatory = $true)][string] $Url,
+        [Parameter(Mandatory = $true)][string] $Destination,
+        [Parameter(Mandatory = $true)][int] $BufferSize,
+        [long] $LimitBytes = 0
+    )
+
+    $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
+    $buffer = New-Object byte[] $BufferSize
+    $req = [System.Net.HttpWebRequest]::Create($Url)
+    $req.Method = 'GET'
+    $req.Timeout = 120000
+    $req.ReadWriteTimeout = 120000
+    $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+    foreach ($key in $auth.Keys) {
+        $req.Headers[$key] = [string]$auth[$key]
+    }
+
+    $resp = $null
+    $stream = $null
+    $dst = $null
+    $total = [long]0
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $resp = $req.GetResponse()
+        $stream = $resp.GetResponseStream()
+        $dst = [System.IO.File]::Create($Destination)
+        while ($true) {
+            $toRead = $buffer.Length
+            if ($LimitBytes -gt 0) {
+                $left = $LimitBytes - $total
+                if ($left -le 0) { break }
+                if ($left -lt $toRead) { $toRead = [int]$left }
+            }
+            $n = $stream.Read($buffer, 0, $toRead)
+            if ($n -le 0) { break }
+            $dst.Write($buffer, 0, $n)
+            $total += $n
+        }
+    } finally {
+        $sw.Stop()
+        if ($dst) { $dst.Dispose() }
+        if ($stream) { $stream.Dispose() }
+        if ($resp) { $resp.Dispose() }
+    }
+
+    return [pscustomobject]@{
+        Bytes     = $total
+        Seconds   = [Math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+        Stopwatch = $sw
+        Method    = 'http'
+        Url       = $Url
     }
 }
 
@@ -238,16 +586,6 @@ function Get-DefaultGatewayInfo {
     return $info
 }
 
-function Wait-EnterToClose {
-    Write-Host ""
-    Write-Host 'Press Enter to close...' -ForegroundColor Yellow
-    try {
-        [void][Console]::ReadLine()
-    } catch {
-        Read-Host | Out-Null
-    }
-}
-
 function Invoke-LowThroughputGatewayRebootAndStop {
     param(
         [Parameter(Mandatory = $true)][double] $MeasuredMbps,
@@ -288,14 +626,14 @@ function Invoke-LowThroughputGatewayRebootAndStop {
         '-File', $rebootPs1,
         '-ForceReboot'
     )
-    if ($NoWaitEnterOnLowThroughputStop) {
+    if ($skipEnterPrompt) {
         $psArgs += '-NoWaitEnter'
     }
-    Write-Host ('[lan-bw] > powershell {0}' -f ($psArgs -join ' '))
+    Write-Host ('[lan-bw] > pwsh {0}' -f ($psArgs -join ' '))
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & powershell.exe @psArgs
+        & (Get-LoopSegmentsPwshExe) @psArgs
         $code = 0
         if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
     } finally {
@@ -318,12 +656,30 @@ $driveRoot = "${letter}:\"
 $mediaRoot = Join-Path $driveRoot $MediaRelativePath.TrimStart('\')
 
 Write-Host ('[lan-bw] Mount drive: {0} (from loop-segments-windows.json / -DriveLetter)' -f $driveRoot)
-Write-Host '[lan-bw] Measures PC ↔ phone LAN via rclone mount (not 5G WAN).'
+if ($HttpOnly -and $ViaMount) {
+    throw '[lan-bw] Use only one of -HttpOnly / -ViaMount (default measures both).'
+}
+$doHttp = -not $ViaMount
+$doMount = -not $HttpOnly
+if ($doHttp -and $doMount) {
+    Write-Host '[lan-bw] Measures both phone HTTP GET and rclone mount copy (same file when possible).'
+} elseif ($doHttp) {
+    Write-Host '[lan-bw] Measures phone HTTP GET only (-HttpOnly).'
+} else {
+    Write-Host '[lan-bw] Measures rclone mount copy only (-ViaMount). Cache can inflate Mbps.'
+}
 $minLanMbps = Get-LoopSegmentsMinLanThroughputMbps -Override $LowThroughputMbps
 Write-Host ('[lan-bw] Min LAN throughput for gateway reboot: {0} Mbps (loop-segments-windows.json minLanThroughputMbps / -LowThroughputMbps)' -f $minLanMbps)
 
-if (-not (Wait-MountRootReady -Root $driveRoot -TimeoutSec $WaitMountSec)) {
-    throw @"
+$mountReady = $false
+if ($doMount -or -not $HttpOnly) {
+    $mountReady = Wait-MountRootReady -Root $driveRoot -TimeoutSec $WaitMountSec
+    if (-not $mountReady -and $doMount) {
+        if ($doHttp) {
+            Write-Warning ("[lan-bw] Mount {0} not ready - falling back to HTTP-only." -f $driveRoot)
+            $doMount = $false
+        } else {
+            throw @"
 [lan-bw] Mount $driveRoot is not ready.
 
 Start it first (leave the window open):
@@ -332,7 +688,58 @@ Start it first (leave the window open):
 
 Then re-run this script.
 "@
+        }
+    }
+    if (-not $mountReady -and $doHttp -and -not $doMount) {
+        Write-Host '[lan-bw] HTTP-only: no mount sidecars / mount scan.'
+    }
+} else {
+    # -HttpOnly with WaitMountSec 0: do not block on L:
+    $mountReady = Test-Path -LiteralPath $driveRoot
+    if (-not $mountReady) {
+        Write-Host '[lan-bw] HTTP-only: skipping mount wait.'
+    }
 }
+
+$scanMediaRoot = ''
+if ($mountReady) {
+    $scanMediaRoot = $mediaRoot
+}
+
+function Resolve-MountPathFromLanName {
+    param(
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
+        [Parameter(Mandatory = $true)][string] $NameOrPath
+    )
+    if (Test-Path -LiteralPath $NameOrPath -PathType Leaf) {
+        return (Get-Item -LiteralPath $NameOrPath).FullName
+    }
+    $rel = $NameOrPath.Trim().TrimStart('/').Replace('/', '\')
+    $candidate = Join-Path $DriveRoot.TrimEnd('\') $rel
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return (Get-Item -LiteralPath $candidate).FullName
+    }
+    return $null
+}
+
+function Get-MeasuredMbps {
+    param($Result)
+    $mb = $Result.Bytes / 1MB
+    return [pscustomobject]@{
+        MegabitsPerSec  = (8.0 * $mb) / $Result.Seconds
+        MegabytesPerSec = $mb / $Result.Seconds
+        MB              = $mb
+        Bytes           = $Result.Bytes
+        Seconds         = $Result.Seconds
+        Method          = $Result.Method
+        Url             = $Result.Url
+    }
+}
+
+$measureUrl = ''
+$source = ''
+$mountSource = $null
+$sourceBytes = [long]0
 
 if (-not [string]::IsNullOrWhiteSpace($SourcePath)) {
     $source = $SourcePath.Trim()
@@ -340,14 +747,35 @@ if (-not [string]::IsNullOrWhiteSpace($SourcePath)) {
         throw "SourcePath not found: $source"
     }
     $sourceItem = Get-Item -LiteralPath $source
+    $mountSource = $sourceItem.FullName
+    $sourceBytes = [long]$sourceItem.Length
+    $measureUrl = Get-PhoneLanUrlForMountPath -DriveRoot $driveRoot -MountFilePath $mountSource
 } else {
-    Write-Host ("[lan-bw] Scanning for largest media under {0} ..." -f $mediaRoot)
-    $sourceItem = Find-LargestPhoneMediaFile -MediaRoot $mediaRoot -MinBytes $MinBytes
-    $source = $sourceItem.FullName
+    $target = Find-RandomPhoneLanHttpTarget -MinBytes $MinBytes -MediaRoot $scanMediaRoot -DriveRoot $driveRoot
+    $source = [string]$target.Name
+    $sourceBytes = [long]$target.Bytes
+    $measureUrl = [string]$target.Url
+    $mountSource = $null
+    if ($mountReady) {
+        $mountSource = Resolve-MountPathFromLanName -DriveRoot $driveRoot -NameOrPath $source
+    }
+    if ([string]::IsNullOrWhiteSpace($mountSource) -and $doMount) {
+        Write-Warning '[lan-bw] Could not map pick to a mount path - choosing a random mount file for the rclone leg.'
+        $sourceItem = Find-RandomPhoneMediaFile -MediaRoot $mediaRoot -MinBytes $MinBytes
+        $mountSource = $sourceItem.FullName
+        if ([string]::IsNullOrWhiteSpace($measureUrl) -or -not $doHttp) {
+            $source = $mountSource
+            $sourceBytes = [long]$sourceItem.Length
+            $measureUrl = Get-PhoneLanUrlForMountPath -DriveRoot $driveRoot -MountFilePath $mountSource
+        }
+    }
 }
 
 Write-Host ('[lan-bw] Source: {0}' -f $source)
-Write-Host ('[lan-bw] Size on phone mount: {0}' -f (Format-Bytes ([long]$sourceItem.Length)))
+if ($mountSource -and ($mountSource -ne $source)) {
+    Write-Host ('[lan-bw] Mount:  {0}' -f $mountSource)
+}
+Write-Host ('[lan-bw] Size:   {0}' -f (Format-Bytes $sourceBytes))
 if ($MaxBytes -gt 0) {
     Write-Host ('[lan-bw] Cap transfer at {0} (-MaxBytes)' -f (Format-Bytes $MaxBytes))
 }
@@ -361,28 +789,79 @@ if ([string]::IsNullOrWhiteSpace($OutFile)) {
     }
 }
 
-Write-Host ('[lan-bw] Local dest: {0}' -f $OutFile)
-Write-Host '[lan-bw] Copying...'
+$outHttp = "$OutFile.http"
+$outMount = "$OutFile.mount"
+$httpStats = $null
+$mountStats = $null
 
-$result = Copy-FileMeasured -Source $source -Destination $OutFile -BufferSize $BufferBytes -LimitBytes $MaxBytes
-$mb = $result.Bytes / 1MB
-$mbps = (8.0 * $mb) / $result.Seconds
+if ($doHttp) {
+    if ([string]::IsNullOrWhiteSpace($measureUrl)) {
+        if ([string]::IsNullOrWhiteSpace($mountSource)) {
+            throw '[lan-bw] No HTTP URL or mount path available for HTTP measure.'
+        }
+        $measureUrl = Get-PhoneLanUrlForMountPath -DriveRoot $driveRoot -MountFilePath $mountSource
+    }
+    Write-Host ''
+    Write-Host ('[lan-bw] HTTP GET {0}' -f $measureUrl)
+    Write-Host '[lan-bw] Downloading (HTTP)...'
+    $httpResult = Copy-HttpMeasured -Url $measureUrl -Destination $outHttp -BufferSize $BufferBytes -LimitBytes $MaxBytes
+    $httpStats = Get-MeasuredMbps -Result $httpResult
+    Write-Host ('[lan-bw] HTTP:  {0:N1} Mbps ({1:N1} MB/s) - {2} in {3:N2}s' -f `
+        $httpStats.MegabitsPerSec, $httpStats.MegabytesPerSec, (Format-Bytes $httpStats.Bytes), $httpStats.Seconds) -ForegroundColor Green
+}
+
+if ($doMount) {
+    if ([string]::IsNullOrWhiteSpace($mountSource) -or -not (Test-Path -LiteralPath $mountSource -PathType Leaf)) {
+        throw '[lan-bw] No mount source file available for rclone measure.'
+    }
+    Write-Host ''
+    Write-Host ('[lan-bw] Mount copy {0}' -f $mountSource)
+    Write-Host '[lan-bw] Copying (rclone/WinFsp)...'
+    $mountResult = Copy-FileMeasured -Source $mountSource -Destination $outMount -BufferSize $BufferBytes -LimitBytes $MaxBytes
+    $mountStats = Get-MeasuredMbps -Result $mountResult
+    Write-Host ('[lan-bw] Mount: {0:N1} Mbps ({1:N1} MB/s) - {2} in {3:N2}s' -f `
+        $mountStats.MegabitsPerSec, $mountStats.MegabytesPerSec, (Format-Bytes $mountStats.Bytes), $mountStats.Seconds) -ForegroundColor Green
+    if ($null -ne $httpStats -and $mountStats.MegabitsPerSec -gt ([Math]::Max(500.0, $httpStats.MegabitsPerSec * 5.0))) {
+        Write-Warning ('[lan-bw] Mount Mbps looks cache-inflated vs HTTP ({0:N1} vs {1:N1}). Prefer HTTP for LAN capacity.' -f $mountStats.MegabitsPerSec, $httpStats.MegabitsPerSec)
+    }
+}
+
+# Use the lesser of HTTP / mount for encode recommendation / gateway reboot.
+if ($null -ne $httpStats -and $null -ne $mountStats) {
+    if ($httpStats.MegabitsPerSec -le $mountStats.MegabitsPerSec) {
+        $primary = $httpStats
+    } else {
+        $primary = $mountStats
+    }
+    Write-Host ('[lan-bw] Using lesser of HTTP ({0:N1}) and mount ({1:N1}) Mbps.' -f `
+        $httpStats.MegabitsPerSec, $mountStats.MegabitsPerSec) -ForegroundColor Cyan
+} elseif ($null -ne $httpStats) {
+    $primary = $httpStats
+} else {
+    $primary = $mountStats
+}
+$mbps = [double]$primary.MegabitsPerSec
 $recommendedMbps = [int][Math]::Floor($mbps * $RecommendHeadroom)
 if ($recommendedMbps -lt $RecommendMinMbps) { $recommendedMbps = $RecommendMinMbps }
 if ($recommendedMbps -gt $RecommendMaxMbps) { $recommendedMbps = $RecommendMaxMbps }
 
 Write-Host ''
-Write-Host ('[lan-bw] Transferred: {0} in {1:N2}s' -f (Format-Bytes $result.Bytes), $result.Seconds) -ForegroundColor Green
-Write-Host ('[lan-bw] Throughput:  {0:N1} Mbps ({1:N1} MB/s)' -f $mbps, ($mb / $result.Seconds)) -ForegroundColor Green
-Write-Host ('[lan-bw] Recommended max media bitrate for minute segments: {0} Mbps ({1:P0} of LAN, clamp {2}-{3})' -f `
-    $recommendedMbps, $RecommendHeadroom, $RecommendMinMbps, $RecommendMaxMbps) -ForegroundColor Cyan
+Write-Host ('[lan-bw] Primary for bitrate/reboot: {0} (lesser measured path)' -f $primary.Method) -ForegroundColor Cyan
+Write-Host ('[lan-bw] Recommended max media bitrate for minute segments: {0} Mbps ({1:P0} of {2}, clamp {3}-{4})' -f `
+    $recommendedMbps, $RecommendHeadroom, $primary.Method, $RecommendMinMbps, $RecommendMaxMbps) -ForegroundColor Cyan
 Write-Host '[lan-bw] Use this as -SegmentVideoBitrateMbps (hybrid batch / Run-TranscodeFfmpeg) so 60s DLNA slots stay under LAN capacity.'
 Write-Host ('[lan-bw] Phone LAN:   {0}' -f (Get-LoopSegmentsPhoneLanBaseUrl))
 
 if (-not $SkipSidecarWrite) {
+    if (-not $mountReady) {
+        Write-Warning '[lan-bw] Skipping sidecar write (mount not ready).'
+    } else {
     $payload = [ordered]@{
         schema                             = 'loopsegments-lan-throughput/v1'
+        measureMethod                      = [string]$primary.Method
         measuredMbps                       = [Math]::Round($mbps, 2)
+        measuredHttpMbps                   = if ($httpStats) { [Math]::Round([double]$httpStats.MegabitsPerSec, 2) } else { $null }
+        measuredMountMbps                  = if ($mountStats) { [Math]::Round([double]$mountStats.MegabitsPerSec, 2) } else { $null }
         recommendedMaxMediaBitrateMbps     = $recommendedMbps
         minLanThroughputMbps               = $minLanMbps
         headroomFactor                     = $RecommendHeadroom
@@ -390,9 +869,11 @@ if (-not $SkipSidecarWrite) {
         phoneLanHost                       = (Get-LoopSegmentsLANHost)
         phoneLanBaseUrl                    = (Get-LoopSegmentsPhoneLanBaseUrl)
         sourcePath                         = $source
-        transferredBytes                   = $result.Bytes
-        elapsedSeconds                     = [Math]::Round($result.Seconds, 3)
-        note                               = 'Cap minute-segment encode (-SegmentVideoBitrateMbps) at or below recommendedMaxMediaBitrateMbps for sustained LAN / Skybox viewing.'
+        mountSourcePath                    = $mountSource
+        sourceUrl                          = $measureUrl
+        transferredBytes                   = $primary.Bytes
+        elapsedSeconds                     = [Math]::Round($primary.Seconds, 3)
+        note                               = 'Default measures HTTP + rclone mount. recommendedMaxMediaBitrateMbps uses the lesser measured Mbps (then headroom), so VFS-cache inflated mount numbers do not raise the encode cap.'
     }
     $json = ($payload | ConvertTo-Json -Depth 4)
     $sidecarPaths = @(
@@ -412,25 +893,30 @@ if (-not $SkipSidecarWrite) {
             Write-Warning ("[lan-bw] Could not write sidecar {0}: {1}" -f $sidecar, $_.Exception.Message)
         }
     }
+    }
 }
 
+$localFiles = @($outHttp, $outMount, $OutFile) | Select-Object -Unique
 if (-not $KeepLocal) {
-    Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
-    Write-Host '[lan-bw] Removed local copy (use -KeepLocal to retain).'
+    foreach ($f in $localFiles) {
+        if ($f -and (Test-Path -LiteralPath $f)) {
+            Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Host '[lan-bw] Removed local copies (use -KeepLocal to retain).'
 } else {
-    Write-Host ('[lan-bw] Kept local copy: {0}' -f $OutFile)
+    Write-Host ('[lan-bw] Kept local copies under: {0}' -f $OutFile)
 }
 
 if (-not $SkipLowThroughputGatewayReboot -and $minLanMbps -gt 0 -and $mbps -lt $minLanMbps) {
     $stopped = Invoke-LowThroughputGatewayRebootAndStop -MeasuredMbps $mbps `
         -ThresholdMbps $minLanMbps -SettleSec $PostRebootSettleSec
     if ($stopped) {
-        if (-not $NoWaitEnterOnLowThroughputStop) {
-            Wait-EnterToClose
-        }
+        Wait-EnterToClose
         # 10 = intentional stop after low-throughput gateway reboot (do not start Chromium).
         exit 10
     }
 }
 
+Wait-EnterToClose
 exit 0

@@ -31,12 +31,11 @@ Integrated under **`windows\pcloud_web_companion`** (preferred):
 
 ```powershell
 cd <repo>\windows
-.\setup\Setup-LoopSegmentsWindows.ps1    # once per PC
+.\setup\Setup-LoopSegmentsWindows.ps1    # once per PC (pwsh)
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
 # same as:
 .\pcloud_web_companion\run_chromium.ps1
 ```
-
 | Flag | Effect |
 |------|--------|
 | `-RecreateVenv` | Recreate machine-local venv under `%LOCALAPPDATA%\pcloud_web_companion\venv` |
@@ -52,7 +51,7 @@ cd <repo>\windows
 | `-DetachChromium` | Do not wait for browser exit (upload + local clear on next run) |
 | `-KeepLocalProfile` | Do not wipe local AppData profile after upload |
 | `-SkipGoHome` | Do not press iPhone Home on companion finish |
-| `-NoDarkMode` | Do not force Chromium UI / page dark mode (default enables both) |
+| `-NoDarkMode` | Do not force Chromium UI dark mode (default: `--force-dark-mode` only) |
 | `-StartUrl "..."` | Override start page (default `https://my.pcloud.com`) |
 
 Each launch:
@@ -64,10 +63,10 @@ Each launch:
 - **Gateway Wi‑Fi reboot (when needed):** compares the PC’s IPv4 default gateway to `phoneLanHost` (app LAN page). If they are **not** on the same subnet, informs you, **reboots Wi‑Fi on the current gateway**, **polls until this PC gets a new LAN IP/gateway**, then **re-checks** — up to **3** rounds, then fails and **waits for Enter** (no Enter between rounds; `-SkipGatewayReboot` to skip).
 - **USB-launches Loop Segments** via `..\usb\Launch-LoopSegmentsViaUsb.ps1` on every start (prints LAN UP/DOWN first). **Skips relaunch** when pymobiledevice3 already sees the app in the **foreground** over USB. **Locked (exit 3) still aborts Chromium.** If USB is missing / launch fails but phone LAN is already reachable, prints a warning and continues to Chromium. Use `-SkipUsbLaunch` for Chromium only. Always prints AltServer status; **starts AltServer when installed but not running**. If the app becomes unavailable after ~7 days: **AltServer → USB → AltStore Refresh All → Settings → General → VPN & Device Management → Developer App → Trust → open once**. USB detect failure also retries after ensuring AltServer.
 - **Attempts rclone mount** via `..\rclone\Mount-LoopSegmentsRclone.ps1 -Quick` in a **separate** console when phone LAN is up (drive letter from `loop-segments-windows.json`, default `L:`). Waits for LAN after USB launch; reuses an existing mount; failures only warn. If the phone LAN page cannot be reached, **sequentially reboots off-subnet routers** under `P:\all_scripts\5g_router_reboot` (ROUTER_IPs outside `phoneLanHost`’s subnet) to get the phone re-connected on the desired wireless LAN gateway, then retries the LAN wait. Mount polls phone LAN and auto-kills rclone after prolonged outage. Log: `windows\rclone\loopsegments-rclone-mount.log`. Use `-SkipRcloneMount` to leave mounting to `Mount-PhoneL.cmd`. Mount window is independent of Chromium — **Ctrl+C** there to unmount. Use `-SkipGatewayReboot` to skip off-subnet recovery reboots too.
-- **LAN throughput probe:** when `L:` is up, runs `..\lan\Measure-LoopSegmentsLanThroughput.ps1` (largest media under `pcld_ios_media\`, default **64 MB** cap), prints Mbps, recommends a **max media bitrate** for minute segments (80% of LAN), and writes sidecars for `run_batch_vr_hybrid.ps1`. If throughput is below **`minLanThroughputMbps`** in `loop-segments-windows.json` (default **40**) and the default gateway already shares the phone LAN page subnet, **warns**, **reboots Wi‑Fi on the current gateway**, asks you to **retry after Wi‑Fi settles**, waits ~10s, then **exits on Enter** (Chromium not started). Use `-SkipLanThroughput` or `-SkipLowThroughputGatewayReboot` to skip.
+- **LAN throughput probe:** when `L:` is up, runs `..\lan\Measure-LoopSegmentsLanThroughput.ps1` (random media under `pcld_ios_media\archive\` ≥ min size, default **64 MB** transfer cap via phone HTTP), prints Mbps, recommends a **max media bitrate** for minute segments (80% of LAN), and writes sidecars for `run_batch_vr_hybrid.ps1`. If throughput is below **`minLanThroughputMbps`** in `loop-segments-windows.json` (default **40**) and the default gateway already shares the phone LAN page subnet, **warns**, **reboots Wi‑Fi on the current gateway**, asks you to **retry after Wi‑Fi settles**, waits ~10s, then **exits on Enter** (Chromium not started). Use `-SkipLanThroughput` or `-SkipLowThroughputGatewayReboot` to skip.
 - **Profile sync:** download full profile from `windows\pcloud_web_companion\chromium-profile` → local AppData; after Chromium exits, upload full folder to P:, then **clear local** (canonical copy stays on P:). Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the wipe. Folder is gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
-- Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded in **dark mode** (`--force-dark-mode` + `WebContentsForceDark`; `-NoDarkMode` to disable); waits for exit unless `-DetachChromium`
+- Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded and **Chromium UI dark mode** (`--force-dark-mode`; `-NoDarkMode` to disable). Page auto-darkening (`WebContentsForceDark`) is not used — it can hide media seekbars; waits for exit unless `-DetachChromium`
 - **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, uploads full profile to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X), then presses **iPhone Home** over USB to background Loop Segments (use `-SkipGoHome` to leave it foreground)
 - **Fatal errors:** any failure that stops the companion ends with a **single** “Press Enter to close…” (child scripts skip their own Enter so you are not prompted twice)
 
@@ -116,7 +115,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 ## Requirements
 
-- Windows + **Windows PowerShell 5.1** (built-in; scripts use `powershell.exe`, not `pwsh`)
+- Windows + **PowerShell 7** (`pwsh`; install from https://aka.ms/powershell). Opening `.ps1` under Windows PowerShell 5.1 re-launches into 7.
 - Windows + Python (`py`) — for the launcher’s Chromium install via Playwright
 - Loop Segments app LAN server on port 8765 (USB launch opens the app first when possible)
 - `windows\loop-segments-windows.json` with `phoneLanHost`

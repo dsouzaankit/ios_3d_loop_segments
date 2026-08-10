@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 <#
 .SYNOPSIS
   If the companion console dies without a graceful marker, close Chromium and sync profile.
@@ -21,6 +21,11 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+
+$PwshHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsPwsh.ps1"
+if (Test-Path -LiteralPath $PwshHelper) {
+    . $PwshHelper
+}
 
 function Test-LocalHasContent {
     param([string] $Dir)
@@ -115,7 +120,7 @@ if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {
     Write-Host "[watchdog] Pressing iPhone Home to background Loop Segments..."
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = (Get-Command powershell.exe).Source
+        $psi.FileName = (Get-LoopSegmentsPwshExe)
         $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`""
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true

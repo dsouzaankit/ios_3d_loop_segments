@@ -20,7 +20,8 @@ param(
     [switch]$KeepLocalProfile,
     # Do not press iPhone Home on companion finish (default: background Loop Segments via USB HID).
     [switch]$SkipGoHome,
-    # Do not force Chromium UI + page dark mode (default: --force-dark-mode + WebContentsForceDark).
+    # Do not force Chromium UI dark mode (default: --force-dark-mode only; no WebContentsForceDark -
+    # page auto-darkening can hide media seekbars / controls on pCloud and similar players).
     [switch]$NoDarkMode,
     # Skip local Enter on fatal errors (Run-PCloudWebCompanion prompts once instead).
     [switch]$NoWaitEnterOnFatal,
@@ -28,6 +29,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+$PwshHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsPwsh.ps1"
+if (-not (Test-Path -LiteralPath $PwshHelper)) {
+    throw "Missing $PwshHelper"
+}
+. $PwshHelper
+Ensure-LoopSegmentsPwshHost -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
 
 function Wait-EnterOnFatal {
     param([int] $ExitCode = 1)
@@ -54,7 +62,7 @@ trap {
 }
 
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-if (-not $ScriptDir) { throw "Cannot resolve script directory; run with: powershell -File `"$($MyInvocation.MyCommand.Path)`"" }
+if (-not $ScriptDir) { throw "Cannot resolve script directory; run with: pwsh -File `"$($MyInvocation.MyCommand.Path)`"" }
 
 $ExtensionDir = $ScriptDir
 $ManifestPath = Join-Path $ExtensionDir "manifest.json"
@@ -357,8 +365,8 @@ function Start-HiddenPowerShell {
             }
         }) -join ' '
 
-    $psExe = (Get-Command powershell.exe).Source
-    # -WindowStyle Hidden alone still flashes a blue console; CreateNoWindow avoids that.
+    $psExe = Get-LoopSegmentsPwshExe
+    # -WindowStyle Hidden alone still flashes a console; CreateNoWindow avoids that.
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $psExe
     $psi.Arguments = "-NoProfile -NoLogo -NonInteractive $argString"
@@ -768,8 +776,8 @@ function Invoke-GatewayWifiRebootIfNeeded {
     }
 
     Write-Host "[gateway] Checking default gateway vs phone LAN page subnet..."
-    Write-Host "[gateway] > powershell $($psArgs -join ' ')"
-    & powershell.exe @psArgs
+    Write-Host "[gateway] > pwsh $($psArgs -join ' ')"
+    & (Get-LoopSegmentsPwshExe) @psArgs
     $code = $LASTEXITCODE
     if ($null -eq $code) { $code = 0 }
     if ($code -ne 0) {
@@ -815,8 +823,8 @@ function Invoke-LoopSegmentsUsbLaunch {
     } else {
         Write-Host "[usb] LAN not reachable - launching Loop Segments on phone before Chromium..."
     }
-    Write-Host "[usb] > powershell $($psArgs -join ' ')"
-    & powershell.exe @psArgs
+    Write-Host "[usb] > pwsh $($psArgs -join ' ')"
+    & (Get-LoopSegmentsPwshExe) @psArgs
     $code = $LASTEXITCODE
     if ($null -eq $code) { $code = 0 }
 
@@ -903,11 +911,11 @@ function Invoke-OffSubnetRouterRebootsForLanRecovery {
     [void]$psArgs.Add("-RebootOffSubnetRouters")
 
     Write-Host "[gateway] Phone LAN page not reachable - rebooting off-subnet routers so the phone can re-connect to the desired wireless LAN gateway..."
-    Write-Host "[gateway] > powershell $($psArgs -join ' ')"
+    Write-Host "[gateway] > pwsh $($psArgs -join ' ')"
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & powershell.exe @psArgs
+        & (Get-LoopSegmentsPwshExe) @psArgs
         $code = 0
         if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
     } finally {
@@ -970,13 +978,14 @@ function Invoke-AttemptRcloneMount {
         # -File path MUST be quoted: Start-Process ArgumentList array does not escape spaces
         # (path under "iOS apps" otherwise exits -196608 and never mounts).
         # -Quick skips slow "rclone ls" so L: appears before the companion wait expires.
-        $proc = Start-Process -FilePath "powershell.exe" -PassThru -ArgumentList @(
+        $proc = Start-Process -FilePath (Get-LoopSegmentsPwshExe) -PassThru -ArgumentList @(
             '-NoProfile'
             '-ExecutionPolicy'
             'Bypass'
             '-File'
             "`"$mountPs1`""
             '-Quick'
+            '-NoWaitEnter'
         ) -WorkingDirectory (Split-Path -Parent $mountPs1)
         if ($null -eq $proc) {
             Write-Warning "[rclone] Start-Process returned no process - continuing without ${letter}:"
@@ -996,6 +1005,13 @@ function Invoke-AttemptRcloneMount {
         }
         if ($proc.HasExited) {
             Write-Warning "[rclone] Mount window exited early (code $($proc.ExitCode)) - check that console. Continuing with Chromium."
+            $rcloneLog = Join-Path $WindowsDir 'rclone\loopsegments-rclone-mount.log'
+            if (Test-Path -LiteralPath $rcloneLog) {
+                Write-Host '[rclone] Last mount log lines:' -ForegroundColor DarkYellow
+                Get-Content -LiteralPath $rcloneLog -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object {
+                    Write-Host ("  {0}" -f $_) -ForegroundColor DarkYellow
+                }
+            }
             return $false
         }
         if (Test-RcloneMountProcessForDrive -DriveLetter $letter) {
@@ -1016,7 +1032,7 @@ function Invoke-AttemptRcloneMount {
 }
 
 function Invoke-MeasureLanThroughputIfMounted {
-    # Soft: after rclone L: is up, time up to 64 MB from phone media. Failures only warn.
+    # Soft: prefer HTTP+mount when L: is up; otherwise HTTP-only. Failures only warn.
     if ($SkipLanThroughput) {
         Write-Host "[lan-bw] Skipping LAN throughput probe (-SkipLanThroughput)"
         return
@@ -1030,10 +1046,7 @@ function Invoke-MeasureLanThroughputIfMounted {
 
     $letter = Get-CompanionMountDriveLetter
     $driveRoot = "${letter}:\"
-    if (-not (Test-Path -LiteralPath $driveRoot)) {
-        Write-Warning "[lan-bw] Mount $driveRoot not ready - skip throughput probe (mount phone first, or omit -SkipRcloneMount)"
-        return
-    }
+    $mountReady = Test-Path -LiteralPath $driveRoot
 
     $psArgs = [System.Collections.Generic.List[string]]::new()
     [void]$psArgs.Add("-NoProfile")
@@ -1044,18 +1057,24 @@ function Invoke-MeasureLanThroughputIfMounted {
     [void]$psArgs.Add("-DriveLetter")
     [void]$psArgs.Add([string]$letter)
     [void]$psArgs.Add("-WaitMountSec")
-    [void]$psArgs.Add("15")
+    if ($mountReady) {
+        [void]$psArgs.Add("15")
+        Write-Host "[lan-bw] Measuring PC <-> phone LAN throughput via HTTP + rclone mount (up to 64 MB)..."
+    } else {
+        [void]$psArgs.Add("0")
+        [void]$psArgs.Add("-HttpOnly")
+        Write-Warning "[lan-bw] Mount $driveRoot not ready - running HTTP-only throughput probe."
+    }
     if ($SkipLowThroughputGatewayReboot -or $SkipGatewayReboot) {
         [void]$psArgs.Add("-SkipLowThroughputGatewayReboot")
     }
-    [void]$psArgs.Add("-NoWaitEnterOnLowThroughputStop")
+    [void]$psArgs.Add("-NoWaitEnter")
 
-    Write-Host "[lan-bw] Measuring PC ↔ phone LAN throughput via $driveRoot (up to 64 MB)..."
-    Write-Host "[lan-bw] > powershell $($psArgs -join ' ')"
+    Write-Host "[lan-bw] > pwsh $($psArgs -join ' ')"
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & powershell.exe @psArgs
+        & (Get-LoopSegmentsPwshExe) @psArgs
         $code = 0
         if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
     } finally {
@@ -1331,7 +1350,7 @@ function Invoke-GoIphoneHome {
     try {
         # Same console so pymobiledevice3 progress/timeouts are visible (hidden child looked "stuck").
         $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = (Get-Command powershell.exe).Source
+        $psi.FileName = (Get-LoopSegmentsPwshExe)
         $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`""
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $false
@@ -1580,9 +1599,10 @@ $chromeArgList = [System.Collections.Generic.List[string]]::new()
 [void]$chromeArgList.Add("--load-extension=`"$ChromeExtension`"")
 [void]$chromeArgList.Add("--disable-features=DisableLoadExtensionCommandLineSwitch,BlockInsecurePrivateNetworkRequests")
 if (-not $NoDarkMode) {
+    # UI chrome only. Do not enable WebContentsForceDark - it auto-inverts page CSS and
+    # commonly makes video seekbars / control bars invisible during playback.
     [void]$chromeArgList.Add("--force-dark-mode")
-    [void]$chromeArgList.Add("--enable-features=WebContentsForceDark")
-    Write-Host "[run] Dark mode: Chromium UI + forced dark web contents (omit with -NoDarkMode)"
+    Write-Host "[run] Dark mode: Chromium UI only (omit with -NoDarkMode; pages keep site theme)"
 }
 [void]$chromeArgList.Add("--disable-restore-session-state")
 [void]$chromeArgList.Add("--no-first-run")

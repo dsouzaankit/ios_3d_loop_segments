@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Enable Sideloadly automatic app refresh (7-day cert) on USB or Wi-Fi.
@@ -157,7 +157,7 @@ if ($WatchUsb) {
     }
     $watchTaskName = "$TaskNamePrefix-UsbWatch"
     $arg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$watchScript`""
-    $watchAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+    $watchAction = New-ScheduledTaskAction -Execute 'pwsh.exe' -Argument $arg
     $watchTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $watchSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     Register-ScheduledTask -TaskName $watchTaskName -Action $watchAction -Trigger $watchTrigger -Settings $watchSettings -Force | Out-Null

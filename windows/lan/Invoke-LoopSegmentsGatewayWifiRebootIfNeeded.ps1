@@ -1,7 +1,8 @@
+# Entry may start under Windows PowerShell 5.1; re-launch with pwsh.
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Reboot router Wi‑Fi when the PC/phone are on the wrong gateway, or recover LAN reachability.
+  Reboot router Wi-Fi when the PC/phone are on the wrong gateway, or recover LAN reachability.
 
 .DESCRIPTION
   Reads phoneLanHost from loop-segments-windows.json (LAN page / app export host).
@@ -55,6 +56,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$PwshHelper = Join-Path $PSScriptRoot "..\lib\Get-LoopSegmentsPwsh.ps1"
+if (-not (Test-Path -LiteralPath $PwshHelper)) {
+    throw "Missing $PwshHelper"
+}
+. $PwshHelper
+Ensure-LoopSegmentsPwshHost -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
 
 $WindowsDir = Split-Path -Parent $PSScriptRoot
 $LibDir = Join-Path $WindowsDir "lib"

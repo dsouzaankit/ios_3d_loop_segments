@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+# Entry may start under Windows PowerShell 5.1 (file association); re-launch with pwsh.
 <#
 .SYNOPSIS
   Start integrated pcloud_web_companion Chromium helper (USB-launches Loop Segments first).
@@ -25,6 +25,8 @@
   While Chromium is running, Ctrl+C or closing the console (X) kills that Chromium profile
   and syncs/clears the profile the same as a normal exit. On finish, presses iPhone Home
   over USB so Loop Segments is backgrounded (Keep Alive can keep running).
+
+  Prefer: .\Run-PCloudWebCompanion.ps1 (PowerShell 7). Opening this .ps1 under 5.1 re-launches pwsh.
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1
@@ -68,6 +70,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$PwshHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsPwsh.ps1"
+if (-not (Test-Path -LiteralPath $PwshHelper)) {
+    throw "Missing $PwshHelper"
+}
+. $PwshHelper
+Ensure-LoopSegmentsPwshHost -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
 
 function Wait-EnterOnError {
     param([int] $ExitCode = 1)

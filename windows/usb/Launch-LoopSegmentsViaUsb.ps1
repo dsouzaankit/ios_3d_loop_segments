@@ -1,3 +1,4 @@
+# Entry may start under Windows PowerShell 5.1; re-launch with pwsh.
 #Requires -Version 5.1
 <#
 .SYNOPSIS
@@ -70,6 +71,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$PwshHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsPwsh.ps1"
+if (-not (Test-Path -LiteralPath $PwshHelper)) {
+    throw "Missing $PwshHelper"
+}
+. $PwshHelper
+Ensure-LoopSegmentsPwshHost -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
 
 $PythonHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsPython.ps1"
 if (-not (Test-Path -LiteralPath $PythonHelper)) {

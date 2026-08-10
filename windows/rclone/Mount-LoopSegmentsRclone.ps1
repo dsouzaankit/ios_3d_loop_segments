@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+# Entry may start under Windows PowerShell 5.1; re-launch with pwsh.
 <#
 .SYNOPSIS
   Mount the phone LAN export folder as a Windows drive via rclone WebDAV (or test connectivity).
@@ -9,6 +9,7 @@
 
   Per-PC settings: loop-segments-windows.json in the parent windows\ folder (see ..\setup\Set-LoopSegmentsWindows.ps1).
   Scripts resolve paths from the shared helper - copy or clone the repo anywhere; only the json file differs per PC.
+  Prefer Mount-LoopSegmentsRclone.ps1 / Mount-PhoneL.cmd (PowerShell 7). Opening this .ps1 under 5.1 re-launches pwsh.
 
 .PARAMETER RemovePort80Proxy
   Admin: remove netsh portproxy rules (PC :80 or :8080 -> phone :8765) from legacy WebDAV mapping.
@@ -75,10 +76,20 @@ param(
     [ValidateRange(15, 3600)]
     [int] $LanDownSeconds = 90,
     [switch] $NoLanWatch,
-    [switch] $SkipOffSubnetRouterReboot
+    [switch] $SkipOffSubnetRouterReboot,
+    # Companion child: exit on error without local Enter (parent already continues).
+    [switch] $NoWaitEnter
 )
 
 $ErrorActionPreference = 'Stop'
+
+$PwshHelper = Join-Path $PSScriptRoot '..\lib\Get-LoopSegmentsPwsh.ps1'
+if (-not (Test-Path -LiteralPath $PwshHelper)) {
+    throw "Missing $PwshHelper"
+}
+. $PwshHelper
+Ensure-LoopSegmentsPwshHost -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
+
 . "$PSScriptRoot\..\lib\LoopSegments-Windows.ps1"
 
 function Ensure-RcloneRemote {
@@ -242,7 +253,7 @@ function Invoke-OffSubnetRouterRebootsForLanRecovery {
     }
     $rebootPs1 = Join-Path $script:LoopSegmentsWindowsRoot 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
     if (-not (Test-Path -LiteralPath $rebootPs1)) {
-        Write-Warning "[gateway] Missing $rebootPs1 - cannot reboot off-subnet routers for LAN recovery"
+        Write-Warning "[gateway] Missing $rebootPs1 — cannot reboot off-subnet routers for LAN recovery"
         return $false
     }
 
@@ -259,7 +270,7 @@ function Invoke-OffSubnetRouterRebootsForLanRecovery {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & powershell.exe @args
+        & (Get-LoopSegmentsPwshExe) @args
         $code = 0
         if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
     } finally {
@@ -313,6 +324,9 @@ function Test-RcloneWebDAVRemote {
 
 function Wait-EnterOnError {
     param([int] $ExitCode = 1)
+    if ($NoWaitEnter) {
+        exit $ExitCode
+    }
     Write-Host ""
     Write-Host "Press Enter to close..." -ForegroundColor Yellow
     try {
@@ -627,7 +641,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     }
 
     $settings = Get-LoopSegmentsWindowsSettings
-    # rclone wants mount point as L: (no trailing backslash); L:\ can break WinFsp / Start-Process.
+    # rclone wants "L:" — trailing "L:\" can break WinFsp / Start-Process argument parsing.
     $mountPoint = "${driveLetter}:"
     Write-Host ''
     $mountMode = if ($ReadOnly) { 'read-only' } else { 'read/write (phone blocks loop/, _working*, etc.)' }

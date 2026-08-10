@@ -1,9 +1,15 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 # Shared per-PC settings for Loop Segments windows scripts (lib/, setup/, usb/, rclone/, ...).
 # This file lives in windows\lib\; config JSON stays in windows\ (parent of lib).
 # Capture windows\ at load time so config paths stay correct even when callers live in a subfolder
 # (dot-sourced $PSScriptRoot would otherwise follow the caller).
+# Requires PowerShell 7+: entry scripts re-launch via Get-LoopSegmentsPwsh.ps1 when opened under 5.1.
 $script:LoopSegmentsWindowsRoot = Split-Path -Parent $PSScriptRoot
+
+$script:LoopSegmentsPwshHelper = Join-Path $PSScriptRoot 'Get-LoopSegmentsPwsh.ps1'
+if ((Test-Path -LiteralPath $script:LoopSegmentsPwshHelper) -and -not (Get-Command Get-LoopSegmentsPwshExe -ErrorAction SilentlyContinue)) {
+    . $script:LoopSegmentsPwshHelper
+}
 
 function Get-LoopSegmentsWindowsConfigPath {
     Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-windows.json'
