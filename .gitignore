@@ -40,6 +40,9 @@ windows/pcloud_web_companion/.venv/
 windows/pcloud_web_companion/.playwright-browsers/
 windows/pcloud_web_companion/lan_config.json
 windows/pcloud_web_companion/__pycache__/
+windows/usb/__pycache__/
+**/__pycache__/
+*.pyc
 
 
 
