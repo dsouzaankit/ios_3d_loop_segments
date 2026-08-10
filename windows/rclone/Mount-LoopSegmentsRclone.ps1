@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   Mount the phone LAN export folder as a Windows drive via rclone WebDAV (or test connectivity).
@@ -242,11 +242,11 @@ function Invoke-OffSubnetRouterRebootsForLanRecovery {
     }
     $rebootPs1 = Join-Path $script:LoopSegmentsWindowsRoot 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
     if (-not (Test-Path -LiteralPath $rebootPs1)) {
-        Write-Warning "[gateway] Missing $rebootPs1 - cannot reboot off-subnet routers for LAN recovery"
+        Write-Warning "[gateway] Missing $rebootPs1 — cannot reboot off-subnet routers for LAN recovery"
         return $false
     }
 
-    Write-Host '[gateway] Phone LAN page not reachable - attempting to get the phone re-connected on the desired wireless LAN gateway'
+    Write-Host '[gateway] Phone LAN page not reachable — attempting to get the phone re-connected on the desired wireless LAN gateway'
     Write-Host '[gateway] by sequentially rebooting routers whose IPs are outside the LAN page subnet...'
     $args = @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass',
@@ -627,7 +627,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     }
 
     $settings = Get-LoopSegmentsWindowsSettings
-    # rclone wants "L:" - trailing "L:\" can break WinFsp / Start-Process argument parsing.
+    # rclone wants "L:" — trailing "L:\" can break WinFsp / Start-Process argument parsing.
     $mountPoint = "${driveLetter}:"
     Write-Host ''
     $mountMode = if ($ReadOnly) { 'read-only' } else { 'read/write (phone blocks loop/, _working*, etc.)' }

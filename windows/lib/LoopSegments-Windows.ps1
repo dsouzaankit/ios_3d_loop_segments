@@ -25,7 +25,7 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         winfspDllPath           = ''
         skipWinFspCheck         = $false
         # Below this measured LAN Mbps (same-subnet), companion/measure forces gateway Wi-Fi reboot.
-        minLanThroughputMbps    = 45
+        minLanThroughputMbps    = 40
         dlnaFolder              = ''
         webdavUser              = 'admin'
         webdavPassword          = 'iosadmin'
@@ -324,13 +324,13 @@ function Get-LoopSegmentsMinLanThroughputMbps {
             $raw = $settings.PSObject.Properties['minLanThroughputMbps'].Value
         }
     }
-    if ($null -eq $raw) { return 45 }
+    if ($null -eq $raw) { return 40 }
     try {
         $n = [double]$raw
     } catch {
-        return 45
+        return 40
     }
-    if ($n -le 0) { return 45 }
+    if ($n -le 0) { return 40 }
     return $n
 }
 

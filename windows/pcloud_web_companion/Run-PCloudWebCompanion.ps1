@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   Start integrated pcloud_web_companion Chromium helper (USB-launches Loop Segments first).
@@ -14,7 +14,7 @@
   (unless -SkipUsbLaunch), then attempts an rclone WebDAV mount (unless
   -SkipRcloneMount) in a separate window when LAN is up, then probes LAN
   throughput off the mount (unless -SkipLanThroughput). If throughput is below
-  minLanThroughputMbps in loop-segments-windows.json (default 45) while gateway and
+  minLanThroughputMbps in loop-segments-windows.json (default 40) while gateway and
   LAN page share a subnet, forces a gateway Wi-Fi reboot,
   asks you to retry later, waits briefly, then exits on Enter (Chromium not started).
   Exit code 3 (phone locked) aborts Chromium. No USB / other USB failures abort only when

@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   Measure LAN throughput by copying a large phone media file off the rclone mount (L:).
@@ -35,7 +35,7 @@ param(
     [int] $RecommendMinMbps = 5,
     [int] $RecommendMaxMbps = 100,
     # After measure: if gateway shares LAN-page subnet and throughput is below this, force gateway Wi-Fi reboot and stop (exit 10).
-    # 0 = use minLanThroughputMbps from loop-segments-windows.json (default 45).
+    # 0 = use minLanThroughputMbps from loop-segments-windows.json (default 40).
     [double] $LowThroughputMbps = 0,
     [int] $PostRebootSettleSec = 10,
     [switch] $SkipLowThroughputGatewayReboot,

@@ -1,21 +1,21 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Reboot router Wi-Fi when the PC/phone are on the wrong gateway, or recover LAN reachability.
+  Reboot router Wi‑Fi when the PC/phone are on the wrong gateway, or recover LAN reachability.
 
 .DESCRIPTION
   Reads phoneLanHost from loop-segments-windows.json (LAN page / app export host).
 
   Default: if the PC IPv4 default gateway is not on the same subnet as phoneLanHost,
-  informs you, reboots Wi-Fi on that current gateway, polls until the PC gets a new
-  LAN IP / gateway, then re-checks - looping up to MaxWrongSubnetRounds times (default 3)
+  informs you, reboots Wi‑Fi on that current gateway, polls until the PC gets a new
+  LAN IP / gateway, then re-checks — looping up to MaxWrongSubnetRounds times (default 3)
   until the gateway shares the LAN page subnet (no Enter / manual re-run between rounds).
 
   -ForceReboot: reboot the current default gateway even when subnets already match
   (e.g. after a low LAN-throughput probe). Same-subnet ForceReboot is a single pass.
 
   -RebootOffSubnetRouters: when the phone LAN page is unreachable, sequentially reboot
-  every known router whose ROUTER_IP is outside the phoneLanHost subnet - so the phone
+  every known router whose ROUTER_IP is outside the phoneLanHost subnet — so the phone
   can re-associate to the desired wireless LAN gateway on that subnet.
 
 .EXAMPLE
@@ -219,7 +219,7 @@ function Wait-PcLanIdentityChange {
         }
     }
 
-    Write-Warning '[gateway] Timed out waiting for LAN IP/gateway change - re-checking current identity.'
+    Write-Warning '[gateway] Timed out waiting for LAN IP/gateway change — re-checking current identity.'
     return (Get-LoopSegmentsDefaultGatewayInfo)
 }
 
@@ -458,7 +458,7 @@ Phone LAN page: {2}
 Write-Host ""
 Write-Host ('[gateway] Current gateway {0} is NOT on the same subnet as the app LAN page ({1}).' -f $gatewayIp, $phoneHost) -ForegroundColor Yellow
 Write-Host '[gateway] Will reboot Wi-Fi on the CURRENT gateway, wait for this PC to get a new LAN IP,' -ForegroundColor Yellow
-Write-Host ('[gateway] then re-check - up to {0} rounds until the gateway shares the LAN page subnet.' -f $MaxWrongSubnetRounds) -ForegroundColor Yellow
+Write-Host ('[gateway] then re-check — up to {0} rounds until the gateway shares the LAN page subnet.' -f $MaxWrongSubnetRounds) -ForegroundColor Yellow
 Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
 
 $round = 0
@@ -470,7 +470,7 @@ while ($true) {
     if ($prefix -le 0) { $prefix = 24 }
 
     if ([string]::IsNullOrWhiteSpace($gatewayIp)) {
-        Write-Warning '[gateway] No default gateway right now - waiting for LAN to return...'
+        Write-Warning '[gateway] No default gateway right now — waiting for LAN to return...'
         $gwInfo = Wait-PcLanIdentityChange `
             -PreviousLocalIp $localIp `
             -PreviousGateway '' `
@@ -481,7 +481,7 @@ while ($true) {
 
     $sameSubnet = Test-SameIpv4Subnet -IpA $gatewayIp -IpB $phoneHost -PrefixLen $prefix
     if ($sameSubnet) {
-        Write-Host ('[gateway] OK - gateway {0} now shares the app LAN page subnet ({1}). Continuing.' -f $gatewayIp, $phoneHost) -ForegroundColor Green
+        Write-Host ('[gateway] OK — gateway {0} now shares the app LAN page subnet ({1}). Continuing.' -f $gatewayIp, $phoneHost) -ForegroundColor Green
         exit 0
     }
 
@@ -504,7 +504,7 @@ Phone LAN page: {2}
     }
 
     Write-Host ""
-    Write-Host ('[gateway] Round {0}: PC IP={1} gateway={2} still off LAN-page subnet {3} - rebooting current gateway Wi-Fi...' -f `
+    Write-Host ('[gateway] Round {0}: PC IP={1} gateway={2} still off LAN-page subnet {3} — rebooting current gateway Wi-Fi...' -f `
         $round,
         $(if ($localIp) { $localIp } else { '(unknown)' }),
         $gatewayIp,

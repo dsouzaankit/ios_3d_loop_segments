@@ -11,7 +11,7 @@
   "rcloneExe": "",
   "winfspDllPath": "",
   "skipWinFspCheck": false,
-  "minLanThroughputMbps": 45,
+  "minLanThroughputMbps": 40,
   "dlnaFolder": "",
   "webdavUser": "admin",
   "webdavPassword": "iosadmin",

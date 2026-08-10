@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$RecreateVenv,
     [switch]$ForceDeps,
     [switch]$NoLaunch,

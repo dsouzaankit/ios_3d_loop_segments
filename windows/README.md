@@ -177,7 +177,7 @@ With **`L:`** up, measure PC ↔ phone Wi‑Fi path using the largest media file
 # .\lan\Measure-LoopSegmentsLanThroughput.ps1 -KeepLocal       # keep temp copy
 ```
 
-Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a **max media bitrate** for minute segments (**80%** of measured LAN, clamped 5–100 Mbps) and writes sidecars under `pcld_ios_media\scripts\lan_throughput.json` and `archive\lan_recommended_segment_bitrate.json`. **`run_batch_vr_hybrid.ps1`** / **`Run-TranscodeFfmpeg.ps1`** pick that up for `-SegmentVideoBitrateMbps` (flat + fisheye pass-2). If measured throughput is below **`minLanThroughputMbps`** in `loop-segments-windows.json` (default **45**) while the gateway already shares the phone LAN page subnet, warns, **reboots the current gateway Wi‑Fi**, asks you to retry later, settles ~10s, then exits on **Enter**. This is **not** 5G WAN speed — it exercises rclone/WinFsp + phone WebDAV on the current gateway.
+Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a **max media bitrate** for minute segments (**80%** of measured LAN, clamped 5–100 Mbps) and writes sidecars under `pcld_ios_media\scripts\lan_throughput.json` and `archive\lan_recommended_segment_bitrate.json`. **`run_batch_vr_hybrid.ps1`** / **`Run-TranscodeFfmpeg.ps1`** pick that up for `-SegmentVideoBitrateMbps` (flat + fisheye pass-2). If measured throughput is below **`minLanThroughputMbps`** in `loop-segments-windows.json` (default **40**) while the gateway already shares the phone LAN page subnet, warns, **reboots the current gateway Wi‑Fi**, asks you to retry later, settles ~10s, then exits on **Enter**. This is **not** 5G WAN speed — it exercises rclone/WinFsp + phone WebDAV on the current gateway.
 
 ## What goes in `loop-segments-windows.json`
 
@@ -186,7 +186,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `phoneLanHost` | Primary iPhone IP for rclone mount (changes per Wi‑Fi) |
 | `phoneLanHosts` | Optional array `{ host, label?, port? }` — unified LAN listing across multiple iPhones |
 | `lanPort` | Usually `8765` |
-| `minLanThroughputMbps` | Companion/measure: if LAN probe is below this (default `45`) while gateway shares phone LAN subnet, reboot current gateway Wi‑Fi and stop |
+| `minLanThroughputMbps` | Companion/measure: if LAN probe is below this (default `40`) while gateway shares phone LAN subnet, reboot current gateway Wi‑Fi and stop |
 | `mountDriveLetter` | Drive letter for phone mount (default `L`; pick another if Koofr uses `L`) |
 | `rcloneRemoteName` | Block name in `rclone.conf` for the phone (default `loopsegments`) |
 | `rcloneConfigPath` | **Empty** = auto (`%APPDATA%\rclone\rclone.conf`; created blank on first mount if missing). Only set a full path for a non-default location. |
