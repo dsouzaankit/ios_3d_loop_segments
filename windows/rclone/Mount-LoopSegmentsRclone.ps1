@@ -248,36 +248,38 @@ function Test-PhoneLANExport {
 function Invoke-OffSubnetRouterRebootsForLanRecovery {
     param([string] $PhoneLanHost = '')
     if ($SkipOffSubnetRouterReboot) {
-        Write-Host '[gateway] Skipping off-subnet router reboots (-SkipOffSubnetRouterReboot)'
+        Write-Host '[lan-recover] Skipping phone LAN recovery (-SkipOffSubnetRouterReboot)'
         return $false
     }
-    $rebootPs1 = Join-Path $script:LoopSegmentsWindowsRoot 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
-    if (-not (Test-Path -LiteralPath $rebootPs1)) {
-        Write-Warning "[gateway] Missing $rebootPs1 — cannot reboot off-subnet routers for LAN recovery"
+    $recoverPs1 = Join-Path $script:LoopSegmentsWindowsRoot 'lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1'
+    if (-not (Test-Path -LiteralPath $recoverPs1)) {
+        Write-Warning "[lan-recover] Missing $recoverPs1 — cannot recover unreachable phone LAN"
         return $false
     }
 
-    Write-Host '[gateway] Phone LAN page not reachable - attempting to get the phone re-connected on the desired wireless LAN gateway'
-    Write-Host '[gateway] by sequentially rebooting routers whose IPs are outside the LAN page subnet...'
-    $args = @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-File', $rebootPs1,
-        '-RebootOffSubnetRouters'
-    )
-    if (-not [string]::IsNullOrWhiteSpace($PhoneLanHost)) {
-        $args += @('-PhoneLanHost', $PhoneLanHost)
-    }
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
+    Write-Host '[lan-recover] Phone LAN page not reachable - recovering onto the expected subnet...'
+    Write-Host '[lan-recover] Running recover in-process (same window)...'
+    $prevEap = $ErrorActionPreference
+    $code = 0
     try {
-        & (Get-LoopSegmentsPwshExe) @args
+        if (-not [string]::IsNullOrWhiteSpace($PhoneLanHost)) {
+            & $recoverPs1 -WaitBeforeRebootSec 0 -NoWaitEnter -PhoneLanHost $PhoneLanHost
+        } else {
+            & $recoverPs1 -WaitBeforeRebootSec 0 -NoWaitEnter
+        }
         $code = 0
-        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+    } catch {
+        $msg = [string]$_.Exception.Message
+        if ($msg -match 'LAN_RECOVER_EXIT:(\d+)') {
+            $code = [int]$Matches[1]
+        } else {
+            throw
+        }
     } finally {
-        $ErrorActionPreference = $prev
+        $ErrorActionPreference = $prevEap
     }
     if ($code -ne 0) {
-        Write-Warning "[gateway] Off-subnet router reboot pass failed (exit $code)"
+        Write-Warning "[lan-recover] Phone LAN recover failed (exit $code)"
         return $false
     }
     return $true
@@ -302,7 +304,7 @@ function Test-PhoneLANExportWithOffSubnetRecovery {
         if (-not (Invoke-OffSubnetRouterRebootsForLanRecovery -PhoneLanHost $HostName)) {
             throw
         }
-        Write-Host '[rclone] Retrying phone LAN page after off-subnet router reboot pass...'
+        Write-Host '[rclone] Retrying phone LAN page after phone-LAN recover...'
         Start-Sleep -Seconds 5
         Test-PhoneLANExport -HostName $HostName -PortNum $PortNum -User $User -Pass $Pass
     }

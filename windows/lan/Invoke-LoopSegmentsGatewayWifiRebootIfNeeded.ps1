@@ -19,6 +19,10 @@
   every known router whose ROUTER_IP is outside the phoneLanHost subnet — so the phone
   can re-associate to the desired wireless LAN gateway on that subnet.
 
+  When run directly (double-click / console), waits for Enter before closing so you can
+  read the result. Pass -NoWaitEnter when invoked as a child so the parent keeps a
+  single prompt.
+
 .EXAMPLE
   .\lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1
 
@@ -56,6 +60,39 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Wait-EnterToClose {
+    if ($NoWaitEnter) { return }
+    Write-Host ""
+    Write-Host 'Press Enter to close...' -ForegroundColor Yellow
+    try {
+        [void][Console]::ReadLine()
+    } catch {
+        Read-Host | Out-Null
+    }
+}
+
+function Exit-WithEnter {
+    param([int] $ExitCode = 0)
+    Wait-EnterToClose
+    exit $ExitCode
+}
+
+function Wait-EnterOnError {
+    param([int] $ExitCode = 1)
+    Exit-WithEnter -ExitCode $ExitCode
+}
+
+# Pause on fatal errors when this script is the console entry (not via companion).
+trap {
+    Write-Host ""
+    Write-Host ('[gateway] {0}' -f $_.Exception.Message) -ForegroundColor Red
+    if ($NoWaitEnter) {
+        throw $_
+    }
+    Wait-EnterToClose
+    exit 1
+}
 
 $PwshHelper = Join-Path $PSScriptRoot "..\lib\Get-LoopSegmentsPwsh.ps1"
 if (-not (Test-Path -LiteralPath $PwshHelper)) {
@@ -317,21 +354,6 @@ function Get-KnownRouterRebootTargets {
     return @($list.ToArray())
 }
 
-function Wait-EnterOnError {
-    param([int] $ExitCode = 1)
-    if ($NoWaitEnter) {
-        exit $ExitCode
-    }
-    Write-Host ""
-    Write-Host 'Press Enter to close...' -ForegroundColor Yellow
-    try {
-        [void][Console]::ReadLine()
-    } catch {
-        Read-Host | Out-Null
-    }
-    exit $ExitCode
-}
-
 function Invoke-RouterWifiRebootScript {
     param(
         [Parameter(Mandatory = $true)][string] $ScriptPath,
@@ -356,7 +378,7 @@ function Invoke-RouterWifiRebootScript {
 try {
 if ($SkipGatewayReboot) {
     Write-Host '[gateway] Skipping gateway Wi-Fi reboot check (-SkipGatewayReboot)'
-    exit 0
+    Exit-WithEnter 0
 }
 
 $phoneHost = Resolve-PhoneLanHost -Override $PhoneLanHost
@@ -383,7 +405,7 @@ if ($RebootOffSubnetRouters) {
     $allRouters = @(Get-KnownRouterRebootTargets -ScriptsRoot $RebootScriptsRoot)
     if ($allRouters.Count -eq 0) {
         Write-Warning ("[gateway] No router reboot scripts found under {0}" -f $RebootScriptsRoot)
-        exit 0
+        Exit-WithEnter 0
     }
 
     $offSubnet = @()
@@ -397,7 +419,7 @@ if ($RebootOffSubnetRouters) {
 
     if ($offSubnet.Count -eq 0) {
         Write-Host '[gateway] No off-subnet routers to reboot (all known ROUTER_IPs share the LAN page subnet).'
-        exit 0
+        Exit-WithEnter 0
     }
 
     Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
@@ -419,7 +441,7 @@ if ($RebootOffSubnetRouters) {
     }
 
     Write-Host '[gateway] Off-subnet router reboot pass complete. Retry phone LAN / rclone when the phone is back on the desired gateway.' -ForegroundColor Green
-    exit 0
+    Exit-WithEnter 0
 }
 
 # --- Default / ForceReboot: act on the PC's current default gateway ---
@@ -431,7 +453,7 @@ if ($prefix -le 0) { $prefix = 24 }
 
 if ([string]::IsNullOrWhiteSpace($gatewayIp)) {
     Write-Warning ("[gateway] No IPv4 default gateway found - skip Wi-Fi reboot check (phone LAN page: {0})." -f $phoneHost)
-    exit 0
+    Exit-WithEnter 0
 }
 
 # Avoid "$gateway[...]" parse ambiguity: never put $gatewayIp immediately before "[" in double quotes.
@@ -441,7 +463,7 @@ Write-Host ('[gateway] PC LAN IP: {0} | default gateway: {1} (/{2}) | phone LAN 
 $sameSubnet = Test-SameIpv4Subnet -IpA $gatewayIp -IpB $phoneHost -PrefixLen $prefix
 if ($sameSubnet -and -not $ForceReboot) {
     Write-Host '[gateway] Gateway is on the same subnet as the app LAN page - no reboot.'
-    exit 0
+    Exit-WithEnter 0
 }
 
 # Same-subnet ForceReboot (low-throughput recovery): single pass, then exit.
@@ -459,7 +481,7 @@ Phone LAN page: {2}
     Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
     Invoke-RouterWifiRebootScript -ScriptPath $rebootScript -Runtime $runtime
     Write-Host '[gateway] Reboot script finished (low-throughput / forced). Wait for Wi-Fi to settle, then retry.' -ForegroundColor Green
-    exit 0
+    Exit-WithEnter 0
 }
 
 # Wrong subnet (with or without -ForceReboot): reboot → wait for new LAN IP → re-check → loop.
@@ -490,7 +512,7 @@ while ($true) {
     $sameSubnet = Test-SameIpv4Subnet -IpA $gatewayIp -IpB $phoneHost -PrefixLen $prefix
     if ($sameSubnet) {
         Write-Host ('[gateway] OK — gateway {0} now shares the app LAN page subnet ({1}). Continuing.' -f $gatewayIp, $phoneHost) -ForegroundColor Green
-        exit 0
+        Exit-WithEnter 0
     }
 
     $round++

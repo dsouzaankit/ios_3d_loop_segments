@@ -890,39 +890,43 @@ function Test-RcloneMountProcessForDrive {
     return ($procs.Count -gt 0)
 }
 
-function Invoke-OffSubnetRouterRebootsForLanRecovery {
-    # When phoneLanHost is unreachable, reboot off-subnet routers so the phone can rejoin the desired gateway.
+function Invoke-PhoneLanRecoverIfNeeded {
+    # Probe expected phone LAN page; if down, reboot off-subnet routers and wait (standalone script).
     if ($SkipGatewayReboot) {
-        Write-Host "[gateway] Skipping off-subnet router reboots (-SkipGatewayReboot)"
-        return $false
+        Write-Host "[lan-recover] Skipping off-subnet phone LAN recovery (-SkipGatewayReboot)"
+        return (Wait-PhoneLanPageReachable -TimeoutSec 45 -Label 'rclone')
     }
-    $rebootPs1 = Join-Path $WindowsDir "lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1"
-    if (-not (Test-Path -LiteralPath $rebootPs1)) {
-        Write-Warning "[gateway] Missing $rebootPs1 - cannot reboot off-subnet routers for LAN recovery"
-        return $false
+    $recoverPs1 = Join-Path $WindowsDir "lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1"
+    if (-not (Test-Path -LiteralPath $recoverPs1)) {
+        Write-Warning "[lan-recover] Missing $recoverPs1 - falling back to LAN wait only"
+        return (Wait-PhoneLanPageReachable -TimeoutSec 45 -Label 'rclone')
     }
 
-    $psArgs = [System.Collections.Generic.List[string]]::new()
-    [void]$psArgs.Add("-NoProfile")
-    [void]$psArgs.Add("-ExecutionPolicy")
-    [void]$psArgs.Add("Bypass")
-    [void]$psArgs.Add("-File")
-    [void]$psArgs.Add($rebootPs1)
-    [void]$psArgs.Add("-RebootOffSubnetRouters")
-
-    Write-Host "[gateway] Phone LAN page not reachable - rebooting off-subnet routers so the phone can re-connect to the desired wireless LAN gateway..."
-    Write-Host "[gateway] > pwsh $($psArgs -join ' ')"
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
+    Write-Host "[lan-recover] Ensuring phone LAN page is on the expected subnet..."
+    Write-Host "[lan-recover] Running recover in-process (same window)..."
+    $savedWait = ${function:Wait-PhoneLanPageReachable}
+    $savedTest = ${function:Test-PhoneLanPageReachable}
+    $savedTcp = ${function:Test-TcpPortOpen}
+    $prevEap = $ErrorActionPreference
+    $code = 0
     try {
-        & (Get-LoopSegmentsPwshExe) @psArgs
+        & $recoverPs1 -NoWaitEnter
         $code = 0
-        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+    } catch {
+        $msg = [string]$_.Exception.Message
+        if ($msg -match 'LAN_RECOVER_EXIT:(\d+)') {
+            $code = [int]$Matches[1]
+        } else {
+            throw
+        }
     } finally {
-        $ErrorActionPreference = $prev
+        $ErrorActionPreference = $prevEap
+        if ($savedWait) { ${function:Wait-PhoneLanPageReachable} = $savedWait }
+        if ($savedTest) { ${function:Test-PhoneLanPageReachable} = $savedTest }
+        if ($savedTcp) { ${function:Test-TcpPortOpen} = $savedTcp }
     }
     if ($code -ne 0) {
-        Write-Warning "[gateway] Off-subnet router reboot pass failed (exit $code)"
+        Write-Warning "[lan-recover] Phone LAN recover failed (exit $code)"
         return $false
     }
     return $true
@@ -944,20 +948,10 @@ function Invoke-AttemptRcloneMount {
         return $false
     }
 
-    # USB launch may have just foregrounded the app; LAN server often needs a few seconds.
-    if (-not (Wait-PhoneLanPageReachable -TimeoutSec 45 -Label 'rclone')) {
-        Write-Warning "[rclone] Phone LAN not reachable after wait - attempting off-subnet router Wi-Fi reboots to pull the phone onto the desired gateway..."
-        if (Invoke-OffSubnetRouterRebootsForLanRecovery) {
-            if (Wait-PhoneLanPageReachable -TimeoutSec 90 -Label 'rclone-after-gateway') {
-                Write-Host "[rclone] Phone LAN is up after off-subnet router reboot pass"
-            } else {
-                Write-Warning "[rclone] Phone LAN still not reachable after off-subnet router reboots - skip mount attempt (open Loop Segments / Keep Alive, check phoneLanHost / Wi-Fi)"
-                return $false
-            }
-        } else {
-            Write-Warning "[rclone] Phone LAN not reachable - skip mount attempt (open Loop Segments / Keep Alive, check phoneLanHost)"
-            return $false
-        }
+    # USB launch may have just foregrounded the app; recover waits, then reboots off-subnet APs if still down.
+    if (-not (Invoke-PhoneLanRecoverIfNeeded)) {
+        Write-Warning "[rclone] Phone LAN not reachable - skip mount attempt (open Loop Segments / Keep Alive, check phoneLanHost / Wi-Fi)"
+        return $false
     }
 
     $letter = Get-CompanionMountDriveLetter

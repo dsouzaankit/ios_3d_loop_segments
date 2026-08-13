@@ -53,29 +53,32 @@ function Ensure-LoopSegmentsPwshHost {
     $pwsh = Get-LoopSegmentsPwshExe
     Write-Host ("[pwsh] Re-launching under PowerShell 7: {0}" -f $pwsh) -ForegroundColor Cyan
 
-    $argList = [System.Collections.Generic.List[string]]::new()
-    [void]$argList.Add('-NoProfile')
-    [void]$argList.Add('-ExecutionPolicy')
-    [void]$argList.Add('Bypass')
-    [void]$argList.Add('-File')
-    [void]$argList.Add($ScriptPath)
-
+    # Use the call operator (not Start-Process -ArgumentList). PS 5.1 Start-Process
+    # does not quote -File paths with spaces ("iOS apps"), so pwsh sees only
+    # P:\all_scripts\iOS and fails.
+    $fileArgs = [System.Collections.Generic.List[string]]::new()
     foreach ($key in @($BoundParameters.Keys)) {
         $val = $BoundParameters[$key]
         if ($val -is [System.Management.Automation.SwitchParameter]) {
-            if ($val.IsPresent) { [void]$argList.Add("-$key") }
+            if ($val.IsPresent) { [void]$fileArgs.Add("-$key") }
             continue
         }
         if ($val -is [bool]) {
-            if ($val) { [void]$argList.Add("-$key") }
+            if ($val) { [void]$fileArgs.Add("-$key") }
             continue
         }
-        [void]$argList.Add("-$key")
-        [void]$argList.Add([string]$val)
+        [void]$fileArgs.Add("-$key")
+        [void]$fileArgs.Add([string]$val)
     }
 
-    $p = Start-Process -FilePath $pwsh -ArgumentList $argList.ToArray() -Wait -PassThru -NoNewWindow
-    $code = 0
-    if ($null -ne $p -and $null -ne $p.ExitCode) { $code = [int]$p.ExitCode }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $pwsh -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @fileArgs
+        $code = 0
+        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
     exit $code
 }

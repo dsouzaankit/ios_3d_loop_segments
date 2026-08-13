@@ -13,7 +13,9 @@
   then sequentially reboot routers whose ROUTER_IP is outside that subnet (via
   Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -RebootOffSubnetRouters), then wait again.
 
-  When run directly, waits for Enter before closing. Pass -NoWaitEnter when invoked as a child.
+  When run directly, waits for Enter before closing. Pass -NoWaitEnter when invoked
+  in-process (companion / rclone) so Exit-WithEnter throws LAN_RECOVER_EXIT:<code>
+  instead of killing the caller.
 
 .EXAMPLE
   .\lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1
@@ -52,10 +54,14 @@ function Wait-EnterToClose {
 function Exit-WithEnter {
     param([int] $ExitCode = 0)
     Wait-EnterToClose
+    if ($NoWaitEnter) {
+        throw "LAN_RECOVER_EXIT:$ExitCode"
+    }
     exit $ExitCode
 }
 
 trap {
+    if ("$($_.Exception.Message)" -match '^LAN_RECOVER_EXIT:') { throw $_ }
     Write-Host ""
     Write-Host ('[lan-recover] {0}' -f $_.Exception.Message) -ForegroundColor Red
     if ($NoWaitEnter) {
@@ -71,6 +77,8 @@ if (-not (Test-Path -LiteralPath $PwshHelper)) {
 }
 . $PwshHelper
 Ensure-LoopSegmentsPwshHost -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters
+Write-Host '[lan-recover] Started.'
+try { [Console]::Out.Flush() } catch {}
 
 $WindowsDir = Split-Path -Parent $PSScriptRoot
 
@@ -241,25 +249,23 @@ try {
         ''
     }
     if (Test-Path -LiteralPath $altSubnetPs1) {
-        Write-Host '[lan-recover] Using USB/Bonjour AltServer subnet check (pymobiledevice3)...'
-        $psArgs = @(
-            '-NoProfile'
-            '-ExecutionPolicy'
-            'Bypass'
-            '-File'
-            $altSubnetPs1
-            '-NoWaitEnter'
-        )
-        if (-not [string]::IsNullOrWhiteSpace($RebootScriptsRoot)) {
-            $psArgs += @('-RebootScriptsRoot', $RebootScriptsRoot)
-        }
-        Write-Host ("[lan-recover] > pwsh {0}" -f ($psArgs -join ' '))
+        Write-Host '[lan-recover] Using USB/Bonjour/pcapd AltServer subnet check (pymobiledevice3)...'
+        Write-Host ("[lan-recover] > {0} -NoWaitEnter" -f $altSubnetPs1)
         $prev = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
+        $ErrorActionPreference = 'Stop'
+        $altCode = 0
         try {
-            & (Get-LoopSegmentsPwshExe) @psArgs
-            $altCode = 0
+            # Same pwsh process so [altserver-subnet] lines show immediately (child pwsh from P: was silent).
+            & $altSubnetPs1 -NoWaitEnter -RebootScriptsRoot $RebootScriptsRoot
             if ($null -ne $LASTEXITCODE) { $altCode = [int]$LASTEXITCODE }
+        } catch {
+            $msg = [string]$_.Exception.Message
+            if ($msg -match 'ALTSERVER_SUBNET_EXIT:(\d+)') {
+                $altCode = [int]$Matches[1]
+            } else {
+                Write-Warning ("[lan-recover] AltServer subnet check threw: {0} — falling back to LAN-page wait + off-subnet router reboots." -f $msg)
+                $altCode = 4
+            }
         } finally {
             $ErrorActionPreference = $prev
         }
@@ -292,6 +298,8 @@ try {
     }
 
     Write-Host '[lan-recover] Phone LAN page not reachable - rebooting off-subnet routers so the phone can rejoin the expected wireless LAN gateway...'
+    # Gateway reboot still uses exit (no throw-exit pattern), so a nested pwsh is
+    # required — in-process & would kill this recover / companion session.
     $psArgs = @(
         '-NoProfile'
         '-ExecutionPolicy'
@@ -329,6 +337,7 @@ try {
     Write-Warning '[lan-recover] Phone LAN still not reachable after off-subnet router reboots (open Loop Segments / Keep Alive, check phoneLanHost / Wi-Fi).'
     Exit-WithEnter 1
 } catch {
+    if ("$($_.Exception.Message)" -match '^LAN_RECOVER_EXIT:') { throw }
     Write-Host ""
     Write-Host ('[lan-recover] {0}' -f $_.Exception.Message) -ForegroundColor Red
     if ($_.ScriptStackTrace) {
