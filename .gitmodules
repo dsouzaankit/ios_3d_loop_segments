@@ -1,0 +1,3 @@
+[submodule "env_setup"]
+	path = env_setup
+	url = https://github.com/dsouzaankit/ios_env_setup.git

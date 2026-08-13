@@ -11,7 +11,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
 
-**PC companion (browse + request export):** [`windows/pcloud_web_companion`](windows/pcloud_web_companion) — on each Windows PC run `windows\setup\Setup-LoopSegmentsWindows.ps1` once, then `windows\pcloud_web_companion\Run-PCloudWebCompanion.ps1` (USB-opens Loop Segments if unlocked; Chromium profile lives on P: under `windows\pcloud_web_companion\chromium-profile`, local AppData cleared after exit). Browse pCloud on the PC while the phone exports over cellular via LAN REST (`/export_from_folder.json`, etc.).
+**PC companion (browse + request export):** [`windows/pcloud_web_companion`](windows/pcloud_web_companion) — clone with **`--recurse-submodules`** (repo-root **`env_setup/`**: AltServer start + phone-subnet helpers). On each Windows PC run `windows\setup\Setup-LoopSegmentsWindows.ps1` once, then `windows\pcloud_web_companion\Run-PCloudWebCompanion.ps1` (USB-opens Loop Segments if unlocked; Chromium profile lives on P: under `windows\pcloud_web_companion\chromium-profile`, local AppData cleared after exit). Browse pCloud on the PC while the phone exports over cellular via LAN REST (`/export_from_folder.json`, etc.).
 
 | Step | Device | Connection |
 |------|--------|------------|
@@ -54,7 +54,7 @@ Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT
 | **AMDS missing** | Full **iTunes uninstall/reinstall** (`iTunes64Setup.exe`, admin). **Do not** install Microsoft Store **Apple Devices** afterward — it removes **Apple Mobile Device Service** |
 | **Trust** | [Once per install](ios/BUILD-WITHOUT-MAC.md#trust-the-developer-on-iphone-required-once-not-weekly) — Settings → General → VPN & Device Management |
 
-Optional: `windows/sideload/Register-AltServerAtLogon.ps1` keeps AltServer in the tray; you still plug in USB for refresh when Wi‑Fi pairing fails.
+Optional: `windows/sideload/Register-AltServerAtLogon.ps1` keeps AltServer in the tray; companion / USB launch also **start AltServer if it is installed but idle** (`env_setup/altserver_refresh_scripts`). You still plug in USB for refresh when Wi‑Fi pairing fails.
 
 Export uses **AVFoundation** on device (no embedded ffmpeg). **iOS 26.x:** **1.0.5+** to launch; **1.1.0** for export and fixed logs. Rebuild IPA from GitHub Actions if the phone still shows 1.0.5.
 
@@ -72,6 +72,7 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [copy-to-icloud.ps1](copy-to-icloud.ps1) | Stamped iCloud paste + prune (shared by deploy; no build) |
 | [ios/](ios/) | Loop Segments iPhone app |
 | [windows/README.md](windows/README.md) | **Portable PC setup** (`loop-segments-windows.json`) |
+| [env_setup/](env_setup/) | Submodule: start AltServer; phone vs PC/AltServer subnet ([ios_env_setup](https://github.com/dsouzaankit/ios_env_setup)) |
 | [windows/rclone/Mount-LoopSegmentsRclone.ps1](windows/rclone/Mount-LoopSegmentsRclone.ps1) | WebDAV **`-TestOnly`** / **mount** / `-Remove` / `-Unstick` / LAN watch — see [RCLONE-PHONE-MOUNT.md](windows/rclone/RCLONE-PHONE-MOUNT.md) |
 | [windows/setup/Set-LoopSegmentsWindows.ps1](windows/setup/Set-LoopSegmentsWindows.ps1) | Per-PC paths (rclone, WinFsp, drive letter) |
 | [windows/archive/](windows/archive/) | Legacy `net use` / port-80 proxy, `Sync-FromPhoneLAN.ps1` |

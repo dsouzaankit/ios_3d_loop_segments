@@ -1,10 +1,10 @@
 ﻿# Loop Segments — Windows (portable)
 
-Scripts work on **any Windows PC** after you copy or clone this repo. Machine-specific paths live in **`loop-segments-windows.json`** (gitignored) in this folder. Shared helpers live in **`lib\`**; entry-point scripts are grouped by role under subfolders.
+Scripts work on **any Windows PC** after you copy or clone this repo (`git clone --recurse-submodules` so **`env_setup`** is present). Machine-specific paths live in **`loop-segments-windows.json`** (gitignored) in this folder. Shared helpers live in **`lib\`**; entry-point scripts are grouped by role under subfolders.
 
 **IPA → iCloud:** from the **repo root** (parent of this folder), run **`..\deploy.ps1`** (build/fetch, then calls **`copy-to-icloud.ps1`**) or **`..\copy-to-icloud.ps1`** alone (stamped `LoopSegments-b{build}-{time}.ipa`, like web_auto_parking). See [../ios/BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md).
 
-**PowerShell:** scripts target **PowerShell 7** (`pwsh`). Opening a `.ps1` under Windows PowerShell 5.1 re-launches into 7 when the shared helper is present. Install: https://aka.ms/powershell
+**PowerShell:** use **PowerShell 7** (`pwsh`) — install: https://aka.ms/powershell. Open a **pwsh** prompt (not the blue Windows PowerShell 5.1 console) before running `.ps1` files. If you do start one under 5.1, a helper **re-runs that same script under `pwsh`** and exits 5.1 with the child’s code. Prefer a 7 prompt; the bounce is a fallback (path spaces like `iOS apps` used to break it). `.cmd` launchers already call `pwsh`.
 
 Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mount-LoopSegmentsRclone.ps1` (or existing `Mount-PhoneL.cmd`).
 
@@ -13,7 +13,7 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 | Folder | Role |
 |--------|------|
 | *(this folder)* | `README.md`, `loop-segments-windows.json` (+ example), legacy `loop-segments-lan-host.txt` |
-| `lib/` | Shared helpers: `LoopSegments-Windows.ps1`, Python picker, AltServer helpers |
+| `lib/` | Shared helpers: `LoopSegments-Windows.ps1`, Python picker, AltServer wrappers (`env_setup` submodule) |
 | `setup/` | New-PC bootstrap + edit per-PC json / LAN IP |
 | `usb/` | Force-open / Home over USB (`pymobiledevice3`) |
 | `sideload/` | AltServer logon task; Sideloadly fallback |
@@ -71,7 +71,7 @@ Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** �
 
 ## pCloud web helper (integrated)
 
-Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then prints LAN status, USB-launches Loop Segments to foreground the app (blocks if the phone is locked), **attempts an rclone mount** in a separate window when LAN is up (if the LAN page is unreachable, **sequentially reboots off-subnet routers** so the phone can rejoin the desired wireless LAN gateway), then **probes LAN Mbps** off `L:` (up to 64 MB).
+Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then prints LAN status, USB-launches Loop Segments to foreground the app (blocks if the phone is locked), **attempts an rclone mount** in a separate window when LAN is up (if the LAN page is unreachable, **`lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`** first uses USB/Bonjour to put the phone on the PC/AltServer subnet, then waits for `:8765`; without USB it **sequentially reboots off-subnet routers**), then **probes LAN Mbps** off `L:` (up to 64 MB).
 
 **Multi-select tip:** in my.pcloud.com, click the **`v`** control to filter the folder by one of **five** types (including **Video**), then multi-select → Download — the companion cancels the zip and queues videos on the phone FIFO. **Folder right-click → Download is not supported** (zip cancelled, no `fileid`s → “no selection ids”); open the folder, select the videos, then Download instead. Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
@@ -119,7 +119,7 @@ py -3.12 -m pip install -U pymobiledevice3
 | Home on quit | Companion finish presses **Home** over USB (`usb\Go-IphoneHomeViaUsb.ps1`) to background Loop Segments. Requires USB + **unlocked** phone; otherwise skipped. Each pymobiledevice3 attempt times out (~25s) so finish cannot hang forever; `-SkipGoHome` leaves the app foreground. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
 | Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh (cert refresh — separate from App ID renew above). **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. Companion / USB launch auto-start AltServer when installed but idle |
 | AltStore UDID (1006) | **“could not determine this device's UDID”** — reinstall AltStore from AltServer (USB). Then **Refresh All**. If Loop Segments is **“not available”**, reinstall the **same** IPA via My Apps → **+** (new GitHub build not required). See tip above / [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) |
-| AltServer | Companion / USB launch report status and **start AltServer if installed but not running**. Setup reports status only. Optional logon start: `.\sideload\Register-AltServerAtLogon.ps1` |
+| AltServer | Companion / USB launch report status and **start AltServer if installed but not running** (core: `..\env_setup\altserver_refresh_scripts\Invoke-AltServerIfNeeded.ps1`). Setup reports status only. Optional logon start: `.\sideload\Register-AltServerAtLogon.ps1` |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
 | Background launch | **Not supported** — USB launch opens the app; lock only after Keep Alive is running (app setting) |
 | iOS 17+ tunnel | If DVT fails: elevated `py -3.12 -m pymobiledevice3 remote tunneld`, then `.\usb\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount` |
@@ -132,7 +132,7 @@ After setup, double-click **`rclone\Mount-PhoneL.cmd`** or run:
 rclone\Mount-PhoneL.cmd
 ```
 
-Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. While mounted, the script polls phone `status.json` and **kills rclone + exits** if LAN stays down ~90s (avoids Explorer hangs). If the phone LAN page cannot be reached at mount time, it **sequentially reboots off-subnet routers** (`P:\all_scripts\5g_router_reboot`) to get the phone re-connected on the desired wireless LAN gateway, then retries (`-SkipOffSubnetRouterReboot` to disable). Mount log: **`rclone\loopsegments-rclone-mount.log`**. If the IP changed: `.\setup\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
+Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. While mounted, the script polls phone `status.json` and **kills rclone + exits** if LAN stays down ~90s (avoids Explorer hangs). If the phone LAN page cannot be reached at mount time, **`..\lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`** uses USB/Bonjour (`env_setup\altserver_refresh_scripts`) to align the phone with the PC/AltServer subnet (or, without USB, reboots off-subnet routers under `P:\all_scripts\5g_router_reboot`), then retries (`-SkipOffSubnetRouterReboot` to disable). Mount log: **`rclone\loopsegments-rclone-mount.log`**. If the IP changed: `.\setup\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
 
 Optional args: **`rclone\Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestOnly`**, **`-Unstick`**, **`-Quick`**, **`-NoLanWatch`**, **`-LanDownSeconds`**, **`-LanPollSeconds`**.
 
@@ -227,12 +227,13 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `setup\Setup-LoopSegmentsWindows.ps1` | **New PC bootstrap** — Python 3.12 / pymobiledevice3 / companion venv / portable json |
 | `lib\Get-LoopSegmentsPython.ps1` | Shared Python picker (dot-sourced; prefer 3.12, skip 3.14+) |
 | `lib\LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
-| `lib\Get-LoopSegmentsAltServer.ps1` | Locate/start AltServer; warn if missing (7-day AltStore expiry) |
+| `lib\Get-LoopSegmentsAltServer.ps1` | Loop Segments wrapper around **`..\env_setup\altserver_refresh_scripts\Get-AltServer.ps1`** (locate/start); 7-day / Trust copy stays here |
 | `setup\Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `setup\Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |
 | `lan\Get-LoopSegmentsUnifiedLANListing.ps1` | **Pool media listings** from all `phoneLanHosts` → JSON or HTML |
 | `lan\Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
-| `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1` | Wrong-subnet **loop** (reboot → wait new PC LAN IP → re-check, max 3 rounds) / forced / **off-subnet sequential** Wi‑Fi reboots (`P:\all_scripts\5g_router_reboot`) |
+| `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1` | Wrong-subnet **loop** (reboot → wait new PC LAN IP → re-check, max 3 rounds) / forced / **off-subnet sequential** Wi‑Fi reboots (`P:\all_scripts\5g_router_reboot`). Direct run waits for Enter; companion passes `-NoWaitEnter`. |
+| `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1` | USB/Bonjour **`env_setup\altserver_refresh_scripts`** first (phone IP vs PC/AltServer subnet), then wait for `:8765`. If already on-subnet, does not reboot just because the app is down. No USB / no Wi-Fi IP: wait then reboot off-subnet routers. |
 | `lan\Measure-LoopSegmentsLanThroughput.ps1` | Time up to 64 MB via phone HTTP from a random `L:\pcld_ios_media\archive\` media file → Mbps + recommended max segment bitrate sidecar for hybrid batch |
 | `rclone\Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `rclone\Unstick-PhoneL.cmd` | Kill dead phone mount + restart Explorer |
