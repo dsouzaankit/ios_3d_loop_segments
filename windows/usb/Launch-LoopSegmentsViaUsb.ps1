@@ -24,8 +24,10 @@
   Install tool once:
       py -3.12 -m pip install -U pymobiledevice3
 
-  iOS 17+: launch tries --userspace tunnel first (no admin). If that fails,
-  start an elevated tunneld in another window:
+  iOS 17+: launch tries DVT --userspace first (no admin). core-device
+  --userspace often times out on the RSD handshake (iOS 26); that is a
+  fallback, not a failure if DVT then launches. If both fail, start an
+  elevated tunneld in another window:
       py -3.12 -m pymobiledevice3 remote tunneld
   then re-run this script with -UseTunneld.
 
@@ -108,6 +110,28 @@ function Write-CommandLines {
     foreach ($line in $Lines) {
         if ($line) { Write-Host $line }
     }
+}
+
+function Write-PymobileAttemptOutput {
+    param(
+        [string[]] $Lines,
+        [switch] $CollapseIfFailed
+    )
+    if (-not $CollapseIfFailed) {
+        Write-CommandLines -Lines $Lines
+        return
+    }
+    $blob = @($Lines) -join "`n"
+    if ($blob -notmatch 'Traceback \(most recent call last\)') {
+        Write-CommandLines -Lines $Lines
+        return
+    }
+    $err = @(
+        $Lines | Where-Object { $_ -match '^(TimeoutError|ConnectionError|OSError|RuntimeError|ProtocolError)\b' }
+    ) | Select-Object -Last 1
+    if (-not $err -and $blob -match 'TimeoutError') { $err = 'TimeoutError' }
+    if (-not $err) { $err = 'pymobiledevice3 error' }
+    Write-Host ("  skipped ({0}) — trying next launch method." -f $err.Trim()) -ForegroundColor DarkGray
 }
 
 function Invoke-Pymobile {
@@ -277,21 +301,23 @@ if (-not $SkipMount) {
 $launchAttempts = @()
 if ($UseTunneld) {
     $launchAttempts += , @{
-        Label   = "core-device launch-application --tunnel ''"
-        CliArgs = @("developer", "core-device", "launch-application", $BundleId, "_", "--tunnel", "")
-    }
-    $launchAttempts += , @{
         Label   = "dvt launch --tunnel ''"
         CliArgs = @("developer", "dvt", "launch", $BundleId, "--tunnel", "")
     }
+    $launchAttempts += , @{
+        Label   = "core-device launch-application --tunnel ''"
+        CliArgs = @("developer", "core-device", "launch-application", $BundleId, "_", "--tunnel", "")
+    }
+}
+# DVT userspace first: core-device --userspace often times out on the RSD
+# handshake (iOS 26) even when DVT can launch.
+$launchAttempts += , @{
+    Label   = "dvt launch --userspace"
+    CliArgs = @("developer", "dvt", "launch", $BundleId, "--userspace")
 }
 $launchAttempts += , @{
     Label   = "core-device launch-application --userspace"
     CliArgs = @("developer", "core-device", "launch-application", $BundleId, "_", "--userspace")
-}
-$launchAttempts += , @{
-    Label   = "dvt launch --userspace"
-    CliArgs = @("developer", "dvt", "launch", $BundleId, "--userspace")
 }
 $launchAttempts += , @{
     Label   = "dvt launch"
@@ -304,18 +330,20 @@ $allOutput = New-Object System.Collections.Generic.List[string]
 foreach ($attempt in $launchAttempts) {
     Write-Host "Trying $($attempt.Label)..."
     $result = Invoke-PythonRuntime -Runtime $rt -ArgumentList (@("-m", "pymobiledevice3") + $attempt.CliArgs)
-    Write-CommandLines -Lines $result.Lines
     foreach ($line in $result.Lines) { [void]$allOutput.Add($line) }
     $lastErr = $result.ExitCode
     $joined = ($result.Lines -join "`n")
-    if ($result.ExitCode -eq 0 -and $joined -notmatch "Traceback|DTXNsError|CoreDeviceError|failed to launch|RequestDenied|Request to launch") {
-        $ok = $true
-        break
-    }
     if ($joined -match "Process launched with pid") {
+        Write-PymobileAttemptOutput -Lines $result.Lines
         $ok = $true
         break
     }
+    if ($result.ExitCode -eq 0 -and $joined -notmatch "Traceback|DTXNsError|CoreDeviceError|failed to launch|RequestDenied|Request to launch") {
+        Write-PymobileAttemptOutput -Lines $result.Lines
+        $ok = $true
+        break
+    }
+    Write-PymobileAttemptOutput -Lines $result.Lines -CollapseIfFailed
 }
 
 if (-not $ok) {

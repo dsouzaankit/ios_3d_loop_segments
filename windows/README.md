@@ -98,7 +98,7 @@ Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
 ## Open Loop Segments over USB (pymobiledevice3)
 
-Force-launch the app from the PC when the iPhone is **USB-connected** and trusted (iTunes / Apple Mobile Device Support). Used standalone or by `Run-PCloudWebCompanion.ps1` before Chromium. Scripts: `usb\Launch-LoopSegmentsViaUsb.ps1`, `usb\Resolve-LoopSegmentsBundleId.py`, `usb\Probe-IphoneUnlock.py`, `usb\Probe-LoopSegmentsForeground.py`. Skips relaunch when USB DVT already reports the app **foreground** (`-ForceRelaunch` to always launch).
+Force-launch the app from the PC when the iPhone is **USB-connected** and trusted (iTunes / Apple Mobile Device Support). Used standalone or by `Run-PCloudWebCompanion.ps1` before Chromium. Scripts: `usb\Launch-LoopSegmentsViaUsb.ps1`, `usb\Resolve-LoopSegmentsBundleId.py`, `usb\Probe-IphoneUnlock.py`, `usb\Probe-LoopSegmentsForeground.py`. Skips relaunch when USB DVT already reports the app **foreground** (`-ForceRelaunch` to always launch). Launch order is **DVT `--userspace` first**; `core-device launch-application --userspace` often times out on the RSD handshake (iOS 26) and is only a fallback — a `TimeoutError` traceback there is not a failed launch if DVT then prints `Process launched with pid`.
 
 ```powershell
 # Prefer Setup (installs 3.12 tooling). Manual:
@@ -122,7 +122,7 @@ py -3.12 -m pip install -U pymobiledevice3
 | AltServer | Companion / USB launch report status and **start AltServer if installed but not running** (core: `..\env_setup\altserver_refresh_scripts\Invoke-AltServerIfNeeded.ps1`). Setup reports status only. Optional logon start: `.\sideload\Register-AltServerAtLogon.ps1` |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
 | Background launch | **Not supported** — USB launch opens the app; lock only after Keep Alive is running (app setting) |
-| iOS 17+ tunnel | If DVT fails: elevated `py -3.12 -m pymobiledevice3 remote tunneld`, then `.\usb\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount` |
+| iOS 17+ / 26 launch | Tries **`dvt launch --userspace`** first (no admin). `core-device --userspace` RSD handshake timeouts are collapsed to one line and the next method is tried. If DVT also fails: elevated `py -3.12 -m pymobiledevice3 remote tunneld`, then `.\usb\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount` |
 
 ## Day-to-day mount
 
@@ -240,7 +240,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `rclone\Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** / mount / **`-Remove`** / **`-Unstick`** / **`-Quick`** / LAN watch / **`-RemovePort80Proxy`** |
 | `rclone\loopsegments-rclone-mount.log` | rclone mount log (local; gitignored) |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: gateway subnet check/reboot, USB-launch Loop Segments, sync profile, start browser |
-| `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); skips if already foreground; exit **3** if phone locked |
+| `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); DVT `--userspace` first; skips if already foreground; exit **3** if phone locked |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Press Home over USB to background the app (companion finish); needs USB + unlocked; exit **3** if locked |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |
 | `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
