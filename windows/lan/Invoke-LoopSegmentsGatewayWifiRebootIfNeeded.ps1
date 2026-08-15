@@ -19,6 +19,9 @@
   every known router whose ROUTER_IP is outside the phoneLanHost subnet — so the phone
   can re-associate to the desired wireless LAN gateway on that subnet.
 
+  -RebootOtherRouters: reboot Wi-Fi on every known router except the PC's current
+  default gateway (low-throughput recovery; leaves this PC's AP up).
+
   When run directly (double-click / console), waits for Enter before closing so you can
   read the result. Pass -NoWaitEnter when invoked as a child so the parent keeps a
   single prompt.
@@ -41,6 +44,8 @@ param(
     # Sequentially reboot all known routers whose IPs are outside the phone LAN page subnet
     # (used when the LAN page / rclone target cannot be reached).
     [switch] $RebootOffSubnetRouters,
+    # Reboot every known router except the current default gateway (low LAN throughput).
+    [switch] $RebootOtherRouters,
     [string] $PhoneLanHost = '',
     [string] $RebootScriptsRoot = 'P:\all_scripts\5g_router_reboot',
     [int] $PrefixLength = 0,
@@ -441,6 +446,53 @@ if ($RebootOffSubnetRouters) {
     }
 
     Write-Host '[gateway] Off-subnet router reboot pass complete. Retry phone LAN / rclone when the phone is back on the desired gateway.' -ForegroundColor Green
+    Exit-WithEnter 0
+}
+
+# --- Low-throughput: reboot every known router except the PC's current gateway ---
+if ($RebootOtherRouters) {
+    Write-Host ''
+    Write-Host '[gateway] Low LAN throughput: rebooting Wi-Fi on other routers/gateways (not the current default gateway).' -ForegroundColor Yellow
+
+    $allRouters = @(Get-KnownRouterRebootTargets -ScriptsRoot $RebootScriptsRoot)
+    if ($allRouters.Count -eq 0) {
+        Write-Warning ("[gateway] No router reboot scripts found under {0}" -f $RebootScriptsRoot)
+        Exit-WithEnter 0
+    }
+
+    $others = @()
+    foreach ($router in $allRouters) {
+        if ($gatewayIp -and ($router.Ip -eq $gatewayIp)) {
+            Write-Host ('[gateway] Keep (current default gateway): {0} ({1})' -f $router.Ip, $router.Model)
+        } else {
+            $others += $router
+        }
+    }
+
+    if ($others.Count -eq 0) {
+        Write-Host '[gateway] No other routers to reboot (only the current gateway is known).'
+        Exit-WithEnter 0
+    }
+
+    Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
+    $settle = [Math]::Max(1, $SettleSecBetweenRouters)
+    $index = 0
+    foreach ($router in $others) {
+        $index++
+        Write-Host ''
+        Write-Host ('[gateway] ({0}/{1}) Rebooting other router {2} ({3})...' -f `
+            $index, $others.Count, $router.Ip, $router.Model) -ForegroundColor Cyan
+        try {
+            Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime
+            Write-Host ('[gateway] Reboot finished for {0}.' -f $router.Ip) -ForegroundColor Green
+        } catch {
+            Write-Warning ("[gateway] Reboot failed for {0}: {1}" -f $router.Ip, $_.Exception.Message)
+        }
+        Write-Host ('[gateway] Waiting {0}s before the next router / settle...' -f $settle)
+        Start-Sleep -Seconds $settle
+    }
+
+    Write-Host '[gateway] Other-router Wi-Fi reboot pass complete.' -ForegroundColor Green
     Exit-WithEnter 0
 }
 

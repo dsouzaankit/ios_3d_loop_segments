@@ -5,11 +5,11 @@
   Bring the phone onto the PC/AltServer subnet, then wait for the Loop Segments LAN page.
 
 .DESCRIPTION
-  Prefers USB/Bonjour via env_setup\altserver_refresh_scripts\Invoke-AltServerPhoneSubnetIfNeeded.ps1
+  Prefers USB/pcapd via env_setup\altserver_refresh_scripts\Invoke-AltServerPhoneSubnetIfNeeded.ps1
   (pymobiledevice3 phone Wi-Fi IP vs this PC's LAN). If the phone is already on a PC subnet,
   waits for http://phoneLanHost:8765/ and does not reboot routers just because the app is down.
 
-  If USB is missing or the phone has no advertised Wi-Fi IP, falls back to: wait for :8765,
+  If USB is missing or pcapd finds no Wi-Fi IPv4, falls back to: wait for :8765,
   then sequentially reboot routers whose ROUTER_IP is outside that subnet (via
   Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -RebootOffSubnetRouters), then wait again.
 
@@ -249,7 +249,7 @@ try {
         ''
     }
     if (Test-Path -LiteralPath $altSubnetPs1) {
-        Write-Host '[lan-recover] Using USB/Bonjour/pcapd AltServer subnet check (pymobiledevice3)...'
+        Write-Host '[lan-recover] Using USB/pcapd AltServer subnet check (pymobiledevice3)...'
         Write-Host ("[lan-recover] > {0} -NoWaitEnter" -f $altSubnetPs1)
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Stop'
@@ -273,7 +273,7 @@ try {
             Write-Host '[lan-recover] Phone and PC/AltServer are on the same subnet.'
             $usbSubnetOk = $true
         } elseif ($altCode -eq 2 -or $altCode -eq 4) {
-            Write-Host ('[lan-recover] USB/Bonjour could not give a phone LAN IP (exit {0}) — falling back to LAN-page wait + off-subnet router reboots.' -f $altCode)
+            Write-Host ('[lan-recover] USB/pcapd could not give a phone LAN IP (exit {0}) — falling back to LAN-page wait + off-subnet router reboots.' -f $altCode)
         } else {
             Write-Warning ("[lan-recover] AltServer subnet refresh failed (exit {0})" -f $altCode)
             Exit-WithEnter $altCode

@@ -14,9 +14,9 @@
   (unless -SkipUsbLaunch), then attempts an rclone WebDAV mount (unless
   -SkipRcloneMount) in a separate window when LAN is up, then probes LAN
   throughput off the mount (unless -SkipLanThroughput). If throughput is below
-  minLanThroughputMbps in loop-segments-windows.json (default 40) while gateway and
-  LAN page share a subnet, forces a gateway Wi-Fi reboot,
-  asks you to retry later, waits briefly, then exits on Enter (Chromium not started).
+  minLanThroughputMbps (default 40), reboots Wi-Fi on other known routers (not the
+  current gateway), waits to settle, and re-measures — up to 2 retries. Chromium
+  stays open (this PC's AP is not bounced).
   Exit code 3 (phone locked) aborts Chromium. No USB / other USB failures abort only when
   phone LAN is also down; if LAN is up, warns and continues.
   On any error / non-zero exit, waits for a single Enter so a double-clicked console
@@ -48,6 +48,15 @@
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -NoDarkMode
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -SkipSkybox
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -SkipVirtualDesktop
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -SkipClashMdnsRoute
 #>
 [CmdletBinding()]
 param(
@@ -65,6 +74,9 @@ param(
     [switch] $KeepLocalProfile,
     [switch] $SkipGoHome,
     [switch] $NoDarkMode,
+    [switch] $SkipSkybox,
+    [switch] $SkipVirtualDesktop,
+    [switch] $SkipClashMdnsRoute,
     [string] $StartUrl = "https://my.pcloud.com"
 )
 
@@ -111,6 +123,9 @@ try {
         KeepLocalProfile                = $KeepLocalProfile
         SkipGoHome                      = $SkipGoHome
         NoDarkMode                      = $NoDarkMode
+        SkipSkybox                      = $SkipSkybox
+        SkipVirtualDesktop              = $SkipVirtualDesktop
+        SkipClashMdnsRoute              = $SkipClashMdnsRoute
         NoWaitEnterOnFatal              = $true
         StartUrl                        = $StartUrl
     }

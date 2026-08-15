@@ -30,9 +30,11 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         rcloneExe               = ''
         winfspDllPath           = ''
         skipWinFspCheck         = $false
-        # Below this measured LAN Mbps (same-subnet), companion/measure forces gateway Wi-Fi reboot.
+        # Below this measured LAN Mbps, companion/measure reboots other routers and re-checks (up to 2 retries).
         minLanThroughputMbps    = 40
         dlnaFolder              = ''
+        skyboxExe               = ''
+        virtualDesktopStreamerExe = ''
         webdavUser              = 'admin'
         webdavPassword          = 'iosadmin'
         iCloudDownloads         = ''
@@ -754,7 +756,7 @@ function Show-LoopSegmentsWindowsDiagnostics {
         # single-host diagnostics still useful when phoneLanHost is empty
     }
     Write-Host "  Mount drive:     $(Get-LoopSegmentsMountDriveLetter):"
-    Write-Host "  Min LAN Mbps:    $(Get-LoopSegmentsMinLanThroughputMbps) (gateway reboot if probe below this on correct subnet)"
+    Write-Host "  Min LAN Mbps:    $(Get-LoopSegmentsMinLanThroughputMbps) (other-router Wi-Fi reboot + re-check if probe below this)"
     Write-Host "  rclone remote:   $(Get-LoopSegmentsRcloneRemoteName)"
     $creds = Get-LoopSegmentsWebDAVCredentials
     Write-Host "  WebDAV auth:     $($creds.User) / (password in json or default iosadmin)"
@@ -769,6 +771,12 @@ function Show-LoopSegmentsWindowsDiagnostics {
     Write-Host "  WinFsp:          $(if ($winfsp) { 'OK' } elseif ($settings.skipWinFspCheck) { 'check skipped' } else { 'not found (set winfspDllPath or skipWinFspCheck)' })"
     if (-not [string]::IsNullOrWhiteSpace($settings.dlnaFolder)) {
         Write-Host "  DLNA folder:     $($settings.dlnaFolder)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($settings.skyboxExe)) {
+        Write-Host "  Skybox exe:      $($settings.skyboxExe)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($settings.virtualDesktopStreamerExe)) {
+        Write-Host "  VD Streamer:     $($settings.virtualDesktopStreamerExe)"
     }
     if (-not [string]::IsNullOrWhiteSpace($settings.notes)) {
         Write-Host "  Notes:           $($settings.notes)"

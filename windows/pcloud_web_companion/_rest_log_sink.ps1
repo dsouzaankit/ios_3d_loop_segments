@@ -1,6 +1,7 @@
 param(
     [string]$LogFile = $(Join-Path $PSScriptRoot "rest.log"),
-    [int]$Port = 18765
+    [int]$Port = 18765,
+    [int]$CompanionPid = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,6 +9,79 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogFile) | Out-Nu
 
 function Write-LogLine([string]$Line) {
     Add-Content -LiteralPath $LogFile -Value $Line -Encoding utf8
+}
+
+if (-not ('CompanionNativeFocus' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class CompanionNativeFocus {
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    public const int SW_RESTORE = 9;
+    public const int SW_SHOW = 5;
+}
+"@
+}
+
+function Get-CompanionConsoleHandle {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) { return [IntPtr]::Zero }
+    try {
+        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
+        if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+            return $proc.MainWindowHandle
+        }
+        $parentId = $null
+        try {
+            $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue).ParentProcessId
+        } catch {}
+        if ($parentId) {
+            $parent = Get-Process -Id $parentId -ErrorAction SilentlyContinue
+            if ($parent -and $parent.MainWindowHandle -ne [IntPtr]::Zero) {
+                return $parent.MainWindowHandle
+            }
+        }
+    } catch {}
+    return [IntPtr]::Zero
+}
+
+function Show-CompanionConsole {
+    $hwnd = Get-CompanionConsoleHandle -ProcessId $CompanionPid
+    if ($hwnd -eq [IntPtr]::Zero) {
+        return $false
+    }
+    try {
+        if ([CompanionNativeFocus]::IsIconic($hwnd)) {
+            [void][CompanionNativeFocus]::ShowWindow($hwnd, [CompanionNativeFocus]::SW_RESTORE)
+        } else {
+            [void][CompanionNativeFocus]::ShowWindow($hwnd, [CompanionNativeFocus]::SW_SHOW)
+        }
+        [void][CompanionNativeFocus]::BringWindowToTop($hwnd)
+        $fg = [CompanionNativeFocus]::GetForegroundWindow()
+        $fgPid = [uint32]0
+        $fgTid = [CompanionNativeFocus]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+        $thisTid = [CompanionNativeFocus]::GetCurrentThreadId()
+        if ($fgTid -ne 0 -and $fgTid -ne $thisTid) {
+            [void][CompanionNativeFocus]::AttachThreadInput($thisTid, $fgTid, $true)
+            [void][CompanionNativeFocus]::SetForegroundWindow($hwnd)
+            [void][CompanionNativeFocus]::AttachThreadInput($thisTid, $fgTid, $false)
+        } else {
+            [void][CompanionNativeFocus]::SetForegroundWindow($hwnd)
+        }
+        try {
+            [void](New-Object -ComObject WScript.Shell).AppActivate($CompanionPid)
+        } catch {}
+        return $true
+    } catch {
+        return $false
+    }
 }
 
 # Stop previous sinks (same script) so the port is free.
@@ -236,6 +310,10 @@ while ($true) {
             }
         } elseif ($line -match '^GET\s+/health\b') {
             Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body '{"ok":true,"phoneLanRelay":true}'
+        } elseif ($line -match '^(GET|POST)\s+/focus-console\b') {
+            $okFocus = Show-CompanionConsole
+            $payload = (@{ ok = [bool]$okFocus; pid = $CompanionPid } | ConvertTo-Json -Compress)
+            Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body $payload
         } else {
             Write-HttpResponse -Stream $req.Stream -StatusCode 404 -Body '{"ok":false}'
         }

@@ -1,4 +1,4 @@
-﻿# Loop Segments — Windows (portable)
+# Loop Segments — Windows (portable)
 
 Scripts work on **any Windows PC** after you copy or clone this repo (`git clone --recurse-submodules` so **`env_setup`** is present). Machine-specific paths live in **`loop-segments-windows.json`** (gitignored) in this folder. Shared helpers live in **`lib\`**; entry-point scripts are grouped by role under subfolders.
 
@@ -17,7 +17,7 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 | `setup/` | New-PC bootstrap + edit per-PC json / LAN IP |
 | `usb/` | Force-open / Home over USB (`pymobiledevice3`) |
 | `sideload/` | AltServer logon task; Sideloadly fallback |
-| `lan/` | Multi-phone unified listing / PC index on `:8766`; gateway Wi‑Fi reboot (wrong-subnet / off-subnet recovery); LAN throughput via rclone mount |
+| `lan/` | Multi-phone unified listing / PC index on `:8766`; gateway Wi‑Fi reboot (wrong-subnet / other-router / off-subnet); LAN throughput |
 | `rclone/` | Optional WinFsp drive-letter mount |
 | `pcloud_web_companion/` | Chromium MV3 companion + `Run-PCloudWebCompanion.ps1` |
 | `archive/` | Legacy `net use` / sync scripts |
@@ -69,25 +69,36 @@ Or step by step: copy `loop-segments-windows.example.json` → `loop-segments-wi
 
 Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). Writable paths support **PUT** (≤ 2 MB), **MKCOL**, **DELETE**, and **MOVE** (build **282+**; Explorer rename stays on-phone). No server **COPY** yet. **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**.
 
+## App LAN vs primary router
+
+The **app LAN gateway** (the AP whose subnet is `phoneLanHost` / AltServer — e.g. `10.0.100.0/24`) is **tethered to a primary router** (upstream WAN / another SSID, e.g. `192.168.2.x`). Phone and PC should associate to the **app LAN** AP, not the primary.
+
+Because that gateway is tethered, its **Wi‑Fi channel must match the primary router’s Wi‑Fi channel**. After changing the primary’s channel, set the same channel on the app LAN gateway (or reboot its Wi‑Fi so it re-locks).
+
+Low Mbps on the **right** subnet is **suspected to be Wi‑Fi channel congestion from neighboring routers** (other APs on or near that channel). Recovery (`Measure-LoopSegmentsLanThroughput.ps1` / companion) therefore **reboots other known routers** (including the primary) and **leaves the current app-LAN gateway up**, so Chromium/pCloud stay connected. It then waits ~20s and re-measures, up to **2** retries, until Mbps ≥ `minLanThroughputMbps` (default **40**).
+
 ## pCloud web helper (integrated)
 
-Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then prints LAN status, USB-launches Loop Segments to foreground the app (blocks if the phone is locked), **attempts an rclone mount** in a separate window when LAN is up (if the LAN page is unreachable, **`lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`** runs **in-process** and uses USB/Bonjour/`pcapd` to put the phone on the PC/AltServer subnet, then waits for `:8765`; without USB it **sequentially reboots off-subnet routers**), then **probes LAN Mbps** off `L:` (up to 64 MB).
+Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then **starts Chromium** so you can browse pCloud while SKYBOX / USB-launch / phone-LAN recover / rclone continue. If `:8765` is down, the extension **queues** downloads (desktop notification) and retries; after ~5 minutes it **denies** them. **Click a toast** to bring the companion PowerShell window to the front. After Chromium is up it **starts SKYBOX VR desktop hidden to the tray** if that player is installed but idle (`-SkipSkybox` to skip). USB-launches Loop Segments to foreground the app (locked phone no longer blocks Chromium), **attempts an rclone mount** in a separate window, then **probes LAN Mbps** off `L:` (up to 64 MB). If that is below `minLanThroughputMbps` (default **40**), it **reboots other routers** (not this PC’s app-LAN gateway), waits, and re-checks — up to **2** retries. The app LAN gateway is tethered to a primary router; those two APs must use the **same Wi‑Fi channel**.
 
 **Multi-select tip:** in my.pcloud.com, click the **`v`** control to filter the folder by one of **five** types (including **Video**), then multi-select → Download — the companion cancels the zip and queues videos on the phone FIFO. **Folder right-click → Download is not supported** (zip cancelled, no `fileid`s → “no selection ids”); open the folder, select the videos, then Download instead. Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
 ```powershell
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
 # gateway vs phoneLanHost subnet check (reboot current gateway Wi-Fi when needed),
-# then prints LAN UP/DOWN, USB-launches / foregrounds the app (locked → exit 3), attempts rclone L: mount,
-# then probes LAN Mbps off L: (up to 64 MB; -SkipLanThroughput to skip)
-# if below minLanThroughputMbps on correct subnet: reboot current gateway Wi-Fi, wait, Enter to exit (retry later)
+# then starts Chromium; SKYBOX / USB-launch / LAN recover / rclone continue in this window
+# (plugin queues downloads if :8765 is down, then denies after ~5 min).
+# SKYBOX VR desktop is started after Chromium if installed but idle (-SkipSkybox to skip).
+# Virtual Desktop Streamer + Service are quit/restarted after Skybox (-SkipVirtualDesktop to skip).
+# Quit also closes Skybox when this companion session started it (already-running Skybox is left).
+# locked phone no longer blocks Chromium. Low throughput reboots other APs (not this PC's gateway) and re-checks (up to 2 retries).
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipGatewayReboot  # skip Wi-Fi reboot check
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only (still tries rclone if LAN up)
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipRcloneMount # no drive-letter mount window
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLanThroughput # no media copy Mbps probe
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLowThroughputGatewayReboot # keep going even if below minLanThroughputMbps
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
-# Quit: close Chromium, or Ctrl+C / console X — syncs profile, then USB Home if unlocked
+# Quit: close Chromium, or Ctrl+C / console X — quits Skybox if we started it, syncs profile, then USB Home if unlocked
 # On finish: USB Home backgrounds the app (needs Keep Alive for export — see ios README).
 #   Locked / no USB → Home skipped. -SkipGoHome leaves app foreground
 ```
@@ -116,7 +127,7 @@ py -3.12 -m pip install -U pymobiledevice3
 | Bundle id | Usually `com.loopsegments.app`; AltStore may resign as `com.loopsegments.app.<suffix>`. **USB launch lookup is independent of that suffix** (and of whatever alphanumeric suffix AltStore shows in App IDs / the app name): each run re-resolves on the phone (`Resolve-LoopSegmentsBundleId.py` — prefix `com.loopsegments.app.*` or display name **Loop Segments**). LAN companion talks `:8765` only (ignores bundle id). |
 | App ID renew vs suffix | AltStore **Renew App IDs** extends the same Apple slot — it does **not** change the resigned suffix. A new suffix appears only if AltStore **registers a new** App ID (e.g. delete + reinstall after the old slot expired). USB launch still finds the app either way. |
 | Unlock | Needed for companion startup USB launch **and** for finish-time Home press. Exit **3** if locked during launch — companion will not start Chromium. Companion always probes LAN (prints UP/DOWN) then USB-launches to foreground the app unless `-SkipUsbLaunch` (skips relaunch when USB DVT already sees Loop Segments **foreground**). If USB is missing but LAN is UP, warns and continues. Home on quit still needs unlock if you want the app backgrounded |
-| Home on quit | Companion finish presses **Home** over USB (`usb\Go-IphoneHomeViaUsb.ps1`) to background Loop Segments. Requires USB + **unlocked** phone; otherwise skipped. Each pymobiledevice3 attempt times out (~25s) so finish cannot hang forever; `-SkipGoHome` leaves the app foreground. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
+| Home on quit | Companion finish backgrounds Loop Segments over USB (`usb\Go-IphoneHomeViaUsb.ps1`). Prefers **DVT `--userspace`** (SpringBoard, then Settings) — the same path as USB launch. **`core-device hid --userspace`** is skipped by default (iOS 26 RSD `TimeoutError` typer dump); pass `-TryUserspaceHid` to try it anyway. Requires USB + **unlocked** phone; otherwise skipped. Each attempt times out (~25s); `-SkipGoHome` leaves the app foreground. A failed Home press does **not** fail the companion session (still exit 0), but the window **waits for Enter** so the dump stays readable. Direct runs of the Home script also wait on error unless `-NoWaitEnter`. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
 | Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh (cert refresh — separate from App ID renew above). **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. Companion / USB launch auto-start AltServer when installed but idle |
 | AltStore UDID (1006) | **“could not determine this device's UDID”** — reinstall AltStore from AltServer (USB). Then **Refresh All**. If Loop Segments is **“not available”**, reinstall the **same** IPA via My Apps → **+** (new GitHub build not required). See tip above / [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) |
 | AltServer | Companion / USB launch report status and **start AltServer if installed but not running** (core: `..\env_setup\altserver_refresh_scripts\Invoke-AltServerIfNeeded.ps1`). Setup reports status only. Optional logon start: `.\sideload\Register-AltServerAtLogon.ps1` |
@@ -132,7 +143,7 @@ After setup, double-click **`rclone\Mount-PhoneL.cmd`** or run:
 rclone\Mount-PhoneL.cmd
 ```
 
-Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. While mounted, the script polls phone `status.json` and **kills rclone + exits** if LAN stays down ~90s (avoids Explorer hangs). If the phone LAN page cannot be reached at mount time, **`..\lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`** runs **in-process** and uses USB/Bonjour/`pcapd` (`env_setup\altserver_refresh_scripts`) to align the phone with the PC/AltServer subnet (or, without USB, reboots off-subnet routers under `P:\all_scripts\5g_router_reboot`), then retries (`-SkipOffSubnetRouterReboot` to disable). Empty Bonjour is typical on another subnet — not “Wi-Fi off”. Mount log: **`rclone\loopsegments-rclone-mount.log`**. If the IP changed: `.\setup\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
+Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. While mounted, the script polls phone `status.json` and **kills rclone + exits** if LAN stays down ~90s (avoids Explorer hangs). If the phone LAN page cannot be reached at mount time, **`..\lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`** runs **in-process** and uses USB/`pcapd` (`env_setup\altserver_refresh_scripts`) to align the phone with the PC/AltServer subnet (or, without USB, reboots off-subnet routers under `P:\all_scripts\5g_router_reboot`), then retries (`-SkipOffSubnetRouterReboot` to disable). Mount log: **`rclone\loopsegments-rclone-mount.log`**. If the IP changed: `.\setup\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
 
 Optional args: **`rclone\Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestOnly`**, **`-Unstick`**, **`-Quick`**, **`-NoLanWatch`**, **`-LanDownSeconds`**, **`-LanPollSeconds`**.
 
@@ -179,7 +190,9 @@ With **`L:`** up, measure PC ↔ phone Wi‑Fi both ways (phone HTTP + rclone mo
 # .\lan\Measure-LoopSegmentsLanThroughput.ps1 -KeepLocal       # keep temp copy
 ```
 
-Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a **max media bitrate** for minute segments (**80%** of measured LAN, clamped 5–100 Mbps) and writes sidecars under `pcld_ios_media\scripts\lan_throughput.json` and `archive\lan_recommended_segment_bitrate.json`. **`run_batch_vr_hybrid.ps1`** / **`Run-TranscodeFfmpeg.ps1`** pick that up for `-SegmentVideoBitrateMbps` (flat + fisheye pass-2). If measured throughput is below **`minLanThroughputMbps`** in `loop-segments-windows.json` (default **40**) while the gateway already shares the phone LAN page subnet, warns, **reboots the current gateway Wi‑Fi**, asks you to retry later, settles ~10s, then exits on **Enter**. This is **not** 5G WAN speed — it exercises rclone/WinFsp + phone WebDAV on the current gateway.
+Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a **max media bitrate** for minute segments (**80%** of measured LAN, clamped 5–100 Mbps) and writes sidecars under `pcld_ios_media\scripts\lan_throughput.json` and `archive\lan_recommended_segment_bitrate.json`. **`run_batch_vr_hybrid.ps1`** / **`Run-TranscodeFfmpeg.ps1`** pick that up for `-SegmentVideoBitrateMbps` (flat + fisheye pass-2). If measured throughput is below **`minLanThroughputMbps`** (default **40**), **reboots Wi‑Fi on every known router except the current default gateway**, waits ~20s, and **re-measures** — up to **2** retries, or until throughput is at least the minimum. Companion runs the same loop after Chromium is open (this PC’s AP is left up). This is **not** 5G WAN speed.
+
+**Do not run the probe during an active Virtual Desktop headset session.** VD streaming the PC screen uses about **50 Mbps** of LAN and will understate phone LAN capacity. The measure script prints this on the console (and warns again if Streamer is running).
 
 ## What goes in `loop-segments-windows.json`
 
@@ -188,7 +201,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `phoneLanHost` | Primary iPhone IP for rclone mount (changes per Wi‑Fi) |
 | `phoneLanHosts` | Optional array `{ host, label?, port? }` — unified LAN listing across multiple iPhones |
 | `lanPort` | Usually `8765` |
-| `minLanThroughputMbps` | Companion/measure: if LAN probe is below this (default `40`) while gateway shares phone LAN subnet, reboot current gateway Wi‑Fi and stop |
+| `minLanThroughputMbps` | Companion/measure: if LAN probe is below this (default `40`), reboot other routers (not current gateway), settle, re-check (up to 2 retries) |
 | `mountDriveLetter` | Drive letter for phone mount (default `L`; pick another if Koofr uses `L`) |
 | `rcloneRemoteName` | Block name in `rclone.conf` for the phone (default `loopsegments`) |
 | `rcloneConfigPath` | **Empty** = auto (`%APPDATA%\rclone\rclone.conf`; created blank on first mount if missing). Only set a full path for a non-default location. |
@@ -198,6 +211,8 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `webdavUser` / `webdavPassword` | Phone LAN WebDAV (defaults match app) |
 | `iCloudDownloads` | **Empty** = `%USERPROFILE%\iCloudDrive\Downloads` — target for repo-root **`copy-to-icloud.ps1`** (also used by **`deploy.ps1`**) |
 | `dlnaFolder` | Optional note for Skybox / junction target |
+| `skyboxExe` | Optional full path to **SKYBOX.exe** if auto-detect misses (companion starts SKYBOX VR desktop when idle) |
+| `virtualDesktopStreamerExe` | Optional full path to **VirtualDesktop.Streamer.exe** if auto-detect misses |
 | `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
 
 ## Koofr + Loop Segments on one PC
@@ -228,12 +243,15 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `lib\Get-LoopSegmentsPython.ps1` | Shared Python picker (dot-sourced; prefer 3.12, skip 3.14+) |
 | `lib\LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
 | `lib\Get-LoopSegmentsAltServer.ps1` | Loop Segments wrapper around **`..\env_setup\altserver_refresh_scripts\Get-AltServer.ps1`** (locate/start); 7-day / Trust copy stays here |
+| `lib\Get-LoopSegmentsSkybox.ps1` | Locate/start **SKYBOX VR desktop** and hide the main window to the **tray**; companion starts it when idle and quits it on finish if this session started it (`-SkipSkybox` to skip) |
+| `lib\Get-LoopSegmentsVirtualDesktop.ps1` | Quit/restart **Virtual Desktop Streamer** and **Virtual Desktop Service** (`-SkipVirtualDesktop` to skip) |
+| `lib\Get-LoopSegmentsClash.ps1` | Optional: if Clash/mihomo is running, UAC-run **`env_setup\Clash\Remove-MihomoMulticastRoute.ps1`** so TUN `224.0.0.0/4` does not steal `.local` mDNS. Phone-IP / `:8765` use numeric IPs and do not need this. |
 | `setup\Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `setup\Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |
 | `lan\Get-LoopSegmentsUnifiedLANListing.ps1` | **Pool media listings** from all `phoneLanHosts` → JSON or HTML |
 | `lan\Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
 | `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1` | Wrong-subnet **loop** (reboot → wait new PC LAN IP → re-check, max 3 rounds) / forced / **off-subnet sequential** Wi‑Fi reboots (`P:\all_scripts\5g_router_reboot`). Direct run waits for Enter; companion passes `-NoWaitEnter`. |
-| `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1` | In-process USB/Bonjour/`pcapd` via **`env_setup\altserver_refresh_scripts`** (phone IP vs PC/AltServer subnet), then wait for `:8765`. If already on-subnet, does not reboot just because the app is down. No USB / no Wi-Fi IP: wait then reboot off-subnet routers. `-NoWaitEnter` throws `LAN_RECOVER_EXIT:<code>` so companion/rclone are not killed. |
+| `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1` | In-process USB/`pcapd` via **`env_setup\altserver_refresh_scripts`** (phone IP vs PC/AltServer subnet), then wait for `:8765`. If already on-subnet, does not reboot just because the app is down. No USB / no Wi-Fi IP: wait then reboot off-subnet routers. `-NoWaitEnter` throws `LAN_RECOVER_EXIT:<code>` so companion/rclone are not killed. |
 | `lan\Measure-LoopSegmentsLanThroughput.ps1` | Time up to 64 MB via phone HTTP from a random `L:\pcld_ios_media\archive\` media file → Mbps + recommended max segment bitrate sidecar for hybrid batch |
 | `rclone\Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `rclone\Unstick-PhoneL.cmd` | Kill dead phone mount + restart Explorer |
@@ -241,7 +259,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `rclone\loopsegments-rclone-mount.log` | rclone mount log (local; gitignored) |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: gateway subnet check/reboot, USB-launch Loop Segments, sync profile, start browser |
 | `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); DVT `--userspace` first; skips if already foreground; exit **3** if phone locked |
-| `usb\Go-IphoneHomeViaUsb.ps1` | Press Home over USB to background the app (companion finish); needs USB + unlocked; exit **3** if locked |
+| `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish (DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); needs USB + unlocked; exit **3** if locked. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` and companion pauses itself after a Home fail |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |
 | `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
 | `sideload\Register-AltServerAtLogon.ps1` | **AltServer** at logon ([BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) §3). Wi‑Fi refresh often fails on Win11 — **USB + AltStore Refresh All** weekly is the reliable path |

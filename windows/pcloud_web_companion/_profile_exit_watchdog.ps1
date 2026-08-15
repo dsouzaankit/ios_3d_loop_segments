@@ -1,13 +1,14 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-  If the companion console dies without a graceful marker, close Chromium and sync profile.
+  If the companion console dies without a graceful marker, close Chromium/Skybox and sync profile.
 
 .DESCRIPTION
   Started by run_chromium.ps1 while waiting on Chromium. When the parent PowerShell
   PID exits without writing the graceful-exit marker, this script force-closes the
-  profile Chromium, uploads the profile to the repo path, and clears local AppData
-  (same finish path as a normal companion exit).
+  profile Chromium, quits SKYBOX VR if this companion session started it, uploads
+  the profile to the repo path, and clears local AppData (same finish path as a
+  normal companion exit).
 #>
 param(
     [Parameter(Mandatory = $true)] [int] $ParentPid,
@@ -22,9 +23,14 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-$PwshHelper = Join-Path (Split-Path -Parent $PSScriptRoot) "lib\Get-LoopSegmentsPwsh.ps1"
+$WindowsLib = Join-Path (Split-Path -Parent $PSScriptRoot) "lib"
+$PwshHelper = Join-Path $WindowsLib "Get-LoopSegmentsPwsh.ps1"
 if (Test-Path -LiteralPath $PwshHelper) {
     . $PwshHelper
+}
+$SkyboxHelper = Join-Path $WindowsLib "Get-LoopSegmentsSkybox.ps1"
+if (Test-Path -LiteralPath $SkyboxHelper) {
+    . $SkyboxHelper
 }
 
 function Test-LocalHasContent {
@@ -109,8 +115,11 @@ if (Test-Path -LiteralPath $GracefulMarkerPath) {
 }
 
 # Ungraceful close (console X, kill, crash): finish the companion session.
-Write-Host "[watchdog] Parent gone without graceful marker - closing Chromium and syncing profile"
+Write-Host "[watchdog] Parent gone without graceful marker - closing Chromium, quitting Skybox if we started it, syncing profile"
 Stop-ProfileChrome -Dir $ProfileDir
+if (Get-Command Stop-LoopSegmentsSkybox -ErrorAction SilentlyContinue) {
+    try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
+}
 Start-Sleep -Milliseconds 500
 Sync-Upload -Src $ProfileDir -Dst $RepoProfileDir
 Clear-Local -Dir $ProfileDir
@@ -121,7 +130,7 @@ if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = (Get-LoopSegmentsPwshExe)
-        $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`""
+        $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`" -NoWaitEnter"
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         $hp = [System.Diagnostics.Process]::Start($psi)

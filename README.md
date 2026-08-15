@@ -72,7 +72,7 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [copy-to-icloud.ps1](copy-to-icloud.ps1) | Stamped iCloud paste + prune (shared by deploy; no build) |
 | [ios/](ios/) | Loop Segments iPhone app |
 | [windows/README.md](windows/README.md) | **Portable PC setup** (`loop-segments-windows.json`) |
-| [env_setup/](env_setup/) | Submodule: start AltServer; phone Wi-Fi IPv4 (USB + Bonjour + `pcapd`) vs PC/AltServer subnet ([ios_env_setup](https://github.com/dsouzaankit/ios_env_setup)) |
+| [env_setup/](env_setup/) | Submodule: start AltServer; phone Wi-Fi IPv4 (USB + `pcapd`) vs PC/AltServer subnet ([ios_env_setup](https://github.com/dsouzaankit/ios_env_setup)) |
 | [windows/rclone/Mount-LoopSegmentsRclone.ps1](windows/rclone/Mount-LoopSegmentsRclone.ps1) | WebDAV **`-TestOnly`** / **mount** / `-Remove` / `-Unstick` / LAN watch — see [RCLONE-PHONE-MOUNT.md](windows/rclone/RCLONE-PHONE-MOUNT.md) |
 | [windows/setup/Set-LoopSegmentsWindows.ps1](windows/setup/Set-LoopSegmentsWindows.ps1) | Per-PC paths (rclone, WinFsp, drive letter) |
 | [windows/archive/](windows/archive/) | Legacy `net use` / port-80 proxy, `Sync-FromPhoneLAN.ps1` |

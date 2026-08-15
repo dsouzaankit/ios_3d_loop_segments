@@ -8,11 +8,20 @@
   If archive/ is empty, falls back to other phone media (loop/root/etc.).
 
   Default: times both phone HTTP GET and an rclone mount copy of the same file.
-  Bitrate recommendation / low-throughput reboot use the lesser measured Mbps
+  Bitrate recommendation / low-throughput recovery use the lesser measured Mbps
   (then RecommendHeadroom). Mount-only numbers can still look cache-inflated; the
   lesser pick keeps an inflated mount from raising the encode cap.
 
+  If that Mbps is below minLanThroughputMbps (default 40), reboots Wi-Fi on every
+  known router except the PC's current default gateway (suspected cause: Wi-Fi
+  channel congestion from neighboring APs; the app LAN AP is tethered to a primary
+  router and those two channels must match), waits to settle, and re-measures.
+  Repeats until throughput is at least the minimum or 2 retries.
+
   -HttpOnly / -ViaMount select a single path. Not 5G WAN internet speed.
+
+  Do not run this probe during an active Virtual Desktop headset session — VD
+  streaming the PC screen uses about 50 Mbps of LAN and will understate phone LAN.
 
   When run directly (double-click / console), waits for Enter before closing so you can
   read the Mbps result. Pass -NoWaitEnter (or -NoWaitEnterOnLowThroughputStop) when
@@ -20,6 +29,9 @@
 
   Prefer: pwsh -File .\lan\Measure-LoopSegmentsLanThroughput.ps1 (or companion).
   Opening under Windows PowerShell 5.1 re-launches pwsh.
+
+  Remap the rclone letter (default L:) if the mount is missing, hung, or died after a
+  Wi-Fi bounce: .\rclone\Mount-LoopSegmentsRclone.ps1 -Unstick then .\rclone\Mount-LoopSegmentsRclone.ps1 (leave open).
 
 .EXAMPLE
   .\rclone\Mount-LoopSegmentsRclone.ps1   # leave window open
@@ -44,10 +56,12 @@ param(
     [double] $RecommendHeadroom = 0.8,
     [int] $RecommendMinMbps = 5,
     [int] $RecommendMaxMbps = 100,
-    # After measure: if gateway shares LAN-page subnet and throughput is below this, force gateway Wi-Fi reboot and stop (exit 10).
+    # After measure: if throughput is below this, reboot other routers (not the current gateway), settle, re-check.
     # 0 = use minLanThroughputMbps from loop-segments-windows.json (default 40).
     [double] $LowThroughputMbps = 0,
-    [int] $PostRebootSettleSec = 10,
+    [int] $PostRebootSettleSec = 20,
+    [ValidateRange(0, 10)]
+    [int] $LowThroughputRetries = 2,
     [switch] $SkipLowThroughputGatewayReboot,
     # Only time phone HTTP GET (skip rclone mount copy).
     [switch] $HttpOnly,
@@ -88,6 +102,15 @@ function Wait-EnterToClose {
 trap {
     Write-Host ""
     Write-Host ("[lan-bw] {0}" -f $_.Exception.Message) -ForegroundColor Red
+    if ("$($_.Exception.Message)" -match 'Cannot find drive') {
+        if (Get-Command Write-MountRemapHint -ErrorAction SilentlyContinue) {
+            $hintLetter = 'L'
+            if (Get-Command Get-LoopSegmentsMountDriveLetter -ErrorAction SilentlyContinue) {
+                $hintLetter = Get-LoopSegmentsMountDriveLetter -Override $DriveLetter
+            }
+            Write-MountRemapHint -DriveLetter $hintLetter
+        }
+    }
     Wait-EnterToClose
     if ($skipEnterPrompt) {
         throw $_
@@ -96,6 +119,10 @@ trap {
 }
 
 . "$PSScriptRoot\..\lib\LoopSegments-Windows.ps1"
+$VdHelper = Join-Path $PSScriptRoot '..\lib\Get-LoopSegmentsVirtualDesktop.ps1'
+if (Test-Path -LiteralPath $VdHelper) {
+    . $VdHelper
+}
 
 function Format-Bytes {
     param([long] $Bytes)
@@ -105,10 +132,30 @@ function Format-Bytes {
     return ('{0} B' -f $Bytes)
 }
 
+function Write-MountRemapHint {
+    param([string] $DriveLetter = 'L')
+    $letter = ([string]$DriveLetter).Trim().TrimEnd(':')
+    if ([string]::IsNullOrWhiteSpace($letter)) { $letter = 'L' }
+    $mountPs1 = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\rclone\Mount-LoopSegmentsRclone.ps1'))
+    Write-Host ""
+    Write-Host ("[lan-bw] {0}: does not exist. Remap it - Unstick if stale/hung, then remount and leave that window open:" -f $letter) -ForegroundColor Yellow
+    Write-Host ("  {0} -Unstick" -f $mountPs1)
+    Write-Host ("  {0}" -f $mountPs1)
+    Write-Host ""
+}
+
+function Test-MountDrivePresent {
+    param([Parameter(Mandatory = $true)][string] $Root)
+    $name = ([string]$Root).Trim().Substring(0, 1)
+    return $null -ne (Get-PSDrive -Name $name -PSProvider FileSystem -ErrorAction SilentlyContinue)
+}
+
 function Test-MountRootReady {
     param([Parameter(Mandatory = $true)][string] $Root)
-    if (-not (Test-Path -LiteralPath $Root)) { return $false }
+    # Missing letter: Get-PSDrive / Test-Path -ErrorAction SilentlyContinue (EAP Stop would throw).
+    if (-not (Test-MountDrivePresent -Root $Root)) { return $false }
     try {
+        if (-not (Test-Path -LiteralPath $Root -ErrorAction SilentlyContinue)) { return $false }
         $null = Get-ChildItem -LiteralPath $Root -ErrorAction Stop | Select-Object -First 1
         return $true
     } catch {
@@ -122,6 +169,7 @@ function Wait-MountRootReady {
         [Parameter(Mandatory = $true)][int] $TimeoutSec
     )
     if (Test-MountRootReady -Root $Root) { return $true }
+    if (-not (Test-MountDrivePresent -Root $Root)) { return $false }
     if ($TimeoutSec -le 0) { return $false }
     Write-Host ("[lan-bw] Waiting up to {0}s for mount {1} ..." -f $TimeoutSec, $Root)
     $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSec)
@@ -156,7 +204,7 @@ function Find-RandomPhoneMediaFile {
     }
     if ($candidates.Count -eq 0) {
         Write-Warning '[lan-bw] archive/ empty on mount - falling back to other media under pcld_ios_media/.'
-        if (-not (Test-Path -LiteralPath $MediaRoot)) {
+        if (-not (Test-Path -LiteralPath $MediaRoot -ErrorAction SilentlyContinue)) {
             throw "Media root not found: $MediaRoot"
         }
         $loopRoot = Join-Path $MediaRoot 'loop'
@@ -350,7 +398,7 @@ function Find-RandomPhoneLanHttpTarget {
         } catch {
             Write-Warning ("[lan-bw] status_lists.json fallback failed: {0}" -f $_.Exception.Message)
         }
-        if ($candidates.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($MediaRoot) -and (Test-Path -LiteralPath $MediaRoot)) {
+        if ($candidates.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($MediaRoot) -and (Test-Path -LiteralPath $MediaRoot -ErrorAction SilentlyContinue)) {
             Write-Host ('[lan-bw] Shallow mount list of media root {0} (no recurse)...' -f $MediaRoot)
             $null = Add-MountMediaCandidates -ScanRoot $MediaRoot -DriveRoot $DriveRoot -MinBytes $MinBytes `
                 -Candidates $candidates -SourceTag 'mount/fallback' -ExcludeScripts
@@ -383,7 +431,8 @@ Export or archive a video on the phone (or lower -MinBytes), then retry.
         Write-Warning ("[lan-bw] Skip (HTTP HEAD failed): {0}" -f $pick.Url)
     }
 
-    throw ('No candidate passed HTTP HEAD after {0} attempt(s). Remount or wait for phone LAN index to refresh, then retry.' -f $tried)
+    Write-MountRemapHint -DriveLetter $letter
+    throw ('No candidate passed HTTP HEAD after {0} attempt(s). Remap {1}: or wait for the phone LAN index to refresh, then retry.' -f $tried, $letter)
 }
 
 function Copy-FileMeasured {
@@ -586,49 +635,31 @@ function Get-DefaultGatewayInfo {
     return $info
 }
 
-function Invoke-LowThroughputGatewayRebootAndStop {
+function Invoke-RebootOtherRoutersForLowThroughput {
     param(
         [Parameter(Mandatory = $true)][double] $MeasuredMbps,
         [Parameter(Mandatory = $true)][double] $ThresholdMbps,
         [Parameter(Mandatory = $true)][int] $SettleSec
     )
 
-    $phoneHost = Get-LoopSegmentsLANHost
     $gwInfo = Get-DefaultGatewayInfo
     $gatewayIp = [string]$gwInfo.Gateway
-    $prefix = [int]$gwInfo.PrefixLength
-    if ($prefix -le 0) { $prefix = 24 }
-
-    if ([string]::IsNullOrWhiteSpace($gatewayIp)) {
-        Write-Warning '[lan-bw] Low throughput but no default gateway found - cannot reboot router.'
-        return $false
-    }
-
-    Write-Host ('[lan-bw] Gateway {0} (/{1}) | phone LAN page {2}' -f $gatewayIp, $prefix, $phoneHost)
-    if (-not (Test-SameIpv4Subnet -IpA $gatewayIp -IpB $phoneHost -PrefixLen $prefix)) {
-        Write-Warning ('[lan-bw] Low throughput ({0:N1} Mbps < {1}), but gateway is NOT on the same subnet as the LAN page - skip forced reboot (fix subnet first).' -f $MeasuredMbps, $ThresholdMbps)
-        return $false
-    }
-
     Write-Host ""
-    Write-Host ('[lan-bw] WARNING: LAN throughput {0:N1} Mbps is below {1} Mbps while gateway and LAN page share a subnet.' -f $MeasuredMbps, $ThresholdMbps) -ForegroundColor Yellow
-    Write-Host '[lan-bw] Rebooting Wi-Fi on the CURRENT gateway to recover bandwidth.' -ForegroundColor Yellow
-    Write-Host '[lan-bw] After Wi-Fi settles, re-run the companion / measure script and try again.' -ForegroundColor Yellow
+    Write-Host ('[lan-bw] WARNING: LAN throughput {0:N1} Mbps is below {1} Mbps.' -f $MeasuredMbps, $ThresholdMbps) -ForegroundColor Yellow
+    Write-Host ('[lan-bw] Rebooting Wi-Fi on other routers/gateways (not current gateway {0}).' -f $(if ($gatewayIp) { $gatewayIp } else { '(unknown)' })) -ForegroundColor Yellow
 
     $rebootPs1 = Join-Path $PSScriptRoot 'Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
     if (-not (Test-Path -LiteralPath $rebootPs1)) {
-        Write-Warning ("[lan-bw] Missing {0} - cannot force gateway reboot." -f $rebootPs1)
+        Write-Warning ("[lan-bw] Missing {0} - cannot reboot other routers." -f $rebootPs1)
         return $false
     }
 
     $psArgs = @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass',
         '-File', $rebootPs1,
-        '-ForceReboot'
+        '-RebootOtherRouters',
+        '-NoWaitEnter'
     )
-    if ($skipEnterPrompt) {
-        $psArgs += '-NoWaitEnter'
-    }
     Write-Host ('[lan-bw] > pwsh {0}' -f ($psArgs -join ' '))
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -640,14 +671,16 @@ function Invoke-LowThroughputGatewayRebootAndStop {
         $ErrorActionPreference = $prev
     }
     if ($code -ne 0) {
-        Write-Warning ("[lan-bw] Gateway reboot failed (exit {0})." -f $code)
+        Write-Warning ("[lan-bw] Other-router reboot failed (exit {0})." -f $code)
         return $false
     }
 
     $settle = [Math]::Max(1, $SettleSec)
-    Write-Host ('[lan-bw] Waiting {0}s for the router Wi-Fi reboot to finish...' -f $settle) -ForegroundColor Cyan
+    Write-Host ('[lan-bw] Waiting {0}s for Wi-Fi to settle, then re-checking throughput...' -f $settle) -ForegroundColor Cyan
     Start-Sleep -Seconds $settle
-    Write-Host '[lan-bw] Re-run this workflow after devices re-associate to the gateway. Companion will not start Chromium now.' -ForegroundColor Yellow
+    if (-not (Test-MountRootReady -Root $driveRoot)) {
+        Write-MountRemapHint -DriveLetter $letter
+    }
     return $true
 }
 
@@ -669,7 +702,15 @@ if ($doHttp -and $doMount) {
     Write-Host '[lan-bw] Measures rclone mount copy only (-ViaMount). Cache can inflate Mbps.'
 }
 $minLanMbps = Get-LoopSegmentsMinLanThroughputMbps -Override $LowThroughputMbps
-Write-Host ('[lan-bw] Min LAN throughput for gateway reboot: {0} Mbps (loop-segments-windows.json minLanThroughputMbps / -LowThroughputMbps)' -f $minLanMbps)
+Write-Host ('[lan-bw] Min LAN throughput: {0} Mbps — below this, reboot other routers and re-check (up to {1} retr{2})' -f $minLanMbps, $LowThroughputRetries, $(if ($LowThroughputRetries -eq 1) { 'y' } else { 'ies' }))
+Write-Host '[lan-bw] Do not run this probe while a Virtual Desktop headset session is active — VD streaming the PC screen uses ~50 Mbps of LAN and will understate phone LAN capacity.' -ForegroundColor Yellow
+$vdRunning = $false
+try {
+    $vdRunning = [bool]((Get-Command Test-LoopSegmentsVdStreamerRunning -ErrorAction SilentlyContinue) -and (Test-LoopSegmentsVdStreamerRunning))
+} catch {}
+if ($vdRunning) {
+    Write-Warning '[lan-bw] Virtual Desktop Streamer is running now. Pause the VD session (or quit Streamer) before trusting this Mbps result.'
+}
 
 $mountReady = $false
 if ($doMount -or -not $HttpOnly) {
@@ -677,17 +718,11 @@ if ($doMount -or -not $HttpOnly) {
     if (-not $mountReady -and $doMount) {
         if ($doHttp) {
             Write-Warning ("[lan-bw] Mount {0} not ready - falling back to HTTP-only." -f $driveRoot)
+            Write-MountRemapHint -DriveLetter $letter
             $doMount = $false
         } else {
-            throw @"
-[lan-bw] Mount $driveRoot is not ready.
-
-Start it first (leave the window open):
-  .\rclone\Mount-PhoneL.cmd
-  # or: .\rclone\Mount-LoopSegmentsRclone.ps1
-
-Then re-run this script.
-"@
+            Write-MountRemapHint -DriveLetter $letter
+            throw "[lan-bw] Mount $driveRoot is not ready. Remap ${letter}: (see commands above), then re-run this script."
         }
     }
     if (-not $mountReady -and $doHttp -and -not $doMount) {
@@ -695,9 +730,10 @@ Then re-run this script.
     }
 } else {
     # -HttpOnly with WaitMountSec 0: do not block on L:
-    $mountReady = Test-Path -LiteralPath $driveRoot
+    $mountReady = Test-MountRootReady -Root $driveRoot
     if (-not $mountReady) {
         Write-Host '[lan-bw] HTTP-only: skipping mount wait.'
+        Write-MountRemapHint -DriveLetter $letter
     }
 }
 
@@ -896,6 +932,70 @@ if (-not $SkipSidecarWrite) {
     }
 }
 
+$retry = 0
+while (
+    -not $SkipLowThroughputGatewayReboot -and
+    $minLanMbps -gt 0 -and
+    $mbps -lt $minLanMbps -and
+    $retry -lt $LowThroughputRetries
+) {
+    $retry++
+    Write-Host ""
+    Write-Host ('[lan-bw] Retry {0}/{1}: reboot other routers, settle, re-check (now {2:N1} Mbps < {3}).' -f `
+        $retry, $LowThroughputRetries, $mbps, $minLanMbps) -ForegroundColor Yellow
+    if (-not (Invoke-RebootOtherRoutersForLowThroughput -MeasuredMbps $mbps `
+            -ThresholdMbps $minLanMbps -SettleSec $PostRebootSettleSec)) {
+        break
+    }
+
+    $httpStats = $null
+    $mountStats = $null
+    $retryMount = $doMount -and (Test-MountRootReady -Root $driveRoot) -and
+        $mountSource -and (Test-Path -LiteralPath $mountSource -PathType Leaf -ErrorAction SilentlyContinue)
+    if ($doHttp -or -not $retryMount) {
+        if ([string]::IsNullOrWhiteSpace($measureUrl)) {
+            Write-Warning '[lan-bw] No HTTP URL for re-check - stopping retries.'
+            break
+        }
+        Write-Host ''
+        Write-Host ('[lan-bw] Re-check HTTP GET {0}' -f $measureUrl)
+        Write-Host '[lan-bw] Downloading (HTTP)...'
+        $httpResult = Copy-HttpMeasured -Url $measureUrl -Destination $outHttp -BufferSize $BufferBytes -LimitBytes $MaxBytes
+        $httpStats = Get-MeasuredMbps -Result $httpResult
+        Write-Host ('[lan-bw] HTTP:  {0:N1} Mbps ({1:N1} MB/s) - {2} in {3:N2}s' -f `
+            $httpStats.MegabitsPerSec, $httpStats.MegabytesPerSec, (Format-Bytes $httpStats.Bytes), $httpStats.Seconds) -ForegroundColor Green
+    }
+    if ($retryMount) {
+        Write-Host ''
+        Write-Host ('[lan-bw] Re-check mount copy {0}' -f $mountSource)
+        $mountResult = Copy-FileMeasured -Source $mountSource -Destination $outMount -BufferSize $BufferBytes -LimitBytes $MaxBytes
+        $mountStats = Get-MeasuredMbps -Result $mountResult
+        Write-Host ('[lan-bw] Mount: {0:N1} Mbps ({1:N1} MB/s) - {2} in {3:N2}s' -f `
+            $mountStats.MegabitsPerSec, $mountStats.MegabytesPerSec, (Format-Bytes $mountStats.Bytes), $mountStats.Seconds) -ForegroundColor Green
+    }
+    if ($null -ne $httpStats -and $null -ne $mountStats) {
+        if ($httpStats.MegabitsPerSec -le $mountStats.MegabitsPerSec) { $primary = $httpStats } else { $primary = $mountStats }
+    } elseif ($null -ne $httpStats) {
+        $primary = $httpStats
+    } elseif ($null -ne $mountStats) {
+        $primary = $mountStats
+    } else {
+        Write-Warning '[lan-bw] Re-check produced no measurement - stopping retries.'
+        break
+    }
+    $mbps = [double]$primary.MegabitsPerSec
+    $recommendedMbps = [int][Math]::Floor($mbps * $RecommendHeadroom)
+    if ($recommendedMbps -lt $RecommendMinMbps) { $recommendedMbps = $RecommendMinMbps }
+    if ($recommendedMbps -gt $RecommendMaxMbps) { $recommendedMbps = $RecommendMaxMbps }
+    Write-Host ('[lan-bw] Re-check primary: {0:N1} Mbps ({1})' -f $mbps, $primary.Method) -ForegroundColor Cyan
+}
+
+if ($minLanMbps -gt 0 -and $mbps -lt $minLanMbps) {
+    Write-Warning ('[lan-bw] Still {0:N1} Mbps after {1} retry(ies) (min {2}). Continuing.' -f $mbps, $retry, $minLanMbps)
+} elseif ($retry -gt 0) {
+    Write-Host ('[lan-bw] Throughput recovered to {0:N1} Mbps after {1} retry(ies).' -f $mbps, $retry) -ForegroundColor Green
+}
+
 $localFiles = @($outHttp, $outMount, $OutFile) | Select-Object -Unique
 if (-not $KeepLocal) {
     foreach ($f in $localFiles) {
@@ -906,16 +1006,6 @@ if (-not $KeepLocal) {
     Write-Host '[lan-bw] Removed local copies (use -KeepLocal to retain).'
 } else {
     Write-Host ('[lan-bw] Kept local copies under: {0}' -f $OutFile)
-}
-
-if (-not $SkipLowThroughputGatewayReboot -and $minLanMbps -gt 0 -and $mbps -lt $minLanMbps) {
-    $stopped = Invoke-LowThroughputGatewayRebootAndStop -MeasuredMbps $mbps `
-        -ThresholdMbps $minLanMbps -SettleSec $PostRebootSettleSec
-    if ($stopped) {
-        Wait-EnterToClose
-        # 10 = intentional stop after low-throughput gateway reboot (do not start Chromium).
-        exit 10
-    }
 }
 
 Wait-EnterToClose

@@ -27,6 +27,8 @@ param(
     [string] $RemoteName = '',
     [string] $WinFspDllPath = '',
     [string] $DlnaFolder = '',
+    [string] $SkyboxExe = '',
+    [string] $VirtualDesktopStreamerExe = '',
     [int] $LanPort = 0,
     [switch] $SkipWinFspCheck,
     [switch] $Show,
@@ -71,6 +73,12 @@ if (-not [string]::IsNullOrWhiteSpace($WinFspDllPath)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($DlnaFolder)) {
     $settings.dlnaFolder = $DlnaFolder.Trim()
+}
+if (-not [string]::IsNullOrWhiteSpace($SkyboxExe)) {
+    $settings.skyboxExe = $SkyboxExe.Trim()
+}
+if (-not [string]::IsNullOrWhiteSpace($VirtualDesktopStreamerExe)) {
+    $settings.virtualDesktopStreamerExe = $VirtualDesktopStreamerExe.Trim()
 }
 if ($LanPort -gt 0) {
     $settings.lanPort = $LanPort

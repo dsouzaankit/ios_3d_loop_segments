@@ -11,7 +11,7 @@ param(
     [switch]$SkipGatewayReboot,
     # Do not time a media copy off L: after a successful rclone mount (default: up to 64 MB).
     [switch]$SkipLanThroughput,
-    # Do not force gateway Wi-Fi reboot when LAN throughput is below minLanThroughputMbps (same-subnet case).
+    # Do not reboot other routers / re-check when LAN throughput is below minLanThroughputMbps.
     [switch]$SkipLowThroughputGatewayReboot,
     [switch]$SkipProfileSync,
     # Do not wait for Chromium exit (upload runs at the start of the next launch instead).
@@ -25,8 +25,16 @@ param(
     [switch]$NoDarkMode,
     # Skip local Enter on fatal errors (Run-PCloudWebCompanion prompts once instead).
     [switch]$NoWaitEnterOnFatal,
+    # Do not check/start SKYBOX VR desktop (default: start if installed but idle).
+    [switch]$SkipSkybox,
+    # Do not quit/restart Virtual Desktop Streamer + Virtual Desktop Service.
+    [switch]$SkipVirtualDesktop,
+    # Do not try to drop Clash/mihomo TUN 224.0.0.0/4 when Clash is running (Bonjour).
+    [switch]$SkipClashMdnsRoute,
     [string]$StartUrl = "https://my.pcloud.com"
 )
+
+$script:CompanionBrowserStarted = $false
 
 $ErrorActionPreference = "Stop"
 
@@ -54,6 +62,9 @@ function Wait-EnterOnFatal {
 trap {
     Write-Host ""
     Write-Host ("[run] {0}" -f $_.Exception.Message) -ForegroundColor Red
+    if (Get-Command Stop-LoopSegmentsSkybox -ErrorAction SilentlyContinue) {
+        try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
+    }
     Wait-EnterOnFatal -ExitCode 1
     if ($NoWaitEnterOnFatal) {
         throw $_
@@ -81,6 +92,21 @@ if (-not (Test-Path -LiteralPath $AltServerHelper)) {
 }
 . $AltServerHelper
 
+$SkyboxHelper = Join-Path $LibDir "Get-LoopSegmentsSkybox.ps1"
+if (-not (Test-Path -LiteralPath $SkyboxHelper)) {
+    throw "Missing shared Skybox helper: $SkyboxHelper"
+}
+. $SkyboxHelper
+$VdHelper = Join-Path $LibDir "Get-LoopSegmentsVirtualDesktop.ps1"
+if (-not (Test-Path -LiteralPath $VdHelper)) {
+    throw "Missing shared Virtual Desktop helper: $VdHelper"
+}
+. $VdHelper
+$ClashHelper = Join-Path $LibDir "Get-LoopSegmentsClash.ps1"
+if (Test-Path -LiteralPath $ClashHelper) {
+    . $ClashHelper
+}
+
 # Machine-local only (never on pCloud P:). Repo .venv is legacy and ignored.
 $CompanionLocalRoot = Join-Path $env:LOCALAPPDATA "pcloud_web_companion"
 $VenvDir = Join-Path $CompanionLocalRoot "venv"
@@ -92,6 +118,8 @@ $LegacyRepoVenv = Join-Path $ScriptDir ".venv"
 # Chromium must use a local disk profile (not P:). We sync that folder to/from the repo each run.
 $UserDataDir = Join-Path $CompanionLocalRoot "chromium-profile"
 $RepoProfileDir = Join-Path $ScriptDir "chromium-profile"
+# Stale "we started Skybox" marker from a prior crash / -NoLaunch must not quit an unrelated client.
+try { Clear-LoopSegmentsSkyboxStartedMarker } catch {}
 
 if (-not (Test-Path $ManifestPath)) {
     throw "Extension manifest not found: $ManifestPath"
@@ -470,7 +498,8 @@ function Start-RestLogSink {
             "-ExecutionPolicy", "Bypass",
             "-File", $sinkScript,
             "-LogFile", $logFile,
-            "-Port", "18765"
+            "-Port", "18765",
+            "-CompanionPid", "$PID"
         ))
 
     # Child powershell cold-start + sink's own "kill previous" sleep. Clash TUN can break
@@ -753,6 +782,38 @@ function Wait-PhoneLanPageReachable {
     return $false
 }
 
+function Invoke-EnsureSkyboxDesktop {
+    if ($SkipSkybox) {
+        Write-Host "[skybox] Skipping SKYBOX VR desktop check (-SkipSkybox)"
+        return
+    }
+    [void](Write-LoopSegmentsSkyboxNotice -AlwaysStatus -EnsureStarted)
+}
+
+function Invoke-RestartVirtualDesktop {
+    if ($SkipVirtualDesktop) {
+        Write-Host "[vd] Skipping Virtual Desktop Streamer / Service restart (-SkipVirtualDesktop)"
+        return
+    }
+    [void](Write-LoopSegmentsVirtualDesktopNotice -EnsureRestarted)
+}
+
+function Invoke-EnsureClashMdnsRoute {
+    if ($SkipClashMdnsRoute) {
+        Write-Host "[clash] Skipping Clash TUN multicast check (-SkipClashMdnsRoute)"
+        return
+    }
+    if (-not (Get-Command Write-LoopSegmentsClashMdnsNotice -ErrorAction SilentlyContinue)) {
+        Write-Warning "[clash] Helper not loaded (no env_setup\\Clash\\Get-Clash.ps1). Bonjour may stay empty under TUN."
+        return
+    }
+    if (-not (Get-Command Test-ClashRunning -ErrorAction SilentlyContinue) -or -not (Test-ClashRunning)) {
+        Write-Host "[clash] Clash/mihomo not running - skip TUN multicast fix"
+        return
+    }
+    [void](Write-LoopSegmentsClashMdnsNotice -FixRoute)
+}
+
 function Invoke-GatewayWifiRebootIfNeeded {
     # When the PC default gateway is not on the same subnet as phoneLanHost: inform,
     # reboot current gateway Wi-Fi, wait for a new PC LAN IP, re-check - loop until matched.
@@ -819,9 +880,9 @@ function Invoke-LoopSegmentsUsbLaunch {
     }
 
     if ($lanUp) {
-        Write-Host "[usb] Foregrounding Loop Segments on phone before Chromium (LAN already up)..."
+        Write-Host "[usb] Foregrounding Loop Segments on phone..."
     } else {
-        Write-Host "[usb] LAN not reachable - launching Loop Segments on phone before Chromium..."
+        Write-Host "[usb] LAN not reachable - launching Loop Segments on phone..."
     }
     Write-Host "[usb] > pwsh $($psArgs -join ' ')"
     & (Get-LoopSegmentsPwshExe) @psArgs
@@ -829,16 +890,20 @@ function Invoke-LoopSegmentsUsbLaunch {
     if ($null -eq $code) { $code = 0 }
 
     if ($code -eq 3) {
+        if ($script:CompanionBrowserStarted) {
+            Write-Warning "[usb] Phone is LOCKED (exit 3). Unlock the iPhone so USB launch / Home-on-quit can work. Chromium stays open; plugin queues until the app LAN page is up."
+            return
+        }
         throw @"
 [usb] Phone is LOCKED (exit 3). Unlock the iPhone, leave it on the Home Screen, then re-run.
 Chromium was not started.
 "@
     }
     if ($code -eq 2) {
-        if ($lanUp) {
+        if ($lanUp -or $script:CompanionBrowserStarted) {
             Write-Warning @"
-[usb] No iPhone on USB (exit 2) - continuing because phone LAN is reachable.
-Plug in USB later for Home-on-quit / foreground. Chromium will start anyway.
+[usb] No iPhone on USB (exit 2)$(if ($lanUp) { ' - phone LAN is reachable' } else { ' - Chromium is already open; plugin will queue/deny until the app LAN page is up' }).
+Plug in USB later for Home-on-quit / foreground.
 "@
             return
         }
@@ -850,9 +915,9 @@ Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launc
 "@
     }
     if ($code -ne 0) {
-        if ($lanUp) {
+        if ($lanUp -or $script:CompanionBrowserStarted) {
             Write-Warning @"
-[usb] Launch-LoopSegmentsViaUsb.ps1 failed (exit $code) - continuing because phone LAN is reachable.
+[usb] Launch-LoopSegmentsViaUsb.ps1 failed (exit $code)$(if ($lanUp) { ' - continuing because phone LAN is reachable' } else { ' - Chromium stays open; plugin queues until LAN is up' }).
 Fix USB / Developer Mode / cert trust when you need foreground or Home-on-quit.
 "@
             return
@@ -959,7 +1024,7 @@ function Invoke-AttemptRcloneMount {
 
     if (Test-RcloneMountProcessForDrive -DriveLetter $letter) {
         Write-Host "[rclone] ${letter}: already mounted (rclone) - ok"
-        return (Test-Path -LiteralPath $driveRoot)
+        return [bool](Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue)
     }
 
     if (Test-Path -LiteralPath $driveRoot) {
@@ -1016,7 +1081,7 @@ function Invoke-AttemptRcloneMount {
         Start-Sleep -Milliseconds 400
     }
 
-    if ((Test-Path -LiteralPath $driveRoot) -or (Test-RcloneMountProcessForDrive -DriveLetter $letter)) {
+    if ((Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue) -or (Test-RcloneMountProcessForDrive -DriveLetter $letter)) {
         Write-Host "[rclone] ${driveRoot} mount in progress / up"
         return (Test-Path -LiteralPath $driveRoot)
     }
@@ -1040,7 +1105,7 @@ function Invoke-MeasureLanThroughputIfMounted {
 
     $letter = Get-CompanionMountDriveLetter
     $driveRoot = "${letter}:\"
-    $mountReady = Test-Path -LiteralPath $driveRoot
+    $mountReady = $null -ne (Get-PSDrive -Name $letter -PSProvider FileSystem -ErrorAction SilentlyContinue)
 
     $psArgs = [System.Collections.Generic.List[string]]::new()
     [void]$psArgs.Add("-NoProfile")
@@ -1074,13 +1139,6 @@ function Invoke-MeasureLanThroughputIfMounted {
     } finally {
         $ErrorActionPreference = $prev
     }
-    if ($code -eq 10) {
-        throw @"
-[lan-bw] Stopped after low LAN throughput (below minLanThroughputMbps in loop-segments-windows.json): current gateway Wi-Fi was rebooted.
-Wait for devices to re-associate, then re-run the companion.
-Chromium was not started.
-"@
-    }
     if ($code -ne 0) {
         Write-Warning "[lan-bw] Measure-LoopSegmentsLanThroughput.ps1 failed (exit $code) - continuing with Chromium."
     }
@@ -1090,11 +1148,14 @@ Sync-LanConfigFromLoopSegments
 $ExtensionLoadDir = Sync-ExtensionToLocalDisk
 Start-RestLogSink
 Invoke-GatewayWifiRebootIfNeeded
-Invoke-LoopSegmentsUsbLaunch
-[void](Invoke-AttemptRcloneMount)
-Invoke-MeasureLanThroughputIfMounted
 
 if ($NoLaunch) {
+    Invoke-EnsureSkyboxDesktop
+    Invoke-RestartVirtualDesktop
+    Invoke-EnsureClashMdnsRoute
+    Invoke-LoopSegmentsUsbLaunch
+    [void](Invoke-AttemptRcloneMount)
+    Invoke-MeasureLanThroughputIfMounted
     Write-Host "[run] Setup complete (-NoLaunch). Extension: $ExtensionDir"
     exit 0
 }
@@ -1253,6 +1314,7 @@ function Clear-LocalProfileMinimal {
 
 $script:CompanionShutdownRequested = $false
 $script:CompanionFinished = $false
+$script:HomeFailedNeedEnter = $false
 $script:CancelKeyPressHandler = $null
 $script:ConsoleCtrlHandler = $null
 $GracefulExitMarker = Join-Path $CompanionLocalRoot "companion-graceful-exit.marker"
@@ -1345,11 +1407,11 @@ function Invoke-GoIphoneHome {
         # Same console so pymobiledevice3 progress/timeouts are visible (hidden child looked "stuck").
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = (Get-LoopSegmentsPwshExe)
-        $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`""
+        $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`" -NoWaitEnter"
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $false
         $p = [System.Diagnostics.Process]::Start($psi)
-        # Outer cap: import + list + up to 3 hid attempts (~25s each) in Go-IphoneHomeViaUsb.ps1.
+        # Outer cap: import + list + DVT SpringBoard/Settings (HID --userspace skipped on iOS 26).
         $outerMs = 120000
         if (-not $p.WaitForExit($outerMs)) {
             Write-Warning "[home] Outer timeout (${outerMs}ms) - killing Home script process tree"
@@ -1369,6 +1431,7 @@ function Invoke-GoIphoneHome {
         Write-Host "[home] Skipped (no USB device)"
     } else {
         Write-Warning "[home] Home press did not succeed (exit $code) - phone may still show Loop Segments"
+        $script:HomeFailedNeedEnter = $true
     }
 }
 
@@ -1379,10 +1442,11 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): close Chromium, sync profile, clear local, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): close Chromium, quit Skybox if we started it, sync profile, clear local, Home on phone..." -ForegroundColor Cyan
 
     try {
         Stop-ProfileChromium -ProfileDir $UserDataDir
+        try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
         Start-Sleep -Milliseconds 500
         if (Test-LocalProfileHasContent -ProfileDir $UserDataDir) {
             Sync-ChromiumProfile -Direction Upload
@@ -1394,6 +1458,17 @@ function Invoke-CompanionGracefulFinish {
         Stop-CompanionRestLogSink
         Invoke-GoIphoneHome
         Write-Host "[run] Companion finish complete." -ForegroundColor Green
+        if ($script:HomeFailedNeedEnter) {
+            # Home is not a fatal companion stop (still exit 0), and the launcher
+            # passes -NoWaitEnterOnFatal — so Wait-EnterOnFatal would skip.
+            Write-Host ""
+            Write-Host "Press Enter to close..." -ForegroundColor Yellow
+            try {
+                [void][Console]::ReadLine()
+            } catch {
+                Read-Host | Out-Null
+            }
+        }
     } catch {
         Write-Warning "[run] Finish had errors: $($_.Exception.Message)"
     } finally {
@@ -1416,7 +1491,7 @@ function Register-CompanionCancelHandler {
                 $eventArgs.Cancel = $true
                 $script:CompanionShutdownRequested = $true
                 Write-Host ""
-                Write-Host "[run] Ctrl+C received - will close Chromium and sync profile..." -ForegroundColor Yellow
+                Write-Host "[run] Ctrl+C received - will close Chromium, quit Skybox if we started it, and sync profile..." -ForegroundColor Yellow
                 try { [CompanionConsoleGuard]::KillTrackedChrome() } catch {}
             }
             [Console]::CancelKeyPress += $script:CancelKeyPressHandler
@@ -1651,13 +1726,62 @@ if ($null -eq $verify) {
 
 Write-Host "[run] Chromium started (fresh tabs + download history; cookies kept)."
 Write-Host "[run] pCloud downloads -> clipboard + POST Loop Segments /export_from_folder.json"
+Write-Host "[run] Remaining setup (SKYBOX / Virtual Desktop / USB / phone LAN recover / rclone) continues in this window."
+Write-Host "[run] If the app LAN page is down, the extension queues exports (~5 min) then denies them (desktop notification)."
+
+$script:CompanionBrowserStarted = $true
+if (-not $DetachChromium) {
+    Register-CompanionCancelHandler
+    Start-CompanionExitWatchdog
+}
+
+if (-not $script:CompanionShutdownRequested) {
+    try {
+        Invoke-EnsureSkyboxDesktop
+    } catch {
+        Write-Warning "[skybox] $($_.Exception.Message)"
+    }
+}
+if (-not $script:CompanionShutdownRequested) {
+    try {
+        Invoke-RestartVirtualDesktop
+    } catch {
+        Write-Warning "[vd] $($_.Exception.Message)"
+    }
+}
+if (-not $script:CompanionShutdownRequested) {
+    try {
+        Invoke-EnsureClashMdnsRoute
+    } catch {
+        Write-Warning "[clash] $($_.Exception.Message)"
+    }
+}
+if (-not $script:CompanionShutdownRequested) {
+    try {
+        Invoke-LoopSegmentsUsbLaunch
+    } catch {
+        Write-Warning "[usb] $($_.Exception.Message)"
+    }
+}
+if (-not $script:CompanionShutdownRequested) {
+    try {
+        [void](Invoke-AttemptRcloneMount)
+    } catch {
+        Write-Warning "[rclone] $($_.Exception.Message)"
+    }
+}
+if (-not $script:CompanionShutdownRequested) {
+    try {
+        Invoke-MeasureLanThroughputIfMounted
+    } catch {
+        Write-Warning "[lan-bw] $($_.Exception.Message)"
+    }
+}
 
 if ($DetachChromium) {
     Write-Host "[run] Detached (-DetachChromium). Full local profile kept until next run uploads, then clears."
     exit 0
 } else {
-    Register-CompanionCancelHandler
-    Start-CompanionExitWatchdog
     try {
         Wait-ProfileChromiumExit -ProfileDir $UserDataDir
     } catch {

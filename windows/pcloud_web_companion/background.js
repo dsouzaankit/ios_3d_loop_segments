@@ -8,8 +8,12 @@ const MAX_CAPTURES = 200;
 const MAX_REST_LOGS = 100;
 const LOCAL_LOG_URL = "http://127.0.0.1:18765/log";
 /** Clash TUN-safe: SW fetch to RFC1918 often hangs; PowerShell relay uses DIRECT. */
-const LOCAL_LAN_RELAY_URL = "http://127.0.0.1:18765/phone-lan";
+const LOCAL_FOCUS_CONSOLE_URL = "http://127.0.0.1:18765/focus-console";
 const LAN_FETCH_TIMEOUT_MS = 12000;
+const PENDING_LAN_KEY = "pendingPhoneLanExports";
+const PENDING_LAN_MAX = 24;
+const PENDING_LAN_TTL_MS = 5 * 60 * 1000;
+const LAN_FLUSH_ALARM = "flush-pending-phone-lan";
 
 /** @type {Map<number, { url: string, filename: string|null, referrer: string|null, timer: ReturnType<typeof setTimeout>|null, done: boolean }>} */
 const pending = new Map();
@@ -246,6 +250,204 @@ async function fetchPhoneLan(targetUrl, { method = "POST", headers = {}, body = 
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function looksLikeLanDown(err) {
+  const s = String(err && err.message ? err.message : err || "");
+  return /fetch failed|aborted|Timeout|timed out|relay fetch failed|HTTP 502|status 502|Failed to fetch|NetworkError/i.test(
+    s
+  );
+}
+
+async function notifyUser(title, message) {
+  try {
+    await chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icon.png",
+      title,
+      message: String(message || "").slice(0, 180),
+      priority: 2,
+    });
+  } catch (err) {
+    console.warn("notification failed:", err);
+  }
+}
+
+async function focusCompanionConsole() {
+  try {
+    await fetch(LOCAL_FOCUS_CONSOLE_URL, { method: "GET", cache: "no-store" });
+  } catch (err) {
+    console.warn("focus companion console failed:", err);
+  }
+}
+
+async function probePhoneLanReady() {
+  try {
+    const cfg = await loadLanConfig();
+    const res = await fetchPhoneLan(`${lanBaseUrl(cfg)}/status.json`, { method: "GET" });
+    if (!res || typeof res.status !== "number") return false;
+    if (res.status === 502 || res.status === 0) return false;
+    return res.status < 500 || res.status === 401 || res.status === 403;
+  } catch {
+    return false;
+  }
+}
+
+async function loadPendingLanExports() {
+  try {
+    const { [PENDING_LAN_KEY]: rows = [] } = await chrome.storage.local.get(PENDING_LAN_KEY);
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+async function savePendingLanExports(rows) {
+  await chrome.storage.local.set({ [PENDING_LAN_KEY]: rows.slice(0, PENDING_LAN_MAX) });
+}
+
+async function schedulePendingLanFlush() {
+  try {
+    await chrome.alarms.create(LAN_FLUSH_ALARM, { periodInMinutes: 1 });
+  } catch (err) {
+    console.warn("lan flush alarm failed:", err);
+  }
+}
+
+async function dropExpiredPendingLanExports() {
+  const now = Date.now();
+  const rows = await loadPendingLanExports();
+  const keep = [];
+  const dropped = [];
+  for (const row of rows) {
+    const age = now - (Number(row.queuedAt) || 0);
+    if (age > PENDING_LAN_TTL_MS) dropped.push(row);
+    else keep.push(row);
+  }
+  if (dropped.length) {
+    await savePendingLanExports(keep);
+    const names = dropped
+      .flatMap((r) =>
+        r.kind === "queue" ? (r.items || []).map((i) => i.displayName) : [r.saveName]
+      )
+      .filter(Boolean)
+      .slice(0, 4)
+      .join(", ");
+    await appendRestLog({
+      phase: "lan_pending_denied",
+      ok: false,
+      silent: true,
+      itemCount: dropped.length,
+      error: "Loop Segments LAN page still down; dropped queued export(s)",
+    });
+    await notifyUser(
+      "Loop Segments: LAN still down",
+      `Denied ${dropped.length} queued export(s)${names ? `: ${names}` : ""}. Open the app / wait for companion setup.`
+    );
+  }
+  return keep;
+}
+
+async function enqueuePendingLanExport(entry) {
+  const rows = await dropExpiredPendingLanExports();
+  rows.push({
+    ...entry,
+    queuedAt: Date.now(),
+  });
+  const overflow = rows.length - PENDING_LAN_MAX;
+  if (overflow > 0) rows.splice(0, overflow);
+  await savePendingLanExports(rows);
+  await schedulePendingLanFlush();
+  const n = rows.length;
+  const label =
+    entry.kind === "queue"
+      ? `${(entry.items || []).length} file(s)`
+      : entry.saveName || "export";
+  await appendRestLog({
+    phase: "lan_pending",
+    ok: true,
+    silent: true,
+    mode: entry.kind,
+    saveName: entry.saveName || null,
+    itemCount: entry.kind === "queue" ? (entry.items || []).length : 1,
+    pendingCount: n,
+    message: "Phone LAN page not ready; queued locally",
+  });
+  await notifyUser(
+    "Loop Segments: waiting for LAN",
+    `${label} queued (${n} pending). Companion is still bringing the app LAN page up.`
+  );
+}
+
+async function flushPendingLanExports() {
+  await dropExpiredPendingLanExports();
+  const rows = await loadPendingLanExports();
+  if (!rows.length) return;
+  const ready = await probePhoneLanReady();
+  if (!ready) return;
+  await savePendingLanExports([]);
+  const failed = [];
+  let sent = 0;
+  for (const row of rows) {
+    try {
+      if (row.kind === "queue") {
+        await postLanExportQueueNow(row.items || [], {
+          mode: row.mode || "prepend",
+          startFirst: row.startFirst !== false,
+        });
+      } else {
+        await postLanExportNow({
+          saveName: row.saveName,
+          folderPath: row.folderPath,
+        });
+      }
+      sent += 1;
+    } catch (err) {
+      if (looksLikeLanDown(err)) failed.push(row);
+      else {
+        await appendRestLog({
+          phase: "lan_pending_flush",
+          ok: false,
+          silent: true,
+          error: String(err && err.message ? err.message : err),
+        });
+      }
+    }
+  }
+  if (failed.length) {
+    const current = await loadPendingLanExports();
+    await savePendingLanExports([...failed, ...current]);
+  }
+  if (sent > 0) {
+    await notifyUser(
+      "Loop Segments: LAN is up",
+      `Sent ${sent} queued export(s) to the phone.`
+    );
+  }
+}
+
+async function withPhoneLanGate(kind, payload, send) {
+  await dropExpiredPendingLanExports();
+  let cfg = null;
+  try {
+    cfg = await loadLanConfig();
+  } catch {
+    cfg = null;
+  }
+  const ready = await probePhoneLanReady();
+  if (!ready) {
+    await enqueuePendingLanExport({ kind, ...payload });
+    return { deferred: true, cfg };
+  }
+  try {
+    return await send();
+  } catch (err) {
+    if (looksLikeLanDown(err)) {
+      await enqueuePendingLanExport({ kind, ...payload });
+      return { deferred: true, cfg };
+    }
+    throw err;
   }
 }
 
@@ -1273,17 +1475,19 @@ async function appendRestLog(entry) {
   }
 
   try {
-    const title = row.ok ? "Loop Segments: queued" : "Loop Segments: REST failed";
-    const message = row.ok
-      ? `${row.saveName || ""} → ${row.endpoint || ""}`.trim()
-      : String(row.error || row.message || "unknown error").slice(0, 180);
-    await chrome.notifications.create({
-      type: "basic",
-      iconUrl: "icon.png",
-      title,
-      message,
-      priority: 2,
-    });
+    if (!row.silent) {
+      const title = row.ok ? "Loop Segments: queued" : "Loop Segments: REST failed";
+      const message = row.ok
+        ? `${row.saveName || ""} → ${row.endpoint || ""}`.trim()
+        : String(row.error || row.message || "unknown error").slice(0, 180);
+      await chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icon.png",
+        title,
+        message,
+        priority: 2,
+      });
+    }
   } catch (err) {
     console.warn("notification failed:", err);
   }
@@ -1300,7 +1504,7 @@ function listingFolderPath(path) {
   return p;
 }
 
-async function postLanExport({ saveName, folderPath }) {
+async function postLanExportNow({ saveName, folderPath }) {
   const cfg = await loadLanConfig();
   const folderListing = listingFolderPath(folderPath);
   if (!folderListing) {
@@ -1396,6 +1600,18 @@ async function postLanExport({ saveName, folderPath }) {
   }
 
   return { endpoint, status: res.status, payload, cfg, mode: "folder" };
+}
+
+async function postLanExport({ saveName, folderPath }) {
+  const folderListing = listingFolderPath(folderPath);
+  if (!folderListing) {
+    return postLanExportNow({ saveName, folderPath });
+  }
+  return withPhoneLanGate(
+    "folder",
+    { saveName, folderPath: folderListing },
+    () => postLanExportNow({ saveName, folderPath: folderListing })
+  );
 }
 
 function isArchiveDownload(filename, url) {
@@ -1703,7 +1919,7 @@ async function resolveFileIdsToExportItems(fileIds, folderHint) {
   return { items, errors };
 }
 
-async function postLanExportQueue(items, { mode = "prepend", startFirst = true } = {}) {
+async function postLanExportQueueNow(items, { mode = "prepend", startFirst = true } = {}) {
   const cfg = await loadLanConfig();
   const endpoint = `${lanBaseUrl(cfg)}/export_queue.json`;
   const bodyObj = {
@@ -1781,6 +1997,14 @@ async function postLanExportQueue(items, { mode = "prepend", startFirst = true }
   }
 
   return { endpoint, status: res.status, payload, cfg, mode: "queue" };
+}
+
+async function postLanExportQueue(items, { mode = "prepend", startFirst = true } = {}) {
+  return withPhoneLanGate(
+    "queue",
+    { items, mode, startFirst },
+    () => postLanExportQueueNow(items, { mode, startFirst })
+  );
 }
 
 async function openLanBrowse(cfg) {
@@ -2004,20 +2228,24 @@ async function runArchiveQueuePipeline({ url, filename, referrer, downloadId }) 
       // ignore
     }
   }
-  if (lanCfg) await openLanBrowse(lanCfg);
+  if (lanCfg && !api?.deferred) await openLanBrowse(lanCfg);
 
   try {
-    await chrome.notifications.create({
-      type: "basic",
-      iconUrl: "icon.png",
-      title: apiError
-        ? "Loop Segments: queue failed"
-        : `Loop Segments: queued ${items.length}`,
-      message: apiError
-        ? String(apiError).slice(0, 180)
-        : items.map((i) => i.displayName).slice(0, 4).join(", "),
-      priority: 2,
-    });
+    if (api?.deferred) {
+      // Waiting-for-LAN notification already shown.
+    } else {
+      await chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icon.png",
+        title: apiError
+          ? "Loop Segments: queue failed"
+          : `Loop Segments: queued ${items.length}`,
+        message: apiError
+          ? String(apiError).slice(0, 180)
+          : items.map((i) => i.displayName).slice(0, 4).join(", "),
+        priority: 2,
+      });
+    }
   } catch {
     // ignore
   }
@@ -2127,7 +2355,7 @@ async function runCapturePipeline({ url, filename, referrer, downloadId }) {
     }
   }
 
-  if (lanCfg) {
+  if (lanCfg && !api?.deferred) {
     await openLanBrowse(lanCfg);
   }
 
@@ -2351,6 +2579,21 @@ if (chrome.webNavigation?.onBeforeNavigate) {
   });
 }
 
+chrome.notifications.onClicked.addListener((notificationId) => {
+  try {
+    chrome.notifications.clear(notificationId);
+  } catch {
+    // ignore
+  }
+  void focusCompanionConsole();
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name === LAN_FLUSH_ALARM) {
+    void flushPendingLanExports();
+  }
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   void appendRestLog({
     phase: "startup",
@@ -2358,11 +2601,15 @@ chrome.runtime.onInstalled.addListener(() => {
     message: "extension installed/updated",
   });
   void cancelAllInFlightPcloudDownloads("onInstalled");
+  void schedulePendingLanFlush();
+  void flushPendingLanExports();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   void logServiceWorkerBoot("onStartup");
   void cancelAllInFlightPcloudDownloads("onStartup");
+  void schedulePendingLanFlush();
+  void flushPendingLanExports();
 });
 
 async function logServiceWorkerBoot(reason) {
@@ -2390,3 +2637,5 @@ async function logServiceWorkerBoot(reason) {
 // Runs when the service worker starts (including --load-extension launches).
 void logServiceWorkerBoot("service_worker_eval");
 void cancelAllInFlightPcloudDownloads("service_worker_eval");
+void schedulePendingLanFlush();
+void flushPendingLanExports();
