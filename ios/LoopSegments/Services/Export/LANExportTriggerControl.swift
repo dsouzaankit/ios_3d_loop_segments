@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let lanExportTriggerDidQueue = Notification.Name("lanExportTriggerDidQueue")
+}
+
 struct LANExportTrigger: Codable {
     enum Command: String, Codable {
         case startExport = "start_export"
@@ -81,6 +85,15 @@ enum LANExportTriggerControl {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(trigger)
             try data.write(to: url, options: .atomic)
+            writeAck(
+                command: trigger.command.rawValue,
+                status: "queued",
+                message: "Trigger written — waiting for app poller to consume",
+                triggerId: trigger.id
+            )
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .lanExportTriggerDidQueue, object: nil)
+            }
             return true
         } catch {
             return false
@@ -251,19 +264,26 @@ enum LANExportTriggerControl {
         onTrimMedia: @escaping () -> Int
     ) async -> String? {
         guard isEnabled else { return nil }
-        guard ExportAutoLockCoordinator.appIsActive else { return nil }
         guard let url = triggerURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
 
         guard let data = try? Data(contentsOf: url) else { return nil }
-        defer { try? FileManager.default.removeItem(at: url) }
 
         let trigger: LANExportTrigger
         do {
             trigger = try JSONDecoder().decode(LANExportTrigger.self, from: data)
         } catch {
+            try? FileManager.default.removeItem(at: url)
             writeAck(command: "parse_error", status: "rejected", message: error.localizedDescription, triggerId: nil)
             return "Trigger rejected — invalid JSON"
         }
+        // Take ownership now so a later POST can write a new trigger while this one resolves.
+        try? FileManager.default.removeItem(at: url)
+        writeAck(
+            command: trigger.command.rawValue,
+            status: "resolving",
+            message: "App consumed trigger — resolving \(trigger.displayName ?? trigger.saveName ?? trigger.command.rawValue)",
+            triggerId: trigger.id
+        )
 
         if let triggerId = trigger.id?.trimmingCharacters(in: .whitespacesAndNewlines), !triggerId.isEmpty {
             let last = UserDefaults.standard.string(forKey: lastHandledIdKey)

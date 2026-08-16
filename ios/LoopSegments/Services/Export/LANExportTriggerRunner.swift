@@ -1,11 +1,17 @@
 import Foundation
 
 /// Polls `export_trigger.json` while the app is foreground, exporting, or Keep Alive is playing (LAN page PUTs triggers).
+/// A LAN POST also posts `lanExportTriggerDidQueue` so a sitting trigger is consumed even if the 2s loop was stopped
+/// (LAN HTTP can stay up via ExportView/coordinator `ensureRunning` after RootView cancelled the poller).
 @MainActor
 enum LANExportTriggerRunner {
     private static var task: Task<Void, Never>?
+    private static weak var sessionRef: AppSession?
+    private static var kickObserverInstalled = false
 
     static func setAppActive(_ active: Bool, session: AppSession) {
+        sessionRef = session
+        installKickObserver()
         ExportAutoLockCoordinator.setAppActive(active)
         let shouldRun = active && ExportLANServer.isEnabled && LANExportTriggerControl.isEnabled
         if !shouldRun {
@@ -13,6 +19,33 @@ enum LANExportTriggerRunner {
             task = nil
             return
         }
+        startLoopIfNeeded(session: session)
+    }
+
+    private static func installKickObserver() {
+        guard !kickObserverInstalled else { return }
+        kickObserverInstalled = true
+        NotificationCenter.default.addObserver(
+            forName: .lanExportTriggerDidQueue,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                await consumeQueuedTrigger()
+            }
+        }
+    }
+
+    /// Restart the poller if needed and consume `export_trigger.json` immediately (LAN REST POST).
+    static func consumeQueuedTrigger() async {
+        guard let session = sessionRef else { return }
+        guard ExportLANServer.isEnabled, LANExportTriggerControl.isEnabled else { return }
+        ExportAutoLockCoordinator.setAppActive(true)
+        startLoopIfNeeded(session: session)
+        await tick(session: session)
+    }
+
+    private static func startLoopIfNeeded(session: AppSession) {
         // Do not cancel/restart an already-running poller — `isExportSessionActive` flips when
         // LAN-triggered startExport begins, and restarting here can drop the start Task.
         if task != nil { return }

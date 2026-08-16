@@ -8,6 +8,7 @@ const MAX_CAPTURES = 200;
 const MAX_REST_LOGS = 100;
 const LOCAL_LOG_URL = "http://127.0.0.1:18765/log";
 /** Clash TUN-safe: SW fetch to RFC1918 often hangs; PowerShell relay uses DIRECT. */
+const LOCAL_LAN_RELAY_URL = "http://127.0.0.1:18765/phone-lan";
 const LOCAL_FOCUS_CONSOLE_URL = "http://127.0.0.1:18765/focus-console";
 const LAN_FETCH_TIMEOUT_MS = 12000;
 const PENDING_LAN_KEY = "pendingPhoneLanExports";
@@ -397,7 +398,11 @@ async function flushPendingLanExports() {
           startFirst: row.startFirst !== false,
         });
       } else {
-        await postLanExportNow({
+        const posted = await postLanExportNow({
+          saveName: row.saveName,
+          folderPath: row.folderPath,
+        });
+        await maybeWaitForExportAck(posted, {
           saveName: row.saveName,
           folderPath: row.folderPath,
         });
@@ -1602,6 +1607,92 @@ async function postLanExportNow({ saveName, folderPath }) {
   return { endpoint, status: res.status, payload, cfg, mode: "folder" };
 }
 
+const ACK_IN_PROGRESS = new Set(["queued", "resolving"]);
+
+async function waitForExportAck({
+  cfg,
+  triggerId,
+  saveName,
+  folderPath,
+  timeoutMs = 90000,
+}) {
+  if (!cfg || !triggerId) return null;
+  const ackUrl = `${lanBaseUrl(cfg)}/pcld_ios_media/scripts/export_trigger.ack.json`;
+  const headers = {
+    Authorization: basicAuthHeader(cfg.webdavUser, cfg.webdavPassword),
+  };
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const res = await fetchPhoneLan(ackUrl, { method: "GET", headers });
+      const raw = await res.text();
+      const a = raw ? JSON.parse(raw) : null;
+      if (a && a.triggerId === triggerId) {
+        last = a;
+        const st = String(a.status || "").toLowerCase();
+        if (!ACK_IN_PROGRESS.has(st)) {
+          const ok = st === "accepted";
+          await appendRestLog({
+            phase: "ack",
+            ok,
+            endpoint: ackUrl,
+            saveName: saveName || null,
+            folderPath: folderPath || null,
+            triggerId,
+            status: a.status,
+            message: a.message || null,
+            ms: Date.now() - started,
+          });
+          if (!ok) {
+            await notifyUser(
+              "Loop Segments: export not started",
+              String(a.message || a.status || "rejected").slice(0, 180)
+            );
+          }
+          return a;
+        }
+      }
+    } catch {
+      // keep polling — relay/direct may flap
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  await appendRestLog({
+    phase: "ack",
+    ok: false,
+    endpoint: ackUrl,
+    saveName: saveName || null,
+    folderPath: folderPath || null,
+    triggerId,
+    status: last && last.status,
+    message: last && last.message,
+    error: last
+      ? `no consume from app (ack stuck at ${last.status})`
+      : "no ack from app",
+    ms: Date.now() - started,
+  });
+  await notifyUser(
+    "Loop Segments: no ack from app",
+    saveName
+      ? `${saveName} queued on LAN but the app did not consume the trigger`
+      : "LAN queued but the app did not consume the trigger"
+  );
+  return last;
+}
+
+async function maybeWaitForExportAck(api, extra = {}) {
+  if (!api || api.deferred || !api.cfg) return null;
+  const triggerId = api.payload && api.payload.triggerId;
+  if (!triggerId) return null;
+  return waitForExportAck({
+    cfg: api.cfg,
+    triggerId,
+    saveName: extra.saveName || api.payload.displayName || null,
+    folderPath: extra.folderPath || api.payload.folderPath || null,
+  });
+}
+
 async function postLanExport({ saveName, folderPath }) {
   const folderListing = listingFolderPath(folderPath);
   if (!folderListing) {
@@ -2357,6 +2448,13 @@ async function runCapturePipeline({ url, filename, referrer, downloadId }) {
 
   if (lanCfg && !api?.deferred) {
     await openLanBrowse(lanCfg);
+  }
+
+  if (api && !api.deferred) {
+    await maybeWaitForExportAck(api, {
+      saveName: filename,
+      folderPath: folder.folderPath,
+    });
   }
 
   try {

@@ -17,10 +17,19 @@
 
 .PARAMETER SourceIpa
   Optional override path to an .ipa (default: ios\build artifacts\ipa\LoopSegments.ipa).
+
+.PARAMETER SkipAltStorePrep
+  Do not start AltServer / check phone subnet (env_setup). deploy.ps1 passes this
+  so prep runs once after the copy.
+
+.PARAMETER NoWaitEnter
+  Do not wait for Enter (when invoked as a child of deploy.ps1).
 #>
 param(
     [switch] $FetchIfMissing,
-    [string] $SourceIpa = ''
+    [string] $SourceIpa = '',
+    [switch] $SkipAltStorePrep,
+    [switch] $NoWaitEnter
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,10 +71,57 @@ function Write-Step([string] $Message) {
     Write-Host "==> $Message"
 }
 
+function Wait-EnterToClose {
+    if ($NoWaitEnter) { return }
+    Write-Host ""
+    Write-Host 'Press Enter to close...' -ForegroundColor Yellow
+    try {
+        [void][Console]::ReadLine()
+    } catch {
+        Read-Host | Out-Null
+    }
+}
+
+function Exit-WithEnter {
+    param([int] $ExitCode = 0)
+    Wait-EnterToClose
+    exit $ExitCode
+}
+
+trap {
+    Write-Host ""
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    if ($NoWaitEnter) { throw $_ }
+    Wait-EnterToClose
+    exit 1
+}
+
+function Invoke-ProjectAltStoreDeployPrep {
+    if ($SkipAltStorePrep) { return }
+    $join = @(
+        (Join-Path $ProjectRoot 'env_setup\altserver_refresh_scripts\Join-AltStoreDeployPrep.ps1')
+        'P:\all_scripts\iOS apps\env_setup\altserver_refresh_scripts\Join-AltStoreDeployPrep.ps1'
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+    if (-not $join) {
+        Write-Host 'WARN: env_setup AltServer helpers not found — skip tray/subnet prep.'
+        return
+    }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        . $join
+        Invoke-AltStoreDeployPrep
+    } catch {
+        Write-Warning ("AltStore deploy prep failed (IPA copy already done): {0}" -f $_.Exception.Message)
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 if (-not (Test-Path -LiteralPath $LocalIpa)) {
     if ($FetchIfMissing) {
         Write-Step 'Local IPA missing — fetching latest Actions artifact'
-        & (Join-Path $ProjectRoot 'deploy.ps1') -UseLatest -SkipICloud
+        & (Join-Path $ProjectRoot 'deploy.ps1') -UseLatest -SkipICloud -NoWaitEnter
         if ($LASTEXITCODE -ne 0) {
             throw 'deploy.ps1 -UseLatest -SkipICloud failed'
         }
@@ -112,3 +168,5 @@ Write-Host '  Wait for iCloud to sync Downloads (new filename triggers Files ref
 Write-Host "  AltStore → My Apps → + → $DestIpaName"
 Write-Host '  Or Files → iCloud Drive → Downloads → Share → AltStore'
 Write-Host ''
+Invoke-ProjectAltStoreDeployPrep
+Exit-WithEnter 0

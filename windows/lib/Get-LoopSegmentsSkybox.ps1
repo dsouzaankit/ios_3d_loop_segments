@@ -547,6 +547,21 @@ function Write-LoopSegmentsSkyboxNotice {
     if ($EnsureStarted -and -not $running) {
         return Start-LoopSegmentsSkybox -WaitSeconds 3
     }
+    if ($EnsureStarted -and $running) {
+        Write-Host ("[skybox] Already running (hide to tray){0}" -f $(if ($path) { ": $path" } else { '' }))
+        $winDeadline = [datetime]::UtcNow.AddSeconds(3)
+        while ([datetime]::UtcNow -lt $winDeadline) {
+            if ((Minimize-LoopSegmentsSkyboxWindows) -gt 0) { break }
+            Start-Sleep -Milliseconds 400
+        }
+        Start-LoopSegmentsSkyboxMinimizeWatch -Seconds 30
+        return [pscustomobject]@{
+            Installed = [bool]$path -or $running
+            Running   = $true
+            Path      = $path
+            Started   = $false
+        }
+    }
     if ($AlwaysStatus -or $running) {
         Write-Host ("[skybox] {0}{1}" -f $(if ($running) { 'Already running' } else { 'Installed, not running' }), $(if ($path) { ": $path" } else { '' }))
     }

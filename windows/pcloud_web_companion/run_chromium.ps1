@@ -27,7 +27,7 @@ param(
     [switch]$NoWaitEnterOnFatal,
     # Do not check/start SKYBOX VR desktop (default: start if installed but idle).
     [switch]$SkipSkybox,
-    # Do not quit/restart Virtual Desktop Streamer + Virtual Desktop Service.
+    # Do not check/start Virtual Desktop Streamer (default: start if idle, hide to tray).
     [switch]$SkipVirtualDesktop,
     # Do not try to drop Clash/mihomo TUN 224.0.0.0/4 when Clash is running (Bonjour).
     [switch]$SkipClashMdnsRoute,
@@ -790,12 +790,12 @@ function Invoke-EnsureSkyboxDesktop {
     [void](Write-LoopSegmentsSkyboxNotice -AlwaysStatus -EnsureStarted)
 }
 
-function Invoke-RestartVirtualDesktop {
+function Invoke-EnsureVirtualDesktop {
     if ($SkipVirtualDesktop) {
-        Write-Host "[vd] Skipping Virtual Desktop Streamer / Service restart (-SkipVirtualDesktop)"
+        Write-Host "[vd] Skipping Virtual Desktop Streamer check (-SkipVirtualDesktop)"
         return
     }
-    [void](Write-LoopSegmentsVirtualDesktopNotice -EnsureRestarted)
+    [void](Write-LoopSegmentsVirtualDesktopNotice -EnsureStarted)
 }
 
 function Invoke-EnsureClashMdnsRoute {
@@ -1151,7 +1151,7 @@ Invoke-GatewayWifiRebootIfNeeded
 
 if ($NoLaunch) {
     Invoke-EnsureSkyboxDesktop
-    Invoke-RestartVirtualDesktop
+    Invoke-EnsureVirtualDesktop
     Invoke-EnsureClashMdnsRoute
     Invoke-LoopSegmentsUsbLaunch
     [void](Invoke-AttemptRcloneMount)
@@ -1744,7 +1744,7 @@ if (-not $script:CompanionShutdownRequested) {
 }
 if (-not $script:CompanionShutdownRequested) {
     try {
-        Invoke-RestartVirtualDesktop
+        Invoke-EnsureVirtualDesktop
     } catch {
         Write-Warning "[vd] $($_.Exception.Message)"
     }

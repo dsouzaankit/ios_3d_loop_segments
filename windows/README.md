@@ -79,7 +79,7 @@ Low Mbps on the **right** subnet is **suspected to be Wi‑Fi channel congestion
 
 ## pCloud web helper (integrated)
 
-Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then **starts Chromium** so you can browse pCloud while SKYBOX / USB-launch / phone-LAN recover / rclone continue. If `:8765` is down, the extension **queues** downloads (desktop notification) and retries; after ~5 minutes it **denies** them. **Click a toast** to bring the companion PowerShell window to the front. After Chromium is up it **starts SKYBOX VR desktop hidden to the tray** if that player is installed but idle (`-SkipSkybox` to skip). USB-launches Loop Segments to foreground the app (locked phone no longer blocks Chromium), **attempts an rclone mount** in a separate window, then **probes LAN Mbps** off `L:` (up to 64 MB). If that is below `minLanThroughputMbps` (default **40**), it **reboots other routers** (not this PC’s app-LAN gateway), waits, and re-checks — up to **2** retries. The app LAN gateway is tethered to a primary router; those two APs must use the **same Wi‑Fi channel**.
+Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then **starts Chromium** so you can browse pCloud while SKYBOX / USB-launch / phone-LAN recover / rclone continue. If `:8765` is down, the extension **queues** downloads (desktop notification) and retries; after ~5 minutes it **denies** them. **Click a toast** to bring the companion PowerShell window to the front. After Chromium is up it **starts SKYBOX VR desktop hidden to the tray** if that player is installed (`-SkipSkybox` to skip), then **starts Virtual Desktop Streamer** if idle and **hides it to the tray** (`-SkipVirtualDesktop` to skip). USB-launches Loop Segments to foreground the app (locked phone no longer blocks Chromium), **attempts an rclone mount** in a separate window, then **probes LAN Mbps** off `L:` (up to 64 MB). If that is below `minLanThroughputMbps` (default **40**), it **reboots other routers** (not this PC’s app-LAN gateway), waits, and re-checks — up to **2** retries. The app LAN gateway is tethered to a primary router; those two APs must use the **same Wi‑Fi channel**.
 
 **Multi-select tip:** in my.pcloud.com, click the **`v`** control to filter the folder by one of **five** types (including **Video**), then multi-select → Download — the companion cancels the zip and queues videos on the phone FIFO. **Folder right-click → Download is not supported** (zip cancelled, no `fileid`s → “no selection ids”); open the folder, select the videos, then Download instead. Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
@@ -88,8 +88,8 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 # gateway vs phoneLanHost subnet check (reboot current gateway Wi-Fi when needed),
 # then starts Chromium; SKYBOX / USB-launch / LAN recover / rclone continue in this window
 # (plugin queues downloads if :8765 is down, then denies after ~5 min).
-# SKYBOX VR desktop is started after Chromium if installed but idle (-SkipSkybox to skip).
-# Virtual Desktop Streamer + Service are quit/restarted after Skybox (-SkipVirtualDesktop to skip).
+# SKYBOX VR desktop is started after Chromium if installed but idle, then hidden to the tray (-SkipSkybox to skip).
+# Virtual Desktop Streamer is started if idle (service started if stopped) and hidden to the tray (-SkipVirtualDesktop to skip).
 # Quit also closes Skybox when this companion session started it (already-running Skybox is left).
 # locked phone no longer blocks Chromium. Low throughput reboots other APs (not this PC's gateway) and re-checks (up to 2 retries).
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipGatewayReboot  # skip Wi-Fi reboot check
@@ -211,8 +211,8 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `webdavUser` / `webdavPassword` | Phone LAN WebDAV (defaults match app) |
 | `iCloudDownloads` | **Empty** = `%USERPROFILE%\iCloudDrive\Downloads` — target for repo-root **`copy-to-icloud.ps1`** (also used by **`deploy.ps1`**) |
 | `dlnaFolder` | Optional note for Skybox / junction target |
-| `skyboxExe` | Optional full path to **SKYBOX.exe** if auto-detect misses (companion starts SKYBOX VR desktop when idle) |
-| `virtualDesktopStreamerExe` | Optional full path to **VirtualDesktop.Streamer.exe** if auto-detect misses |
+| `skyboxExe` | Optional full path to **SKYBOX.exe** if auto-detect misses (companion starts SKYBOX VR desktop when idle and hides it to the tray) |
+| `virtualDesktopStreamerExe` | Optional full path to **VirtualDesktop.Streamer.exe** if auto-detect misses (companion starts Streamer when idle, starts the service if stopped, and hides Streamer to the tray) |
 | `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
 
 ## Koofr + Loop Segments on one PC
@@ -244,7 +244,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `lib\LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
 | `lib\Get-LoopSegmentsAltServer.ps1` | Loop Segments wrapper around **`..\env_setup\altserver_refresh_scripts\Get-AltServer.ps1`** (locate/start); 7-day / Trust copy stays here |
 | `lib\Get-LoopSegmentsSkybox.ps1` | Locate/start **SKYBOX VR desktop** and hide the main window to the **tray**; companion starts it when idle and quits it on finish if this session started it (`-SkipSkybox` to skip) |
-| `lib\Get-LoopSegmentsVirtualDesktop.ps1` | Quit/restart **Virtual Desktop Streamer** and **Virtual Desktop Service** (`-SkipVirtualDesktop` to skip) |
+| `lib\Get-LoopSegmentsVirtualDesktop.ps1` | Locate/start **Virtual Desktop Streamer**, start the service if it is stopped, and hide the Streamer window to the **tray** (`-SkipVirtualDesktop` to skip). Companion finish does not quit Streamer |
 | `lib\Get-LoopSegmentsClash.ps1` | Optional: if Clash/mihomo is running, UAC-run **`env_setup\Clash\Remove-MihomoMulticastRoute.ps1`** so TUN `224.0.0.0/4` does not steal `.local` mDNS. Phone-IP / `:8765` use numeric IPs and do not need this. |
 | `setup\Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `setup\Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |

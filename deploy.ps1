@@ -23,6 +23,12 @@
 .PARAMETER SkipICloud
   Only refresh ios\build artifacts\ipa\LoopSegments.ipa (no iCloud copy).
 
+.PARAMETER SkipAltStorePrep
+  Do not start AltServer / check phone subnet (env_setup helpers).
+
+.PARAMETER NoWaitEnter
+  Do not wait for Enter (child callers). Direct run waits, including on errors.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\deploy.ps1
 
@@ -32,7 +38,9 @@
 param(
     [switch] $UseLatest,
     [string] $RunId = '',
-    [switch] $SkipICloud
+    [switch] $SkipICloud,
+    [switch] $SkipAltStorePrep,
+    [switch] $NoWaitEnter
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,8 +50,55 @@ $IpaDir = Join-Path $ProjectRoot 'ios\build artifacts\ipa'
 $IpaName = 'LoopSegments.ipa'
 $LocalIpa = Join-Path $IpaDir $IpaName
 
+function Wait-EnterToClose {
+    if ($NoWaitEnter) { return }
+    Write-Host ""
+    Write-Host 'Press Enter to close...' -ForegroundColor Yellow
+    try {
+        [void][Console]::ReadLine()
+    } catch {
+        Read-Host | Out-Null
+    }
+}
+
+function Exit-WithEnter {
+    param([int] $ExitCode = 0)
+    Wait-EnterToClose
+    exit $ExitCode
+}
+
+trap {
+    Write-Host ""
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    if ($NoWaitEnter) { throw $_ }
+    Wait-EnterToClose
+    exit 1
+}
+
 function Write-Step([string] $Message) {
     Write-Host "==> $Message"
+}
+
+function Invoke-ProjectAltStoreDeployPrep {
+    if ($SkipAltStorePrep) { return }
+    $join = @(
+        (Join-Path $ProjectRoot 'env_setup\altserver_refresh_scripts\Join-AltStoreDeployPrep.ps1')
+        'P:\all_scripts\iOS apps\env_setup\altserver_refresh_scripts\Join-AltStoreDeployPrep.ps1'
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+    if (-not $join) {
+        Write-Host 'WARN: env_setup AltServer helpers not found — skip tray/subnet prep.'
+        return
+    }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        . $join
+        Invoke-AltStoreDeployPrep
+    } catch {
+        Write-Warning ("AltStore deploy prep failed (IPA copy already done): {0}" -f $_.Exception.Message)
+    } finally {
+        $ErrorActionPreference = $prev
+    }
 }
 
 function Assert-Gh {
@@ -121,6 +176,7 @@ Assert-Gh
 Write-Host ''
 Write-Host 'Deploy workflow:'
 Write-Host '  [PC]  1. This script (GitHub Actions IPA -> local + iCloud Downloads)'
+Write-Host '  [PC]     AltServer tray + phone subnet (env_setup), unless -SkipAltStorePrep'
 Write-Host '  [YOU] 2. Wait for iCloud sync on iPhone (no cloud badge)'
 Write-Host '  [YOU] 3. AltStore -> My Apps -> + -> LoopSegments.ipa'
 Write-Host ''
@@ -173,8 +229,14 @@ Write-Host "Actions:   https://github.com/dsouzaankit/ios_3d_loop_segments/actio
 if ($SkipICloud) {
     Write-Host 'Skipped iCloud copy (-SkipICloud).'
     Write-Host 'Re-paste later: .\copy-to-icloud.ps1'
-    exit 0
+    Invoke-ProjectAltStoreDeployPrep
+    Exit-WithEnter 0
 }
 
 Write-Step 'Pasting IPA to iCloud (copy-to-icloud)'
-& (Join-Path $ProjectRoot 'copy-to-icloud.ps1') -SourceIpa $LocalIpa
+& (Join-Path $ProjectRoot 'copy-to-icloud.ps1') -SourceIpa $LocalIpa -SkipAltStorePrep -NoWaitEnter
+if ($null -ne $LASTEXITCODE -and [int]$LASTEXITCODE -ne 0) {
+    throw ("copy-to-icloud.ps1 failed (exit {0})" -f $LASTEXITCODE)
+}
+Invoke-ProjectAltStoreDeployPrep
+Exit-WithEnter 0
