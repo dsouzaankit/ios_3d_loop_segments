@@ -1,6 +1,6 @@
 # rclone drive letter mount of the iPhone LAN export (optional PC workflow)
 
-The phone’s LAN server (**`http://<ip>:8765/`**) implements **HTTP + WebDAV** (PROPFIND, PUT/MKCOL/DELETE/**MOVE** under writable `pcld_ios_media/` paths, Basic auth **`admin` / `iosadmin`**) so clients like **Quest Skybox** can add it as a **WebDAV** library directly — **no PC rclone step required**. Media files live in **Application Support** on the phone (hidden from the Files app); **rclone still maps `L:\pcld_ios_media\`** via WebDAV — not via USB.
+The phone’s LAN server (**`http://<ip>:8765/`**) implements **HTTP + WebDAV** (PROPFIND, PUT/MKCOL/DELETE/**MOVE** under writable `pcld_ios_media/` paths, Basic auth **`admin` / `iosadmin`**) so clients like **Quest Skybox** can add it as a **WebDAV** library directly — **no PC rclone step required**. Media files live in **Application Support** on the phone (hidden from the Files app); **rclone still maps `L:`** via WebDAV — not via USB. If `pcld_ios_media/` exists on the phone, the mount **starts there** (`L:\loop`, `L:\archive`); otherwise Explorer shows `L:\pcld_ios_media\`.
 
 On **Windows**, you can map the same URL with **`rclone mount`** (WinFsp + `type = webdav` in `rclone.conf`) to get a **drive letter** for Explorer / DLNA folder indexing. That path can feel **sluggish**, show **VFS/listing quirks**, or hang compared to **Skybox → phone WebDAV** or **plain HTTP** downloads.
 

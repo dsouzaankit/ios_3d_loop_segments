@@ -6,6 +6,8 @@
 .DESCRIPTION
   Loop Segments on the phone serves HTTP + WebDAV on port 8765 (PROPFIND, GET, Basic auth admin/iosadmin).
   This script writes/updates a [loopsegments] block in rclone.conf and runs rclone mount (WinFsp).
+  If the phone has pcld_ios_media/, the mount start directory is that folder (L:\loop, L:\archive);
+  otherwise the WebDAV root is mounted (L:\pcld_ios_media\...).
 
   Per-PC settings: loop-segments-windows.json in the parent windows\ folder (see ..\setup\Set-LoopSegmentsWindows.ps1).
   Scripts resolve paths from the shared helper - copy or clone the repo anywhere; only the json file differs per PC.
@@ -324,6 +326,34 @@ function Test-RcloneWebDAVRemote {
     Write-Host '  Phone Exports visible via WebDAV - good'
 }
 
+function Test-PhoneLanHasPcldIosMediaFolder {
+    param(
+        [string] $HostName,
+        [int] $PortNum,
+        [string] $User,
+        [string] $Pass
+    )
+    $uri = "http://${HostName}:${PortNum}/pcld_ios_media/"
+    $pair = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${User}:${Pass}"))
+    $headers = @{
+        Authorization = "Basic $pair"
+        Depth         = '0'
+    }
+    $body = '<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:displayname/></D:prop></D:propfind>'
+    $response = $null
+    try {
+        $response = Invoke-WebDavRequest -Uri $uri -Method 'PROPFIND' -Headers $headers -Body $body -TimeoutSec 12
+        $status = [int]$response.StatusCode
+        return ($status -ge 200 -and $status -lt 400)
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $response) {
+            try { $response.Close() } catch {}
+        }
+    }
+}
+
 function Wait-EnterOnError {
     param([int] $ExitCode = 1)
     if ($NoWaitEnter) {
@@ -577,6 +607,7 @@ try {
     $webdavUrl = "http://${hostIp}:${portNum}/"
     $driveRoot = "${driveLetter}:\"
     $mountLabel = "${remote}:"
+    $mountStartDir = ''
 
     if ($RemovePort80Proxy) {
         $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -645,16 +676,30 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     $settings = Get-LoopSegmentsWindowsSettings
     # rclone wants "L:" — trailing "L:\" can break WinFsp / Start-Process argument parsing.
     $mountPoint = "${driveLetter}:"
+    if (Test-PhoneLanHasPcldIosMediaFolder -HostName $hostIp -PortNum $portNum -User $creds.User -Pass $creds.Password) {
+        $mountStartDir = 'pcld_ios_media'
+        $mountLabel = "${remote}:pcld_ios_media"
+        Write-Host "Start directory: pcld_ios_media (present on phone LAN)"
+    } else {
+        Write-Host "Start directory: WebDAV root (pcld_ios_media not listed — L:\pcld_ios_media\ if the app creates it later)"
+    }
     Write-Host ''
     $mountMode = if ($ReadOnly) { 'read-only' } else { 'read/write (phone blocks loop/, _working*, etc.)' }
     Write-Host "Mounting ${mountLabel} on $mountPoint ($mountMode). Ctrl+C stops the mount."
     if (-not $NoLanWatch) {
         Write-Host "LAN watch on: unmount if http://${hostIp}:${portNum}/ stays down for ${LanDownSeconds}s (poll ${LanPollSeconds}s)."
     }
-    if (-not $ReadOnly) {
-        Write-Host "Bootstrap: copy your .ps1 to ${driveRoot}pcld_ios_media\ then run it (syncs scripts/ subfolders; <= 2 MB per file)."
+    if ($mountStartDir) {
+        if (-not $ReadOnly) {
+            Write-Host "Bootstrap: copy your .ps1 to ${driveRoot} then run it (syncs scripts\ subfolders; <= 2 MB per file)."
+        }
+        Write-Host "DLNA / Explorer: ${driveRoot}loop\ (op_00|op_01) or ${driveRoot} (_working.mp4)"
+    } else {
+        if (-not $ReadOnly) {
+            Write-Host "Bootstrap: copy your .ps1 to ${driveRoot}pcld_ios_media\ then run it (syncs scripts/ subfolders; <= 2 MB per file)."
+        }
+        Write-Host "DLNA / Explorer: ${driveRoot}pcld_ios_media\loop\ (op_00|op_01) or ${driveRoot}pcld_ios_media\ (_working.mp4)"
     }
-    Write-Host "DLNA / Explorer: ${driveRoot}pcld_ios_media\loop\ (op_00|op_01) or ${driveRoot}pcld_ios_media\ (_working.mp4)"
     if (-not [string]::IsNullOrWhiteSpace($settings.dlnaFolder)) {
         Write-Host "Configured DLNA folder: $($settings.dlnaFolder)"
         Write-Host "  cmd /c mklink /J `"$($settings.dlnaFolder)\phone_exports`" `"$driveRoot`""
@@ -662,7 +707,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     Write-Host ''
 
     $mountArgs = @(
-        'mount', "${remote}:", $mountPoint,
+        'mount', $mountLabel, $mountPoint,
         '--vfs-cache-mode', 'full',
         '--dir-cache-time', '5s',
         '--poll-interval', '10s',
@@ -694,6 +739,13 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     $rcloneProc = Find-LoopSegmentsRcloneMountProcess -DriveLetter $driveLetter -RemoteName $remote
     if ($null -ne $rcloneProc -and -not $rcloneProc.HasExited) {
         Write-Host "Reusing existing rclone mount PID $($rcloneProc.Id) for ${mountPoint} (skip second mount)."
+        $existingCmd = ''
+        try {
+            $existingCmd = [string](Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $rcloneProc.Id) -ErrorAction SilentlyContinue).CommandLine
+        } catch {}
+        if ($mountStartDir -and $existingCmd -and ($existingCmd -notmatch '(?i)pcld_ios_media')) {
+            Write-Warning "Existing mount is WebDAV root. -Unstick then remount to start in pcld_ios_media."
+        }
     } else {
         if ((Test-Path -LiteralPath $driveRoot) -and $null -eq $rcloneProc) {
             Write-Warning "${driveRoot} exists but no matching rclone process - mount may fail. Try -Unstick first."

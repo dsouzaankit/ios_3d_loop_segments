@@ -1,4 +1,4 @@
-﻿# Entry may start under Windows PowerShell 5.1; re-launch with pwsh.
+# Entry may start under Windows PowerShell 5.1; re-launch with pwsh.
 <#
 .SYNOPSIS
   Measure LAN throughput via phone HTTP and/or rclone mount (L:).
@@ -494,6 +494,10 @@ function Get-PhoneLanUrlForMountPath {
         throw ("Source is not under mount root {0}: {1}" -f $DriveRoot, $MountFilePath)
     }
     $rel = $full.Substring($root.Length).Replace('\', '/')
+    $rel = $rel.TrimStart('/')
+    if ($rel -notmatch '(?i)^pcld_ios_media(/|$)') {
+        $rel = 'pcld_ios_media/' + $rel
+    }
     $parts = $rel.Split(@('/'), [System.StringSplitOptions]::RemoveEmptyEntries)
     $encoded = ($parts | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
     return ((Get-LoopSegmentsPhoneLanBaseUrl).TrimEnd('/') + '/' + $encoded)
@@ -688,6 +692,23 @@ $letter = Get-LoopSegmentsMountDriveLetter -Override $DriveLetter
 $driveRoot = "${letter}:\"
 $mediaRoot = Join-Path $driveRoot $MediaRelativePath.TrimStart('\')
 
+function Resolve-LoopSegmentsMountMediaRoot {
+    param(
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
+        [Parameter(Mandatory = $true)][string] $PreferredRelative
+    )
+    $preferred = Join-Path $DriveRoot.TrimEnd('\') $PreferredRelative.TrimStart('\')
+    if (Test-Path -LiteralPath $preferred -ErrorAction SilentlyContinue) {
+        return $preferred
+    }
+    foreach ($n in @('archive', 'loop', 'scripts')) {
+        if (Test-Path -LiteralPath (Join-Path $DriveRoot.TrimEnd('\') $n) -ErrorAction SilentlyContinue) {
+            return $DriveRoot.TrimEnd('\')
+        }
+    }
+    return $preferred
+}
+
 Write-Host ('[lan-bw] Mount drive: {0} (from loop-segments-windows.json / -DriveLetter)' -f $driveRoot)
 if ($HttpOnly -and $ViaMount) {
     throw '[lan-bw] Use only one of -HttpOnly / -ViaMount (default measures both).'
@@ -739,7 +760,9 @@ if ($doMount -or -not $HttpOnly) {
 
 $scanMediaRoot = ''
 if ($mountReady) {
+    $mediaRoot = Resolve-LoopSegmentsMountMediaRoot -DriveRoot $driveRoot -PreferredRelative $MediaRelativePath
     $scanMediaRoot = $mediaRoot
+    Write-Host ('[lan-bw] Media root: {0}' -f $mediaRoot)
 }
 
 function Resolve-MountPathFromLanName {
@@ -754,6 +777,13 @@ function Resolve-MountPathFromLanName {
     $candidate = Join-Path $DriveRoot.TrimEnd('\') $rel
     if (Test-Path -LiteralPath $candidate -PathType Leaf) {
         return (Get-Item -LiteralPath $candidate).FullName
+    }
+    $stripped = $rel -replace '(?i)^pcld_ios_media\\', ''
+    if ($stripped -ne $rel) {
+        $alt = Join-Path $DriveRoot.TrimEnd('\') $stripped
+        if (Test-Path -LiteralPath $alt -PathType Leaf) {
+            return (Get-Item -LiteralPath $alt).FullName
+        }
     }
     return $null
 }
