@@ -4,7 +4,7 @@ The phone’s LAN server (**`http://<ip>:8765/`**) implements **HTTP + WebDAV** 
 
 On **Windows**, you can map the same URL with **`rclone mount`** (WinFsp + `type = webdav` in `rclone.conf`) to get a **drive letter** for Explorer / DLNA folder indexing. That path can feel **sluggish**, show **VFS/listing quirks**, or hang compared to **Skybox → phone WebDAV** or **plain HTTP** downloads.
 
-**If Explorer freezes after the phone LAN goes down:** the mount script **polls** `status.json` and **kills rclone + exits** after ~90s unreachable (override with `-LanDownSeconds` / `-LanPollSeconds`, or `-NoLanWatch`). Mount stderr/info: **`loopsegments-rclone-mount.log`** in this folder. Manual escape: double-click **`Unstick-PhoneL.cmd`** (or `.\Mount-LoopSegmentsRclone.ps1 -Unstick`) to kill the mount and restart Explorer. If Explorer is already wedged, use **Task Manager → File → Run new task** and paste the full path to `Unstick-PhoneL.cmd`.
+**If Explorer freezes after the phone LAN goes down:** the mount script **polls** `status.json` and **kills rclone + exits** after ~90s unreachable (override with `-LanDownSeconds` / `-LanPollSeconds`, or `-NoLanWatch`). rclone writes **`%TEMP%\loopsegments-rclone-mount.log`** (local disk — it cannot create the log on pCloud `P:`). On quit/abort/next start that file is copied to **`windows\rclone\loopsegments-rclone-mount.log`**. Manual escape: double-click **`Unstick-PhoneL.cmd`** (or `.\Mount-LoopSegmentsRclone.ps1 -Unstick`) to kill the mount and restart Explorer. If Explorer is already wedged, use **Task Manager → File → Run new task** and paste the full path to `Unstick-PhoneL.cmd`.
 
 ## Setup (portable across PCs)
 
@@ -51,7 +51,7 @@ Use a different **`mountDriveLetter`** if **`L:`** is already Koofr.
 | **`Mount-LoopSegmentsRclone.ps1`** | **Active** — test, mount, `-Remove`, `-Unstick`, `-Quick`, LAN watch, `-RemovePort80Proxy` |
 | **`Mount-PhoneL.cmd`** | Day-to-day launcher → mount script |
 | **`Unstick-PhoneL.cmd`** | Kill dead phone mount + restart Explorer |
-| **`loopsegments-rclone-mount.log`** | rclone mount log written next to these scripts (gitignored) |
+| **`%TEMP%\loopsegments-rclone-mount.log`** | live rclone mount log (Temp; copied to `windows\rclone\` on quit) |
 | **`../setup/Set-LoopSegmentsWindows.ps1`** | Per-PC json (IP, drive letter, rclone paths) |
 | **`../archive/Map-LoopSegmentsWebDAV.ps1`** | Legacy `net use` / port 80 proxy (not recommended) |
 

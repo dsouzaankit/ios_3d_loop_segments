@@ -690,7 +690,8 @@ function Invoke-RebootOtherRoutersForLowThroughput {
 
 $letter = Get-LoopSegmentsMountDriveLetter -Override $DriveLetter
 $driveRoot = "${letter}:\"
-$mediaRoot = Join-Path $driveRoot $MediaRelativePath.TrimStart('\')
+# Do not Join-Path onto an unmapped letter — PowerShell throws "Cannot find drive".
+$mediaRoot = $null
 
 function Resolve-LoopSegmentsMountMediaRoot {
     param(
@@ -753,11 +754,10 @@ if ($doMount -or -not $HttpOnly) {
         Write-Host '[lan-bw] HTTP-only: no mount sidecars / mount scan.'
     }
 } else {
-    # -HttpOnly with WaitMountSec 0: do not block on L:
+    # -HttpOnly with WaitMountSec 0: do not block on L: or print remap as if the probe failed.
     $mountReady = Test-MountRootReady -Root $driveRoot
     if (-not $mountReady) {
         Write-Host '[lan-bw] HTTP-only: skipping mount wait.'
-        Write-MountRemapHint -DriveLetter $letter
     }
 }
 

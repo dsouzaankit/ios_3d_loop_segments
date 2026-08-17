@@ -554,6 +554,7 @@ function Watch-LoopSegmentsRcloneMount {
     Write-Host 'Ctrl+C also stops rclone and exits.'
     $lastOk = [datetime]::UtcNow
     $wasDown = $false
+    $script:RcloneWatchReturned = $false
 
     try {
         while ($true) {
@@ -563,6 +564,7 @@ function Watch-LoopSegmentsRcloneMount {
                 $code = 0
                 try { $code = [int]$RcloneProcess.ExitCode } catch {}
                 Write-Host "rclone exited (code $code)."
+                $script:RcloneWatchReturned = $true
                 return $code
             }
 
@@ -585,6 +587,7 @@ function Watch-LoopSegmentsRcloneMount {
                     }
                 } catch {}
                 Start-Sleep -Milliseconds 400
+                $script:RcloneWatchReturned = $true
                 return 2
             }
             Write-Host ('[lan-watch] LAN down {0}s / {1}s (rclone PID {2})...' -f $downFor, $DownSeconds, $RcloneProcess.Id)
@@ -594,6 +597,12 @@ function Watch-LoopSegmentsRcloneMount {
         if (-not $RcloneProcess.HasExited) {
             Write-Host "Stopping rclone PID $($RcloneProcess.Id)..."
             Stop-Process -Id $RcloneProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+        # Ctrl+C / abort does not return to the caller — wipe the log here.
+        # Normal return leaves the file for Show-RcloneMountLogTail, then the caller clears.
+        if (-not $script:RcloneWatchReturned) {
+            Start-Sleep -Milliseconds 200
+            Clear-LoopSegmentsRcloneMountLog
         }
     }
 }
@@ -638,6 +647,7 @@ try {
             Restart-WindowsExplorerShell
             Write-Host 'Unstick done. If Explorer is still wedged, Task Manager -> End task explorer.exe, then Run explorer.'
         }
+        Clear-LoopSegmentsRcloneMountLog
         exit 0
     }
 
@@ -729,12 +739,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         exit 0
     }
 
-    $rcloneLog = Join-Path $PSScriptRoot 'loopsegments-rclone-mount.log'
-    try {
-        if (Test-Path -LiteralPath $rcloneLog) {
-            Remove-Item -LiteralPath $rcloneLog -Force -ErrorAction SilentlyContinue
-        }
-    } catch {}
+    $rcloneLog = Get-LoopSegmentsRcloneMountLogPath
 
     $rcloneProc = Find-LoopSegmentsRcloneMountProcess -DriveLetter $driveLetter -RemoteName $remote
     if ($null -ne $rcloneProc -and -not $rcloneProc.HasExited) {
@@ -750,6 +755,10 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         if ((Test-Path -LiteralPath $driveRoot) -and $null -eq $rcloneProc) {
             Write-Warning "${driveRoot} exists but no matching rclone process - mount may fail. Try -Unstick first."
         }
+        Clear-LoopSegmentsRcloneMountLog
+        if (-not (Test-Path -LiteralPath $rcloneLog)) {
+            try { New-Item -ItemType File -Path $rcloneLog -Force | Out-Null } catch {}
+        }
         $rcloneProc = Start-LoopSegmentsRcloneMountProcess -MountArgs $mountArgs -LogFile $rcloneLog
         Write-Host "rclone mount started (PID $($rcloneProc.Id)); log: $rcloneLog"
         # Brief settle so WinFsp can attach before the first LAN sleep cycle.
@@ -761,6 +770,8 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
             Write-Host ('[Mount-LoopSegmentsRclone] rclone exited immediately (exit {0}).' -f $early) -ForegroundColor Red
             Show-RcloneMountLogTail -LogFile $rcloneLog
             Write-Host "If ${mountPoint} was already mounted, run: .\Mount-LoopSegmentsRclone.ps1 -Unstick   then remount." -ForegroundColor Yellow
+            # -NoWaitEnter: leave the log for the companion window to tail, then it clears.
+            if (-not $NoWaitEnter) { Clear-LoopSegmentsRcloneMountLog }
             Wait-EnterOnError -ExitCode $early
         }
     }
@@ -774,18 +785,26 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
 
     if ($code -eq 2) {
         Write-Host '[Mount-LoopSegmentsRclone] Exited after prolonged LAN outage (rclone killed).'
+        Show-RcloneMountLogTail -LogFile $rcloneLog
+        Clear-LoopSegmentsRcloneMountLog
         exit 2
     }
     if ($code -ne 0) {
         Write-Host ('[Mount-LoopSegmentsRclone] rclone mount failed (exit {0}).' -f $code) -ForegroundColor Red
         Show-RcloneMountLogTail -LogFile $rcloneLog
+        if (-not $NoWaitEnter) { Clear-LoopSegmentsRcloneMountLog }
         Wait-EnterOnError -ExitCode $code
     }
+    Clear-LoopSegmentsRcloneMountLog
 } catch {
     Write-Host ""
     Write-Host ('[Mount-LoopSegmentsRclone] {0}' -f $_.Exception.Message) -ForegroundColor Red
     if ($_.ScriptStackTrace) {
         Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
     }
+    try {
+        Show-RcloneMountLogTail -LogFile (Get-LoopSegmentsRcloneMountLogPath)
+        if (-not $NoWaitEnter) { Clear-LoopSegmentsRcloneMountLog }
+    } catch {}
     Wait-EnterOnError -ExitCode 1
 }

@@ -258,6 +258,35 @@ function Get-RcloneInvocation {
     }
 }
 
+function Get-LoopSegmentsRcloneMountLogPath {
+    # Local NTFS — rclone --log-file on P: (pCloud) fails with "cannot find the file specified".
+    Join-Path $env:TEMP 'loopsegments-rclone-mount.log'
+}
+
+function Get-LoopSegmentsRcloneMountLogArchivePath {
+    Join-Path $script:LoopSegmentsWindowsRoot 'rclone\loopsegments-rclone-mount.log'
+}
+
+function Clear-LoopSegmentsRcloneMountLog {
+    # rclone keeps writing on Temp. On quit/abort/next start, copy the last log to P: then empty Temp.
+    $src = Get-LoopSegmentsRcloneMountLogPath
+    $dst = Get-LoopSegmentsRcloneMountLogArchivePath
+    $copied = $true
+    try {
+        if ((Test-Path -LiteralPath $src) -and ((Get-Item -LiteralPath $src).Length -gt 0)) {
+            Copy-Item -LiteralPath $src -Destination $dst -Force
+        }
+    } catch {
+        $copied = $false
+    }
+    if (-not $copied) { return }
+    try {
+        if (Test-Path -LiteralPath $src) {
+            Set-Content -LiteralPath $src -Value '' -Encoding utf8
+        }
+    } catch {}
+}
+
 function Invoke-LoopSegmentsRclone {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]] $RcloneArgs)
     $inv = Get-RcloneInvocation

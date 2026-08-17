@@ -1034,18 +1034,13 @@ function Invoke-AttemptRcloneMount {
 
     try {
         Write-Host "[rclone] Attempting mount ${letter}: via $mountPs1 -Quick (separate window; Ctrl+C there to unmount)..."
-        # -File path MUST be quoted: Start-Process ArgumentList array does not escape spaces
-        # (path under "iOS apps" otherwise exits -196608 and never mounts).
-        # -Quick skips slow "rclone ls" so L: appears before the companion wait expires.
-        $proc = Start-Process -FilePath (Get-LoopSegmentsPwshExe) -PassThru -ArgumentList @(
-            '-NoProfile'
-            '-ExecutionPolicy'
-            'Bypass'
-            '-File'
-            "`"$mountPs1`""
-            '-Quick'
-            '-NoWaitEnter'
-        ) -WorkingDirectory (Split-Path -Parent $mountPs1)
+        # Start-Process ArgumentList treats \a \n in P:\all_scripts\... as escapes (same as
+        # Chromium --load-extension). Forward slashes + one quoted -File string keep
+        # "iOS apps" intact without eating \a. Array -File without quotes used to exit -196608.
+        $mountFile = ([System.IO.Path]::GetFullPath($mountPs1) -replace '\\', '/')
+        $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Quick -NoWaitEnter' -f $mountFile
+        $proc = Start-Process -FilePath (Get-LoopSegmentsPwshExe) -PassThru -ArgumentList $argLine `
+            -WorkingDirectory (Split-Path -Parent $mountPs1)
         if ($null -eq $proc) {
             Write-Warning "[rclone] Start-Process returned no process - continuing without ${letter}:"
             return $false
@@ -1064,13 +1059,17 @@ function Invoke-AttemptRcloneMount {
         }
         if ($proc.HasExited) {
             Write-Warning "[rclone] Mount window exited early (code $($proc.ExitCode)) - check that console. Continuing with Chromium."
-            $rcloneLog = Join-Path $WindowsDir 'rclone\loopsegments-rclone-mount.log'
+            $rcloneLog = Get-LoopSegmentsRcloneMountLogPath
+            if (-not $rcloneLog) {
+                $rcloneLog = Join-Path $env:TEMP 'loopsegments-rclone-mount.log'
+            }
             if (Test-Path -LiteralPath $rcloneLog) {
                 Write-Host '[rclone] Last mount log lines:' -ForegroundColor DarkYellow
                 Get-Content -LiteralPath $rcloneLog -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object {
                     Write-Host ("  {0}" -f $_) -ForegroundColor DarkYellow
                 }
             }
+            try { Clear-LoopSegmentsRcloneMountLog } catch {}
             return $false
         }
         if (Test-RcloneMountProcessForDrive -DriveLetter $letter) {
