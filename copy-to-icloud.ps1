@@ -19,8 +19,9 @@
   Optional override path to an .ipa (default: ios\build artifacts\ipa\LoopSegments.ipa).
 
 .PARAMETER SkipAltStorePrep
-  Do not start AltServer / check phone subnet (env_setup). deploy.ps1 passes this
-  so prep runs once after the copy.
+  Do not start AltServer / Clash multicast prep (env_setup). Phone-subnet
+  check is USB plug-in, not this script. deploy.ps1 passes this so prep
+  runs once after the copy.
 
 .PARAMETER NoWaitEnter
   Do not wait for Enter (when invoked as a child of deploy.ps1).
@@ -103,14 +104,14 @@ function Invoke-ProjectAltStoreDeployPrep {
         'P:\all_scripts\iOS apps\env_setup\altserver_refresh_scripts\Join-AltStoreDeployPrep.ps1'
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
     if (-not $join) {
-        Write-Host 'WARN: env_setup AltServer helpers not found — skip tray/subnet prep.'
+        Write-Host 'WARN: env_setup AltServer helpers not found — skip tray prep.'
         return
     }
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         . $join
-        Invoke-AltStoreDeployPrep
+        Invoke-AltStoreDeployPrep -SkipPhoneSubnet
     } catch {
         Write-Warning ("AltStore deploy prep failed (IPA copy already done): {0}" -f $_.Exception.Message)
     } finally {

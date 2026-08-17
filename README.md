@@ -41,7 +41,7 @@ Copy segment files into your DLNA folder (or use [WORKFLOW.md](WORKFLOW.md)). Se
 
 Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md)** — **AltStore + AltServer** (primary) or paid TestFlight; Sideloadly only if AltStore fails.
 
-**Deploy IPA to iCloud (Windows):** from repo root, `.\deploy.ps1` triggers GitHub **ios-build**, downloads the IPA locally, then **calls `.\copy-to-icloud.ps1`** (requires `gh auth login`). After the copy it starts **AltServer** and checks the phone subnet (`env_setup` / `Join-AltStoreDeployPrep.ps1`; `-SkipAltStorePrep` to skip). Paste-only (no build): `.\copy-to-icloud.ps1` — stamped `LoopSegments-b{build}-{time}.ipa` + prune older `LoopSegments*.ipa` (same idea as `web_auto_parking\deploy.ps1`).
+**Deploy IPA to iCloud (Windows):** from repo root, `.\deploy.ps1` triggers GitHub **ios-build**, downloads the IPA locally, then **calls `.\copy-to-icloud.ps1`** (requires `gh auth login`). After the copy it starts **AltServer** (`env_setup` / `Join-AltStoreDeployPrep.ps1`; `-SkipAltStorePrep` to skip). Phone-subnet check stays on **USB plug-in**, not IPA deploy. Paste-only (no build): `.\copy-to-icloud.ps1` — stamped `LoopSegments-b{build}-{time}.ipa` + prune older `LoopSegments*.ipa` (same idea as `web_auto_parking\deploy.ps1`).
 
 **Free install (~7-day certs):**
 

@@ -24,7 +24,8 @@
   Only refresh ios\build artifacts\ipa\LoopSegments.ipa (no iCloud copy).
 
 .PARAMETER SkipAltStorePrep
-  Do not start AltServer / check phone subnet (env_setup helpers).
+  Do not start AltServer / Clash multicast prep (env_setup). Phone-subnet
+  check is USB plug-in, not this script.
 
 .PARAMETER NoWaitEnter
   Do not wait for Enter (child callers). Direct run waits, including on errors.
@@ -86,14 +87,14 @@ function Invoke-ProjectAltStoreDeployPrep {
         'P:\all_scripts\iOS apps\env_setup\altserver_refresh_scripts\Join-AltStoreDeployPrep.ps1'
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
     if (-not $join) {
-        Write-Host 'WARN: env_setup AltServer helpers not found — skip tray/subnet prep.'
+        Write-Host 'WARN: env_setup AltServer helpers not found — skip tray prep.'
         return
     }
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         . $join
-        Invoke-AltStoreDeployPrep
+        Invoke-AltStoreDeployPrep -SkipPhoneSubnet
     } catch {
         Write-Warning ("AltStore deploy prep failed (IPA copy already done): {0}" -f $_.Exception.Message)
     } finally {
@@ -176,7 +177,7 @@ Assert-Gh
 Write-Host ''
 Write-Host 'Deploy workflow:'
 Write-Host '  [PC]  1. This script (GitHub Actions IPA -> local + iCloud Downloads)'
-Write-Host '  [PC]     AltServer tray + phone subnet (env_setup), unless -SkipAltStorePrep'
+Write-Host '  [PC]     AltServer tray (env_setup); phone subnet is USB plug-in. -SkipAltStorePrep to skip tray'
 Write-Host '  [YOU] 2. Wait for iCloud sync on iPhone (no cloud badge)'
 Write-Host '  [YOU] 3. AltStore -> My Apps -> + -> LoopSegments.ipa'
 Write-Host ''
