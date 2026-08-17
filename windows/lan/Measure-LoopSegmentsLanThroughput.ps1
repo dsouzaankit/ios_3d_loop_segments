@@ -98,6 +98,31 @@ function Wait-EnterToClose {
     }
 }
 
+$outHttp = $null
+$outMount = $null
+
+function Clear-LoopSegmentsLanBwTempCopies {
+    if ($KeepLocal) { return }
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in @($outHttp, $outMount, $OutFile)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$candidate)) {
+            [void]$paths.Add([string]$candidate)
+        }
+    }
+    Get-ChildItem -LiteralPath $env:TEMP -Filter 'loopsegments-lan-bw-*' -File -ErrorAction SilentlyContinue |
+        ForEach-Object { [void]$paths.Add($_.FullName) }
+    $removed = 0
+    foreach ($f in ($paths | Select-Object -Unique)) {
+        if ($f -and (Test-Path -LiteralPath $f)) {
+            Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path -LiteralPath $f)) { $removed++ }
+        }
+    }
+    if ($removed -gt 0) {
+        Write-Host '[lan-bw] Removed local copies (use -KeepLocal to retain).'
+    }
+}
+
 # When this script is the console entry (not via companion), pause on fatal errors.
 trap {
     Write-Host ""
@@ -111,6 +136,7 @@ trap {
             Write-MountRemapHint -DriveLetter $hintLetter
         }
     }
+    try { Clear-LoopSegmentsLanBwTempCopies } catch {}
     Wait-EnterToClose
     if ($skipEnterPrompt) {
         throw $_
@@ -1029,16 +1055,10 @@ if ($minLanMbps -gt 0 -and $mbps -lt $minLanMbps) {
     Write-Host ('[lan-bw] Throughput recovered to {0:N1} Mbps after {1} retry(ies).' -f $mbps, $retry) -ForegroundColor Green
 }
 
-$localFiles = @($outHttp, $outMount, $OutFile) | Select-Object -Unique
-if (-not $KeepLocal) {
-    foreach ($f in $localFiles) {
-        if ($f -and (Test-Path -LiteralPath $f)) {
-            Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
-        }
-    }
-    Write-Host '[lan-bw] Removed local copies (use -KeepLocal to retain).'
-} else {
+if ($KeepLocal) {
     Write-Host ('[lan-bw] Kept local copies under: {0}' -f $OutFile)
+} else {
+    Clear-LoopSegmentsLanBwTempCopies
 }
 
 Wait-EnterToClose
