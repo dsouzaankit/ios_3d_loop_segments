@@ -36,7 +36,7 @@
   While mounted, probe phone LAN this often (default 15). Ignored with -NoLanWatch.
 
 .PARAMETER LanDownSeconds
-  If LAN stays unreachable this long, kill rclone and exit this script (default 90).
+  If LAN stays unreachable this long, kill rclone and exit this script (default 60).
   Prevents Explorer hangs on a dead L: mount.
 
 .PARAMETER NoLanWatch
@@ -76,7 +76,7 @@ param(
     [ValidateRange(5, 600)]
     [int] $LanPollSeconds = 15,
     [ValidateRange(15, 3600)]
-    [int] $LanDownSeconds = 90,
+    [int] $LanDownSeconds = 60,
     [switch] $NoLanWatch,
     [switch] $SkipOffSubnetRouterReboot,
     # Companion child: exit on error without local Enter (parent already continues).
@@ -547,7 +547,7 @@ function Watch-LoopSegmentsRcloneMount {
         [Parameter(Mandatory = $true)][string] $HostName,
         [Parameter(Mandatory = $true)][int] $PortNum,
         [int] $PollSeconds = 15,
-        [int] $DownSeconds = 90
+        [int] $DownSeconds = 60
     )
 
     Write-Host "LAN watch: probe http://${HostName}:${PortNum}/status.json every ${PollSeconds}s; kill rclone if down >= ${DownSeconds}s."
