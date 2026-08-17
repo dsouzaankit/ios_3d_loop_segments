@@ -10,7 +10,7 @@ enum PCloudSearchService {
     private static let webSearchTimeoutSeconds: Double = 20
     private static let catalogTimeoutSeconds: Double = 15
     private static let webDAVTimeoutBaseSeconds: Double = 10
-    private static let webDAVTimeoutMaxSeconds: Double = 45
+    private static let webDAVTimeoutMaxSeconds: Double = 22
     private static let webDAVMaxFolders = 80
 
     /// More bookmark/browse roots need more time; cap avoids multi-minute LAN stalls.
