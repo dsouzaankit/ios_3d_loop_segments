@@ -54,7 +54,7 @@ Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT
 | **AMDS missing** | Full **iTunes uninstall/reinstall** (`iTunes64Setup.exe`, admin). **Do not** install Microsoft Store **Apple Devices** afterward — it removes **Apple Mobile Device Service** |
 | **Trust** | [Once per install](ios/BUILD-WITHOUT-MAC.md#trust-the-developer-on-iphone-required-once-not-weekly) — Settings → General → VPN & Device Management |
 
-Optional: `windows/sideload/Register-AltServerAtLogon.ps1` keeps AltServer in the tray; companion / USB launch also **start AltServer if it is installed but idle** (`env_setup/altserver_refresh_scripts`). You still plug in USB for refresh when Wi‑Fi pairing fails.
+Optional: `windows/sideload/Register-AltServerAtLogon.ps1` keeps AltServer in the tray; companion / USB launch also **start AltServer if it is installed but idle** (`env_setup/altserver_refresh`). You still plug in USB for refresh when Wi‑Fi pairing fails.
 
 Export uses **AVFoundation** on device (no embedded ffmpeg). **iOS 26.x:** **1.0.5+** to launch; **1.1.0** for export and fixed logs. Rebuild IPA from GitHub Actions if the phone still shows 1.0.5.
 

@@ -5,7 +5,7 @@
   Bring the phone onto the PC/AltServer subnet, then wait for the Loop Segments LAN page.
 
 .DESCRIPTION
-  Prefers USB/pcapd via env_setup\altserver_refresh_scripts\Invoke-AltServerPhoneSubnetIfNeeded.ps1
+  Prefers USB/pcapd via env_setup\altserver_refresh\Invoke-AltServerPhoneSubnetIfNeeded.ps1
   (pymobiledevice3 phone Wi-Fi IP vs this PC's LAN). If the phone is already on a PC subnet,
   waits for http://phoneLanHost:8765/ and does not reboot routers just because the app is down.
 
@@ -233,8 +233,10 @@ try {
     $repoRoot = Split-Path -Parent $WindowsDir
     $altRefreshDir = $null
     foreach ($candidate in @(
+            (Join-Path $repoRoot 'env_setup\altserver_refresh')
             (Join-Path $repoRoot 'env_setup\altserver_refresh_scripts')
             (Join-Path $repoRoot 'env_setup\altserver_refresh_script')
+            'P:\all_scripts\iOS apps\env_setup\altserver_refresh'
             'P:\all_scripts\iOS apps\env_setup\altserver_refresh_scripts'
             'P:\all_scripts\iOS apps\env_setup\altserver_refresh_script'
         )) {
