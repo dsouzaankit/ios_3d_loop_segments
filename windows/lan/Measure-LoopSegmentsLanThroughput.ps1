@@ -697,14 +697,17 @@ function Resolve-LoopSegmentsMountMediaRoot {
         [Parameter(Mandatory = $true)][string] $DriveRoot,
         [Parameter(Mandatory = $true)][string] $PreferredRelative
     )
-    $preferred = Join-Path $DriveRoot.TrimEnd('\') $PreferredRelative.TrimStart('\')
+    $root = $DriveRoot.TrimEnd('\')
+    # Mount may already start at pcld_ios_media (L:\loop, L:\archive). Prefer that even if a
+    # nested L:\pcld_ios_media exists from an older sidecar write.
+    foreach ($n in @('archive', 'loop', 'scripts')) {
+        if (Test-Path -LiteralPath (Join-Path $root $n) -ErrorAction SilentlyContinue) {
+            return $root
+        }
+    }
+    $preferred = Join-Path $root $PreferredRelative.TrimStart('\')
     if (Test-Path -LiteralPath $preferred -ErrorAction SilentlyContinue) {
         return $preferred
-    }
-    foreach ($n in @('archive', 'loop', 'scripts')) {
-        if (Test-Path -LiteralPath (Join-Path $DriveRoot.TrimEnd('\') $n) -ErrorAction SilentlyContinue) {
-            return $DriveRoot.TrimEnd('\')
-        }
     }
     return $preferred
 }

@@ -25,15 +25,17 @@ Or day-to-day: double-click **`Mount-PhoneL.cmd`** in this folder.
 
 The mount script writes/updates **`[loopsegments]`** in your **`rclone.conf`** (same file as Koofr if you use one). Settings: **`../loop-segments-windows.json`** — see **[../README.md](../README.md)**.
 
-**`L:` is read/write by default.** Copy a bootstrap **`.ps1`** to **`L:\pcld_ios_media\`**, then run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per PUT. **MOVE** (Explorer rename) is supported on writable paths (local on phone — no re-download). Same-folder paste still downloads unless/until server **COPY** exists. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** = DLNA-only. Without a mount, see **`../archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
+**`L:` is read/write by default.** If the mount starts at `pcld_ios_media/`, copy a bootstrap **`.ps1`** to **`L:\`** (not `L:\pcld_ios_media\`). If the mount is WebDAV root, copy to **`L:\pcld_ios_media\`**. Run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per PUT. **MOVE** (Explorer rename) is supported on writable paths (local on phone — no re-download). Same-folder paste still downloads unless/until server **COPY** exists. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** = DLNA-only. Without a mount, see **`../archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
 
-Mounted paths:
+Mounted paths (start directory `pcld_ios_media/`):
 
-- **`L:\pcld_ios_media\*.ps1`** — bootstrap sync scripts (writable)
-- **`L:\pcld_ios_media\scripts\`** — nested scripts/tools (writable)
-- **`L:\pcld_ios_media\archive\`** — retained videos (writable); **`archive\*.ps1`** robocopy helpers survive **Clear media** (videos do not)
-- **`L:\pcld_ios_media\loop\`** — read-only on phone
-- **`L:\pcld_ios_media\_working.mp4`** — read-only on phone
+- **`L:\*.ps1`** — bootstrap sync scripts (writable)
+- **`L:\scripts\`** — nested scripts/tools (writable)
+- **`L:\archive\`** — retained videos (writable); **`archive\*.ps1`** robocopy helpers survive **Clear media** (videos do not)
+- **`L:\loop\`** — read-only on phone
+- **`L:\_working.mp4`** — read-only on phone
+
+If Explorer instead shows **`L:\pcld_ios_media\`**, the mount is WebDAV root (folder missing at mount time). Use the same names under that folder. A nested empty **`L:\pcld_ios_media`** while `L:\loop` already exists is a leftover — delete it; it is not a second media tree.
 
 Use a different **`mountDriveLetter`** if **`L:`** is already Koofr.
 

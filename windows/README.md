@@ -143,7 +143,7 @@ After setup, double-click **`rclone\Mount-PhoneL.cmd`** or run:
 rclone\Mount-PhoneL.cmd
 ```
 
-Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. While mounted, the script polls phone `status.json` and **kills rclone + exits** if LAN stays down ~90s (avoids Explorer hangs). If the phone LAN page cannot be reached at mount time, **`..\lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`** runs **in-process** and uses USB/`pcapd` (`env_setup\altserver_refresh_scripts`) to align the phone with the PC/AltServer subnet (or, without USB, reboots off-subnet routers under `P:\all_scripts\5g_router_reboot`), then retries (`-SkipOffSubnetRouterReboot` to disable). Mount log: **`rclone\loopsegments-rclone-mount.log`**. If the IP changed: `.\setup\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
+Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windows.json`** (IP, drive letter, rclone paths). Leave the window open while **L:** is in use; **Ctrl+C** stops the mount. If `pcld_ios_media/` exists on the phone, the mount **starts there** (`L:\loop`, `L:\archive`, `L:\scripts`) — do not create a nested `L:\pcld_ios_media`. Otherwise Explorer shows `L:\pcld_ios_media\`. While mounted, the script polls phone `status.json` and **kills rclone + exits** if LAN stays down ~90s (avoids Explorer hangs). If the phone LAN page cannot be reached at mount time, **`..\lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`** runs **in-process** and uses USB/`pcapd` (`env_setup\altserver_refresh_scripts`) to align the phone with the PC/AltServer subnet (or, without USB, reboots off-subnet routers under `P:\all_scripts\5g_router_reboot`), then retries (`-SkipOffSubnetRouterReboot` to disable). Mount log: **`rclone\loopsegments-rclone-mount.log`**. If the IP changed: `.\setup\Set-LoopSegmentsLANHost.ps1 <new-ip>` first.
 
 Optional args: **`rclone\Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestOnly`**, **`-Unstick`**, **`-Quick`**, **`-NoLanWatch`**, **`-LanDownSeconds`**, **`-LanPollSeconds`**.
 
@@ -181,7 +181,7 @@ Links in the unified view point back to each phone’s `:8765` URL — playback 
 
 ### LAN throughput (after rclone mount)
 
-With **`L:`** up, measure PC ↔ phone Wi‑Fi both ways (phone HTTP + rclone mount copy) using a random media file under `pcld_ios_media\archive\` (≥ `-MinBytes`, default **8 MB**):
+With **`L:`** up, measure PC ↔ phone Wi‑Fi both ways (phone HTTP + rclone mount copy) using a random media file under `L:\archive\` (or `L:\pcld_ios_media\archive\` if the mount is WebDAV root) (≥ `-MinBytes`, default **8 MB**):
 
 ```powershell
 .\rclone\Mount-PhoneL.cmd          # leave open
@@ -190,7 +190,7 @@ With **`L:`** up, measure PC ↔ phone Wi‑Fi both ways (phone HTTP + rclone mo
 # .\lan\Measure-LoopSegmentsLanThroughput.ps1 -KeepLocal       # keep temp copy
 ```
 
-Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a **max media bitrate** for minute segments (**80%** of measured LAN, clamped 5–100 Mbps) and writes sidecars under `pcld_ios_media\scripts\lan_throughput.json` and `archive\lan_recommended_segment_bitrate.json`. **`run_batch_vr_hybrid.ps1`** / **`Run-TranscodeFfmpeg.ps1`** pick that up for `-SegmentVideoBitrateMbps` (flat + fisheye pass-2). If measured throughput is below **`minLanThroughputMbps`** (default **40**), **reboots Wi‑Fi on every known router except the current default gateway**, waits ~20s, and **re-measures** — up to **2** retries, or until throughput is at least the minimum. Companion runs the same loop after Chromium is open (this PC’s AP is left up). This is **not** 5G WAN speed.
+Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a **max media bitrate** for minute segments (**80%** of measured LAN, clamped 5–100 Mbps) and writes sidecars under `L:\scripts\lan_throughput.json` and `L:\archive\lan_recommended_segment_bitrate.json` (same names under `L:\pcld_ios_media\` if the mount is WebDAV root). **`run_batch_vr_hybrid.ps1`** / **`Run-TranscodeFfmpeg.ps1`** pick that up for `-SegmentVideoBitrateMbps` (flat + fisheye pass-2). If measured throughput is below **`minLanThroughputMbps`** (default **40**), **reboots Wi‑Fi on every known router except the current default gateway**, waits ~20s, and **re-measures** — up to **2** retries, or until throughput is at least the minimum. Companion runs the same loop after Chromium is open (this PC’s AP is left up). This is **not** 5G WAN speed.
 
 **Do not run the probe during an active Virtual Desktop headset session.** VD streaming the PC screen uses about **50 Mbps** of LAN and will understate phone LAN capacity. The measure script prints this on the console (and warns again if Streamer is running).
 
@@ -252,7 +252,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `lan\Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
 | `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1` | Wrong-subnet **loop** (reboot → wait new PC LAN IP → re-check, max 3 rounds) / forced / **off-subnet sequential** Wi‑Fi reboots (`P:\all_scripts\5g_router_reboot`). Direct run waits for Enter; companion passes `-NoWaitEnter`. |
 | `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1` | In-process USB/`pcapd` via **`env_setup\altserver_refresh_scripts`** (phone IP vs PC/AltServer subnet), then wait for `:8765`. If already on-subnet, does not reboot just because the app is down. No USB / no Wi-Fi IP: wait then reboot off-subnet routers. `-NoWaitEnter` throws `LAN_RECOVER_EXIT:<code>` so companion/rclone are not killed. |
-| `lan\Measure-LoopSegmentsLanThroughput.ps1` | Time up to 64 MB via phone HTTP from a random `L:\pcld_ios_media\archive\` media file → Mbps + recommended max segment bitrate sidecar for hybrid batch |
+| `lan\Measure-LoopSegmentsLanThroughput.ps1` | Time up to 64 MB via phone HTTP from a random `L:\archive\` (or `L:\pcld_ios_media\archive\`) media file → Mbps + recommended max segment bitrate sidecar for hybrid batch |
 | `rclone\Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `rclone\Unstick-PhoneL.cmd` | Kill dead phone mount + restart Explorer |
 | `rclone\Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** / mount / **`-Remove`** / **`-Unstick`** / **`-Quick`** / LAN watch / **`-RemovePort80Proxy`** |
