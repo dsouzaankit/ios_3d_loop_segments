@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 291 (1.2.55):** Unavailable screen uses a grouped list (title, redo-search note, Copy name / Search in Browse / Remove) instead of a tight empty-state stack in the middle of the screen.
+
 **Build 290 (1.2.54):** Browse search **keeps hits already found** when the WebDAV walk times out (previously returned an empty list). Status still notes that not every folder was scanned.
 
 **Build 289 (1.2.53):** If a queued / companion file is missing from its saved pCloud folder, skip it — **no** WebDAV walk and **no** auto-resume from that stale path. The skip stays on **Paused** as **Unavailable** (opens instead of Export): *Redo search and re-export using web companion*. **Copy name** and **Search in Browse** still work (stale exact-name cache is dropped so a move can match). **Move to queued** leaves unavailable rows on Paused. Companion desktop toast on the first rejected ack: `Loop Segments: skipped <name>` (later FIFO skips are Paused-only).

@@ -66,22 +66,28 @@ struct PausedExportDestinationView: View {
     }
 
     private var unavailableView: some View {
-        ContentUnavailableView {
-            Label("Unavailable", systemImage: "icloud.slash")
-        } description: {
-            Text(ResumeStore.pCloudSourceUnavailableMessage)
-        } actions: {
-            Button("Copy name") {
-                UIPasteboard.general.string = liveEntry.resolvedDisplayName
+        List {
+            Section {
+                Label("Unavailable", systemImage: "icloud.slash")
+                    .font(.body.weight(.semibold))
+                Text(ResumeStore.pCloudSourceUnavailableMessage)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Button("Search in Browse") {
-                session.pendingBrowseSearch = liveEntry.resolvedDisplayName
-                session.selectedMainTab = .browse
-            }
-            Button("Remove from Paused", role: .destructive) {
-                resumeStore.dismissPausedExport(liveEntry)
+            Section {
+                Button("Copy name") {
+                    UIPasteboard.general.string = liveEntry.resolvedDisplayName
+                }
+                Button("Search in Browse") {
+                    session.pendingBrowseSearch = liveEntry.resolvedDisplayName
+                    session.selectedMainTab = .browse
+                }
+                Button("Remove from Paused", role: .destructive) {
+                    resumeStore.dismissPausedExport(liveEntry)
+                }
             }
         }
+        .listStyle(.insetGrouped)
     }
 
     private var notFoundTitle: String {
