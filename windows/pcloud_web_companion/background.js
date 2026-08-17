@@ -2548,14 +2548,6 @@ async function handleCdnFileNavigation(tabId, url) {
     });
     return;
   }
-    await appendRestLog({
-      phase: "cdn_tab",
-      ok: true,
-      url,
-      message: "CDN tab left open (duplicate of in-flight capture)",
-    });
-    return;
-  }
 
   await appendRestLog({
     phase: "cdn_tab",
