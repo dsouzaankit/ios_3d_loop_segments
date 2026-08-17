@@ -303,6 +303,8 @@ Wi‑Fi pairing is **optional** for AltStore if you refresh **with the cable** ~
 2. iPhone **USB** → unlock → **Trust**.
 3. Open **AltStore** on the phone → **My Apps → Refresh All** (or refresh **AltStore** first, then Loop Segments).
 
+USB **Refresh All** works even with a **multiple-gateway** setup (phone and PC on different APs / subnets). Same Wi‑Fi is only for background Wi‑Fi refresh. Clash/mihomo TUN can still hide AltServer (Bonjour) until the multicast route is dropped.
+
 No iTunes Summary checkbox required for this path. Keep **iCloud for Windows** signed in (helps “data isn’t in the correct format” errors).
 
 ### Plan C — Apple Devices checkbox keeps resetting
@@ -344,7 +346,7 @@ AltStore (iPhone)  ──requests refresh──►  AltServer (PC)  ──signs�
 | Path | Who starts refresh | Automatic? |
 |------|-------------------|------------|
 | **Wi‑Fi** | **AltStore** (background, before expiry) | **Sometimes** — same Wi‑Fi, AltServer running, Background App Refresh on; iOS may delay |
-| **USB** | **You** — open AltStore → **My Apps → Refresh All** | **No** — cable only helps AltServer be reachable; no plug-in-and-refresh |
+| **USB** | **You** — open AltStore → **My Apps → Refresh All** | **No** — cable is enough (does **not** need same Wi‑Fi / gateway); no plug-in-and-refresh |
 
 [Register-AltServerAtLogon.ps1](../windows/sideload/Register-AltServerAtLogon.ps1) only keeps **AltServer in the tray** at logon; it does not trigger refresh on USB attach. For USB-only refresh without opening AltStore manually, use [Sideloadly fallback](#5-sideloadly-fallback-only-if-altstore-fails) (daemon refreshes on USB when enrolled).
 
@@ -352,7 +354,7 @@ AltStore (iPhone)  ──requests refresh──►  AltServer (PC)  ──signs�
 |-------|------|
 | **AltServer** (PC tray) | Signs apps when the phone is reachable on the LAN |
 | **AltStore** (iPhone) | Requests refresh for installed apps, including **itself** |
-| **Same Wi‑Fi** | Phone and PC on one network (refresh does **not** run on cellular-only away from home) |
+| **Same Wi‑Fi** | Needed for **background** Wi‑Fi refresh only. **USB Refresh All** works across multiple gateways / APs |
 | **Background App Refresh** | **Settings → AltStore → On** and **Settings → General → Background App Refresh → AltStore → On** |
 
 **One-time setup**
