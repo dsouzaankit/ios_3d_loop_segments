@@ -4,7 +4,7 @@ Chromium MV3 extension (`pcloud_web_companion`) that intercepts pCloud downloads
 
 ## What it does
 
-**CDN view tabs** (Open Original, inline play, or a Download that opened a tab): the companion **does not close** them. **Downloads** on the shelf are still cancelled immediately. Either path still posts the same Loop Segments export (folder + name). Duplicate tab+download is deduped.
+**CDN view tabs** (Open Original, inline play, or a Download that opened a tab): the companion **does not close** them. **Downloads** on the shelf are still cancelled immediately. Either path still posts the same Loop Segments export (folder + name). Duplicate tab+download is deduped. **Refreshing a tab with the same full href** does not post again (this Chromium session) — no export reset and **`parked/` is not touched**. A **new signed URL** still posts; if that clip is already running, the phone parks root media then restores it and **continues from the checkpoint** (other titles in `parked/` stay).
 
 On a **single-file** pCloud download click:
 

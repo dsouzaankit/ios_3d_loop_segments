@@ -4,6 +4,8 @@ const PCLOUD_UI_HOST_RE = /^(my|e|www)\.pcloud\.com$/i;
 const PCLOUD_CDN_HOST_RE = /^p[a-z0-9]+\.pcloud\.com$/i;
 const FINALIZE_FALLBACK_MS = 1500;
 const CAPTURE_DEDUP_MS = 10000;
+const POSTED_EXACT_HREFS_KEY = "postedExactHrefs";
+const MAX_POSTED_EXACT_HREFS = 200;
 const MAX_CAPTURES = 200;
 const MAX_REST_LOGS = 100;
 const LOCAL_LOG_URL = "http://127.0.0.1:18765/log";
@@ -81,6 +83,58 @@ function claimCapture(url) {
   if (prev && now - prev < CAPTURE_DEDUP_MS) return false;
   recentCaptureKeys.set(key, now);
   return true;
+}
+
+function exactHref(url) {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    return u.href;
+  } catch {
+    return String(url || "").trim();
+  }
+}
+
+async function hasPostedExactHref(url) {
+  const href = exactHref(url);
+  if (!href) return false;
+  try {
+    const data = await chrome.storage.session.get(POSTED_EXACT_HREFS_KEY);
+    const list = data[POSTED_EXACT_HREFS_KEY] || [];
+    return list.includes(href);
+  } catch {
+    return false;
+  }
+}
+
+async function rememberPostedExactHref(url) {
+  const href = exactHref(url);
+  if (!href) return;
+  try {
+    const data = await chrome.storage.session.get(POSTED_EXACT_HREFS_KEY);
+    const list = data[POSTED_EXACT_HREFS_KEY] || [];
+    const next = [href, ...list.filter((h) => h !== href)].slice(
+      0,
+      MAX_POSTED_EXACT_HREFS
+    );
+    await chrome.storage.session.set({ [POSTED_EXACT_HREFS_KEY]: next });
+  } catch {
+    // ignore
+  }
+}
+
+async function forgetPostedExactHref(url) {
+  const href = exactHref(url);
+  if (!href) return;
+  try {
+    const data = await chrome.storage.session.get(POSTED_EXACT_HREFS_KEY);
+    const list = data[POSTED_EXACT_HREFS_KEY] || [];
+    await chrome.storage.session.set({
+      [POSTED_EXACT_HREFS_KEY]: list.filter((h) => h !== href),
+    });
+  } catch {
+    // ignore
+  }
 }
 
 async function cancelDownloadQuiet(downloadId) {
@@ -2335,6 +2389,19 @@ async function runCapturePipeline({ url, filename, referrer, downloadId }) {
     return;
   }
 
+  if (await hasPostedExactHref(url)) {
+    await appendRestLog({
+      phase: "capture",
+      ok: true,
+      downloadId: downloadId ?? null,
+      url,
+      saveName: filename,
+      message: "identical href skipped (already posted this session)",
+    });
+    return;
+  }
+  await rememberPostedExactHref(url);
+
   let folder = {
     folderId: null,
     folderPath: null,
@@ -2409,6 +2476,7 @@ async function runCapturePipeline({ url, filename, referrer, downloadId }) {
     lanCfg = api.cfg || null;
   } catch (err) {
     apiError = String(err && err.message ? err.message : err);
+    await forgetPostedExactHref(url);
   }
 
   if (!lanCfg) {
@@ -2460,8 +2528,26 @@ async function runCapturePipeline({ url, filename, referrer, downloadId }) {
 
 async function handleCdnFileNavigation(tabId, url) {
   if (!isPcloudCdnFileUrl(url)) return;
-  // Leave the tab open (Open Original / inline play). Still queue Loop Segments.
+  // Leave the tab open (Open Original / inline play). Still queue Loop Segments
+  // unless this exact signed URL was already posted this Chromium session.
+  if (await hasPostedExactHref(url)) {
+    await appendRestLog({
+      phase: "cdn_tab",
+      ok: true,
+      url,
+      message: "CDN tab left open; identical href skipped (already posted this session)",
+    });
+    return;
+  }
   if (!claimCapture(url)) {
+    await appendRestLog({
+      phase: "cdn_tab",
+      ok: true,
+      url,
+      message: "CDN tab left open (duplicate of in-flight capture)",
+    });
+    return;
+  }
     await appendRestLog({
       phase: "cdn_tab",
       ok: true,
