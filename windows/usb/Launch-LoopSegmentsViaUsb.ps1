@@ -31,6 +31,9 @@
       py -3.12 -m pymobiledevice3 remote tunneld
   then re-run this script with -UseTunneld.
 
+  DVT launch uses --no-kill-existing so a running export (Keep Alive / lock
+  screen) is foregrounded instead of killed. -ForceRelaunch omits that flag.
+
 .PARAMETER BundleId
   App bundle id (default com.loopsegments.app).
 
@@ -48,6 +51,7 @@
 
 .PARAMETER ForceRelaunch
   Launch even if Loop Segments is already the foreground app (USB DVT proclist).
+  Also omits --no-kill-existing so DVT may restart the process.
 
 .EXITCODES
   0  Launched, already foreground (skipped relaunch), or ListOnly ok
@@ -298,11 +302,16 @@ if (-not $SkipMount) {
     }
 }
 
+$dvtKill = @()
+if (-not $ForceRelaunch) {
+    $dvtKill = @('--no-kill-existing')
+}
+
 $launchAttempts = @()
 if ($UseTunneld) {
     $launchAttempts += , @{
         Label   = "dvt launch --tunnel ''"
-        CliArgs = @("developer", "dvt", "launch", $BundleId, "--tunnel", "")
+        CliArgs = @("developer", "dvt", "launch", $BundleId) + $dvtKill + @("--tunnel", "")
     }
     $launchAttempts += , @{
         Label   = "core-device launch-application --tunnel ''"
@@ -313,7 +322,7 @@ if ($UseTunneld) {
 # handshake (iOS 26) even when DVT can launch.
 $launchAttempts += , @{
     Label   = "dvt launch --userspace"
-    CliArgs = @("developer", "dvt", "launch", $BundleId, "--userspace")
+    CliArgs = @("developer", "dvt", "launch", $BundleId) + $dvtKill + @("--userspace")
 }
 $launchAttempts += , @{
     Label   = "core-device launch-application --userspace"
@@ -321,7 +330,7 @@ $launchAttempts += , @{
 }
 $launchAttempts += , @{
     Label   = "dvt launch"
-    CliArgs = @("developer", "dvt", "launch", $BundleId)
+    CliArgs = @("developer", "dvt", "launch", $BundleId) + $dvtKill
 }
 
 $ok = $false

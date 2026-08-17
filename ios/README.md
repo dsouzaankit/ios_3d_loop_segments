@@ -6,7 +6,7 @@
 
 **IPA / install (no Mac):** from repo root run **`.\deploy.ps1`** (triggers [ios-build](https://github.com/dsouzaankit/ios_3d_loop_segments/actions/workflows/ios-build.yml), downloads the IPA, then runs **`.\copy-to-icloud.ps1`**). Paste-only: **`.\copy-to-icloud.ps1`** (stamped `LoopSegments-b{build}-{time}.ipa`, same pattern as web_auto_parking). Details / AltStore: [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md). PC AltServer notes: [../windows/README.md](../windows/README.md).
 
-**PC tools:** [../windows/README.md](../windows/README.md) — companion, USB launch/Home, rclone, LAN probe. Companion requests exports via phone LAN REST (`/export_from_folder.json`, `/export_queue.json`, triggers) while the phone uses **cellular** to pCloud.
+**PC tools:** [../windows/README.md](../windows/README.md) — companion, USB launch/Home, rclone, LAN probe. Companion requests exports via phone LAN REST (`/export_from_folder.json`, `/export_queue.json`, triggers) while the phone uses **cellular** to pCloud. Re-running companion USB-launches with DVT **`--no-kill-existing`** (skips if already foreground) so a lock-screen Keep Alive export is only brought forward — a **new** pCloud Download still soft-pauses the live run (`startFirst`).
 
 **App icon:** [LoopSegments/Assets.xcassets/AppIcon.appiconset](LoopSegments/Assets.xcassets/AppIcon.appiconset) (1024×1024 dual-segment loop + play). Wired via `ASSETCATALOG_COMPILER_APPICON_NAME` + `CFBundleIconName` in [project.yml](project.yml) / [Info.plist](LoopSegments/Resources/Info.plist). CI fails the IPA if `Assets.car` / `CFBundleIconName` is missing. After install, delete the old app first if the home screen / App Library **Hidden** tile stays blank (iOS caches the previous blank icon).
 
