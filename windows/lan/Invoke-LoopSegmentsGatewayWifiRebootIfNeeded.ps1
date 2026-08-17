@@ -54,8 +54,10 @@ param(
     [ValidateRange(2, 60)]
     [int] $PollSecAfterReboot = 4,
     # Per-round wait for LAN identity change before re-checking / next reboot (0 = wait forever).
+    # WifiRestart script is ~10s (telnet + device sleep 5). 20s after that is DHCP/reassociate
+    # plus a couple of 4s polls; matches -WaitPhoneIpSec. Still same-IP → next bounce round.
     [ValidateRange(0, 3600)]
-    [int] $WaitLanIpChangeSec = 300,
+    [int] $WaitLanIpChangeSec = 20,
     # Wrong-subnet reboot rounds before giving up (default 3).
     [ValidateRange(1, 100)]
     [int] $MaxWrongSubnetRounds = 3,
@@ -219,7 +221,7 @@ function Wait-PcLanIdentityChange {
     param(
         [string] $PreviousLocalIp = '',
         [string] $PreviousGateway = '',
-        [int] $TimeoutSec = 300,
+        [int] $TimeoutSec = 20,
         [int] $PollSec = 4
     )
     $poll = [Math]::Max(2, $PollSec)
@@ -242,6 +244,7 @@ function Wait-PcLanIdentityChange {
     }
 
     $lastLog = [datetime]::MinValue
+    $sameUnchangedStreak = 0
     while ([datetime]::UtcNow -lt $deadline) {
         Start-Sleep -Seconds $poll
         $cur = Get-LoopSegmentsDefaultGatewayInfo
@@ -257,6 +260,20 @@ function Wait-PcLanIdentityChange {
                 $(if ($prevGw) { $prevGw } else { '(none)' }),
                 $(if ($curGw) { $curGw } else { '(none)' })) -ForegroundColor Green
             return $cur
+        }
+
+        # Same IP+gateway back means the AP is up and this PC rejoined it — do not burn
+        # the rest of the timeout. Two polls so a stale lease during the drop is ignored.
+        $lanUp = (-not [string]::IsNullOrWhiteSpace($curIp)) -and (-not [string]::IsNullOrWhiteSpace($curGw))
+        $unchanged = $lanUp -and $prevIp -and $prevGw -and ($curIp -eq $prevIp) -and ($curGw -eq $prevGw)
+        if ($unchanged) {
+            $sameUnchangedStreak++
+            if ($sameUnchangedStreak -ge 2) {
+                Write-Host ('[gateway] Bounce left LAN unchanged (IP={0} gw={1}) — stopping wait.' -f $curIp, $curGw) -ForegroundColor Yellow
+                return $cur
+            }
+        } else {
+            $sameUnchangedStreak = 0
         }
 
         if (([datetime]::UtcNow - $lastLog).TotalSeconds -ge 15) {

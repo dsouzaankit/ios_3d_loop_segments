@@ -99,18 +99,20 @@ function Get-LoopSegmentsVdStreamerPath {
 }
 
 function Get-LoopSegmentsVdStreamerPids {
-    $ids = [System.Collections.Generic.List[int]]::new()
+    $ids = [System.Collections.Generic.List[uint32]]::new()
     foreach ($n in $script:LoopSegmentsVdStreamerProcessNames) {
-        Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object {
-            if (-not ($ids -contains $_.Id)) { [void]$ids.Add([int]$_.Id) }
+        foreach ($p in @(Get-Process -Name $n -ErrorAction SilentlyContinue)) {
+            $id = [uint32]$p.Id
+            if ($id -gt 0 -and -not ($ids -contains $id)) { [void]$ids.Add($id) }
         }
     }
-    Get-Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.ProcessName -match '(?i)VirtualDesktop.*Streamer'
-    } | ForEach-Object {
-        if (-not ($ids -contains $_.Id)) { [void]$ids.Add([int]$_.Id) }
+    foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.ProcessName -match '(?i)VirtualDesktop.*Streamer'
+            })) {
+        $id = [uint32]$p.Id
+        if ($id -gt 0 -and -not ($ids -contains $id)) { [void]$ids.Add($id) }
     }
-    return , @($ids.ToArray())
+    return @($ids.ToArray())
 }
 
 function Test-LoopSegmentsVdStreamerRunning {
@@ -181,9 +183,8 @@ function Minimize-LoopSegmentsVdStreamerWindows {
     try { Initialize-LoopSegmentsVdNative } catch { return 0 }
     $pids = @(Get-LoopSegmentsVdStreamerPids)
     if ($pids.Count -eq 0) { return 0 }
-    $uints = [uint32[]]@($pids | ForEach-Object { [uint32]$_ })
     try {
-        return [int][LoopSegmentsVdWin]::HidePids($uints)
+        return [int][LoopSegmentsVdWin]::HidePids($pids)
     } catch {
         return 0
     }
