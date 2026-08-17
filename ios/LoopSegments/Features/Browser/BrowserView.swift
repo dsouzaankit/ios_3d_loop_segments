@@ -265,6 +265,8 @@ struct BrowserView: View {
             .onChange(of: session.selectedMainTab) { _, tab in
                 if tab == .browse {
                     applyPendingBrowseSearchIfNeeded()
+                } else {
+                    clearBrowseSearch()
                 }
             }
             .onChange(of: folderBookmarkStore.revision) { _, _ in
@@ -334,6 +336,14 @@ struct BrowserView: View {
         guard !trimmed.isEmpty else { return }
         searchText = trimmed
         searchToken += 1
+    }
+
+    private func clearBrowseSearch() {
+        guard isSearchActive || isSearching || !searchResults.isEmpty else { return }
+        searchText = ""
+        searchResults = []
+        searchModeNote = ""
+        isSearching = false
     }
 
     private func refreshFolderBookmarks() {

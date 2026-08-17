@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 293 (1.2.57):** Leaving Browse (Queued / Paused) clears the search field and results so a `Search in Browse` query does not come back when you return.
+
 **Build 292 (1.2.56):** WebDAV walk search cap is **22 s** (`min(10 + 2.5×(roots−1), 22)`). **Unavailable** rows stay that way — opening them does not re-check the saved folder; a later companion export is a new job and does not heal the old row (Remove to drop it). Hits already found still stay on screen if search times out.
 
 **Build 291 (1.2.55):** Unavailable screen uses a grouped list (title, redo-search note, Copy name / Search in Browse / Remove) instead of a tight empty-state stack in the middle of the screen.
@@ -670,7 +672,7 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 | **Browse** search bar (`.searchable`) | Primary UI; optional **pCloud REST search (account-wide)** toggle (off by default). |
 | **Paused** tab | Saved **`folderPath`** → one-level PROPFIND first; then `searchMatchingResumeEntry` (cache / walk) if needed. If that folder no longer has the file → **Unavailable** (no walk, no Resume). That flag is **sticky**: opening the row does not re-list the folder; companion re-export does not clear it — **Remove** (or a new export on the **same** `href`/`fileKey`). Cap **10** in-progress slots (**includes** the live export); list hides the live file → usually **≤9** visible while exporting. Handoff may briefly show 10 then drop the oldest. Overflow drops oldest unavailable first. |
 | **Pinned completed** (Browse sidebar, latest only) | Same resolve path — locates the pCloud source for Export settings while segment media stays on disk. |
-| **Search in Browse** / **Copy name** | Failed resume **and** **Unavailable**: copy the filename, or fill the Browse search bar and run the same pipeline. That starts a **new** job if you export a hit; it does not un-mark the old Unavailable row. Unavailable drops the stale exact-name cache first so a move can still match. |
+| **Search in Browse** / **Copy name** | Failed resume **and** **Unavailable**: copy the filename, or fill the Browse search bar and run the same pipeline. Leaving Browse clears that query so it does not persist when you return. That starts a **new** job if you export a hit; it does not un-mark the old Unavailable row. Unavailable drops the stale exact-name cache first so a move can still match. |
 
 **Default path (REST toggle off or `tokenSaved=false`):** **File cache** (last **200** hits: full `href` + filename) is checked locally first — full-path or exact-name matches return in Browse immediately; **folder cache** (last **100** parent paths) is used for PROPFIND only when file cache is not a strong match. Then WebDAV walk on **current Browse folder** + **bookmarks** (deduped), always **excluding `/`**. Cached/bookmark roots are visited **before** the pCloud user-files tree (build **232+**). **Paused/pinned resume** tries **file cache** (no network), then one PROPFIND per cached folder, then full search. Timeout scales with root count: `min(10 + 2.5×(roots−1), 22)` seconds. Cap **80 folders** visited per search. If search starts from `/`, UI + `search_debug.txt` note that root is excluded (bookmarks-only scan unless recent-hit cache has paths).
 
