@@ -268,23 +268,80 @@ function Get-LoopSegmentsRcloneMountLogArchivePath {
 }
 
 function Clear-LoopSegmentsRcloneMountLog {
-    # rclone keeps writing on Temp. On quit/abort/next start, copy the last log to P: then empty Temp.
+    # rclone writes on Temp. On quit/abort/next start, copy the last log to P: then delete Temp.
     $src = Get-LoopSegmentsRcloneMountLogPath
     $dst = Get-LoopSegmentsRcloneMountLogArchivePath
-    $copied = $true
     try {
         if ((Test-Path -LiteralPath $src) -and ((Get-Item -LiteralPath $src).Length -gt 0)) {
-            Copy-Item -LiteralPath $src -Destination $dst -Force
+            Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
         }
     } catch {
-        $copied = $false
+        return
     }
-    if (-not $copied) { return }
+    for ($i = 0; $i -lt 6; $i++) {
+        try {
+            if (Test-Path -LiteralPath $src) {
+                Remove-Item -LiteralPath $src -Force -ErrorAction Stop
+            }
+            if (-not (Test-Path -LiteralPath $src)) { return }
+        } catch {}
+        Start-Sleep -Milliseconds 200
+    }
     try {
         if (Test-Path -LiteralPath $src) {
             Set-Content -LiteralPath $src -Value '' -Encoding utf8
         }
     } catch {}
+}
+
+function Register-LoopSegmentsRcloneLogConsoleGuard {
+    param([int] $RclonePid = 0)
+    $src = Get-LoopSegmentsRcloneMountLogPath
+    $dst = Get-LoopSegmentsRcloneMountLogArchivePath
+    if (-not ('LoopSegmentsRcloneLogGuard' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+public static class LoopSegmentsRcloneLogGuard {
+    public static string Src;
+    public static string Dst;
+    public static int RclonePid;
+    public delegate bool HandlerRoutine(uint dwCtrlType);
+    static HandlerRoutine _keep;
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetConsoleCtrlHandler(HandlerRoutine handler, bool add);
+    public static void Register(string src, string dst, int rclonePid) {
+        Src = src;
+        Dst = dst;
+        RclonePid = rclonePid;
+        if (_keep == null) {
+            _keep = OnCtrl;
+            SetConsoleCtrlHandler(_keep, true);
+        }
+    }
+    public static void SetRclonePid(int pid) { RclonePid = pid; }
+    static bool OnCtrl(uint dwCtrlType) {
+        try {
+            if (RclonePid > 0) {
+                try { Process.GetProcessById(RclonePid).Kill(); } catch {}
+                Thread.Sleep(250);
+            }
+            if (!string.IsNullOrEmpty(Src) && File.Exists(Src) && new FileInfo(Src).Length > 0 && !string.IsNullOrEmpty(Dst)) {
+                File.Copy(Src, Dst, true);
+            }
+            if (!string.IsNullOrEmpty(Src) && File.Exists(Src)) {
+                try { File.Delete(Src); } catch {}
+            }
+        } catch {}
+        return false;
+    }
+}
+'@
+    }
+    [LoopSegmentsRcloneLogGuard]::Register($src, $dst, $RclonePid)
 }
 
 function Invoke-LoopSegmentsRclone {

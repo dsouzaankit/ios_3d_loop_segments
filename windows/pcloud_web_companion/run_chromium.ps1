@@ -1063,9 +1063,17 @@ function Invoke-AttemptRcloneMount {
             if (-not $rcloneLog) {
                 $rcloneLog = Join-Path $env:TEMP 'loopsegments-rclone-mount.log'
             }
-            if (Test-Path -LiteralPath $rcloneLog) {
+            $archiveLog = $null
+            try { $archiveLog = Get-LoopSegmentsRcloneMountLogArchivePath } catch {}
+            $tailFrom = $null
+            if ((Test-Path -LiteralPath $rcloneLog) -and ((Get-Item -LiteralPath $rcloneLog).Length -gt 0)) {
+                $tailFrom = $rcloneLog
+            } elseif ($archiveLog -and (Test-Path -LiteralPath $archiveLog)) {
+                $tailFrom = $archiveLog
+            }
+            if ($tailFrom) {
                 Write-Host '[rclone] Last mount log lines:' -ForegroundColor DarkYellow
-                Get-Content -LiteralPath $rcloneLog -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object {
+                Get-Content -LiteralPath $tailFrom -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object {
                     Write-Host ("  {0}" -f $_) -ForegroundColor DarkYellow
                 }
             }

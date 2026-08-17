@@ -751,6 +751,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         if ($mountStartDir -and $existingCmd -and ($existingCmd -notmatch '(?i)pcld_ios_media')) {
             Write-Warning "Existing mount is WebDAV root. -Unstick then remount to start in pcld_ios_media."
         }
+        try { Register-LoopSegmentsRcloneLogConsoleGuard -RclonePid $rcloneProc.Id } catch {}
     } else {
         if ((Test-Path -LiteralPath $driveRoot) -and $null -eq $rcloneProc) {
             Write-Warning "${driveRoot} exists but no matching rclone process - mount may fail. Try -Unstick first."
@@ -761,6 +762,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         }
         $rcloneProc = Start-LoopSegmentsRcloneMountProcess -MountArgs $mountArgs -LogFile $rcloneLog
         Write-Host "rclone mount started (PID $($rcloneProc.Id)); log: $rcloneLog"
+        try { Register-LoopSegmentsRcloneLogConsoleGuard -RclonePid $rcloneProc.Id } catch {}
         # Brief settle so WinFsp can attach before the first LAN sleep cycle.
         Start-Sleep -Seconds 3
         try { $rcloneProc.Refresh() } catch {}
@@ -770,8 +772,8 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
             Write-Host ('[Mount-LoopSegmentsRclone] rclone exited immediately (exit {0}).' -f $early) -ForegroundColor Red
             Show-RcloneMountLogTail -LogFile $rcloneLog
             Write-Host "If ${mountPoint} was already mounted, run: .\Mount-LoopSegmentsRclone.ps1 -Unstick   then remount." -ForegroundColor Yellow
-            # -NoWaitEnter: leave the log for the companion window to tail, then it clears.
-            if (-not $NoWaitEnter) { Clear-LoopSegmentsRcloneMountLog }
+            # Archive to P: and delete Temp; companion tails Temp or the P: copy.
+            Clear-LoopSegmentsRcloneMountLog
             Wait-EnterOnError -ExitCode $early
         }
     }
@@ -792,7 +794,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     if ($code -ne 0) {
         Write-Host ('[Mount-LoopSegmentsRclone] rclone mount failed (exit {0}).' -f $code) -ForegroundColor Red
         Show-RcloneMountLogTail -LogFile $rcloneLog
-        if (-not $NoWaitEnter) { Clear-LoopSegmentsRcloneMountLog }
+        Clear-LoopSegmentsRcloneMountLog
         Wait-EnterOnError -ExitCode $code
     }
     Clear-LoopSegmentsRcloneMountLog
@@ -804,7 +806,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     }
     try {
         Show-RcloneMountLogTail -LogFile (Get-LoopSegmentsRcloneMountLogPath)
-        if (-not $NoWaitEnter) { Clear-LoopSegmentsRcloneMountLog }
+        Clear-LoopSegmentsRcloneMountLog
     } catch {}
     Wait-EnterOnError -ExitCode 1
 }
