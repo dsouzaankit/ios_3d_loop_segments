@@ -270,7 +270,10 @@ enum PCloudSearchService {
         )
         if !webDAV.items.isEmpty {
             let recent = SearchLocationCache.listingPaths().count
-            let note = webDAVSuccessNote(count: webDAV.items.count, recentRootCount: recent)
+            var note = webDAVSuccessNote(count: webDAV.items.count, recentRootCount: recent)
+            if webDAV.timedOut {
+                note += " Search timed out before every folder was scanned."
+            }
             SearchDebugLog.log("done: \(note)")
             return finishResult(items: webDAV.items, statusNote: note)
         }
@@ -484,6 +487,7 @@ enum PCloudSearchService {
         if bookmarksOnly {
             SearchDebugLog.log("search: bookmarks-only walk (no user-files tree)")
         }
+        let liveHits = WebDAVSearchHitBox()
         let progressHandler: (@Sendable (WebDAVSearchProgress) -> Void)? = status.map { report in
             { progress in
                 let line = progress.uiStatusLine()
@@ -504,7 +508,8 @@ enum PCloudSearchService {
                     quickRootDiscovery: true,
                     pinnedRootsOnly: bookmarksOnly,
                     timeoutSeconds: seconds,
-                    progress: progressHandler
+                    progress: progressHandler,
+                    liveHits: liveHits
                 )
             }
             return WebDAVSearchPass(items: items, timedOut: false)
@@ -512,8 +517,11 @@ enum PCloudSearchService {
             SearchDebugLog.log("WebDAV walk: cancelled")
             throw CancellationError()
         } catch is ExportAsyncTimeout.TimedOut {
-            SearchDebugLog.log("WebDAV walk: timed out after \(Int(seconds))s (\(browsePaths.count) roots)")
-            return WebDAVSearchPass(items: [], timedOut: true)
+            let partial = liveHits.snapshot()
+            SearchDebugLog.log(
+                "WebDAV walk: timed out after \(Int(seconds))s (\(browsePaths.count) roots) — keeping \(partial.count) hit(s)"
+            )
+            return WebDAVSearchPass(items: partial, timedOut: true)
         } catch {
             SearchDebugLog.log("WebDAV walk failed: \(error.localizedDescription)")
             return WebDAVSearchPass(items: [], timedOut: false)

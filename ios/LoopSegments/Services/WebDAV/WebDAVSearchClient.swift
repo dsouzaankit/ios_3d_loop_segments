@@ -1,5 +1,23 @@
 import Foundation
 
+/// Snapshot of WebDAV walk hits so an outer timeout can still return what was found.
+final class WebDAVSearchHitBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [WebDAVItem] = []
+
+    func publish(_ items: [WebDAVItem]) {
+        lock.lock()
+        self.items = items
+        lock.unlock()
+    }
+
+    func snapshot() -> [WebDAVItem] {
+        lock.lock()
+        defer { lock.unlock() }
+        return items
+    }
+}
+
 /// Filename search by walking WebDAV folders (slower than REST search).
 enum WebDAVSearchClient {
     private static let maxFoldersToVisitDefault = 1200
@@ -13,7 +31,8 @@ enum WebDAVSearchClient {
         quickRootDiscovery: Bool = false,
         pinnedRootsOnly: Bool = false,
         timeoutSeconds: Double = 0,
-        progress: (@Sendable (WebDAVSearchProgress) -> Void)? = nil
+        progress: (@Sendable (WebDAVSearchProgress) -> Void)? = nil,
+        liveHits: WebDAVSearchHitBox? = nil
     ) async throws -> [WebDAVItem] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return [] }
@@ -66,6 +85,12 @@ enum WebDAVSearchClient {
 
         while !queue.isEmpty, results.count < maxResults, foldersVisited < maxFoldersToVisit {
             if Task.isCancelled { throw CancellationError() }
+            if timeoutSeconds > 0, elapsedSeconds() >= timeoutSeconds {
+                SearchDebugLog.log(
+                    "WebDAV walk: stopping at \(Int(timeoutSeconds))s with \(results.count) hit(s)"
+                )
+                break
+            }
 
             let folderPath = queue.removeFirst()
             let listingPath = WebDAVURLBuilder.directoryListingPath(folderPath)
@@ -96,6 +121,7 @@ enum WebDAVSearchClient {
                 if haystack.contains(needle) || nameMatch {
                     if item.isDirectory || item.isVideo {
                         results.append(item)
+                        liveHits?.publish(results)
                         if results.count >= maxResults { break }
                     }
                 }
@@ -125,6 +151,7 @@ enum WebDAVSearchClient {
         if results.isEmpty, foldersVisited > 0, listFailures == foldersVisited {
             throw WebDAVError.httpStatus(401)
         }
+        liveHits?.publish(results)
         return results.sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory && !rhs.isDirectory }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending

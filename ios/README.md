@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 290 (1.2.54):** Browse search **keeps hits already found** when the WebDAV walk times out (previously returned an empty list). Status still notes that not every folder was scanned.
+
 **Build 289 (1.2.53):** If a queued / companion file is missing from its saved pCloud folder, skip it — **no** WebDAV walk and **no** auto-resume from that stale path. The skip stays on **Paused** as **Unavailable** (opens instead of Export): *Redo search and re-export using web companion*. **Copy name** and **Search in Browse** still work (stale exact-name cache is dropped so a move can match). **Move to queued** leaves unavailable rows on Paused. Companion desktop toast on the first rejected ack: `Loop Segments: skipped <name>` (later FIFO skips are Paused-only).
 
 **Build 288 (1.2.52):** Kick LAN export consume on POST so a **202** queue write is not left waiting while the poller is stopped.
@@ -672,7 +674,7 @@ All **find-by-name** flows use **`PCloudSearchService`** with the same rules:
 
 **Live UI while WebDAV runs:** current folder (short path), `folders visited / 80`, queue depth, hit count, ETA (rate-based, capped by timeout). Same line is written periodically to **`pcld_ios_media/logs/search_debug.txt`** (append-only like **`export_latest.txt`**; capped at **64 KB** on disk; listed on LAN `:8765` when the file exists; legacy **`/search_debug.txt`** URL works). **File-cache** hits (saved full paths/names) show in Browse first; repeat searches skip cached-folder PROPFIND when file cache already has hits. Search from **`/`** uses **bookmarks + cache paths only** (no `remote.php/dav/files/…` tree expansion). The current cache snapshot is available on LAN as **`pcld_ios_media/logs/search_cache.json`** (also linked from the monitor page when present).
 
-**Empty results:** distinct messages for **WebDAV timeout** (not finished scanning), **no matches**, and **missing API token** (optional REST). Do not treat a 10 s timeout across many bookmarks as “login missing.”
+**Timeout / empty results:** if the walk times out with hits, Browse **keeps those rows** and notes that not every folder was scanned. Distinct empty messages for **WebDAV timeout** (no hits yet), **no matches**, and **missing API token** (optional REST). Do not treat a 10 s timeout across many bookmarks as “login missing.”
 
 **Not global filename search:** Browse folder refresh (`reconcileWithBrowseListing`), export **404 rename repair** (re-list parent folder), **Alternate export** / LAN **random** pick (list videos in one folder or bookmark roots only), LAN **`/browse`** folder browser (no search box).
 
