@@ -20,8 +20,6 @@ const LAN_FLUSH_ALARM = "flush-pending-phone-lan";
 const pending = new Map();
 /** @type {Map<string, number>} */
 const recentCaptureKeys = new Map();
-/** @type {Set<number>} */
-const closingCdnTabIds = new Set();
 
 function isPcloudUrl(url) {
   if (!url || url.startsWith("blob:")) return false;
@@ -96,29 +94,6 @@ async function cancelDownloadQuiet(downloadId) {
     await chrome.downloads.erase({ id: downloadId });
   } catch {
     // ignore
-  }
-}
-
-async function closeMatchingCdnTabs(url) {
-  const key = captureKey(url);
-  if (!key) return;
-  let tabs = [];
-  try {
-    tabs = await chrome.tabs.query({});
-  } catch {
-    return;
-  }
-  for (const tab of tabs) {
-    if (tab.id == null || !tab.url) continue;
-    if (captureKey(tab.url) !== key) continue;
-    closingCdnTabIds.add(tab.id);
-    try {
-      await chrome.tabs.remove(tab.id);
-    } catch {
-      // ignore
-    } finally {
-      closingCdnTabIds.delete(tab.id);
-    }
   }
 }
 
@@ -2189,9 +2164,8 @@ async function finalize(downloadId) {
   pending.delete(downloadId);
 
   const url = rec.url;
-  // Stop the download / CDN tab immediately — do not wait for folder resolve.
+  // Kill the downloads-shelf transfer immediately. Leave any CDN view tab open.
   await cancelDownloadQuiet(downloadId);
-  await closeMatchingCdnTabs(url);
 
   if (!claimCapture(url)) {
     await appendRestLog({
@@ -2486,23 +2460,13 @@ async function runCapturePipeline({ url, filename, referrer, downloadId }) {
 
 async function handleCdnFileNavigation(tabId, url) {
   if (!isPcloudCdnFileUrl(url)) return;
-  if (closingCdnTabIds.has(tabId)) return;
-
-  closingCdnTabIds.add(tabId);
-  try {
-    await chrome.tabs.remove(tabId);
-  } catch {
-    // already closed
-  } finally {
-    closingCdnTabIds.delete(tabId);
-  }
-
+  // Leave the tab open (Open Original / inline play). Still queue Loop Segments.
   if (!claimCapture(url)) {
     await appendRestLog({
       phase: "cdn_tab",
       ok: true,
       url,
-      message: "CDN tab closed (duplicate of in-flight capture)",
+      message: "CDN tab left open (duplicate of in-flight capture)",
     });
     return;
   }
@@ -2511,7 +2475,7 @@ async function handleCdnFileNavigation(tabId, url) {
     phase: "cdn_tab",
     ok: true,
     url,
-    message: "CDN file tab intercepted (no downloads API event)",
+    message: "CDN file tab left open; posting to Loop Segments",
   });
 
   await runCapturePipeline({
@@ -2529,16 +2493,12 @@ function trackPcloudDownload(item, filenameHint) {
   const existing = pending.get(item.id);
   const filename = filenameHint || existing?.filename || baseName(item.filename);
 
-  // Cancel immediately so Chromium does not open/save the CDN file while we resolve.
-  // Under Clash TUN, CDN transfer is slow — keep cancelling so a late Content-Disposition
-  // download does not win the race.
+  // Cancel the downloads-shelf transfer immediately. Do not close CDN view tabs.
   void cancelDownloadQuiet(item.id);
-  void closeMatchingCdnTabs(url);
   void (async () => {
     for (let i = 0; i < 8; i++) {
       await new Promise((r) => setTimeout(r, 250));
       await cancelDownloadQuiet(item.id);
-      await closeMatchingCdnTabs(url);
     }
   })();
 
@@ -2659,7 +2619,7 @@ chrome.downloads.onChanged.addListener((delta) => {
 
 // pCloud often opens the signed CDN URL in a new tab (inline media) instead of
 // firing downloads.onCreated — especially on the first click after launch.
-// Clash TUN makes that tab hang for a long time before Content-Disposition download.
+// Leave that tab open (view / Open Original). Still queue Loop Segments.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || (changeInfo.status === "loading" ? tab.url : null);
   if (!url || !isPcloudCdnFileUrl(url)) return;
@@ -2671,7 +2631,7 @@ chrome.tabs.onCreated.addListener((tab) => {
   void handleCdnFileNavigation(tab.id, tab.url);
 });
 
-// Earlier than tabs.onUpdated when possible (closes CDN tab before body download).
+// Same capture as onUpdated, earlier in the navigation — still does not close the tab.
 if (chrome.webNavigation?.onBeforeNavigate) {
   chrome.webNavigation.onBeforeNavigate.addListener((details) => {
     if (details.frameId !== 0) return;

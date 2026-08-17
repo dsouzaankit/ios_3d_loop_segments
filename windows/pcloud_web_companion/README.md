@@ -1,12 +1,14 @@
 # pCloud web companion → Loop Segments
 
-Chromium MV3 extension (`pcloud_web_companion`) that intercepts pCloud downloads, cancels them, copies the URL + filename, and queues an export on the Loop Segments iOS LAN API.
+Chromium MV3 extension (`pcloud_web_companion`) that intercepts pCloud downloads, cancels the **downloads shelf**, copies the URL + filename, and queues an export on the Loop Segments iOS LAN API. **CDN view tabs stay open** (Open Original / inline play).
 
 ## What it does
 
+**CDN view tabs** (Open Original, inline play, or a Download that opened a tab): the companion **does not close** them. **Downloads** on the shelf are still cancelled immediately. Either path still posts the same Loop Segments export (folder + name). Duplicate tab+download is deduped.
+
 On a **single-file** pCloud download click:
 
-1. Cancels the Chromium download (or closes a CDN file tab) immediately, then removes it from the shelf
+1. Cancels the Chromium **download** immediately (shelf), then removes it from the shelf. Any new CDN tab stays open.
 2. Resolves the open my.pcloud `folder=` id to a folder **path/name** via `listfolder` / parent walk — `folderPath` is the full pCloud path (root segment kept). API host is derived from the download CDN domain when possible (`pnyc1.pcloud.com` → `apinyc1.pcloud.com`), with `api.pcloud.com` / `eapi` as fallbacks
 3. If `folderPath` is missing/garbled (e.g. search UI text like `"darina" in "/All Files/"`), runs **right-click → Open Location** on the file, then re-resolves; falls back to pCloud `search` API if needed
 4. Copies clipboard lines: download URL, filename, folder path, folder name (when known)
@@ -100,7 +102,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 | Where | What |
 |-------|------|
-| `windows\pcloud_web_companion\rest.log` (P:) | JSON lines: `sw_boot`, `capture`, `request`, `response`, `browse`, … (cleared each `run_chromium.ps1` start; gitignored) |
+| `windows\pcloud_web_companion\rest.log` (P:) | JSON lines: `sw_boot`, `capture`, `cdn_tab` (tab left open; export still posted), `request`, `response`, `browse`, … (cleared each `run_chromium.ps1` start; gitignored) |
 | Extension toolbar icon | Same events in a popup |
 | Desktop notification | Archive/queue POST: queued OK, no fileids, empty resolve, or REST failed. First phone ack `rejected` (file missing from saved folder) → **Loop Segments: skipped `<name>`**. Later FIFO drain skips land on Paused **Unavailable** only. |
 
@@ -132,7 +134,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 The extension must reach `http://<phoneLanHost>:8765/`. **Clash TUN** often black-holes Chromium service-worker `fetch` to private IPs (LAN tab may still work), so export POSTs hang and a pCloud CDN tab/download eventually wins. That is a unicast/TUN issue, not mDNS — the multicast UAC script does not fix it.
 
-**Fix in 1.7.4+:** phone LAN API calls go through `http://127.0.0.1:18765/phone-lan` (companion PowerShell sink) which talks to the phone with an **empty WinHTTP proxy** (DIRECT). Loopback is normally excluded from TUN. CDN tabs are closed earlier (`webNavigation`) and in-progress pCloud downloads are re-cancelled while the pipeline runs.
+**Fix in 1.7.4+:** phone LAN API calls go through `http://127.0.0.1:18765/phone-lan` (companion PowerShell sink) which talks to the phone with an **empty WinHTTP proxy** (DIRECT). Loopback is normally excluded from TUN. In-progress pCloud **downloads** are re-cancelled while the pipeline runs. **CDN view tabs are not closed** (1.7.8+).
 
 `run_chromium.ps1` also sets `--proxy-bypass-list` for system-proxy Clash. Keep the companion console open so the local sink stays up.
 
