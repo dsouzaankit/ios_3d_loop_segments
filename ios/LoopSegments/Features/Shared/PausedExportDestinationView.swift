@@ -1,28 +1,33 @@
 import SwiftUI
 
-/// Resolves a paused or pinned resume row to `ExportView` (listing match, sparse href, or pCloud search).
+/// Resolves a paused or pinned resume row to `ExportView` (listing match, or unavailable if the saved folder moved).
 struct PausedExportDestinationView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
     let entry: ResumeEntry
     let browsing: [WebDAVItem]
-    /// Browse folder stack — merged with bookmarks inside `PCloudSearchService` (same as Browse search).
-    let browsePathStack: [String]
-    let onSearchByName: (String) -> Void
 
     @State private var searchItem: WebDAVItem?
     @State private var isSearching = false
     @State private var searchStatusLine = ""
     @State private var resolveError: String?
 
+    private var liveEntry: ResumeEntry {
+        resumeStore.snapshotEntries().first { $0.fileKey == entry.fileKey } ?? entry
+    }
+
     var body: some View {
         Group {
-            if let item = resumeStore.resolveItem(for: entry, browsing: browsing + (searchItem.map { [$0] } ?? [])) {
+            if liveEntry.isSourceUnavailable {
+                unavailableView
+            } else if let item = searchItem {
+                ExportView(item: item)
+            } else if let item = resumeStore.resolveItem(for: liveEntry, browsing: browsing), !browsing.isEmpty {
                 ExportView(item: item)
             } else if isSearching {
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text("Finding \(entry.resolvedDisplayName.isEmpty ? "paused export" : entry.resolvedDisplayName)…")
+                    Text("Finding \(liveEntry.resolvedDisplayName.isEmpty ? "paused export" : liveEntry.resolvedDisplayName)…")
                         .font(.subheadline)
                     if !searchStatusLine.isEmpty {
                         Text(searchStatusLine)
@@ -40,60 +45,83 @@ struct PausedExportDestinationView: View {
                 } description: {
                     Text(notFoundDescription)
                 } actions: {
-                    Button("Search in Browse") {
-                        onSearchByName(entry.resolvedDisplayName)
-                    }
-                    Button("Try again") {
-                        Task { await resolveViaSearch() }
+                    if !liveEntry.isSourceUnavailable {
+                        Button("Try folder again") {
+                            Task { await resolveViaFolderList() }
+                        }
                     }
                 }
             }
         }
-        .navigationTitle(entry.resolvedDisplayName.isEmpty ? "Paused export" : entry.resolvedDisplayName)
+        .navigationTitle(liveEntry.resolvedDisplayName.isEmpty ? "Paused export" : liveEntry.resolvedDisplayName)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             resumeStore.reconcilePausedWithWorkingSource()
-            if resumeStore.resolveItem(for: entry, browsing: browsing) != nil {
+            if liveEntry.isSourceUnavailable { return }
+            if !browsing.isEmpty, resumeStore.resolveItem(for: liveEntry, browsing: browsing) != nil {
                 return
             }
-            await resolveViaSearch()
+            await resolveViaFolderList()
+        }
+    }
+
+    private var unavailableView: some View {
+        ContentUnavailableView {
+            Label("Unavailable", systemImage: "icloud.slash")
+        } description: {
+            Text(ResumeStore.pCloudSourceUnavailableMessage)
+        } actions: {
+            Button("Copy name") {
+                UIPasteboard.general.string = liveEntry.resolvedDisplayName
+            }
+            Button("Search in Browse") {
+                session.pendingBrowseSearch = liveEntry.resolvedDisplayName
+                session.selectedMainTab = .browse
+            }
+            Button("Remove from Paused", role: .destructive) {
+                resumeStore.dismissPausedExport(liveEntry)
+            }
         }
     }
 
     private var notFoundTitle: String {
-        entry.pinnedCompleted ? "Source not found yet" : "File not in this folder"
+        liveEntry.pinnedCompleted ? "Source not found yet" : "File not in this folder"
     }
 
     private var notFoundDescription: String {
         if let resolveError, !resolveError.isEmpty {
             return resolveError
         }
-        if entry.pinnedCompleted {
-            return """
-            Segment media is on disk; searching pCloud (bookmarks + Browse path, same as the search bar) to open Export for the source file. \
-            Tap Try again or Search in Browse.
-            """
+        if liveEntry.pinnedCompleted {
+            return ResumeStore.pCloudSourceUnavailableMessage
         }
-        return """
-        Tries the saved folderPath (one-level list), then the same pCloud search as Browse. \
-        Open the folder that contains the file or tap Search in Browse.
-        """
+        return ResumeStore.pCloudSourceUnavailableMessage
     }
 
-    private func resolveViaSearch() async {
-        guard searchItem == nil else { return }
+    private func resolveViaFolderList() async {
+        guard searchItem == nil, !liveEntry.isSourceUnavailable else { return }
         SearchDebugLog.ensureReady()
         isSearching = true
-        searchStatusLine = "Preparing pCloud search…"
+        searchStatusLine = "Checking saved pCloud folder…"
         resolveError = nil
-        defer {
-            isSearching = false
+        defer { isSearching = false }
+
+        let folder = liveEntry.folderPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !folder.isEmpty else {
+            resumeStore.markPCloudSourceUnavailable(
+                displayName: liveEntry.resolvedDisplayName,
+                href: liveEntry.href,
+                folderPath: nil
+            )
+            resolveError = ResumeStore.pCloudSourceUnavailableMessage
+            return
         }
+
         let credentials: WebDAVCredentials
         do {
             guard let prepared = try await session.prepareCredentialsForSearch() else {
                 SearchDebugLog.log("resume resolve UI: not signed in")
-                resolveError = "Sign in to search pCloud for this file."
+                resolveError = "Sign in to check the saved pCloud folder."
                 return
             }
             credentials = prepared
@@ -104,30 +132,26 @@ struct PausedExportDestinationView: View {
             resolveError = error.localizedDescription
             return
         }
+
         do {
-            if let match = try await PCloudSearchService.searchMatchingResumeEntry(
-                entry: entry,
-                credentials: credentials,
-                browsePaths: browsePathStack,
-                status: { note in
-                    Task { @MainActor in
-                        searchStatusLine = note
-                    }
-                }
-            ) {
-                searchItem = match
-                resumeStore.backfillHrefs(from: [match])
-                searchStatusLine = ""
-                return
-            }
-            resolveError = entry.pinnedCompleted
-                ? "No matching file in bookmarks or Browse path. Turn on pCloud REST search in Browse or open the source folder."
-                : "No matching file found. Try Search in Browse or enable pCloud REST search."
+            let match = try await AlternateExportFilePicker.findVideo(
+                named: liveEntry.resolvedDisplayName,
+                in: folder,
+                credentials: credentials
+            )
+            searchItem = match
+            resumeStore.backfillHrefs(from: [match])
+            searchStatusLine = ""
         } catch is CancellationError {
             SearchDebugLog.log("resume resolve UI: cancelled")
         } catch {
-            SearchDebugLog.log("resume resolve UI: \(error.localizedDescription)")
-            resolveError = error.localizedDescription
+            SearchDebugLog.log("resume resolve UI: folder miss — \(error.localizedDescription)")
+            resumeStore.markPCloudSourceUnavailable(
+                displayName: liveEntry.resolvedDisplayName,
+                href: liveEntry.href,
+                folderPath: folder
+            )
+            resolveError = ResumeStore.pCloudSourceUnavailableMessage
         }
     }
 }

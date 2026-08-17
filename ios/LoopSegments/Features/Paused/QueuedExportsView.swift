@@ -45,6 +45,7 @@ struct QueuedExportsView: View {
                     Text(
                         "Not started yet. Auto-starts when the phone is idle after an export finishes or Stop. " +
                             "User Pause holds the queue. Cap \(PendingExportQueue.maxItems). Companion multi-select prepends here. " +
+                            "If a queued file is missing from its saved folder, it is skipped and appears on Paused as unavailable. " +
                             "Paused tab → Move to queued appends here as fresh jobs."
                     )
                     .font(.footnote)

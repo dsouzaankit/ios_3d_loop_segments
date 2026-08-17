@@ -192,12 +192,7 @@ struct BrowserView: View {
             .navigationDestination(item: $selectedPinnedEntry) { entry in
                 PausedExportDestinationView(
                     entry: entry,
-                    browsing: items,
-                    browsePathStack: pathStack,
-                    onSearchByName: { name in
-                        searchText = name
-                        searchToken += 1
-                    }
+                    browsing: items
                 )
             }
             .searchable(text: $searchText, prompt: "Search pCloud")

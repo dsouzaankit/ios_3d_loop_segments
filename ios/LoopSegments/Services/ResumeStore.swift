@@ -17,8 +17,12 @@ struct ResumeEntry: Codable, Identifiable, Hashable {
     var checkpointMediaMs: Int64?
     /// Shown in Browse after a finished export when `_working.mp4` + segments exist on disk (like a bookmark to reopen Export / LAN).
     var pinnedCompleted: Bool = false
+    /// Saved `folderPath` no longer contains this file (moved/renamed on pCloud). Re-queue from the PC companion.
+    var sourceUnavailable: Bool? = nil
 
     var id: String { fileKey }
+
+    var isSourceUnavailable: Bool { sourceUnavailable == true }
 
     /// Prefer stored name; fall back to href leaf so Paused never shows a blank row.
     var resolvedDisplayName: String {
@@ -157,6 +161,7 @@ final class ResumeStore: ObservableObject {
             if let sourceDurationMs, sourceDurationMs > 0 {
                 entry.sourceDurationMs = min(sourceDurationMs, ResumeSeek.maxPlausibleMs)
             }
+            entry.sourceUnavailable = nil
             entry.updatedAt = Date()
         }
     }
@@ -167,6 +172,7 @@ final class ResumeStore: ObservableObject {
     @discardableResult
     func moveAllPausedExportsToPendingQueue(exceptFileKey: String? = nil) -> Int {
         let paused = interruptedEntries(excludingFileKey: exceptFileKey)
+            .filter { !$0.isSourceUnavailable }
         guard !paused.isEmpty else { return 0 }
 
         // Paused list is newest-first; append oldest-first so FIFO drains chronologically.
@@ -251,6 +257,74 @@ final class ResumeStore: ObservableObject {
         entries[index].updatedAt = Date()
         persist(entries)
         _ = ExportParkedMedia.removePark(forFileKey: entry.fileKey)
+    }
+
+    static let pCloudSourceUnavailableMessage =
+        "Redo search and re-export using web companion"
+
+    /// Folder one-level list missed this name — do not resume or FIFO-replay the stale path.
+    func markPCloudSourceUnavailable(
+        displayName: String,
+        href: String? = nil,
+        folderPath: String? = nil
+    ) {
+        SearchLocationCache.removeStaleFile(name: displayName, href: href)
+        let needle = displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hrefNeedle = href?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var entries = load()
+        var changed = false
+        for index in entries.indices {
+            guard entries[index].exportInProgress else { continue }
+            let nameL = entries[index].resolvedDisplayName.lowercased()
+            let hrefMatch = !hrefNeedle.isEmpty && entries[index].href == hrefNeedle
+            let nameMatch = !needle.isEmpty && (
+                nameL == needle
+                    || (nameL as NSString).deletingPathExtension == (needle as NSString).deletingPathExtension
+            )
+            guard hrefMatch || nameMatch else { continue }
+            entries[index].sourceUnavailable = true
+            entries[index].updatedAt = Date()
+            changed = true
+        }
+        if changed {
+            persist(entries)
+            SearchDebugLog.log(
+                "Paused source unavailable: \"\(displayName)\" folder=\(folderPath ?? "—") — \(Self.pCloudSourceUnavailableMessage)"
+            )
+            ExportRuntimeLog.mirror("Skipped \(displayName) — \(Self.pCloudSourceUnavailableMessage)")
+            return
+        }
+
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let folder = folderPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let key = "unavailable:\(folder.lowercased())/\(name.lowercased())"
+        if let index = entries.firstIndex(where: { $0.fileKey == key }) {
+            entries[index].sourceUnavailable = true
+            entries[index].exportInProgress = true
+            entries[index].displayName = name
+            if !folder.isEmpty { entries[index].folderPath = folder }
+            if let href, !href.isEmpty { entries[index].href = href }
+            entries[index].updatedAt = Date()
+        } else {
+            entries.append(
+                ResumeEntry(
+                    fileKey: key,
+                    displayName: name,
+                    href: href,
+                    folderPath: folder.isEmpty ? nil : folder,
+                    lastSeekMs: 0,
+                    updatedAt: Date(),
+                    exportInProgress: true,
+                    sourceUnavailable: true
+                )
+            )
+        }
+        persist(entries)
+        SearchDebugLog.log(
+            "Paused source unavailable (queued skip): \"\(name)\" folder=\(folder.isEmpty ? "—" : folder) — \(Self.pCloudSourceUnavailableMessage)"
+        )
+        ExportRuntimeLog.mirror("Skipped \(name) — \(Self.pCloudSourceUnavailableMessage)")
     }
 
     func setSourceDurationMs(_ ms: Int64, for item: WebDAVItem) {
@@ -554,11 +628,15 @@ final class ResumeStore: ObservableObject {
 
     /// Keep at most `maxPausedExports` in-progress rows; clear oldest first.
     private func trimPausedQueueOverflow(_ entries: inout [ResumeEntry]) {
-        let paused = entries.indices
-            .filter { entries[$0].exportInProgress }
-            .sorted { entries[$0].updatedAt < entries[$1].updatedAt }
-        guard paused.count > Self.maxPausedExports else { return }
-        let drop = paused.prefix(paused.count - Self.maxPausedExports)
+        let inProgress = entries.indices.filter { entries[$0].exportInProgress }
+        guard inProgress.count > Self.maxPausedExports else { return }
+        let dropOrder = inProgress.sorted { a, b in
+            let aSkip = entries[a].isSourceUnavailable
+            let bSkip = entries[b].isSourceUnavailable
+            if aSkip != bSkip { return aSkip && !bSkip }
+            return entries[a].updatedAt < entries[b].updatedAt
+        }
+        let drop = dropOrder.prefix(inProgress.count - Self.maxPausedExports)
         for index in drop {
             let key = entries[index].fileKey
             entries[index].exportInProgress = false

@@ -108,6 +108,28 @@ enum SearchLocationCache {
         return WebDAVRenameReconcile.matchResumeEntry(entry, in: videos)
     }
 
+    /// Drop a moved/renamed file so exact-name cache cannot keep returning the old href.
+    static func removeStaleFile(name: String, href: String?) {
+        let needle = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hrefNeedle = href?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !needle.isEmpty || !hrefNeedle.isEmpty else { return }
+        let base = (needle as NSString).deletingPathExtension
+        var store = loadStore()
+        let before = store.files.count
+        store.files.removeAll { file in
+            if !hrefNeedle.isEmpty, file.href == hrefNeedle { return true }
+            let nameL = file.name.lowercased()
+            if !needle.isEmpty, nameL == needle { return true }
+            if !base.isEmpty, (nameL as NSString).deletingPathExtension == base { return true }
+            return false
+        }
+        guard store.files.count != before else { return }
+        saveStore(store)
+        SearchDebugLog.log(
+            "search location cache: removed stale \"\(name)\" — \(store.files.count) file(s) left"
+        )
+    }
+
     static func recordHits(from items: [WebDAVItem]) {
         guard !items.isEmpty else { return }
         var store = loadStore()

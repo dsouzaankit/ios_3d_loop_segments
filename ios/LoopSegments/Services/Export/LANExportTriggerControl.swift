@@ -330,27 +330,21 @@ enum LANExportTriggerControl {
                 } catch {
                     let folderError = error.localizedDescription
                     SearchDebugLog.log(
-                        "start_export folder resolve failed (\(folderError)) — WebDAV walk for \"\(fileName)\""
+                        "start_export folder resolve failed (\(folderError)) — not walking; source unavailable for \"\(fileName)\""
                     )
-                    switch await resolveViaWebDAVWalk(
-                        fileName: fileName,
-                        credentials: credentials,
-                        currentItem: currentItem,
-                        folderErrorPrefix: folderError
-                    ) {
-                    case .success(let walked, let note):
-                        item = walked
-                        resolveNote = note
-                    case .failure(let message):
-                        writeAck(
-                            command: trigger.command.rawValue,
-                            status: "rejected",
-                            message: message,
-                            triggerId: trigger.id
-                        )
-                        // First queue item already popped; allow FIFO drain on the next runner tick.
-                        return "Trigger rejected — \(message)"
-                    }
+                    ResumeStore.shared.markPCloudSourceUnavailable(
+                        displayName: fileName,
+                        href: hrefItem?.href,
+                        folderPath: folderRaw
+                    )
+                    let message = "\(folderError) — \(ResumeStore.pCloudSourceUnavailableMessage)"
+                    writeAck(
+                        command: trigger.command.rawValue,
+                        status: "rejected",
+                        message: message,
+                        triggerId: trigger.id
+                    )
+                    return "Trigger rejected — \(message)"
                 }
             } else if let hrefItem {
                 // LAN Browse "Export 0:00" sends href + displayName — prefer href (do not walk by name).

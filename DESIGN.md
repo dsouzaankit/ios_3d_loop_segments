@@ -160,8 +160,8 @@ Served on LAN as `/pcld_ios_media/...`. Legacy `Documents/Exports/` is empty aft
 
 | Store | Cap | Behavior |
 |-------|-----|----------|
-| Pending FIFO (`export_pending_queue.json`) | **50** | Companion / REST enqueue; drain on finish / Stop; **user Pause holds** drain; **Move to queued** appends paused here as fresh jobs |
-| Paused (`ResumeStore` / parked) | **10** `exportInProgress` | Soft-pause keeps checkpoint; FIFO does **not** auto-resume interrupted live runs; **Move to queued** / `queue_all` drops checkpoints + parks |
+| Pending FIFO (`export_pending_queue.json`) | **50** | Companion / REST enqueue; drain on finish / Stop; **user Pause holds** drain; **Move to queued** appends paused here as fresh jobs (skips **Unavailable** rows) |
+| Paused (`ResumeStore` / parked) | **10** `exportInProgress` | Soft-pause keeps checkpoint; FIFO does **not** auto-resume interrupted live runs; folder miss → **Unavailable** (Copy name / Search in Browse; no Resume); **Move to queued** / `queue_all` drops checkpoints + parks for available rows only |
 
 ### Keep Alive
 
@@ -278,7 +278,7 @@ ios_3d_loop_segments/
 2. **Browse** — WebDAV tree, search, bookmarks; pin latest finished export; orange **Exporting** bar while busy.
 3. **Export** — seek presets, Start / Pause / Stop, Mbps cutoff, LAN toggle, Keep Alive, logs / clear media.
 4. **Queued** — pending FIFO; Clear / Remove.
-5. **Paused** — checkpoints; Move to queued / Resume / Clear.
+5. **Paused** — checkpoints; **Unavailable** (moved/missing source) with Copy name / Search in Browse; Move to queued / Resume / Clear.
 6. **LAN `/` + `/browse`** — same queues + playback links for the PC browser.
 
 ---

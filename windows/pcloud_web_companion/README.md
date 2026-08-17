@@ -19,7 +19,7 @@ On **multi-select Download** (pCloud builds a **zip archive**):
 2. Reads recently captured selection `fileid`s from `getthumbslinks` / `getziplink` (`webRequest` + MAIN-world fetch/XHR hook)
 3. Resolves each video via pCloud `getpath` / `stat` + **parent folder path** → `{ folderPath, displayName }` (name-only fallback forces a slow bookmark WebDAV walk and often misses deep files)
 4. `POST /export_queue.json` with `{ mode: "prepend", startFirst: true, items: […] }` — phone FIFO; first item soft-pauses any running export → that clip goes to **Paused** (parked) and is **not** auto-resumed when later queue items finish
-5. Remaining items show under the app **Paused** tab → **Queued** until idle (finish/Stop drains; user Pause holds). Resume interrupted titles manually from **Paused** / LAN
+5. Remaining items show under the app **Queued** tab until idle (finish/Stop drains; user Pause holds). Resume interrupted titles manually from **Paused** / LAN. If a file is missing from its saved folder, the phone skips it onto **Paused** as **Unavailable** (first rejected ack: desktop toast **Loop Segments: skipped `<name>`**).
 
 **Tip — select only videos in my.pcloud.com:** the web UI can filter the current folder by type. Click the **`v`** (view / type filter) control, then pick one of the **five** type filters (including **Video**). With **Video** active, multi-select + Download queues video files for Loop Segments without grabbing photos/docs from the same folder.
 
@@ -102,7 +102,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 |-------|------|
 | `windows\pcloud_web_companion\rest.log` (P:) | JSON lines: `sw_boot`, `capture`, `request`, `response`, `browse`, … (cleared each `run_chromium.ps1` start; gitignored) |
 | Extension toolbar icon | Same events in a popup |
-| Desktop notification | Archive/queue POST: queued OK, no fileids, empty resolve, or REST failed — **not** phone mid-FIFO resolve skips (those are silent; see phone `export_trigger.ack.json`) |
+| Desktop notification | Archive/queue POST: queued OK, no fileids, empty resolve, or REST failed. First phone ack `rejected` (file missing from saved folder) → **Loop Segments: skipped `<name>`**. Later FIFO drain skips land on Paused **Unavailable** only. |
 
 ## Extension files
 

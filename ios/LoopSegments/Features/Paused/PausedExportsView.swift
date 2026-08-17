@@ -47,6 +47,18 @@ struct PausedExportsView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.hapticPlain)
+                            .contextMenu {
+                                Button("Copy name") {
+                                    UIPasteboard.general.string = entry.resolvedDisplayName
+                                }
+                                Button("Search in Browse") {
+                                    session.pendingBrowseSearch = entry.resolvedDisplayName
+                                    session.selectedMainTab = .browse
+                                }
+                                Button("Remove", role: .destructive) {
+                                    resumeStore.dismissPausedExport(entry)
+                                }
+                            }
                             .swipeActions(edge: .trailing) {
                                 Button("Remove", role: .destructive) {
                                     resumeStore.dismissPausedExport(entry)
@@ -59,7 +71,7 @@ struct PausedExportsView: View {
                         "Cap is \(ResumeStore.maxPausedExports) in-progress slots total (includes the live export). " +
                             "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
                             "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
-                            "Each row stores its pCloud folder for a fast one-level resume list before a full walk. Swipe to remove. " +
+                            "Each row stores its pCloud folder for a fast one-level resume list. If that folder no longer has the file, the row is unavailable — redo search and re-export using web companion, or Copy name / Search in Browse (stale path is dropped so a move can still match). Swipe to remove. " +
                             "Move to queued appends all paused rows onto the Queued tab as fresh jobs (checkpoints and parked media dropped; releases Pause hold) so they auto-start when idle. " +
                             "Clear paused removes checkpoints (and parked media) but keeps a live export running."
                     )
@@ -80,12 +92,7 @@ struct PausedExportsView: View {
             .navigationDestination(item: $selectedEntry) { entry in
                 PausedExportDestinationView(
                     entry: entry,
-                    browsing: [],
-                    browsePathStack: session.browserPathStack,
-                    onSearchByName: { name in
-                        session.pendingBrowseSearch = name
-                        session.selectedMainTab = .browse
-                    }
+                    browsing: []
                 )
             }
             .onAppear { refresh() }
@@ -104,9 +111,15 @@ struct PausedExportsView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .lineLimit(2)
-            Text("Paused at \(ResumeTimeFormat.formatMs(ms)) · \(ResumeTimeFormat.relative(entry.updatedAt))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if entry.isSourceUnavailable {
+                Text(ResumeStore.pCloudSourceUnavailableMessage)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                Text("Paused at \(ResumeTimeFormat.formatMs(ms)) · \(ResumeTimeFormat.relative(entry.updatedAt))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let folder = entry.folderPath, !folder.isEmpty {
                 Text(folder)
                     .font(.caption2)

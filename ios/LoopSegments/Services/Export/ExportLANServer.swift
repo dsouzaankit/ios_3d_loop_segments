@@ -2136,7 +2136,13 @@ enum ExportLANServer {
                 // No on-disk media yet — filename only (Resume button has seek).
                 play = "<span>\(label)</span>"
             }
-            return "<li>\(play)\(htmlResumeExportButton(for: entry))</li>"
+            let resumeControl: String
+            if entry.isSourceUnavailable {
+                resumeControl = " <span class=\"muted\">\(htmlEscape(ResumeStore.pCloudSourceUnavailableMessage))</span>"
+            } else {
+                resumeControl = htmlResumeExportButton(for: entry)
+            }
+            return "<li>\(play)\(resumeControl)</li>"
         }
     }
 
@@ -2262,7 +2268,7 @@ enum ExportLANServer {
         return """
         <details id="lan-paused-wrap" class="lan-paused-exports">
           <summary id="lan-paused-heading">Paused exports (\(count))</summary>
-          <p class="muted">Checkpoints from soft-pause / Pause. Move to queued appends onto FIFO as fresh jobs (drops checkpoints / parked media). Clear removes parked media; live export is kept.</p>
+          <p class="muted">Checkpoints from soft-pause / Pause. Unavailable rows (missing from saved pCloud folder) have no Resume — redo search / re-export from companion, or Copy name / Search in Browse on the phone. Move to queued appends available rows onto FIFO as fresh jobs (drops checkpoints / parked media; skips unavailable). Clear removes parked media; live export is kept.</p>
           <p id="lan-paused-actions"\(actionsHidden)>
             <button type="button" id="lan-paused-queue-all">Move to queued</button>
             <button type="button" id="lan-paused-clear">Clear paused</button>

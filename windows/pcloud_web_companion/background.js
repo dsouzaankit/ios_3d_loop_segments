@@ -1645,8 +1645,11 @@ async function waitForExportAck({
             ms: Date.now() - started,
           });
           if (!ok) {
+            const title = saveName
+              ? `Loop Segments: skipped ${saveName}`
+              : "Loop Segments: export not started";
             await notifyUser(
-              "Loop Segments: export not started",
+              title,
               String(a.message || a.status || "rejected").slice(0, 180)
             );
           }
