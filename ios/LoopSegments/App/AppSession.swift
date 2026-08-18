@@ -242,6 +242,7 @@ final class AppSession: ObservableObject {
         ResumeStore.shared.beginExport(for: item, seekMs: seekMsForRun)
         isExportRunning = true
         syncExportSessionActive()
+        LANExportResolveState.shared.finishStartAttempt()
         ExportAutoLockCoordinator.exportDidStart()
         ExportBackgroundKeepAlive.shared.beginExportSession(exportTitle: item.name)
         exportAutoPauseTask?.cancel()

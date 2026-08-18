@@ -4,6 +4,7 @@ import SwiftUI
 struct QueuedExportsView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var pendingQueue = PendingExportQueue.shared
+    @ObservedObject private var lanResolve = LANExportResolveState.shared
 
     var body: some View {
         NavigationStack {
@@ -60,6 +61,8 @@ struct QueuedExportsView: View {
                         ExportActivityBanner(itemName: item.name)
                     }
                     .buttonStyle(.hapticPlain)
+                } else if let name = lanResolve.displayName {
+                    ExportActivityBanner(title: "Starting…", itemName: name, showsOpen: false)
                 }
             }
         }

@@ -46,6 +46,35 @@ struct LANExportTriggerAck: Codable {
     var triggerId: String?
 }
 
+/// Blocks pending-FIFO drain while a LAN/companion start is still resolving or handing off to `startExport`.
+/// Also drives the orange “Starting…” banner before `isExportRunning` flips on.
+@MainActor
+final class LANExportResolveState: ObservableObject {
+    static let shared = LANExportResolveState()
+
+    @Published private(set) var displayName: String?
+    private(set) var blocksPendingDrain = false
+
+    func begin(displayName: String?) {
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.displayName = trimmed.isEmpty ? "file" : trimmed
+        blocksPendingDrain = true
+        SearchDebugLog.log(
+            "LAN trigger: resolving “\(self.displayName ?? "file")” — pending FIFO waits until export starts"
+        )
+    }
+
+    func finishWithoutStarting() {
+        displayName = nil
+        blocksPendingDrain = false
+    }
+
+    func finishStartAttempt() {
+        displayName = nil
+        blocksPendingDrain = false
+    }
+}
+
 enum LANExportTriggerControl {
     static let triggerRelativePath = "\(ExportPaths.mediaExportFolderName)/scripts/export_trigger.json"
     static let ackRelativePath = "\(ExportPaths.mediaExportFolderName)/scripts/export_trigger.ack.json"
@@ -277,6 +306,8 @@ enum LANExportTriggerControl {
             return "Trigger rejected — invalid JSON"
         }
         // Take ownership now so a later POST can write a new trigger while this one resolves.
+        // Pending FIFO drain is blocked until this start is running (or rejected) — a 2s poll
+        // tick must not pop the rest of a companion batch during folder resolve.
         try? FileManager.default.removeItem(at: url)
         writeAck(
             command: trigger.command.rawValue,
@@ -284,6 +315,28 @@ enum LANExportTriggerControl {
             message: "App consumed trigger — resolving \(trigger.displayName ?? trigger.saveName ?? trigger.command.rawValue)",
             triggerId: trigger.id
         )
+
+        let startLike: Bool = {
+            switch trigger.command {
+            case .startExport, .startExportRandom, .resumeExport, .downloadURL:
+                return true
+            case .pauseExport, .stopExport, .clearMedia, .trimMedia:
+                return false
+            }
+        }()
+        var didScheduleStart = false
+        if startLike {
+            LANExportResolveState.shared.begin(displayName: trigger.displayName ?? trigger.saveName)
+        }
+        defer {
+            if startLike, !didScheduleStart {
+                LANExportResolveState.shared.finishWithoutStarting()
+            }
+        }
+        func scheduleStart(_ item: WebDAVItem, _ seekMs: Int64) {
+            didScheduleStart = true
+            onStartExport(item, seekMs)
+        }
 
         if let triggerId = trigger.id?.trimmingCharacters(in: .whitespacesAndNewlines), !triggerId.isEmpty {
             let last = UserDefaults.standard.string(forKey: lastHandledIdKey)
@@ -398,7 +451,7 @@ enum LANExportTriggerControl {
                     message: "Resuming paused \(pausedItem.name) at \(ResumeTimeFormat.formatMs(seekMs))",
                     triggerId: trigger.id
                 )
-                onStartExport(pausedItem, seekMs)
+                scheduleStart(pausedItem, seekMs)
                 return "LAN trigger — resume paused \(pausedItem.name)"
             }
             await prepareForFreshStart()
@@ -410,7 +463,7 @@ enum LANExportTriggerControl {
                 message: "Starting \(item.name) at \(ResumeTimeFormat.formatMs(seek))\(via)",
                 triggerId: trigger.id
             )
-            onStartExport(item, seek)
+            scheduleStart(item, seek)
             return "LAN trigger — export \(item.name)"
 
         case .startExportRandom:
@@ -459,7 +512,7 @@ enum LANExportTriggerControl {
                     triggerId: trigger.id
                 )
                 await prepareForFreshStart()
-                onStartExport(picked, max(0, trigger.seekMs ?? 0))
+                scheduleStart(picked, max(0, trigger.seekMs ?? 0))
                 return "LAN trigger — random \(picked.name)"
             } catch {
                 writeAck(
@@ -506,7 +559,7 @@ enum LANExportTriggerControl {
                 message: "Resuming \(item.name) at \(ResumeTimeFormat.formatMs(seekMs))",
                 triggerId: trigger.id
             )
-            onStartExport(item, seekMs)
+            scheduleStart(item, seekMs)
             return "LAN trigger — resume \(item.name)"
 
         case .pauseExport:
@@ -632,7 +685,7 @@ enum LANExportTriggerControl {
                 triggerId: trigger.id
             )
             await prepareForFreshStart()
-            onStartExport(item, 0)
+            scheduleStart(item, 0)
             return "LAN trigger — URL export \(saveName)"
         }
     }

@@ -180,6 +180,8 @@ final class PendingExportQueue: ObservableObject {
         guard !session.userRequestedExportPause else { return }
         // Avoid overwriting an unconsumed trigger (e.g. startFirst just wrote one).
         if LANExportTriggerControl.hasPendingTriggerFile { return }
+        // Folder resolve / startExport handoff still idle — do not pop the rest of a companion batch.
+        if LANExportResolveState.shared.blocksPendingDrain { return }
         guard let next = popFront() else { return }
         let folder = next.folderPath ?? ""
         let queued = LANExportTriggerControl.queueStartExportFromFolder(

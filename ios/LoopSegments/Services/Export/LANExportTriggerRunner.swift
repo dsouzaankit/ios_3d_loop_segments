@@ -8,6 +8,8 @@ enum LANExportTriggerRunner {
     private static var task: Task<Void, Never>?
     private static weak var sessionRef: AppSession?
     private static var kickObserverInstalled = false
+    /// One consume at a time. The 2s loop must not drain the FIFO while folder resolve awaits.
+    private static var tickRunning = false
 
     static func setAppActive(_ active: Bool, session: AppSession) {
         sessionRef = session
@@ -58,6 +60,9 @@ enum LANExportTriggerRunner {
     }
 
     private static func tick(session: AppSession) async {
+        if tickRunning { return }
+        tickRunning = true
+        defer { tickRunning = false }
         let reference = LANExportContext.referenceOrActive(from: session)
             ?? WebDAVItem(href: "/", name: "Root", isDirectory: true, contentLength: nil)
         let note = await LANExportTriggerControl.pollAndConsume(
@@ -70,6 +75,7 @@ enum LANExportTriggerRunner {
             onStartExport: { item, seek in
                 LANExportContext.saveReference(item)
                 session.runExportUITask {
+                    defer { LANExportResolveState.shared.finishStartAttempt() }
                     do {
                         try await session.startExport(item: item, seekMs: seek)
                     } catch {

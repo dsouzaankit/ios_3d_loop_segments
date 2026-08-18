@@ -160,7 +160,7 @@ Served on LAN as `/pcld_ios_media/...`. Legacy `Documents/Exports/` is empty aft
 
 | Store | Cap | Behavior |
 |-------|-----|----------|
-| Pending FIFO (`export_pending_queue.json`) | **50** | Companion / REST enqueue; drain on finish / Stop; **user Pause holds** drain; **Move to queued** appends paused here as fresh jobs (skips **Unavailable** rows) |
+| Pending FIFO (`export_pending_queue.json`) | **50** | Companion / REST enqueue; drain on finish / Stop; **user Pause holds** drain; drain waits while a LAN start is still resolving; **Move to queued** appends paused here as fresh jobs (skips **Unavailable** rows) |
 | Paused (`ResumeStore` / parked) | **10** `exportInProgress` | Soft-pause keeps checkpoint; FIFO does **not** auto-resume interrupted live runs; folder miss → **Unavailable** (Copy name / Search in Browse; no Resume); **Move to queued** / `queue_all` drops checkpoints + parks for available rows only |
 
 ### Keep Alive

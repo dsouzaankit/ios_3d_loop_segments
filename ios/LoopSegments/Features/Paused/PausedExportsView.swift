@@ -6,6 +6,7 @@ struct PausedExportsView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
     @ObservedObject private var pendingQueue = PendingExportQueue.shared
+    @ObservedObject private var lanResolve = LANExportResolveState.shared
 
     @State private var selectedEntry: ResumeEntry?
     @State private var entries: [ResumeEntry] = []
@@ -87,6 +88,8 @@ struct PausedExportsView: View {
                         ExportActivityBanner(itemName: item.name)
                     }
                     .buttonStyle(.hapticPlain)
+                } else if let name = lanResolve.displayName {
+                    ExportActivityBanner(title: "Starting…", itemName: name, showsOpen: false)
                 }
             }
             .navigationDestination(item: $selectedEntry) { entry in

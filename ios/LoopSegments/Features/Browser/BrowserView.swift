@@ -4,6 +4,7 @@ struct BrowserView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject private var resumeStore = ResumeStore.shared
     @ObservedObject private var folderBookmarkStore = FolderBookmarkStore.shared
+    @ObservedObject private var lanResolve = LANExportResolveState.shared
     @State private var items: [WebDAVItem] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -184,6 +185,8 @@ struct BrowserView: View {
                         ExportActivityBanner(itemName: item.name)
                     }
                     .buttonStyle(.hapticPlain)
+                } else if let name = lanResolve.displayName {
+                    ExportActivityBanner(title: "Starting…", itemName: name, showsOpen: false)
                 }
             }
             .navigationDestination(for: WebDAVItem.self) { item in
