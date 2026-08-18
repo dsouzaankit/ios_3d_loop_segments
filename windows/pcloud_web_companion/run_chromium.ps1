@@ -107,6 +107,11 @@ if (Test-Path -LiteralPath $ClashHelper) {
     . $ClashHelper
 }
 
+$WindowsLib = Join-Path $LibDir 'LoopSegments-Windows.ps1'
+if ((Test-Path -LiteralPath $WindowsLib) -and -not (Get-Command Start-LoopSegmentsConsoleNoActivate -ErrorAction SilentlyContinue)) {
+    . $WindowsLib
+}
+
 # Machine-local only (never on pCloud P:). Repo .venv is legacy and ignored.
 $CompanionLocalRoot = Join-Path $env:LOCALAPPDATA "pcloud_web_companion"
 $VenvDir = Join-Path $CompanionLocalRoot "venv"
@@ -1033,19 +1038,19 @@ function Invoke-AttemptRcloneMount {
     }
 
     try {
-        Write-Host "[rclone] Attempting mount ${letter}: via $mountPs1 -Quick (separate window; Ctrl+C there to unmount)..."
+        Write-Host "[rclone] Attempting mount ${letter}: via $mountPs1 -Quick (minimized console, no focus steal; Ctrl+C there to unmount)..."
         # Start-Process ArgumentList treats \a \n in P:\all_scripts\... as escapes (same as
         # Chromium --load-extension). Forward slashes + one quoted -File string keep
         # "iOS apps" intact without eating \a. Array -File without quotes used to exit -196608.
         $mountFile = ([System.IO.Path]::GetFullPath($mountPs1) -replace '\\', '/')
         $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Quick -NoWaitEnter' -f $mountFile
-        $proc = Start-Process -FilePath (Get-LoopSegmentsPwshExe) -PassThru -ArgumentList $argLine `
+        $proc = Start-LoopSegmentsConsoleNoActivate -FilePath (Get-LoopSegmentsPwshExe) -ArgumentList $argLine `
             -WorkingDirectory (Split-Path -Parent $mountPs1)
         if ($null -eq $proc) {
             Write-Warning "[rclone] Start-Process returned no process - continuing without ${letter}:"
             return $false
         }
-        Write-Host "[rclone] Mount window started (PID $($proc.Id))"
+        Write-Host "[rclone] Mount window started minimized (PID $($proc.Id))"
     } catch {
         Write-Warning "[rclone] Could not start mount window: $($_.Exception.Message) - continuing without ${letter}:"
         return $false

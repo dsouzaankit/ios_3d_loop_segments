@@ -344,6 +344,45 @@ public static class LoopSegmentsRcloneLogGuard {
     [LoopSegmentsRcloneLogGuard]::Register($src, $dst, $RclonePid)
 }
 
+function Start-LoopSegmentsConsoleNoActivate {
+    # New console without stealing focus (SW_SHOWMINNOACTIVE). Minimized on the taskbar.
+    param(
+        [Parameter(Mandatory = $true)][string] $FilePath,
+        [string] $ArgumentList = '',
+        [string] $WorkingDirectory = ''
+    )
+    if (-not ('LoopSegmentsShowWindow' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LoopSegmentsShowWindow {
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    public const int SW_SHOWMINNOACTIVE = 7;
+}
+'@
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.Arguments = $ArgumentList
+    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+        $psi.WorkingDirectory = $WorkingDirectory
+    }
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Minimized
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    if ($null -eq $proc) { return $null }
+    for ($i = 0; $i -lt 40; $i++) {
+        Start-Sleep -Milliseconds 50
+        try { $proc.Refresh() } catch {}
+        if ($proc.HasExited) { break }
+        if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { break }
+    }
+    if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+        [void][LoopSegmentsShowWindow]::ShowWindow($proc.MainWindowHandle, 7)
+    }
+    return $proc
+}
+
 function Invoke-LoopSegmentsRclone {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]] $RcloneArgs)
     $inv = Get-RcloneInvocation
