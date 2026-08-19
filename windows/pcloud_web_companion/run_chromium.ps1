@@ -1222,6 +1222,108 @@ function Remove-ProfilePath {
     }
 }
 
+# Chromium unpacked extension id: SHA256(UTF-16LE of absolute path with
+# uppercase drive letter), first 16 bytes as nibbles mapped a-p.
+function ConvertTo-ChromiumUnpackedExtensionId {
+    param([Parameter(Mandatory = $true)][string]$ExtensionDir)
+    $path = [System.IO.Path]::GetFullPath($ExtensionDir)
+    if ($path.Length -ge 2 -and $path[1] -eq ':') {
+        $path = [char]::ToUpperInvariant($path[0]) + $path.Substring(1)
+    }
+    $path = $path.TrimEnd('\')
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash([System.Text.Encoding]::Unicode.GetBytes($path))
+    } finally {
+        $sha.Dispose()
+    }
+    $chars = [char[]]::new(32)
+    for ($i = 0; $i -lt 16; $i++) {
+        $chars[2 * $i] = [char]([int][char]'a' + ($digest[$i] -shr 4))
+        $chars[(2 * $i) + 1] = [char]([int][char]'a' + ($digest[$i] -band 0xF))
+    }
+    return [string]::new($chars)
+}
+
+# Pin the unpacked companion to the toolbar and bind Ctrl+E. Python json keeps
+# Chrome's large integers intact (PowerShell ConvertTo-Json does not).
+function Set-CompanionToolbarPinAndShortcut {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProfileRoot,
+        [Parameter(Mandatory = $true)][string]$ExtensionDir
+    )
+    if (-not (Test-Path -LiteralPath $PythonExe)) {
+        Write-Warning "[ext] Python missing - skip toolbar pin / Ctrl+E prefs"
+        return
+    }
+    $extId = ConvertTo-ChromiumUnpackedExtensionId -ExtensionDir $ExtensionDir
+    $prefs = Join-Path $ProfileRoot 'Default\Preferences'
+    $pyFile = Join-Path $env:TEMP 'loop-segments-chrome-prefs.py'
+    $py = @'
+import json, os, sys
+
+prefs_path, ext_id, accel = sys.argv[1], sys.argv[2], sys.argv[3]
+command_name = "open-pcloud-on-p"
+
+if os.path.isfile(prefs_path):
+    try:
+        with open(prefs_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        sys.stderr.write("preferences json: %s\n" % exc)
+        sys.exit(1)
+else:
+    os.makedirs(os.path.dirname(prefs_path), exist_ok=True)
+    data = {}
+
+ext = data.get("extensions")
+if not isinstance(ext, dict):
+    ext = {}
+    data["extensions"] = ext
+
+pinned = ext.get("pinned_extensions")
+if not isinstance(pinned, list):
+    pinned = []
+pinned = [x for x in pinned if isinstance(x, str) and x != ext_id]
+pinned.insert(0, ext_id)
+ext["pinned_extensions"] = pinned
+
+cmds = ext.get("commands")
+if not isinstance(cmds, dict):
+    cmds = {}
+    ext["commands"] = cmds
+for key in list(cmds):
+    item = cmds.get(key)
+    if not isinstance(item, dict):
+        continue
+    if item.get("extension") == ext_id and item.get("command_name") == command_name:
+        del cmds[key]
+cmds[accel] = {
+    "command_name": command_name,
+    "extension": ext_id,
+    "global": False,
+}
+
+tmp = prefs_path + ".tmp"
+with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+    json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+os.replace(tmp, prefs_path)
+print(ext_id)
+'@
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($pyFile, $py, $utf8NoBom)
+    try {
+        $null = & $PythonExe $pyFile $prefs $extId 'windows:Ctrl+E'
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "[ext] Failed to write toolbar pin / Ctrl+E into Preferences"
+            return
+        }
+        Write-Host "[ext] Pinned $extId to toolbar; shortcut windows:Ctrl+E"
+    } catch {
+        Write-Warning "[ext] Toolbar pin / Ctrl+E prefs: $($_.Exception.Message)"
+    }
+}
+
 function Sync-ChromiumProfile {
     param(
         [Parameter(Mandatory = $true)]
@@ -1656,6 +1758,8 @@ foreach ($rel in @(
     )) {
     Remove-ProfilePath (Join-Path $UserDataDir $rel)
 }
+
+Set-CompanionToolbarPinAndShortcut -ProfileRoot $UserDataDir -ExtensionDir $ExtensionLoadDir
 
 # Start-Process ArgumentList treats backslash escapes (\a, \n, ...). Path
 # P:\all_scripts\... became "--load-extension=P" and the extension never loaded.

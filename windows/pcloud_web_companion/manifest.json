@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "pCloud Download → Loop Segments",
-  "version": "1.7.11",
+  "version": "1.7.12",
   "description": "Cancels pCloud downloads ASAP and queues Loop Segments; leaves CDN view tabs open (Open Original). Multi-select archive → export_queue.json FIFO; single file → export_from_folder.json. Phone LAN via local relay (Clash TUN-safe).",
   "permissions": [
     "downloads",
@@ -57,7 +57,7 @@
   "commands": {
     "open-pcloud-on-p": {
       "suggested_key": {
-        "default": "Alt+Shift+E"
+        "default": "Ctrl+E"
       },
       "description": "Open the current pCloud folder in Explorer on the pCloud Drive"
     }

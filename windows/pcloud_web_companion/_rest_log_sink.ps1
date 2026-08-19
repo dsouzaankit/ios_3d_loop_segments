@@ -23,9 +23,14 @@ public static class CompanionNativeFocus {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int dwProcessId);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     public const int SW_RESTORE = 9;
     public const int SW_SHOW = 5;
+    public const int ASFW_ANY = -1;
+    public const byte VK_MENU = 0x12;
+    public const uint KEYEVENTF_KEYUP = 2;
 }
 "@
 }
@@ -52,36 +57,46 @@ function Get-CompanionConsoleHandle {
     return [IntPtr]::Zero
 }
 
-function Show-CompanionConsole {
-    $hwnd = Get-CompanionConsoleHandle -ProcessId $CompanionPid
-    if ($hwnd -eq [IntPtr]::Zero) {
-        return $false
-    }
+function Show-HwndForeground {
+    param([IntPtr]$Hwnd)
+    if ($Hwnd -eq [IntPtr]::Zero) { return $false }
     try {
-        if ([CompanionNativeFocus]::IsIconic($hwnd)) {
-            [void][CompanionNativeFocus]::ShowWindow($hwnd, [CompanionNativeFocus]::SW_RESTORE)
+        [void][CompanionNativeFocus]::AllowSetForegroundWindow([CompanionNativeFocus]::ASFW_ANY)
+        if ([CompanionNativeFocus]::IsIconic($Hwnd)) {
+            [void][CompanionNativeFocus]::ShowWindow($Hwnd, [CompanionNativeFocus]::SW_RESTORE)
         } else {
-            [void][CompanionNativeFocus]::ShowWindow($hwnd, [CompanionNativeFocus]::SW_SHOW)
+            [void][CompanionNativeFocus]::ShowWindow($Hwnd, [CompanionNativeFocus]::SW_SHOW)
         }
-        [void][CompanionNativeFocus]::BringWindowToTop($hwnd)
+        [void][CompanionNativeFocus]::BringWindowToTop($Hwnd)
+        [CompanionNativeFocus]::keybd_event([CompanionNativeFocus]::VK_MENU, 0, 0, [UIntPtr]::Zero)
+        [CompanionNativeFocus]::keybd_event([CompanionNativeFocus]::VK_MENU, 0, [CompanionNativeFocus]::KEYEVENTF_KEYUP, [UIntPtr]::Zero)
         $fg = [CompanionNativeFocus]::GetForegroundWindow()
         $fgPid = [uint32]0
         $fgTid = [CompanionNativeFocus]::GetWindowThreadProcessId($fg, [ref]$fgPid)
         $thisTid = [CompanionNativeFocus]::GetCurrentThreadId()
         if ($fgTid -ne 0 -and $fgTid -ne $thisTid) {
             [void][CompanionNativeFocus]::AttachThreadInput($thisTid, $fgTid, $true)
-            [void][CompanionNativeFocus]::SetForegroundWindow($hwnd)
+            [void][CompanionNativeFocus]::SetForegroundWindow($Hwnd)
             [void][CompanionNativeFocus]::AttachThreadInput($thisTid, $fgTid, $false)
         } else {
-            [void][CompanionNativeFocus]::SetForegroundWindow($hwnd)
+            [void][CompanionNativeFocus]::SetForegroundWindow($Hwnd)
         }
-        try {
-            [void](New-Object -ComObject WScript.Shell).AppActivate($CompanionPid)
-        } catch {}
         return $true
     } catch {
         return $false
     }
+}
+
+function Show-CompanionConsole {
+    $hwnd = Get-CompanionConsoleHandle -ProcessId $CompanionPid
+    if ($hwnd -eq [IntPtr]::Zero) {
+        return $false
+    }
+    $ok = Show-HwndForeground -Hwnd $hwnd
+    try {
+        [void](New-Object -ComObject WScript.Shell).AppActivate($CompanionPid)
+    } catch {}
+    return $ok
 }
 
 # Stop previous sinks (same script) so the port is free.
@@ -283,13 +298,51 @@ function ConvertTo-PCloudExplorerTarget {
     }
 }
 
+function Get-ExplorerHwndForPath {
+    param([string]$FolderPath)
+    $want = [System.IO.Path]::GetFullPath($FolderPath).TrimEnd('\')
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        foreach ($win in @($shell.Windows())) {
+            try {
+                $loc = [string]$win.Document.Folder.Self.Path
+                if ([string]::IsNullOrWhiteSpace($loc)) { continue }
+                $have = [System.IO.Path]::GetFullPath($loc).TrimEnd('\')
+                if ($have -eq $want) {
+                    return [IntPtr]$win.HWND
+                }
+            } catch {}
+        }
+    } catch {}
+    return [IntPtr]::Zero
+}
+
 function Start-ExplorerAt {
     param([string]$Path, [bool]$Select)
     $explorer = Join-Path $env:WINDIR 'explorer.exe'
-    if ($Select) {
+    $folderForWindow = $Path
+    if ($Select -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        $folderForWindow = Split-Path -Parent $Path
         Start-Process -FilePath $explorer -ArgumentList @("/select,$Path")
     } else {
         Start-Process -FilePath $explorer -ArgumentList @($Path)
+        $folderForWindow = $Path
+    }
+    $hwnd = [IntPtr]::Zero
+    for ($i = 0; $i -lt 25; $i++) {
+        Start-Sleep -Milliseconds 120
+        $hwnd = Get-ExplorerHwndForPath -FolderPath $folderForWindow
+        if ($hwnd -ne [IntPtr]::Zero) { break }
+    }
+    if ($hwnd -ne [IntPtr]::Zero) {
+        [void](Show-HwndForeground -Hwnd $hwnd)
+    } else {
+        try {
+            $leaf = Split-Path -Leaf $folderForWindow
+            if ($leaf) {
+                [void](New-Object -ComObject WScript.Shell).AppActivate($leaf)
+            }
+        } catch {}
     }
 }
 

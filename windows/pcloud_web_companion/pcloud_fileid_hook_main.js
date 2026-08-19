@@ -133,4 +133,42 @@
   } catch {
     // ignore
   }
+
+  // my.pcloud.com preventDefault()s contextmenu and often opens its overlay on
+  // pointer/mouse button 2 before contextmenu fires. Shift+right-click (capture,
+  // MAIN world) stops those handlers so Chrome's native menu can show.
+  // Do not preventDefault on contextmenu — that is what would hide the native menu.
+  try {
+    const isShiftRightClick = (event) => {
+      const right =
+        event.type === "contextmenu" ||
+        event.button === 2 ||
+        event.which === 3;
+      if (!right) return false;
+      if (event.shiftKey) return true;
+      try {
+        return Boolean(event.getModifierState && event.getModifierState("Shift"));
+      } catch {
+        return false;
+      }
+    };
+    const bypassPcloudContextMenu = (event) => {
+      if (!isShiftRightClick(event)) return;
+      event.stopImmediatePropagation();
+    };
+    const types = [
+      "contextmenu",
+      "pointerdown",
+      "pointerup",
+      "mousedown",
+      "mouseup",
+      "auxclick",
+    ];
+    for (const type of types) {
+      window.addEventListener(type, bypassPcloudContextMenu, true);
+      document.addEventListener(type, bypassPcloudContextMenu, true);
+    }
+  } catch {
+    // ignore
+  }
 })();

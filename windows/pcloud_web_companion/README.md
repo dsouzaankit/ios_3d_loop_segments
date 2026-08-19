@@ -27,7 +27,7 @@ On **multi-select Download** (pCloud builds a **zip archive**):
 
 **Not supported — folder right-click → Download:** that also builds a zip, but pCloud does not expose per-file `fileid`s the way multi-select does. The companion still **cancels** the zip, then shows a desktop notification (**no selection ids**) and does **not** expand the folder into FIFO items. To queue a whole folder: open it → filter **Video** → select the files (or Select all) → **Download**.
 
-**Open this folder in pCloud Drive** (extension **1.7.11+**, companion sink must be running). Resolves the my.pcloud.com folder (tree node `folder=` URL, current tab, or right-clicked node) to a pCloud path, maps **All Files** → the pCloud Drive root, and opens it in Explorer. Drive letter comes from **`HKCU\SOFTWARE\pCloud` `SyncDrive`**, then a volume labeled **pCloud Drive** (pCloud picks the next letter if `P:` is taken). Right-click the page or a tree node → **Open this folder in pCloud Drive**, toolbar popup → **Open pCloud Drive folder**, or **Alt+Shift+E** (set/confirm in `chrome://extensions/shortcuts`). Online-only folders still open if the Drive shows them; if the path is not on the Drive yet, Explorer opens the nearest existing parent.
+**Open this folder in pCloud Drive** (extension **1.7.12+**, companion sink must be running). Resolves the my.pcloud.com folder (tree node `folder=` URL, current tab, or right-clicked node) to a pCloud path, maps **All Files** → the pCloud Drive root, and opens it in Explorer **in the foreground**. Drive letter comes from **`HKCU\SOFTWARE\pCloud` `SyncDrive`**, then a volume labeled **pCloud Drive** (pCloud picks the next letter if `P:` is taken). Each launch **pins the extension to the Chromium toolbar** and binds **Ctrl+E** (that replaces Chromium’s default Ctrl+E search; change it in `chrome://extensions/shortcuts` if needed). my.pcloud.com **blocks the browser context menu** (its own file menu uses `preventDefault` and often starts on right-button `pointerdown`); **Shift+right-click** stops those page handlers so Chrome’s menu can show → **Open this folder in pCloud Drive**. Same action: toolbar popup → **Open pCloud Drive folder**, or **Ctrl+E**. Restart the companion after an extension update so the MAIN-world hook reloads. Online-only folders still open if the Drive shows them; if the path is not on the Drive yet, Explorer opens the nearest existing parent.
 
 ## Run
 
@@ -65,7 +65,7 @@ Each launch:
 
 - Ensures a **machine-local** venv at `%LOCALAPPDATA%\pcloud_web_companion\venv` (Python 3.12 preferred; removes any legacy repo `.venv` on P:)
 - Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
-- Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive)
+- Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive), then **pins it on the toolbar** and sets **Ctrl+E** in the profile `Preferences` (Python JSON, not PowerShell `ConvertTo-Json`)
 - Starts a local REST log sink
 - **Gateway Wi‑Fi reboot (when needed):** compares the PC’s IPv4 default gateway to `phoneLanHost` (app LAN page). If they are **not** on the same subnet, informs you, **reboots Wi‑Fi on the current gateway**, **polls until this PC gets a new LAN IP/gateway**, then **re-checks** — up to **3** rounds, then fails and **waits for Enter** (no Enter between rounds; `-SkipGatewayReboot` to skip). This still runs **before** Chromium so pCloud is not dropped mid-browse.
 - **Starts Chromium early** (after gateway check + profile sync) so you can use my.pcloud.com while USB/LAN recover/rclone continue in the companion console. If the app LAN page (`:8765`) is down, the extension **queues** intercepted downloads locally (desktop notification) and retries about once a minute; after **~5 minutes** it **denies** them with another notification. When LAN comes up, queued exports are POSTed automatically. **Click a toast** to bring the companion PowerShell window to the front.
@@ -112,16 +112,18 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 | File | Role |
 |------|------|
-| `manifest.json` | MV3 permissions |
-| `background.js` | Download intercept, REST POST, LAN root `/` tab |
+| `manifest.json` | MV3 permissions; **Ctrl+E** → open current folder in Explorer |
+| `background.js` | Download intercept, REST POST, LAN root `/` tab, Explorer jump |
+| `pcloud_fileid_hook_main.js` | MAIN-world fetch/XHR `fileid`s; Shift+right-click bypass of pCloud’s overlay (`pointerdown` / `contextmenu`) |
+| `pcloud_folder_tracker.js` | Isolated-world `folder=` / tree node for Explorer jump |
 | `offscreen.html` / `offscreen.js` | Clipboard write |
-| `logs.html` / `logs.js` | In-browser REST log UI |
+| `logs.html` / `logs.js` | In-browser REST log UI + **Open pCloud Drive folder** |
 | `lan_config.json` | Phone LAN target (synced on launch) |
 | `Run-PCloudWebCompanion.ps1` | Thin wrapper → `run_chromium.ps1` (preferred entry) |
-| `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, browser launch |
+| `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, toolbar pin + **Ctrl+E** prefs, browser launch |
 | `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium, quit Skybox if we started it, + sync/clear profile |
 | `requirements.txt` | `playwright` (launcher Chromium fetch only) |
-| `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log`; phone-LAN relay; **open-explorer** (detected pCloud Drive letter) |
+| `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log`; phone-LAN relay; **open-explorer** (detected pCloud Drive letter, Explorer to foreground) |
 | `chromium-profile/` | Synced browser profile (gitignored; local working copy under `%LOCALAPPDATA%`) |
 
 ## Requirements
