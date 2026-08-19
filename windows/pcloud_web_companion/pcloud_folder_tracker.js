@@ -179,6 +179,39 @@
   window.addEventListener("popstate", publish);
   setInterval(publish, 1500);
 
+  document.addEventListener(
+    "contextmenu",
+    (event) => {
+      let el = event.target;
+      for (let i = 0; i < 14 && el; i++) {
+        const href =
+          (el.getAttribute && (el.getAttribute("href") || el.getAttribute("data-href"))) ||
+          "";
+        const dataId =
+          (el.getAttribute &&
+            (el.getAttribute("data-folderid") ||
+              el.getAttribute("data-folder-id") ||
+              el.getAttribute("data-id"))) ||
+          "";
+        const fromHref = parseFolderId(href);
+        const fromData = /^\d{3,}$/.test(String(dataId)) ? String(dataId) : null;
+        if (fromHref || fromData) {
+          try {
+            chrome.runtime.sendMessage({
+              type: "pcloud-context-menu-folder",
+              folderId: fromHref || fromData,
+            });
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        el = el.parentElement;
+      }
+    },
+    true
+  );
+
   const origPush = history.pushState;
   const origReplace = history.replaceState;
   history.pushState = function () {

@@ -1,7 +1,7 @@
 function render(logs) {
   const list = document.getElementById("list");
   const meta = document.getElementById("meta");
-  meta.textContent = `${logs.length} entries · disk log: windows\\pcloud_web_companion\\rest.log (P:)`;
+  meta.textContent = `${logs.length} entries · disk log: windows\\pcloud_web_companion\\rest.log`;
   list.replaceChildren();
   for (const entry of logs) {
     const div = document.createElement("div");
@@ -20,6 +20,18 @@ document.getElementById("refresh").addEventListener("click", () => void load());
 document.getElementById("clear").addEventListener("click", async () => {
   await chrome.storage.local.set({ restLogs: [] });
   render([]);
+});
+document.getElementById("openP").addEventListener("click", async () => {
+  const meta = document.getElementById("meta");
+  meta.textContent = "Opening pCloud Drive folder…";
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "open-pcloud-on-p" });
+    meta.textContent = result?.ok
+      ? `Opened ${result.path || "pCloud Drive"}`
+      : `pCloud Drive: ${result?.error || "failed"}`;
+  } catch (err) {
+    meta.textContent = `pCloud Drive: ${err && err.message ? err.message : err}`;
+  }
 });
 
 void load();

@@ -12,6 +12,7 @@ const LOCAL_LOG_URL = "http://127.0.0.1:18765/log";
 /** Clash TUN-safe: SW fetch to RFC1918 often hangs; PowerShell relay uses DIRECT. */
 const LOCAL_LAN_RELAY_URL = "http://127.0.0.1:18765/phone-lan";
 const LOCAL_FOCUS_CONSOLE_URL = "http://127.0.0.1:18765/focus-console";
+const LOCAL_OPEN_EXPLORER_URL = "http://127.0.0.1:18765/open-explorer";
 const LAN_FETCH_TIMEOUT_MS = 12000;
 const PENDING_LAN_KEY = "pendingPhoneLanExports";
 const PENDING_LAN_MAX = 24;
@@ -309,6 +310,222 @@ async function focusCompanionConsole() {
     await fetch(LOCAL_FOCUS_CONSOLE_URL, { method: "GET", cache: "no-store" });
   } catch (err) {
     console.warn("focus companion console failed:", err);
+  }
+}
+
+function pcloudPathToDriveRelative(path) {
+  const parts = String(path || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length && /^all files$/i.test(parts[0])) parts.shift();
+  return parts.join("\\");
+}
+
+async function rememberContextMenuFolderTarget(folderId) {
+  const id = folderId ? String(folderId) : "";
+  if (!id) return;
+  try {
+    await chrome.storage.session.set({
+      pcloudContextMenuFolder: { folderId: id, at: Date.now() },
+    });
+  } catch {
+    // ignore
+  }
+}
+
+async function loadRecentContextMenuFolderId() {
+  try {
+    const { pcloudContextMenuFolder } = await chrome.storage.session.get(
+      "pcloudContextMenuFolder"
+    );
+    const id = pcloudContextMenuFolder?.folderId;
+    const at = Number(pcloudContextMenuFolder?.at || 0);
+    if (!id || Date.now() - at > 8000) return null;
+    return String(id);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveAuthAndHost() {
+  const tracked = await loadTrackedFolderContext();
+  let auth = tracked?.auth || null;
+  let apiHost = tracked?.apiHost || null;
+  const cookies = await readAuthCandidatesFromCookies();
+  if (!auth && cookies.length) {
+    auth = cookies[0].auth;
+    apiHost = apiHost || cookies[0].apiHost;
+  }
+  return { auth, apiHost, cookies };
+}
+
+async function resolveFolderIdToPcloudPath(folderId) {
+  const { auth, apiHost, cookies } = await resolveAuthAndHost();
+  const auths = [];
+  if (auth) auths.push({ auth, apiHost });
+  for (const c of cookies || []) {
+    if (auth && c.auth === auth) continue;
+    auths.push({ auth: c.auth, apiHost: c.apiHost || apiHost });
+  }
+  let lastError = null;
+  for (const candidate of auths.slice(0, 6)) {
+    const meta = await pcloudApiFolderMeta(
+      folderId,
+      candidate.auth,
+      candidate.apiHost || apiHost,
+      null
+    );
+    if (meta && !meta.error && meta.path) {
+      return { path: meta.path, name: meta.name || null, error: null };
+    }
+    lastError = meta?.error || lastError;
+  }
+  return { path: null, name: null, error: lastError || "folder path unresolved" };
+}
+
+async function postOpenExplorer({ folderPath, fileName }) {
+  const relative = pcloudPathToDriveRelative(folderPath);
+  const body = JSON.stringify({
+    folderPath: folderPath || "",
+    relative,
+    fileName: fileName || "",
+  });
+  const res = await fetch(LOCAL_OPEN_EXPLORER_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  const raw = await res.text();
+  let payload = null;
+  try {
+    payload = raw ? JSON.parse(raw) : null;
+  } catch {
+    payload = null;
+  }
+  if (!res.ok || !payload?.ok) {
+    const err =
+      payload?.error || raw || `open-explorer HTTP ${res.status}`;
+    throw new Error(String(err).slice(0, 240));
+  }
+  return payload;
+}
+
+/**
+ * Open the my.pcloud.com folder (tab URL, right-clicked tree node, or tracked
+ * context) in Windows Explorer on the mounted pCloud Drive letter.
+ */
+async function openCurrentPcloudFolderOnPDrive({ url = null, folderId = null } = {}) {
+  let resolvedFolderId = folderId ? String(folderId) : null;
+  let fileName = null;
+  let folderPath = null;
+  let source = "unknown";
+
+  if (!resolvedFolderId && url) {
+    resolvedFolderId = parseFolderIdFromText(url);
+    if (resolvedFolderId) source = "url";
+  }
+  if (!resolvedFolderId) {
+    const fromMenu = await loadRecentContextMenuFolderId();
+    if (fromMenu) {
+      resolvedFolderId = fromMenu;
+      source = "tree_node";
+    }
+  }
+
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const tabUrl = url || tabs[0]?.url || null;
+  if (!resolvedFolderId && tabUrl && isPcloudUiUrl(tabUrl) && !isSearchResultsUrl(tabUrl)) {
+    resolvedFolderId = parseFolderIdFromText(tabUrl);
+    if (resolvedFolderId) source = "tab_url";
+  }
+
+  if (resolvedFolderId) {
+    const meta = await resolveFolderIdToPcloudPath(resolvedFolderId);
+    folderPath = meta.path;
+    if (!folderPath) {
+      const message = meta.error || `Could not resolve folder ${resolvedFolderId}`;
+      await notifyUser("Loop Segments: pCloud Drive", message);
+      await appendRestLog({
+        phase: "open_explorer",
+        ok: false,
+        silent: true,
+        folderId: resolvedFolderId,
+        source,
+        error: message,
+      });
+      return { ok: false, error: message };
+    }
+  } else {
+    const folder = await resolvePcloudFolderContext({
+      referrer: tabUrl,
+      url: tabUrl,
+    });
+    folderPath = folder?.folderPath || null;
+    fileName = null;
+    source = folder?.source || "context";
+    if (!folderPath) {
+      const message = "No pCloud folder on this tab (open a folder, not search).";
+      await notifyUser("Loop Segments: pCloud Drive", message);
+      await appendRestLog({
+        phase: "open_explorer",
+        ok: false,
+        silent: true,
+        source,
+        error: message,
+        tabUrl,
+      });
+      return { ok: false, error: message };
+    }
+  }
+
+  try {
+    const opened = await postOpenExplorer({ folderPath, fileName });
+    const shown = opened.path || pcloudPathToDriveRelative(folderPath);
+    await notifyUser("Loop Segments: opened pCloud Drive", shown);
+    await appendRestLog({
+      phase: "open_explorer",
+      ok: true,
+      silent: true,
+      folderId: resolvedFolderId,
+      folderPath,
+      source,
+      windowsPath: shown,
+    });
+    return { ok: true, path: shown, folderPath };
+  } catch (err) {
+    const message = String(err && err.message ? err.message : err);
+    await notifyUser("Loop Segments: pCloud Drive", message);
+    await appendRestLog({
+      phase: "open_explorer",
+      ok: false,
+      silent: true,
+      folderId: resolvedFolderId,
+      folderPath,
+      source,
+      error: message,
+    });
+    return { ok: false, error: message };
+  }
+}
+
+async function ensureExplorerContextMenu() {
+  if (!chrome.contextMenus?.create) return;
+  try {
+    await chrome.contextMenus.removeAll();
+    await chrome.contextMenus.create({
+      id: "open-pcloud-on-p",
+      title: "Open this folder in pCloud Drive",
+      contexts: ["page", "frame", "link", "selection"],
+      documentUrlPatterns: [
+        "https://my.pcloud.com/*",
+        "https://e.pcloud.com/*",
+        "https://www.pcloud.com/*",
+      ],
+    });
+  } catch (err) {
+    console.warn("contextMenus:", err);
   }
 }
 
@@ -2647,6 +2864,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })();
     return true;
   }
+  if (message?.type === "pcloud-context-menu-folder") {
+    void rememberContextMenuFolderTarget(message.folderId);
+    sendResponse({ ok: true });
+    return;
+  }
+  if (message?.type === "open-pcloud-on-p") {
+    void (async () => {
+      const result = await openCurrentPcloudFolderOnPDrive({
+        url: message.url || null,
+        folderId: message.folderId || null,
+      });
+      sendResponse(result);
+    })();
+    return true;
+  }
   if (message?.type !== "pcloud-folder-context") return;
   const payload = message.payload || {};
   void (async () => {
@@ -2718,6 +2950,21 @@ if (chrome.webNavigation?.onBeforeNavigate) {
   });
 }
 
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info?.menuItemId !== "open-pcloud-on-p") return;
+  void openCurrentPcloudFolderOnPDrive({
+    url: info.linkUrl || info.pageUrl || tab?.url || null,
+    folderId: parseFolderIdFromText(info.linkUrl || "") || null,
+  });
+});
+
+if (chrome.commands?.onCommand) {
+  chrome.commands.onCommand.addListener((command) => {
+    if (command !== "open-pcloud-on-p") return;
+    void openCurrentPcloudFolderOnPDrive();
+  });
+}
+
 chrome.notifications.onClicked.addListener((notificationId) => {
   try {
     chrome.notifications.clear(notificationId);
@@ -2734,6 +2981,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
+  void ensureExplorerContextMenu();
   void appendRestLog({
     phase: "startup",
     ok: true,
@@ -2745,6 +2993,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  void ensureExplorerContextMenu();
   void logServiceWorkerBoot("onStartup");
   void cancelAllInFlightPcloudDownloads("onStartup");
   void schedulePendingLanFlush();
@@ -2774,6 +3023,7 @@ async function logServiceWorkerBoot(reason) {
 }
 
 // Runs when the service worker starts (including --load-extension launches).
+void ensureExplorerContextMenu();
 void logServiceWorkerBoot("service_worker_eval");
 void cancelAllInFlightPcloudDownloads("service_worker_eval");
 void schedulePendingLanFlush();

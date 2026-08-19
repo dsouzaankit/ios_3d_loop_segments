@@ -27,6 +27,8 @@ On **multi-select Download** (pCloud builds a **zip archive**):
 
 **Not supported — folder right-click → Download:** that also builds a zip, but pCloud does not expose per-file `fileid`s the way multi-select does. The companion still **cancels** the zip, then shows a desktop notification (**no selection ids**) and does **not** expand the folder into FIFO items. To queue a whole folder: open it → filter **Video** → select the files (or Select all) → **Download**.
 
+**Open this folder in pCloud Drive** (extension **1.7.11+**, companion sink must be running). Resolves the my.pcloud.com folder (tree node `folder=` URL, current tab, or right-clicked node) to a pCloud path, maps **All Files** → the pCloud Drive root, and opens it in Explorer. Drive letter comes from **`HKCU\SOFTWARE\pCloud` `SyncDrive`**, then a volume labeled **pCloud Drive** (pCloud picks the next letter if `P:` is taken). Right-click the page or a tree node → **Open this folder in pCloud Drive**, toolbar popup → **Open pCloud Drive folder**, or **Alt+Shift+E** (set/confirm in `chrome://extensions/shortcuts`). Online-only folders still open if the Drive shows them; if the path is not on the Drive yet, Explorer opens the nearest existing parent.
+
 ## Run
 
 Integrated under **`windows\pcloud_web_companion`** (preferred):
@@ -119,7 +121,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, browser launch |
 | `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium, quit Skybox if we started it, + sync/clear profile |
 | `requirements.txt` | `playwright` (launcher Chromium fetch only) |
-| `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log` |
+| `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log`; phone-LAN relay; **open-explorer** (detected pCloud Drive letter) |
 | `chromium-profile/` | Synced browser profile (gitignored; local working copy under `%LOCALAPPDATA%`) |
 
 ## Requirements

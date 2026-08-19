@@ -159,6 +159,7 @@ function Write-HttpResponse {
         400 { "Bad Request" }
         404 { "Not Found" }
         502 { "Bad Gateway" }
+        503 { "Service Unavailable" }
         default { "Error" }
     }
     $payload = [Text.Encoding]::UTF8.GetBytes($Body)
@@ -184,6 +185,112 @@ function Test-IsPrivateLanHttpUrl {
     if ($h -match '^192\.168\.\d{1,3}\.\d{1,3}$') { return $true }
     if ($h -match '^172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}$') { return $true }
     return $false
+}
+
+function Get-PCloudDriveRoot {
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        $sync = [string](Get-ItemProperty -Path 'HKCU:\SOFTWARE\pCloud' -Name 'SyncDrive' -ErrorAction Stop).SyncDrive
+        if (-not [string]::IsNullOrWhiteSpace($sync)) {
+            $candidates.Add($sync.Trim())
+        }
+    } catch {}
+
+    try {
+        Get-CimInstance Win32_LogicalDisk -ErrorAction SilentlyContinue |
+            Where-Object { $_.VolumeName -match '(?i)pcloud' -and $_.DeviceID -match '^[A-Za-z]:$' } |
+            ForEach-Object { [void]$candidates.Add("$($_.DeviceID)\") }
+    } catch {}
+
+    foreach ($raw in $candidates) {
+        $root = $raw
+        if ($root -match '^([A-Za-z]):\\?$') {
+            $root = "$($Matches[1].ToUpperInvariant()):\"
+        } elseif ($root -match '^([A-Za-z]):\\') {
+            $root = "$($Matches[1].ToUpperInvariant()):\"
+        } else {
+            continue
+        }
+        if (Test-Path -LiteralPath $root) {
+            return ([System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\')
+        }
+    }
+
+    throw "pCloud Drive is not mounted (HKCU:\SOFTWARE\pCloud SyncDrive / volume label 'pCloud Drive')"
+}
+
+function ConvertTo-PCloudExplorerTarget {
+    param(
+        [string]$FolderPath,
+        [string]$Relative,
+        [string]$FileName,
+        [string]$DriveRoot
+    )
+    $parts = @()
+    $rel = $Relative
+    if ([string]::IsNullOrWhiteSpace($rel)) {
+        $rel = [string]$FolderPath
+    }
+    $rel = $rel -replace '/', '\'
+    foreach ($seg in ($rel -split '\\')) {
+        $s = $seg.Trim()
+        if ([string]::IsNullOrWhiteSpace($s) -or $s -eq '.') { continue }
+        if ($s -eq '..') { throw "path must not contain .." }
+        if ($s -match '[:*?"<>|]') { throw "invalid path segment" }
+        if ($parts.Count -eq 0 -and $s -match '^(?i)all files$') { continue }
+        $parts += $s
+    }
+    $rootFull = [System.IO.Path]::GetFullPath($DriveRoot)
+    if (-not $rootFull.EndsWith('\')) { $rootFull += '\' }
+    $folderFull = $rootFull
+    if ($parts.Count -gt 0) {
+        $folderFull = [System.IO.Path]::GetFullPath((Join-Path $rootFull ($parts -join '\')))
+    }
+    if (-not $folderFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "path is outside the pCloud drive"
+    }
+    $fileFull = $null
+    $leaf = [string]$FileName
+    if (-not [string]::IsNullOrWhiteSpace($leaf) -and $leaf -notmatch '[\\/:*?"<>|]') {
+        $fileFull = [System.IO.Path]::GetFullPath((Join-Path $folderFull $leaf))
+        if (-not $fileFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $fileFull = $null
+        }
+    }
+    $open = $folderFull
+    $select = $false
+    if ($fileFull -and (Test-Path -LiteralPath $fileFull)) {
+        $open = $fileFull
+        $select = $true
+    } else {
+        $probe = $folderFull
+        while ($probe.Length -ge $rootFull.Length) {
+            if (Test-Path -LiteralPath $probe) { break }
+            $parent = Split-Path -Parent $probe
+            if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $probe) { break }
+            $probe = $parent
+        }
+        if (-not (Test-Path -LiteralPath $probe)) {
+            throw "folder is not on pCloud Drive ($DriveRoot) (not synced?): $folderFull"
+        }
+        $open = $probe
+    }
+    return @{
+        path   = $open
+        select = $select
+        mapped = $folderFull
+    }
+}
+
+function Start-ExplorerAt {
+    param([string]$Path, [bool]$Select)
+    $explorer = Join-Path $env:WINDIR 'explorer.exe'
+    if ($Select) {
+        Start-Process -FilePath $explorer -ArgumentList @("/select,$Path")
+    } else {
+        Start-Process -FilePath $explorer -ArgumentList @($Path)
+    }
 }
 
 # Clash TUN often black-holes Chromium SW fetch to RFC1918. This relay uses WinHTTP
@@ -314,6 +421,28 @@ while ($true) {
             $okFocus = Show-CompanionConsole
             $payload = (@{ ok = [bool]$okFocus; pid = $CompanionPid } | ConvertTo-Json -Compress)
             Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body $payload
+        } elseif ($line -match '^POST\s+/open-explorer\b') {
+            try {
+                $obj = if ([string]::IsNullOrWhiteSpace($req.Body)) { [pscustomobject]@{} } else { $req.Body | ConvertFrom-Json }
+                $driveRoot = Get-PCloudDriveRoot
+                $target = ConvertTo-PCloudExplorerTarget -FolderPath ([string]$obj.folderPath) -Relative ([string]$obj.relative) -FileName ([string]$obj.fileName) -DriveRoot $driveRoot
+                Start-ExplorerAt -Path $target.path -Select ([bool]$target.select)
+                Write-LogLine "$(Get-Date -Format o) OPEN_EXPLORER $($target.path)"
+                $payload = (@{
+                    ok     = $true
+                    path   = $target.path
+                    mapped = $target.mapped
+                    select = [bool]$target.select
+                } | ConvertTo-Json -Compress)
+                Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body $payload
+            } catch {
+                $msg = "$_"
+                Write-LogLine "$(Get-Date -Format o) OPEN_EXPLORER_ERROR $msg"
+                $status = 400
+                if ($msg -match 'not mounted|is not available') { $status = 503 }
+                $payload = (@{ ok = $false; error = $msg } | ConvertTo-Json -Compress)
+                Write-HttpResponse -Stream $req.Stream -StatusCode $status -Body $payload
+            }
         } else {
             Write-HttpResponse -Stream $req.Stream -StatusCode 404 -Body '{"ok":false}'
         }
