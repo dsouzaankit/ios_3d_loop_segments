@@ -7,7 +7,7 @@
   Started by run_chromium.ps1 while waiting on Chromium. When the parent PowerShell
   PID exits without writing the graceful-exit marker, this script force-closes the
   profile Chromium, quits SKYBOX VR if this companion session started it, uploads
-  the profile to the repo path, and clears local AppData (same finish path as a
+  the profile zip to the repo path, and clears local AppData (same finish path as a
   normal companion exit).
 #>
 param(
@@ -31,6 +31,10 @@ if (Test-Path -LiteralPath $PwshHelper) {
 $SkyboxHelper = Join-Path $WindowsLib "Get-LoopSegmentsSkybox.ps1"
 if (Test-Path -LiteralPath $SkyboxHelper) {
     . $SkyboxHelper
+}
+$ProfileSyncHelper = Join-Path $PSScriptRoot "_chromium_profile_sync.ps1"
+if (Test-Path -LiteralPath $ProfileSyncHelper) {
+    . $ProfileSyncHelper
 }
 
 function Test-LocalHasContent {
@@ -63,27 +67,16 @@ function Stop-ProfileChrome {
 
 function Sync-Upload {
     param([string] $Src, [string] $Dst)
-    if ($SkipProfileSync) { return }
-    if (-not (Test-LocalHasContent -Dir $Src)) { return }
-    New-Item -ItemType Directory -Force -Path $Dst | Out-Null
-    $excludeFiles = @(
-        "SingletonLock"
-        "SingletonCookie"
-        "SingletonSocket"
-        "lockfile"
-        "DevToolsActivePort"
-    )
-    $args = @(
-        $Src, $Dst, "/E", "/MIR", "/R:2", "/W:1",
-        "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS", "/XF"
-    ) + $excludeFiles
-    & robocopy.exe @args | Out-Null
-    foreach ($name in $excludeFiles) {
-        $p = Join-Path $Dst $name
-        if (Test-Path -LiteralPath $p) {
-            Remove-Item -LiteralPath $p -Force -Recurse -ErrorAction SilentlyContinue
-        }
+    if (-not (Get-Command Sync-LoopSegmentsChromiumProfile -ErrorAction SilentlyContinue)) {
+        Write-Warning "[watchdog] Profile zip helper missing - skip upload"
+        return
     }
+    $zip = Join-Path (Split-Path -Parent $Dst) "chromium-profile.zip"
+    Sync-LoopSegmentsChromiumProfile -Direction Upload `
+        -LocalProfileDir $Src `
+        -RepoProfileDir $Dst `
+        -RepoProfileZip $zip `
+        -Skip:$SkipProfileSync
 }
 
 function Clear-Local {

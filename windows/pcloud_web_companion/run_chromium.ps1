@@ -75,6 +75,12 @@ trap {
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $ScriptDir) { throw "Cannot resolve script directory; run with: pwsh -File `"$($MyInvocation.MyCommand.Path)`"" }
 
+$ProfileSyncHelper = Join-Path $ScriptDir "_chromium_profile_sync.ps1"
+if (-not (Test-Path -LiteralPath $ProfileSyncHelper)) {
+    throw "Missing profile sync helper: $ProfileSyncHelper"
+}
+. $ProfileSyncHelper
+
 $ExtensionDir = $ScriptDir
 $ManifestPath = Join-Path $ExtensionDir "manifest.json"
 $WindowsDir = Split-Path -Parent $ScriptDir
@@ -120,9 +126,11 @@ $Requirements = Join-Path $ScriptDir "requirements.txt"
 $DepsStamp = Join-Path $VenvDir ".deps_requirements_sha256.txt"
 $LegacyRepoVenv = Join-Path $ScriptDir ".venv"
 
-# Chromium must use a local disk profile (not P:). We sync that folder to/from the repo each run.
+# Chromium must use a local disk profile (not P:). Canonical copy on P: is one zip
+# (cache excluded). Legacy unpacked chromium-profile\ is download-only if the zip is missing.
 $UserDataDir = Join-Path $CompanionLocalRoot "chromium-profile"
 $RepoProfileDir = Join-Path $ScriptDir "chromium-profile"
+$RepoProfileZip = Join-Path $ScriptDir "chromium-profile.zip"
 # Stale "we started Skybox" marker from a prior crash / -NoLaunch must not quit an unrelated client.
 try { Clear-LoopSegmentsSkyboxStartedMarker } catch {}
 
@@ -1330,72 +1338,11 @@ function Sync-ChromiumProfile {
         [ValidateSet("Download", "Upload")]
         [string] $Direction
     )
-
-    if ($SkipProfileSync) {
-        Write-Host "[profile] Sync skipped (-SkipProfileSync)"
-        return
-    }
-
-    $src = if ($Direction -eq "Download") { $RepoProfileDir } else { $UserDataDir }
-    $dst = if ($Direction -eq "Download") { $UserDataDir } else { $RepoProfileDir }
-
-    if (-not (Test-Path -LiteralPath $src)) {
-        Write-Host "[profile] $Direction skip (missing $src)"
-        return
-    }
-
-    # Empty source (no Default/) - nothing useful to copy yet
-    $hasContent = Test-Path -LiteralPath (Join-Path $src "Default")
-    if (-not $hasContent) {
-        $any = @(Get-ChildItem -LiteralPath $src -Force -ErrorAction SilentlyContinue)
-        if ($any.Count -eq 0) {
-            Write-Host "[profile] $Direction skip (empty $src)"
-            return
-        }
-    }
-
-    New-Item -ItemType Directory -Force -Path $dst | Out-Null
-    Write-Host "[profile] $Direction (full folder): $src -> $dst"
-
-    # Full mirror of the profile tree. Skip only live lock files so the next
-    # Chromium start is not blocked (Chromium must already be closed).
-    $excludeFiles = @(
-        "SingletonLock"
-        "SingletonCookie"
-        "SingletonSocket"
-        "lockfile"
-        "DevToolsActivePort"
-    )
-
-    $robocopyArgs = @(
-        $src
-        $dst
-        "/E"
-        "/MIR"
-        "/R:2"
-        "/W:1"
-        "/NFL"
-        "/NDL"
-        "/NJH"
-        "/NJS"
-        "/NC"
-        "/NS"
-        "/XF"
-    ) + $excludeFiles
-
-    & robocopy.exe @robocopyArgs | Out-Null
-    $rc = $LASTEXITCODE
-    # robocopy: 0-7 = success / no fatal error (do not leave this in $LASTEXITCODE for the wrapper).
-    if ($rc -ge 8) {
-        Write-Warning "[profile] $Direction robocopy exit $rc (see robocopy docs)"
-    } else {
-        Write-Host "[profile] $Direction OK (robocopy=$rc)"
-    }
-    $global:LASTEXITCODE = 0
-
-    foreach ($name in $excludeFiles) {
-        Remove-ProfilePath (Join-Path $dst $name)
-    }
+    Sync-LoopSegmentsChromiumProfile -Direction $Direction `
+        -LocalProfileDir $UserDataDir `
+        -RepoProfileDir $RepoProfileDir `
+        -RepoProfileZip $RepoProfileZip `
+        -Skip:$SkipProfileSync
 }
 
 function Test-LocalProfileHasContent {
@@ -1564,7 +1511,7 @@ function Invoke-CompanionGracefulFinish {
         Start-Sleep -Milliseconds 500
         if (Test-LocalProfileHasContent -ProfileDir $UserDataDir) {
             Sync-ChromiumProfile -Direction Upload
-            Write-Host "[run] Profile synced to $RepoProfileDir"
+            Write-Host "[run] Profile synced to $RepoProfileZip"
         } else {
             Write-Host "[run] Local profile empty - skip upload"
         }
@@ -1737,7 +1684,6 @@ function Clear-ProfileTabsAndDownloadHistory {
 }
 
 New-Item -ItemType Directory -Force -Path $UserDataDir | Out-Null
-New-Item -ItemType Directory -Force -Path $RepoProfileDir | Out-Null
 Stop-ProfileChromium -ProfileDir $UserDataDir
 # If a prior -DetachChromium left a full local profile, upload it first.
 # Never upload an empty local over P: (would wipe the canonical copy).
@@ -1806,7 +1752,7 @@ $ChromeArgString = $chromeArgList -join " "
 Write-Host "[run] Launching Chromium with extension loaded from:"
 Write-Host "      $ChromeExtension"
 Write-Host "[run] Profile (local): $ChromeUserData"
-Write-Host "[run] Profile (repo):  $RepoProfileDir"
+Write-Host "[run] Profile (repo zip): $RepoProfileZip"
 Write-Host "[run] URL: $StartUrl"
 Write-Host "[run] REST disk log: $(Join-Path $ScriptDir 'rest.log')"
 Write-Host "[run] In-browser logs: click the extension icon"

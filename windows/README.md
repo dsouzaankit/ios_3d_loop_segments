@@ -230,7 +230,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | Stays on P: / repo (intentional) | Machine-local only |
 |----------------------------------|--------------------|
 | Extension source, scripts | `%LOCALAPPDATA%\pcloud_web_companion\venv` |
-| `chromium-profile\` (shared pCloud login) | Playwright browsers, unpacked extension, REST log |
+| `chromium-profile.zip` (shared pCloud login) | Playwright browsers, unpacked extension, REST log |
 | | `loop-segments-windows.json` (per-PC phone IP) |
 
 Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compatibility (gitignored).
