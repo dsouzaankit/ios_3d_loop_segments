@@ -24,6 +24,8 @@ function Get-ChromiumProfileExcludeDirNames {
         'Sessions'
         'Media Cache'
         'Shared Dictionary'
+        'DawnWebGPUCache'
+        'AutofillAiModelCache'
     )
 }
 
@@ -44,26 +46,8 @@ function Get-ChromiumProfileExcludeFileNames {
         'Current Tabs'
         'Last Session'
         'Last Tabs'
+        'LOCK'
     )
-}
-
-function Get-ChromiumProfileTarExe {
-    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
-    if (-not $tar) {
-        throw 'tar.exe not found (needed to zip the Chromium profile)'
-    }
-    return $tar.Source
-}
-
-function Get-ChromiumProfileTarExcludeArgs {
-    $list = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in (Get-ChromiumProfileExcludeDirNames)) {
-        [void]$list.Add("--exclude=$name")
-    }
-    foreach ($name in (Get-ChromiumProfileExcludeFileNames)) {
-        [void]$list.Add("--exclude=$name")
-    }
-    return @($list)
 }
 
 function Clear-ChromiumProfileDir {
@@ -100,29 +84,96 @@ function Copy-ChromiumProfileZipFile {
     Move-Item -LiteralPath $partial -Destination $Dst -Force
 }
 
+function Test-ChromiumProfileRelativeExcluded {
+    param([string]$RelativePath)
+    $parts = @($RelativePath -split '[\\/]' | Where-Object { $_ -and $_ -ne '.' })
+    if ($parts.Count -eq 0) { return $true }
+    $dirNames = Get-ChromiumProfileExcludeDirNames
+    $fileNames = Get-ChromiumProfileExcludeFileNames
+    for ($i = 0; $i -lt $parts.Count; $i++) {
+        $part = $parts[$i]
+        foreach ($d in $dirNames) {
+            if ([string]::Equals($part, $d, [StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        }
+        if ($i -eq ($parts.Count - 1)) {
+            foreach ($f in $fileNames) {
+                if ([string]::Equals($part, $f, [StringComparison]::OrdinalIgnoreCase)) {
+                    return $true
+                }
+            }
+        }
+    }
+    return $false
+}
+
 function New-ChromiumProfileZip {
     param(
         [Parameter(Mandatory = $true)][string]$ProfileDir,
         [Parameter(Mandatory = $true)][string]$ZipPath
     )
-    $tar = Get-ChromiumProfileTarExe
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $root = [System.IO.Path]::GetFullPath($ProfileDir).TrimEnd('\')
+    if (-not (Test-Path -LiteralPath (Join-Path $root 'Default'))) {
+        throw "profile zip: no Default/ under $root"
+    }
     $stage = Join-Path $env:TEMP ("loop-segments-chromium-profile-{0}.zip" -f [guid]::NewGuid().ToString('n'))
     Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
-    $exclude = Get-ChromiumProfileTarExcludeArgs
-    & $tar -a -c -f $stage @exclude -C $ProfileDir .
-    $code = $LASTEXITCODE
-    # bsdtar 1 = some files skipped (locks); 2+ = fatal.
-    if ($code -ge 2 -or -not (Test-Path -LiteralPath $stage)) {
-        Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
-        throw "tar zip failed (exit $code)"
+
+    $count = 0
+    $hasPrefs = $false
+    $hasCookies = $false
+    $fs = [System.IO.File]::Open($stage, [System.IO.FileMode]::Create, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    try {
+        $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create, $true)
+        try {
+            foreach ($full in [System.IO.Directory]::EnumerateFiles($root, '*', [System.IO.SearchOption]::AllDirectories)) {
+                $rel = $full.Substring($root.Length).TrimStart('\')
+                if (Test-ChromiumProfileRelativeExcluded -RelativePath $rel) { continue }
+                $entryName = $rel.Replace('\', '/')
+                try {
+                    $src = [System.IO.File]::Open($full, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                } catch {
+                    Write-Warning "[profile] skip locked $rel"
+                    continue
+                }
+                try {
+                    $entry = $zip.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Fastest)
+                    $es = $entry.Open()
+                    try {
+                        $src.CopyTo($es)
+                    } finally {
+                        $es.Dispose()
+                    }
+                } catch {
+                    Write-Warning "[profile] skip unreadable $rel"
+                    continue
+                } finally {
+                    $src.Dispose()
+                }
+                $count++
+                if ($entryName -eq 'Default/Preferences') { $hasPrefs = $true }
+                if ($entryName -eq 'Default/Network/Cookies') { $hasCookies = $true }
+            }
+        } finally {
+            $zip.Dispose()
+        }
+    } finally {
+        $fs.Dispose()
     }
-    if ($code -eq 1) {
-        Write-Warning "[profile] tar skipped some locked files (exit 1); zip kept"
+
+    $len = 0
+    if (Test-Path -LiteralPath $stage) {
+        $len = (Get-Item -LiteralPath $stage).Length
     }
-    $len = (Get-Item -LiteralPath $stage).Length
-    if ($len -lt 256) {
+    if ($count -lt 10 -or -not $hasPrefs -or $len -lt 1024) {
         Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
-        throw "profile zip too small ($len bytes)"
+        throw "profile zip missing login files (entries=$count prefs=$hasPrefs cookies=$hasCookies size=$len)"
+    }
+    if (-not $hasCookies) {
+        Write-Warning "[profile] zip has Preferences but no Default/Network/Cookies"
     }
     Copy-ChromiumProfileZipFile -Src $stage -Dst $ZipPath
     Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
@@ -134,13 +185,20 @@ function Expand-ChromiumProfileZip {
         [Parameter(Mandatory = $true)][string]$ZipPath,
         [Parameter(Mandatory = $true)][string]$DestDir
     )
-    $tar = Get-ChromiumProfileTarExe
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
     Clear-ChromiumProfileDir -Dir $DestDir
-    & $tar -x -f $ZipPath -C $DestDir
-    $code = $LASTEXITCODE
-    if ($code -ge 2) {
-        throw "tar extract failed (exit $code)"
+    # Old companion zips used tar.exe (entries named ./Default/...). New zips use
+    # System.IO.Compression (Default/...). tar extract handles both; ZipFile does not.
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($tar) {
+        & $tar.Source -x -f $ZipPath -C $DestDir
+        $code = $LASTEXITCODE
+        if ($code -ge 2) {
+            throw "tar extract failed (exit $code)"
+        }
+        return
     }
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $DestDir)
 }
 
 function Start-LegacyUnpackedProfileCleanup {
