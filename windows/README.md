@@ -36,7 +36,7 @@ cd <repo>\windows
 # 3) Day-to-day: pCloud companion (gateway check → LAN status; USB-foregrounds app unless -SkipUsbLaunch)
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
 #    Quit: close Chromium, Ctrl+C, or console X - kills Chromium, syncs profile,
-#    then USB Home (app Keep Alive default on - see ../ios/README.md; -SkipGoHome to skip)
+#    then USB Home only if the app is still foreground (Keep Alive default on — see ../ios/README.md; -SkipGoHome to never press)
 
 # Optional helpers
 .\setup\Set-LoopSegmentsWindows.ps1 -Show          # show/edit per-PC json
@@ -98,9 +98,9 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLanThroughput # no media copy Mbps probe
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLowThroughputGatewayReboot # keep going even if below minLanThroughputMbps
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
-# Quit: close Chromium, or Ctrl+C / console X — quits Skybox if we started it, syncs profile, then USB Home if unlocked
-# On finish: USB Home backgrounds the app (needs Keep Alive for export — see ios README).
-#   Locked / no USB → Home skipped. -SkipGoHome leaves app foreground
+# Quit: close Chromium, or Ctrl+C / console X — quits Skybox if we started it, syncs profile, then USB Home only if the app is still foreground
+# On finish: USB Home backgrounds the app when it is still frontmost (needs Keep Alive for export — see ios README).
+#   Already backgrounded / locked / no USB → Home skipped. -SkipGoHome never presses Home
 ```
 
 **Machine-local** (not synced via pCloud): companion venv, Playwright Chromium, and the unpacked extension under `%LOCALAPPDATA%\pcloud_web_companion\`. The repo `.venv` is removed if present — do not recreate it on `P:`.
@@ -126,8 +126,8 @@ py -3.12 -m pip install -U pymobiledevice3
 |-------|--------|
 | Bundle id | Usually `com.loopsegments.app`; AltStore may resign as `com.loopsegments.app.<suffix>`. **USB launch lookup is independent of that suffix** (and of whatever alphanumeric suffix AltStore shows in App IDs / the app name): each run re-resolves on the phone (`Resolve-LoopSegmentsBundleId.py` — prefix `com.loopsegments.app.*` or display name **Loop Segments**). LAN companion talks `:8765` only (ignores bundle id). |
 | App ID renew vs suffix | AltStore **Renew App IDs** extends the same Apple slot — it does **not** change the resigned suffix. A new suffix appears only if AltStore **registers a new** App ID (e.g. delete + reinstall after the old slot expired). USB launch still finds the app either way. |
-| Unlock | Needed for companion startup USB launch **and** for finish-time Home press. Exit **3** if locked during launch — companion **warns** and Chromium stays open. Companion always probes LAN (prints UP/DOWN) then USB-launches to foreground the app unless `-SkipUsbLaunch` (skips relaunch when USB DVT already sees Loop Segments **foreground**; otherwise **`--no-kill-existing`** so a running export is not killed). If USB is missing but LAN is UP, warns and continues. Home on quit still needs unlock if you want the app backgrounded |
-| Home on quit | Companion finish backgrounds Loop Segments over USB (`usb\Go-IphoneHomeViaUsb.ps1`). Prefers **DVT `--userspace`** (SpringBoard, then Settings) — the same path as USB launch. **`core-device hid --userspace`** is skipped by default (iOS 26 RSD `TimeoutError` typer dump); pass `-TryUserspaceHid` to try it anyway. Requires USB + **unlocked** phone; otherwise skipped. Each attempt times out (~25s); `-SkipGoHome` leaves the app foreground. A failed Home press does **not** fail the companion session (still exit 0), but the window **waits for Enter** so the dump stays readable. Direct runs of the Home script also wait on error unless `-NoWaitEnter`. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
+| Unlock | Needed for companion startup USB launch. Exit **3** if locked during launch — companion **warns** and Chromium stays open. Companion always probes LAN (prints UP/DOWN) then USB-launches to foreground the app unless `-SkipUsbLaunch` (skips relaunch when USB DVT already sees Loop Segments **foreground**; otherwise **`--no-kill-existing`** so a running export is not killed). If USB is missing but LAN is UP, warns and continues. Finish-time Home is skipped when the phone is locked (treated as already backgrounded) |
+| Home on quit | Companion finish backgrounds Loop Segments over USB (`usb\Go-IphoneHomeViaUsb.ps1`) **only if it is still the foreground app**. Lock screen or already-backgrounded → skip (exit 0). Prefers **DVT `--userspace`** (SpringBoard, then Settings) — the same path as USB launch. **`core-device hid --userspace`** is skipped by default (iOS 26 RSD `TimeoutError` typer dump); pass `-TryUserspaceHid` to try it anyway. No USB → skip. Each attempt times out (~25s); `-SkipGoHome` never presses Home. A failed Home press does **not** fail the companion session (still exit 0), but the window **waits for Enter** so the dump stays readable. Direct runs of the Home script also wait on error unless `-NoWaitEnter`. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
 | Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh (cert refresh — separate from App ID renew above). **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** (USB works across multiple gateways; same Wi‑Fi is only for background refresh) → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. Companion / USB launch auto-start AltServer when installed but idle |
 | AltStore UDID (1006) | **“could not determine this device's UDID”** — reinstall AltStore from AltServer (USB). Then **Refresh All**. If Loop Segments is **“not available”**, reinstall the **same** IPA via My Apps → **+** (new GitHub build not required). See tip above / [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) |
 | AltServer | Companion / USB launch report status and **start AltServer if installed but not running** (core: `..\env_setup\altserver_refresh\Invoke-AltServerIfNeeded.ps1`). Setup reports status only. Optional logon start: `.\sideload\Register-AltServerAtLogon.ps1` |
@@ -259,7 +259,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `%TEMP%\loopsegments-rclone-mount.log` | live rclone mount log (copied to `rclone\loopsegments-rclone-mount.log` on quit) |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: gateway subnet check/reboot, USB-launch Loop Segments, sync profile, start browser |
 | `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); DVT `--userspace --no-kill-existing` first; skips if already foreground; exit **3** if phone locked |
-| `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish (DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); needs USB + unlocked; exit **3** if locked. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` and companion pauses itself after a Home fail |
+| `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish if it is still foreground (skip when backgrounded or lock screen; DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); no USB → skip. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` and companion pauses itself after a Home fail |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |
 | `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
 | `sideload\Register-AltServerAtLogon.ps1` | **AltServer** at logon ([BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) §3). Wi‑Fi refresh often fails on Win11 — **USB + AltStore Refresh All** weekly is the reliable path |

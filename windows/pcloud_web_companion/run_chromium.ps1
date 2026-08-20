@@ -18,7 +18,7 @@ param(
     [switch]$DetachChromium,
     # Keep the full local AppData profile after upload (default: wipe local after sync to P:).
     [switch]$KeepLocalProfile,
-    # Do not press iPhone Home on companion finish (default: background Loop Segments via USB HID).
+    # Never simulate Home on companion finish (default already skips when backgrounded or locked).
     [switch]$SkipGoHome,
     # Do not force Chromium UI dark mode (default: --force-dark-mode only; no WebContentsForceDark -
     # page auto-darkening can hide media seekbars / controls on pCloud and similar players).
@@ -1460,7 +1460,7 @@ function Invoke-GoIphoneHome {
         Write-Warning "[home] Missing $homePs1"
         return
     }
-    Write-Host "[home] Backgrounding Loop Segments (USB Home button; per-attempt timeout, skip with -SkipGoHome)..."
+    Write-Host "[home] USB Home if Loop Segments is still foreground (skip when backgrounded or locked)..."
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $code = 1

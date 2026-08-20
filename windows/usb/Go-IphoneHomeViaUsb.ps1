@@ -5,18 +5,20 @@
 
 .DESCRIPTION
   Background Loop Segments after Run-PCloudWebCompanion finishes so Keep Alive /
-  LAN can keep running. Prefer DVT --userspace (same path as USB launch).
-  core-device hid --userspace often times out on the iOS 26 RSD handshake and
-  dumps a typer traceback; that attempt is skipped unless -TryUserspaceHid.
+  LAN can keep running. Skips the Home simulation when the app is already not
+  foreground (including lock screen). Prefer DVT --userspace (same path as USB
+  launch). core-device hid --userspace often times out on the iOS 26 RSD
+  handshake and dumps a typer traceback; that attempt is skipped unless
+  -TryUserspaceHid.
 
   Each pymobiledevice3 attempt has a hard timeout (default 25s). Without that,
   hid/userspace can hang forever and leave the companion stuck on finish.
 
 .EXITCODES
-  0  Home pressed (or best-effort succeeded)
+  0  Home pressed, or skipped (already backgrounded / lock screen)
   1  Tooling / generic failure
   2  No USB device
-  3  Phone locked
+  3  Phone locked during a Home attempt (lock at start skips as 0)
 
 .EXAMPLE
   .\Go-IphoneHomeViaUsb.ps1
@@ -150,6 +152,22 @@ function Write-HomeAttemptOutput {
     Write-Host ("  skipped ({0}) — trying next home method." -f $err.Trim()) -ForegroundColor DarkGray
 }
 
+function Test-IphonePasscodeLocked {
+    param(
+        [Parameter(Mandatory = $true)] $Runtime,
+        [Parameter(Mandatory = $true)] [int] $TimeoutSec
+    )
+    $probePy = Join-Path $PSScriptRoot "Probe-IphoneUnlock.py"
+    if (-not (Test-Path -LiteralPath $probePy)) { return $null }
+    $probe = Invoke-PythonRuntimeTimed -Runtime $Runtime -ArgumentList @(
+        $probePy
+    ) -TimeoutSec $TimeoutSec
+    $blob = ($probe.Lines -join "`n")
+    if ($probe.ExitCode -eq 3 -or $blob -match 'PHONE_LOCKED|PasswordRequired') { return $true }
+    if ($probe.ExitCode -eq 0 -or $blob -match '(?m)^UNLOCKED\b') { return $false }
+    return $null
+}
+
 function Test-LoopSegmentsStillForeground {
     param(
         [Parameter(Mandatory = $true)] $Runtime,
@@ -189,6 +207,21 @@ $listText = ($list.Lines -join "`n")
 if ($list.ExitCode -ne 0 -or $listText -match '(?s)^\s*\[\s*\]\s*$' -or $listText -match '(?i)no devices?') {
     Write-Host "[home] No USB iPhone - skip Home press" -ForegroundColor Yellow
     Exit-Home 2
+}
+
+$probeTimeout = [Math]::Min(20, $AttemptTimeoutSec)
+$locked = Test-IphonePasscodeLocked -Runtime $rt -TimeoutSec $probeTimeout
+if ($locked -eq $true) {
+    Write-Host "[home] Phone locked (app already backgrounded) - skip Home press" -ForegroundColor DarkGray
+    Exit-Home 0
+}
+$alreadyFg = Test-LoopSegmentsStillForeground -Runtime $rt -TimeoutSec $probeTimeout
+if ($alreadyFg -eq $false) {
+    Write-Host "[home] Loop Segments already backgrounded - skip Home press" -ForegroundColor DarkGray
+    Exit-Home 0
+}
+if ($alreadyFg -eq $true) {
+    Write-Host "[home] Loop Segments is foreground - simulating Home..."
 }
 
 # HID without --userspace/--tunnel requires tunneld (RSDServiceProviderDep).

@@ -54,7 +54,7 @@ cd <repo>\windows
 | `-SkipProfileSync` | Do not sync Chromium profile to/from repo |
 | `-DetachChromium` | Do not wait for browser exit (upload + local clear on next run) |
 | `-KeepLocalProfile` | Do not wipe local AppData profile after upload |
-| `-SkipGoHome` | Do not press iPhone Home on companion finish |
+| `-SkipGoHome` | Never press iPhone Home on companion finish (default still skips when the app is already backgrounded or the phone is locked) |
 | `-NoDarkMode` | Do not force Chromium UI dark mode (default: `--force-dark-mode` only) |
 | `-SkipSkybox` | Do not check/start SKYBOX VR desktop (default: start if idle, hide to tray) |
 | `-SkipVirtualDesktop` | Do not check/start Virtual Desktop Streamer (default: start if idle, hide to tray) |
@@ -78,7 +78,7 @@ Each launch:
 - **Profile sync:** zip the local AppData profile (**Cache / Code Cache / GPU / Safe Browsing / Service Worker** left out) → copy one **`chromium-profile.zip`** onto P: (Windows Explorer–readable zip, not `tar.exe`’s `./` layout which looks empty). On start, copy that zip off P: and extract locally. If the zip is missing, a one-time copy of the old unpacked `chromium-profile\` folder still runs (same cache dirs skipped); after a successful zip upload that unpacked tree is **deleted in the background**. Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the local wipe. Zip and folder are gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded and **Chromium UI dark mode** (`--force-dark-mode`; `-NoDarkMode` to disable). Page auto-darkening (`WebContentsForceDark`) is not used — it can hide media seekbars; waits for exit unless `-DetachChromium`
-- **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, quits SKYBOX if this session started it, uploads the profile **zip** to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X), then backgrounds Loop Segments over USB (DVT `--userspace`; HID Home is skipped on iOS 26). Use `-SkipGoHome` to leave it foreground
+- **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, quits SKYBOX if this session started it, uploads the profile **zip** to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X), then USB-Homes Loop Segments **only if it is still foreground** (skipped when already backgrounded or lock screen; DVT `--userspace`; HID Home is skipped on iOS 26). Use `-SkipGoHome` to never press Home
 - **Fatal errors:** any failure that stops the companion ends with a **single** “Press Enter to close…” (child scripts skip their own Enter so you are not prompted twice). USB Home-on-quit failure also pauses for Enter (it does not fail the companion session, so the fatal prompt would not run)
 
 ## Playwright

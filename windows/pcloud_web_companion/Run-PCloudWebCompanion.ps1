@@ -23,8 +23,8 @@
   does not close immediately (child scripts use -NoWaitEnter / -NoWaitEnterOnFatal
   so you are not prompted twice).
   While Chromium is running, Ctrl+C or closing the console (X) kills that Chromium profile
-  and syncs/clears the profile the same as a normal exit. On finish, presses iPhone Home
-  over USB so Loop Segments is backgrounded (Keep Alive can keep running).
+  and syncs/clears the profile the same as a normal exit. On finish, USB Home runs only if
+  Loop Segments is still the foreground app (skipped when already backgrounded or lock screen).
 
   Prefer: .\Run-PCloudWebCompanion.ps1 (PowerShell 7). Opening this .ps1 under 5.1 re-launches pwsh.
 

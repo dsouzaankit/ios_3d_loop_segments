@@ -119,7 +119,7 @@ Clear-Local -Dir $ProfileDir
 
 $homePs1 = Join-Path (Split-Path -Parent $PSScriptRoot) "usb\Go-IphoneHomeViaUsb.ps1"
 if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {
-    Write-Host "[watchdog] Pressing iPhone Home to background Loop Segments..."
+    Write-Host "[watchdog] USB Home if Loop Segments is still foreground..."
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = (Get-LoopSegmentsPwshExe)
