@@ -617,6 +617,7 @@ function Watch-LoopSegmentsRcloneMount {
         [Parameter(Mandatory = $true)]$RcloneProcess,
         [Parameter(Mandatory = $true)][string] $HostName,
         [Parameter(Mandatory = $true)][int] $PortNum,
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
         [int] $PollSeconds = 15,
         [int] $DownSeconds = 60
     )
@@ -668,6 +669,12 @@ function Watch-LoopSegmentsRcloneMount {
         if (-not $RcloneProcess.HasExited) {
             Write-Host "Stopping rclone PID $($RcloneProcess.Id)..."
             Stop-Process -Id $RcloneProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+        # WinFsp drop + This PC refresh (Ctrl+C, console X, LAN-watch kill, rclone exit).
+        Start-Sleep -Milliseconds 400
+        if (-not [string]::IsNullOrWhiteSpace($DriveRoot)) {
+            Update-ExplorerForMappedDrive -DriveRoot $DriveRoot -Removed
+            Write-Host ("[mount] Told Explorer {0} was removed." -f $DriveRoot)
         }
         # Ctrl+C / abort does not return to the caller — wipe the log here.
         # Normal return leaves the file for Show-RcloneMountLogTail, then the caller clears.
@@ -803,12 +810,18 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
     }
 
     if ($NoLanWatch) {
-        Invoke-LoopSegmentsRclone @mountArgs
-        $code = 0
-        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
-        if ($code -ne 0) {
-            Write-Host ('[Mount-LoopSegmentsRclone] rclone mount failed (exit {0}).' -f $code) -ForegroundColor Red
-            Wait-EnterOnError -ExitCode $code
+        try {
+            Invoke-LoopSegmentsRclone @mountArgs
+            $code = 0
+            if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+            if ($code -ne 0) {
+                Write-Host ('[Mount-LoopSegmentsRclone] rclone mount failed (exit {0}).' -f $code) -ForegroundColor Red
+                Wait-EnterOnError -ExitCode $code
+            }
+        } finally {
+            Start-Sleep -Milliseconds 400
+            Update-ExplorerForMappedDrive -DriveRoot $driveRoot -Removed
+            Write-Host ("[mount] Told Explorer {0} was removed." -f $driveRoot)
         }
         exit 0
     }
@@ -865,6 +878,7 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         -RcloneProcess $rcloneProc `
         -HostName $hostIp `
         -PortNum $portNum `
+        -DriveRoot $driveRoot `
         -PollSeconds $LanPollSeconds `
         -DownSeconds $LanDownSeconds
 
