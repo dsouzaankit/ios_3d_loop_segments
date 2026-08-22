@@ -202,7 +202,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `phoneLanHosts` | Optional array `{ host, label?, port? }` — unified LAN listing across multiple iPhones |
 | `lanPort` | Usually `8765` |
 | `minLanThroughputMbps` | Companion/measure: if LAN probe is below this (default `40`), reboot other routers (not current gateway), settle, re-check (up to 2 retries) |
-| `mountDriveLetter` | Drive letter for phone mount (default `L`; pick another if Koofr uses `L`) |
+| `mountDriveLetter` | Drive letter for phone mount (default `L`; pick another if Koofr uses `L`). Config only — not inferred from This PC or a free letter. |
 | `rcloneRemoteName` | Block name in `rclone.conf` for the phone (default `loopsegments`) |
 | `rcloneConfigPath` | **Empty** = auto (`%APPDATA%\rclone\rclone.conf`; created blank on first mount if missing). Only set a full path for a non-default location. |
 | `rcloneExe` | **Empty** = `rclone` on PATH |
