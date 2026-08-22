@@ -8,9 +8,12 @@
   Reads phoneLanHost from loop-segments-windows.json (LAN page / app export host).
 
   Default: if the PC IPv4 default gateway is not on the same subnet as phoneLanHost,
-  informs you, reboots Wi‑Fi on that current gateway, polls until the PC gets a new
-  LAN IP / gateway, then re-checks — looping up to MaxWrongSubnetRounds times (default 3)
-  until the gateway shares the LAN page subnet (no Enter / manual re-run between rounds).
+  informs you, waits for tcp/23, reboots Wi‑Fi on that current gateway, then polls
+  (WaitLanIpChangeSec, default 20s) until the PC gets a new LAN IP / gateway or the AP
+  is back on tcp/23 after a drop. Windows can keep a stale Wi‑Fi lease while the radio
+  is down; Clash TUN often changes the default route sooner. Then re-checks — looping up
+  to MaxWrongSubnetRounds times (default 3). A failed telnet round waits and continues
+  instead of aborting remaining rounds.
 
   -ForceReboot: reboot the current default gateway even when subnets already match
   (e.g. after a low LAN-throughput probe). Same-subnet ForceReboot is a single pass.
@@ -53,9 +56,8 @@ param(
     # After a wrong-subnet reboot, poll this often for a new PC LAN IP / gateway.
     [ValidateRange(2, 60)]
     [int] $PollSecAfterReboot = 4,
-    # Per-round wait for LAN identity change before re-checking / next reboot (0 = wait forever).
-    # WifiRestart script is ~10s (telnet + device sleep 5). 20s after that is DHCP/reassociate
-    # plus a couple of 4s polls; matches -WaitPhoneIpSec. Still same-IP → next bounce round.
+    # Per-round wait after WifiRestart for this PC to drop the old AP and DHCP
+    # (0 = wait forever). Stale Wi-Fi lease can keep the same IP+gw while tcp/23 is down.
     [ValidateRange(0, 3600)]
     [int] $WaitLanIpChangeSec = 20,
     # Wrong-subnet reboot rounds before giving up (default 3).
@@ -217,6 +219,58 @@ function Get-LoopSegmentsDefaultGatewayInfo {
     return $info
 }
 
+function Test-RouterTcp23 {
+    param(
+        [Parameter(Mandatory = $true)][string] $Ip,
+        [int] $TimeoutMs = 1500
+    )
+    if ([string]::IsNullOrWhiteSpace($Ip)) { return $false }
+    $client = $null
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        $iar = $client.BeginConnect($Ip.Trim(), 23, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
+            return $false
+        }
+        $client.EndConnect($iar)
+        return [bool]$client.Connected
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $client) {
+            try { $client.Close() } catch {}
+        }
+    }
+}
+
+function Wait-RouterTelnetReady {
+    param(
+        [Parameter(Mandatory = $true)][string] $Ip,
+        [int] $TimeoutSec = 20,
+        [int] $PollSec = 4
+    )
+    if (Test-RouterTcp23 -Ip $Ip) { return $true }
+    $poll = [Math]::Max(2, $PollSec)
+    $unlimited = ($TimeoutSec -le 0)
+    $deadline = if ($unlimited) { [datetime]::MaxValue } else { [datetime]::UtcNow.AddSeconds($TimeoutSec) }
+    Write-Host ('[gateway] Waiting for tcp/23 on {0} before telnet (AP still rebooting)...' -f $Ip) -ForegroundColor Yellow
+    $lastLog = [datetime]::MinValue
+    while ([datetime]::UtcNow -lt $deadline) {
+        Start-Sleep -Seconds $poll
+        if (Test-RouterTcp23 -Ip $Ip) {
+            Write-Host ('[gateway] tcp/23 {0} is open.' -f $Ip) -ForegroundColor Green
+            return $true
+        }
+        if (([datetime]::UtcNow - $lastLog).TotalSeconds -ge 15) {
+            $lastLog = [datetime]::UtcNow
+            $left = if ($unlimited) { '∞' } else { [int]($deadline - [datetime]::UtcNow).TotalSeconds }
+            Write-Host ('[gateway] Still no tcp/23 on {0} ({1}s left)' -f $Ip, $left)
+        }
+    }
+    Write-Warning ('[gateway] tcp/23 {0} still closed after {1}s' -f $Ip, $TimeoutSec)
+    return $false
+}
+
 function Wait-PcLanIdentityChange {
     param(
         [string] $PreviousLocalIp = '',
@@ -245,11 +299,14 @@ function Wait-PcLanIdentityChange {
 
     $lastLog = [datetime]::MinValue
     $sameUnchangedStreak = 0
+    $sawDrop = $false
     while ([datetime]::UtcNow -lt $deadline) {
         Start-Sleep -Seconds $poll
         $cur = Get-LoopSegmentsDefaultGatewayInfo
         $curIp = if ($null -eq $cur.LocalIp) { '' } else { [string]$cur.LocalIp.Trim() }
         $curGw = if ($null -eq $cur.Gateway) { '' } else { [string]$cur.Gateway.Trim() }
+        $telnetGw = if ($curGw) { $curGw } else { $prevGw }
+        $tcp23 = if ($telnetGw) { Test-RouterTcp23 -Ip $telnetGw } else { $false }
 
         $ipChanged = (-not [string]::IsNullOrWhiteSpace($curIp)) -and ($curIp -ne $prevIp)
         $gwChanged = (-not [string]::IsNullOrWhiteSpace($curGw)) -and ($curGw -ne $prevGw)
@@ -262,26 +319,34 @@ function Wait-PcLanIdentityChange {
             return $cur
         }
 
-        # Same IP+gateway back means the AP is up and this PC rejoined it — do not burn
-        # the rest of the timeout. Two polls so a stale lease during the drop is ignored.
+        # Windows often keeps a stale Wi-Fi lease while the AP is still down (no Clash TUN
+        # to change the default route). Treat missing IP/gw OR closed tcp/23 as the drop.
         $lanUp = (-not [string]::IsNullOrWhiteSpace($curIp)) -and (-not [string]::IsNullOrWhiteSpace($curGw))
-        $unchanged = $lanUp -and $prevIp -and $prevGw -and ($curIp -eq $prevIp) -and ($curGw -eq $prevGw)
-        if ($unchanged) {
+        if ((-not $lanUp) -or (-not $tcp23)) {
+            $sawDrop = $true
+            $sameUnchangedStreak = 0
+        }
+
+        # Same IP+gateway AND tcp/23 open after a drop = AP is actually back.
+        $unchanged = $lanUp -and $tcp23 -and $prevIp -and $prevGw -and ($curIp -eq $prevIp) -and ($curGw -eq $prevGw)
+        if ($sawDrop -and $unchanged) {
             $sameUnchangedStreak++
             if ($sameUnchangedStreak -ge 2) {
-                Write-Host ('[gateway] Bounce left LAN unchanged (IP={0} gw={1}) — stopping wait.' -f $curIp, $curGw) -ForegroundColor Yellow
+                Write-Host ('[gateway] Bounce left LAN unchanged (IP={0} gw={1}; tcp/23 open) — stopping wait.' -f $curIp, $curGw) -ForegroundColor Yellow
                 return $cur
             }
-        } else {
+        } elseif (-not $unchanged) {
             $sameUnchangedStreak = 0
         }
 
         if (([datetime]::UtcNow - $lastLog).TotalSeconds -ge 15) {
             $lastLog = [datetime]::UtcNow
             $left = if ($unlimited) { '∞' } else { [int]($deadline - [datetime]::UtcNow).TotalSeconds }
-            Write-Host ('[gateway] Still waiting for new LAN IP/gateway... (now IP={0} gw={1}; {2}s left)' -f `
+            $tcpNote = if ($telnetGw) { $(if ($tcp23) { 'tcp/23 open' } else { 'tcp/23 closed' }) } else { 'no gw' }
+            Write-Host ('[gateway] Still waiting for new LAN IP/gateway... (now IP={0} gw={1}; {2}; {3}s left)' -f `
                 $(if ($curIp) { $curIp } else { '(none)' }),
                 $(if ($curGw) { $curGw } else { '(none)' }),
+                $tcpNote,
                 $left)
         }
     }
@@ -379,22 +444,46 @@ function Get-KnownRouterRebootTargets {
 function Invoke-RouterWifiRebootScript {
     param(
         [Parameter(Mandatory = $true)][string] $ScriptPath,
-        [Parameter(Mandatory = $true)] $Runtime
+        [Parameter(Mandatory = $true)] $Runtime,
+        [string] $RouterIp = '',
+        [int] $TelnetWaitSec = 20,
+        [int] $PollSec = 4,
+        [switch] $AllowFail
     )
-    Write-Host ('[gateway] Running: {0}' -f $ScriptPath) -ForegroundColor Cyan
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $allArgs = @($Runtime.Prefix) + @($ScriptPath)
-        & $Runtime.Exe @allArgs
-        $code = 0
-        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
-    } finally {
-        $ErrorActionPreference = $prev
+    if (-not [string]::IsNullOrWhiteSpace($RouterIp)) {
+        [void](Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec)
+    }
+
+    $runOnce = {
+        Write-Host ('[gateway] Running: {0}' -f $ScriptPath) -ForegroundColor Cyan
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $allArgs = @($Runtime.Prefix) + @($ScriptPath)
+            & $Runtime.Exe @allArgs
+            $code = 0
+            if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        $code
+    }.GetNewClosure()
+
+    $code = & $runOnce
+    if ($code -ne 0 -and -not [string]::IsNullOrWhiteSpace($RouterIp)) {
+        Write-Warning ('[gateway] Telnet reboot failed (exit {0}) — waiting for tcp/23 then retrying once...' -f $code)
+        [void](Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec)
+        $code = & $runOnce
     }
     if ($code -ne 0) {
-        throw ('[gateway] Reboot script failed (exit {0}): {1}' -f $code, $ScriptPath)
+        $msg = ('[gateway] Reboot script failed (exit {0}): {1}' -f $code, $ScriptPath)
+        if ($AllowFail) {
+            Write-Warning $msg
+            return $false
+        }
+        throw $msg
     }
+    return $true
 }
 
 try {
@@ -453,7 +542,8 @@ if ($RebootOffSubnetRouters) {
         Write-Host ('[gateway] ({0}/{1}) Rebooting off-subnet router {2} ({3}) so clients can leave that AP...' -f `
             $index, $offSubnet.Count, $router.Ip, $router.Model) -ForegroundColor Cyan
         try {
-            Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime
+            Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime `
+                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot
             Write-Host ('[gateway] Reboot finished for {0}.' -f $router.Ip) -ForegroundColor Green
         } catch {
             Write-Warning ("[gateway] Reboot failed for {0}: {1}" -f $router.Ip, $_.Exception.Message)
@@ -500,7 +590,8 @@ if ($RebootOtherRouters) {
         Write-Host ('[gateway] ({0}/{1}) Rebooting other router {2} ({3})...' -f `
             $index, $others.Count, $router.Ip, $router.Model) -ForegroundColor Cyan
         try {
-            Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime
+            Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime `
+                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot
             Write-Host ('[gateway] Reboot finished for {0}.' -f $router.Ip) -ForegroundColor Green
         } catch {
             Write-Warning ("[gateway] Reboot failed for {0}: {1}" -f $router.Ip, $_.Exception.Message)
@@ -548,7 +639,8 @@ Phone LAN page: {2}
     Write-Host ""
     Write-Host ('[gateway] Forcing Wi-Fi reboot on current gateway {0} (same subnet as LAN page {1}).' -f $gatewayIp, $phoneHost) -ForegroundColor Yellow
     Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
-    Invoke-RouterWifiRebootScript -ScriptPath $rebootScript -Runtime $runtime
+    Invoke-RouterWifiRebootScript -ScriptPath $rebootScript -Runtime $runtime `
+        -RouterIp $gatewayIp -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot
     Write-Host '[gateway] Reboot script finished (low-throughput / forced). Wait for Wi-Fi to settle, then retry.' -ForegroundColor Green
     Exit-WithEnter 0
 }
@@ -608,8 +700,13 @@ Phone LAN page: {2}
         $(if ($localIp) { $localIp } else { '(unknown)' }),
         $gatewayIp,
         $phoneHost) -ForegroundColor Cyan
-    Invoke-RouterWifiRebootScript -ScriptPath $rebootScript -Runtime $runtime
-    Write-Host '[gateway] Reboot command finished. Waiting for this PC to reassociate and get another LAN IP...' -ForegroundColor Green
+    $rebootOk = Invoke-RouterWifiRebootScript -ScriptPath $rebootScript -Runtime $runtime `
+        -RouterIp $gatewayIp -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot -AllowFail
+    if ($rebootOk) {
+        Write-Host '[gateway] Reboot command finished. Waiting for this PC to reassociate and get another LAN IP...' -ForegroundColor Green
+    } else {
+        Write-Warning '[gateway] Reboot script failed this round (AP may still be down). Waiting for LAN before the next round...'
+    }
 
     [void](Wait-PcLanIdentityChange `
         -PreviousLocalIp $localIp `
