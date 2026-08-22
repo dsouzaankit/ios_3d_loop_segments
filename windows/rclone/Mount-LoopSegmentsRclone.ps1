@@ -420,6 +420,77 @@ function Restart-WindowsExplorerShell {
     Start-Process -FilePath "$env:WINDIR\explorer.exe" | Out-Null
 }
 
+function Initialize-LoopSegmentsShellNotify {
+    if ([System.Management.Automation.PSTypeName]'LoopSegmentsShellNotify'.Type) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LoopSegmentsShellNotify {
+    public const uint SHCNE_DRIVEREMOVED = 0x00000080;
+    public const uint SHCNE_DRIVEADD = 0x00000100;
+    public const uint SHCNE_UPDATEDIR = 0x00001000;
+    public const uint SHCNF_PATHW = 0x0005;
+    public const uint SHCNF_FLUSHNOWAIT = 0x2000;
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern void SHChangeNotify(uint wEventId, uint uFlags, string dwItem1, IntPtr dwItem2);
+}
+'@
+}
+
+function Update-ExplorerForMappedDrive {
+    param(
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
+        [switch] $Removed
+    )
+    $root = $DriveRoot.Trim()
+    if ($root -notmatch '\\$') { $root = "$root\" }
+    try {
+        Initialize-LoopSegmentsShellNotify
+        $flags = [LoopSegmentsShellNotify]::SHCNF_PATHW -bor [LoopSegmentsShellNotify]::SHCNF_FLUSHNOWAIT
+        $evt = if ($Removed) {
+            [LoopSegmentsShellNotify]::SHCNE_DRIVEREMOVED
+        } else {
+            [LoopSegmentsShellNotify]::SHCNE_DRIVEADD
+        }
+        [LoopSegmentsShellNotify]::SHChangeNotify($evt, $flags, $root, [IntPtr]::Zero)
+        [LoopSegmentsShellNotify]::SHChangeNotify([LoopSegmentsShellNotify]::SHCNE_UPDATEDIR, $flags, $root, [IntPtr]::Zero)
+    } catch {
+        Write-Verbose ('[mount] SHChangeNotify failed: {0}' -f $_.Exception.Message)
+    }
+    try {
+        $app = New-Object -ComObject Shell.Application
+        $driveToken = [regex]::Escape($root.TrimEnd('\').Replace('\', '/'))
+        foreach ($win in @($app.Windows())) {
+            try {
+                $exe = [string]$win.FullName
+                if ($exe -notmatch '(?i)\\explorer\.exe$') { continue }
+                $url = [string]$win.LocationURL
+                $title = [string]$win.LocationName
+                $isThisPc = ($url -match '20D04FE0-3AEA-1069-A2D8-08002B30309D') -or
+                    ($title -match '^(This PC|Computer)$')
+                $isDrive = ($url -match $driveToken) -or
+                    ($title -match ('^{0}' -f [regex]::Escape($root.TrimEnd('\'))))
+                if ($isThisPc -or $isDrive) {
+                    $win.Refresh()
+                }
+            } catch {}
+        }
+    } catch {}
+}
+
+function Wait-LoopSegmentsMountDrive {
+    param(
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
+        [int] $TimeoutSec = 15
+    )
+    $deadline = [datetime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSec))
+    while ([datetime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $DriveRoot) { return $true }
+        Start-Sleep -Milliseconds 400
+    }
+    return (Test-Path -LiteralPath $DriveRoot)
+}
+
 function Test-PhoneLanAlive {
     param(
         [Parameter(Mandatory = $true)][string] $HostName,
@@ -643,6 +714,9 @@ try {
         } else {
             Write-Host "${driveRoot} is gone (good)."
         }
+        if (-not $Unstick) {
+            Update-ExplorerForMappedDrive -DriveRoot $driveRoot -Removed
+        }
         if ($Unstick) {
             Restart-WindowsExplorerShell
             Write-Host 'Unstick done. If Explorer is still wedged, Task Manager -> End task explorer.exe, then Run explorer.'
@@ -752,6 +826,9 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
             Write-Warning "Existing mount is WebDAV root. -Unstick then remount to start in pcld_ios_media."
         }
         try { Register-LoopSegmentsRcloneLogConsoleGuard -RclonePid $rcloneProc.Id } catch {}
+        if (Test-Path -LiteralPath $driveRoot) {
+            Update-ExplorerForMappedDrive -DriveRoot $driveRoot
+        }
     } else {
         if ((Test-Path -LiteralPath $driveRoot) -and $null -eq $rcloneProc) {
             Write-Warning "${driveRoot} exists but no matching rclone process - mount may fail. Try -Unstick first."
@@ -775,6 +852,12 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
             # Archive to P: and delete Temp; companion tails Temp or the P: copy.
             Clear-LoopSegmentsRcloneMountLog
             Wait-EnterOnError -ExitCode $early
+        }
+        if (Wait-LoopSegmentsMountDrive -DriveRoot $driveRoot -TimeoutSec 12) {
+            Update-ExplorerForMappedDrive -DriveRoot $driveRoot
+            Write-Host ("[mount] Told Explorer {0} appeared." -f $driveRoot)
+        } else {
+            Write-Warning ("[mount] {0} not visible yet — Explorer This PC may need F5." -f $driveRoot)
         }
     }
 
