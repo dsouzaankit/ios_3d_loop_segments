@@ -115,7 +115,7 @@ enum VanillaDownloadResumeCatalog {
         guard totalLength > 0 else { return .startFresh }
         let fm = FileManager.default
         guard let manifest = readManifest(), matches(fileKey: fileKey, totalLength: totalLength) else {
-            return faststartOnlyCompletePlan(fileKey: fileKey, totalLength: totalLength)
+            return .startFresh
         }
         if fm.fileExists(atPath: destinationURL.path) {
             let onDisk = ExportPaths.fileByteSize(at: destinationURL)
@@ -130,22 +130,7 @@ enum VanillaDownloadResumeCatalog {
             if onDisk >= totalLength { return .alreadyComplete }
             if onDisk > 0 { return .resume(offset: onDisk) }
         }
-        return faststartOnlyCompletePlan(fileKey: fileKey, totalLength: totalLength)
-    }
-
-    /// After moov-at-end remux the dense download is removed; faststart holds the completed local copy.
-    private static func faststartOnlyCompletePlan(fileKey: String, totalLength: Int64) -> ResumePlan {
-        guard totalLength > 0,
-              let manifest = readManifest(),
-              manifest.fileKey == fileKey,
-              lengthsCompatible(manifestLength: manifest.totalLength, totalLength: totalLength) else {
-            return .startFresh
-        }
-        let fast = ExportPaths.vanillaFastStartURL
-        guard FileManager.default.fileExists(atPath: fast.path) else { return .startFresh }
-        let onDisk = (try? fast.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-        guard onDisk > 0, onDisk >= totalLength * 90 / 100 else { return .startFresh }
-        return .alreadyComplete
+        return .startFresh
     }
 
     static func initialDownloadedBytes(

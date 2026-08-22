@@ -29,7 +29,6 @@ final class ExportPlaybackState: @unchecked Sendable {
         var transcodedWorkingFileBytes: Int64 = 0
         var vanillaDownloadActive = false
         var vanillaLANRelativePath = ""
-        var vanillaUsesFastStartForExport = false
         /// Bytes written to `_vanilla_download.*` (sequential from file start).
         var vanillaDownloadedBytes: Int64 = 0
         var vanillaLastProgressBytes: Int64 = 0
@@ -111,7 +110,6 @@ final class ExportPlaybackState: @unchecked Sendable {
             snapshot.vanillaDownloadActive = active
             if !active {
                 snapshot.vanillaLANRelativePath = ""
-                snapshot.vanillaUsesFastStartForExport = false
                 snapshot.vanillaDownloadedBytes = 0
             }
         }
@@ -210,7 +208,6 @@ final class ExportPlaybackState: @unchecked Sendable {
 
     func beginVanillaExport(
         downloadRelativePath: String,
-        fastStartRelativePath: String?,
         seekSeconds: Double,
         durationSeconds: Double,
         totalBytes: Int64,
@@ -220,7 +217,6 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock {
             snapshot.vanillaDownloadActive = true
             snapshot.vanillaLANRelativePath = downloadRelativePath
-            snapshot.vanillaUsesFastStartForExport = fastStartRelativePath != nil
             snapshot.pcloudTranscodedWorkingActive = false
             snapshot.vanillaDownloadedBytes = max(0, initialDownloadedBytes)
             snapshot.filledSpans = []
@@ -246,22 +242,12 @@ final class ExportPlaybackState: @unchecked Sendable {
         lock.withLock { snapshot.vanillaLANRelativePath }
     }
 
-    func promoteVanillaLANToFaststart() {
-        lock.withLock {
-            snapshot.vanillaLANRelativePath = ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL)
-            snapshot.vanillaUsesFastStartForExport = true
-        }
-    }
-
     func vanillaDownloadUserNotice() -> String? {
         lock.withLock {
             guard snapshot.vanillaDownloadActive else { return nil }
             let path = snapshot.vanillaLANRelativePath
-            let fast = snapshot.vanillaUsesFastStartForExport
-                ? " Segments / LAN use faststart MP4 after download (dense _vanilla_download.* removed when moov was at EOF)."
-                : ""
             return """
-            Vanilla download — LAN plays \(path) while download runs (growing dense file).\(fast) \
+            Vanilla download — LAN plays \(path) while download runs (growing dense file). \
             Segments from local copy when codecs allow.
             """
         }

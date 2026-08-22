@@ -318,7 +318,7 @@ enum ExportPaths {
         return onDisk
     }
 
-    /// Faststart MP4 derived from vanilla download (separate file; vanilla bytes unchanged).
+    /// Legacy sidecar from older builds (no longer written). Kept so leftover files can be listed or deleted.
     static var vanillaFastStartURL: URL {
         mediaExportDirectory.appendingPathComponent("_vanilla_faststart.mp4")
     }
@@ -346,7 +346,7 @@ enum ExportPaths {
         vanillaPrimaryMediaExistsOnDisk()
     }
 
-    /// Dense vanilla download and/or faststart sidecar (after moov-at-end remux replaces the download file).
+    /// Dense vanilla download and/or leftover `_vanilla_faststart.mp4` from older builds.
     static func vanillaPrimaryMediaExistsOnDisk() -> Bool {
         let fm = FileManager.default
         if fm.fileExists(atPath: vanillaFastStartURL.path) { return true }
@@ -377,33 +377,13 @@ enum ExportPaths {
         }
     }
 
-    /// Prefer growing `_vanilla_download.*` while downloading; otherwise completed `_vanilla_faststart.mp4`.
+    /// Prefer `_vanilla_download.*`; leftover `_vanilla_faststart.mp4` only if the download is gone.
     static func vanillaPrimaryLocalURL(for item: WebDAVItem) -> URL {
         let download = vanillaDownloadURL(preservingExtensionFrom: item.name)
         if FileManager.default.fileExists(atPath: download.path) {
             return download
         }
         return vanillaFastStartURL
-    }
-
-    /// After moov-at-end remux, drop `_vanilla_download.*` and point LAN at `_vanilla_faststart.mp4`.
-    static func replaceVanillaDownloadWithFaststartSidecar(log: ((String) -> Void)? = nil) {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: vanillaFastStartURL.path) else { return }
-        VanillaDownloadResumeCatalog.remove()
-        if let listed = try? fm.contentsOfDirectory(at: mediaExportDirectory, includingPropertiesForKeys: nil) {
-            for url in listed {
-                guard isVanillaDownloadMediaCopy(fileName: url.lastPathComponent) else { continue }
-                do {
-                    try fm.removeItem(at: url)
-                    log?("Removed \(pathRelativeToExports(url)) — using faststart sidecar on LAN")
-                } catch {
-                    log?("Could not remove \(url.lastPathComponent): \(error.localizedDescription)")
-                }
-            }
-        }
-        ExportPlaybackState.shared.promoteVanillaLANToFaststart()
-        ExportRetentionSourceCatalog.markAppFaststartRemuxCompleted()
     }
 
     static func isLANBrowsableMediaFile(fileName: String) -> Bool {

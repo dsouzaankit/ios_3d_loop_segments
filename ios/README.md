@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 295 (1.2.59):** No vanilla remux — keep `_vanilla_download.*` (no `_vanilla_faststart.mp4`, no silent `*_appFast_*` archive). Faststart remux stays on `loop/op_*.mp4` only. Re-export after this build to replace an existing silent `_appFast_` file.
+
 **Build 294 (1.2.58):** Companion multi-select no longer starts the next queued file while the first is still resolving its pCloud folder (that race put #2 on **Paused** and needed a manual Export). Orange banner shows **Starting…** during resolve so it does not wait for the export run to begin.
 
 **Build 293 (1.2.57):** Leaving Browse (Queued / Paused) clears the search field and results so a `Search in Browse` query does not come back when you return.
@@ -154,7 +156,7 @@ While a run is active there are **two** live copies (`export_latest.txt` + a tem
 **Start export** archives any finished live log, clears live pointers, and **keeps** history. **Resume** after pause keeps history and on-disk media (no log wipe); checkpoint seek is used even if the Export screen seek UI drifted. **Clear logs** (Export tab) deletes all log files. Copy from LAN **`http://<ip>:8765/pcld_ios_media/logs/…`** (or legacy **`/export_latest.txt`**). On upgrade, logs move automatically out of **Documents/Exports/**.
 
 On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** is moved into Application Support automatically. LAN/WebDAV paths stay **`/pcld_ios_media/...`**. Copy segments over LAN (not Apple Devices USB).
-- **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; MP4/MOV/M4V also **`_vanilla_faststart.mp4`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
+- **Recovery when sparse probe fails:** probes **via pCloud before** creating `_working.mp4` when not resuming a paused sparse export; abandons any stale sparse shell when vanilla/HLS starts. **WMV/MKV/WebM/TS/etc.** skip sparse probe entirely (**HEAD + vanilla fast path**). (1) **Vanilla WebDAV download** first if enabled (default on; **no API token** — works when `gethlslink` fails) → **`_vanilla_download.<ext>`**; (2) **pCloud HLS** only if vanilla is off or failed and estimated bitrate is above the **HLS cutoff** → **`_working_pcloud_transcode.mp4`** (**needs REST token** — see limitation section). Browser shows **WMV** and **TS** in the file list.
 - Real-time read pacing (like ffmpeg `-re`); segments cut at **keyframes** (~60s target, not strict wall-clock grid)
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse**, **Queued**, **Paused**, and **Export** (export keeps running if you leave Export); **Starting…** while a companion/LAN file is still resolving; row badge **Exporting** on the active file. Paused mid-run files are listed on the **Paused** tab (not in Browse).
@@ -219,7 +221,7 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
-LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, faststart copies, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file); MP4/MOV/M4V also refresh **`_vanilla_faststart.mp4`** every 25% during download. Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, **`search_debug.txt`** when search has run); the LAN index lists **`search_debug.txt`** when on disk (legacy **`/search_debug.txt`** URL still works). Legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
+LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file). Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, **`search_debug.txt`** when search has run); the LAN index lists **`search_debug.txt`** when on disk (legacy **`/search_debug.txt`** URL still works). Legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
 
 **PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** / **MOVE** (Basic auth **`admin` / `iosadmin`**) can create nested folders, small files (≤ 2 MB per PUT), and rename/relocate on the phone (local **`MOVE`** — no download). Typical homes: **`scripts/`** or **`archive/*.ps1`** (robocopy helpers that use `$PSScriptRoot` next to retained videos). **No server `COPY` yet** — same-folder Explorer paste still GET+PUT over LAN. **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, **`parked/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
 
@@ -389,16 +391,16 @@ Resume/checkpoint track from the seek forward only. Export logs and **`http://&l
 
 Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for mid-file minutes, passthrough while the window is not dense yet). After a minute is dense on `_working.mp4`, the app uses **disk passthrough** for that segment (no second pCloud read for the same window). **Pause** keeps checkpoint + `_working.mp4` + `loop/op_*.mp4`. **Stop** clears paused state, removes `loop/op_*.mp4`, archives root copies to `archive/`. **Export completes** copies root media into `archive/` but **keeps** the same paths on LAN (`_working.mp4`, `_vanilla_download.*`, etc.) so WebDAV players are not broken mid-playback.
 
-**Media retention:** Only **playable video** at `pcld_ios_media/` root is archived. Sidecars (`_working.sparse.json`, `_vanilla_download.meta.json`, `_export_retention_source.json`) stay unstamped and are **deleted** when media is **moved** off root (new export / Stop). Finished copies go under **`archive/`** as **`<pCloud-basename>[_3D_<nK>][_appFast_]<local-time>.<ext>`** (device timezone), not pipeline slot names like `_working.mp4`. **`loop/`** is not archived. A **fresh** Start export archives any existing root media first; **LAN resume** (`continueLANExport`) does not.
+**Media retention:** Only **playable video** at `pcld_ios_media/` root is archived. Sidecars (`_working.sparse.json`, `_vanilla_download.meta.json`, `_export_retention_source.json`) stay unstamped and are **deleted** when media is **moved** off root (new export / Stop). Finished copies go under **`archive/`** as **`<pCloud-basename>[_3D_<nK>]<local-time>.<ext>`** (device timezone; legacy `*_appFast_*` names still prune as one batch), not pipeline slot names like `_working.mp4`. **`loop/`** is not archived. A **fresh** Start export archives any existing root media first; **LAN resume** (`continueLANExport`) does not.
 
-**Vanilla MP4/MOV/M4V:** WebDAV fills `_vanilla_download.*` while bytes arrive. If moov was at EOF, a **`_vanilla_faststart.mp4`** sidecar is built (also refreshed during download); when the download finishes the dense **`_vanilla_download.*` file is removed** and LAN/segments use the faststart copy only. If pCloud already had moov-at-head, only the download file is kept (no sidecar).
+**Vanilla MP4/MOV/M4V:** WebDAV fills `_vanilla_download.*` while bytes arrive. LAN and segments use that file. The app does **not** remux a `_vanilla_faststart.mp4` sidecar (older builds did; leftover sidecars are deleted on the next vanilla start).
 
-**Multiple root media files (same export):** Usually **one** playable file at root after a path finishes (sparse → `_working.mp4`; transcode → `_working_pcloud_transcode.mp4`; vanilla moov-at-EOF → `_vanilla_faststart.mp4` only). You can still get **2+** archivable root videos when:
+**Multiple root media files (same export):** Usually **one** playable file at root after a path finishes (sparse → `_working.mp4`; transcode → `_working_pcloud_transcode.mp4`; vanilla → `_vanilla_download.*`). You can still get **2+** archivable root videos when:
 
 | # | Scenario | What’s on disk | Notes |
 |---|----------|----------------|-------|
-| **1** | Vanilla download **in progress** | `_vanilla_download.*` + partial `_vanilla_faststart.mp4` | 25% remux refreshes build the sidecar before the final replace. |
-| **2** | **Stop** / handoff during **(1)** | Both files if still present | One archive timestamp batch; `_appFast_` only if replace already ran. |
+| **1** | Vanilla download **in progress** | `_vanilla_download.*` | Growing file; LAN serves it as bytes arrive. |
+| **2** | **Stop** / handoff during **(1)** | Partial `_vanilla_download.*` | One archive timestamp batch. |
 | **4** | **Sparse + kept vanilla** (below) | `_working.mp4` + `_vanilla_download.*` | Rare; see **Sparse + vanilla overlap**. |
 
 **Fresh export vs LAN resume:** Any **new** Start export (not `continueLANExport`) **moves** existing root media into `archive/` first (including leftovers from a **paused** or **interrupted** run), then starts the new job. **Handoff** to another title **parks** the prior root set under **`pcld_ios_media/parked/<filename>/`** (media + sparse sidecars; LAN/WebDAV; `fileKey` in `_parked_meta.json`) instead of only a timestamped `archive/` copy — resume of that paused title **restores** park → root then sparse-adopts. **LAN resume** (`continueLANExport` — same title paused: checkpoint &gt; ~0.25 s **or** partial `_vanilla_download.*` for that file) keeps `_working` / `loop/` / vanilla on disk (or restores from `parked/`) and does **not** archive first; WebDAV vanilla fill still resumes from the last byte via `_vanilla_download.meta.json`.
@@ -415,7 +417,7 @@ Export logs with **`@ X Mbps`** mean a **pCloud** range read (dense fill or, for
 | **Trim media (keep last 2)** | Deletes older `archive/` batches; active unstamped root slot + `loop/` unchanged |
 | **Clear media** / **`clear_media`** | Removes active root videos, **all browsable videos** under `archive/` (stamped + unstamped — stamp-stripped keeps are not immortal), `parked/`, `downloads/`, `loop/` segments, and **deletes** paused/in-progress resume rows (Paused tab empties). **Keeps** non-media under `archive/` (e.g. location-dependent `.ps1` robocopy helpers) and does not touch `scripts/` or logs |
 
-**Filename pattern:** `<pCloud-basename>[_3D_<nK>][_appFast_]yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`**. Example: `archive/MyMovie_3D_4K_2026-05-22_14-30-52.mp4`; after in-app moov-at-end remux: `archive/MyMovie_3D_4K_appFast_2026-05-22_14-30-52.mp4`. Legacy `_working_*` / `_vanilla_*` archive names are kept if already on disk. Prune/trim batches still key on the timestamp only (`_appFast_` does not split batches).
+**Filename pattern:** `<pCloud-basename>[_3D_<nK>]yyyy-MM-dd_HH-mm-ss.<ext>` under **`pcld_ios_media/archive/`**. Example: `archive/MyMovie_3D_4K_2026-05-22_14-30-52.mp4`. Legacy `*_appFast_*` / `_working_*` / `_vanilla_*` archive names are kept if already on disk. Prune/trim batches still key on the timestamp only (`_appFast_` does not split batches).
 
 **`_3D_<nK>` tier** (only when **n > 2**): inferred from video dimensions before archive (probes active root media). Full **side-by-side** uses **coded width**; flat/other uses the **longer** edge.
 
@@ -440,7 +442,7 @@ Implementation: `ExportMediaArchive.swift`, `ExportRetentionSourceCatalog.swift`
 | `pcld_ios_media/_working.mp4` | Yes | May work (like VLC); sparse holes can break some servers |
 | `pcld_ios_media/_working_pcloud_transcode.mp4` | Yes | HLS transcode in progress (not original WMV/MKV) |
 | `pcld_ios_media/_vanilla_download.*` | Yes | Full dense copy (e.g. `.wmv`); **USB copy to PC** or full LAN GET when download complete (PotPlayer/VLC). iOS does not segment WMV. |
-| `pcld_ios_media/_vanilla_faststart.mp4` | Yes | Faststart MP4 sidecar when vanilla backup ran on MP4 |
+| `pcld_ios_media/_vanilla_faststart.mp4` | Yes | Leftover sidecar from older builds only (not written anymore) |
 
 ### Quest LAN playback (Skybox vs Pigasus)
 
@@ -512,7 +514,7 @@ flowchart TD
 | **Sparse `_working.mp4` (normal)** | pCloud probe succeeds (typical MP4/MOV/M4V/MKV with readable track) | Sparse shell + dense spans | Per-minute windows + optional LAN preload (see below) |
 | **LAN preload only** | Sparse path + est. bitrate **below** segment Mbps cutoff | `_working.mp4` filled toward EOF | **8 parallel** WebDAV chunks, sequential from playback start (or 0→seek prefix when seek > 0) |
 | **Sparse + 60s segments** | Sparse path + est. bitrate **at/above** cutoff + H.264/HEVC + AAC | `_working.mp4` + `loop/op_*.mp4` | One dense window per minute (+ minimal prefetch at export cursor when LAN on) |
-| **Vanilla full download** | Sparse probe fails **or** resume probe fails; toggle **on** (default) | `_vanilla_download.<ext>` (+ `_vanilla_faststart.mp4` for MP4/MOV/M4V) | **2 MB** sequential WebDAV from byte 0; **resumes** partial via `_vanilla_download.meta.json` |
+| **Vanilla full download** | Sparse probe fails **or** resume probe fails; toggle **on** (default) | `_vanilla_download.<ext>` | **2 MB** sequential WebDAV from byte 0; **resumes** partial via `_vanilla_download.meta.json` |
 | **pCloud HLS transcode** | Vanilla off/failed; probe error is container/no-track; est. Mbps ≥ HLS cutoff; API token | `_working_pcloud_transcode.mp4` (growing MP4) | HTTPS HLS playlist + progressive transcode (not WebDAV range mirror) |
 | **Probe failure (terminal)** | Recovery exhausted (vanilla off, HLS ineligible or failed) | None new | — |
 
@@ -540,7 +542,7 @@ After the primary pipeline is sparse + segments, each ~60s window uses **one** o
 |----------|------|
 | **WMV/ASF, MKV, AVI, …** (`supportsIOSegmentExport` false) | Stops after full file on disk — play **`_vanilla_download.*`** on PC/LAN; **no** `op_*.mp4` on phone |
 | **MP4/MOV/M4V, est. Mbps below cutoff** | Full file kept; **no** segments (`finishVanillaWithout60sSegments`) |
-| **MP4/MOV/M4V, at/above cutoff, H.264/HEVC + AAC** | ~60s segments from **local** copy (`_vanilla_download.*` or `_vanilla_faststart.mp4` if built) |
+| **MP4/MOV/M4V, at/above cutoff, H.264/HEVC + AAC** | ~60s segments from **local** `_vanilla_download.*` |
 | **AV1 or unsupported codec** | Vanilla file kept; segment export fails with codec message |
 | **Probe fails on completed vanilla** | File kept for LAN/USB; no segments |
 
@@ -576,7 +578,7 @@ After the primary pipeline is sparse + segments, each ~60s window uses **one** o
 | **Large file** | ~**1.5 GB** | Sparse temp only (not full copy); large HEVC mid-file uses dense-window export session |
 | **Mid-file byte offset** | **> 32 MB** | Treated as mid-file for prefetch / remote passthrough decisions |
 | **LAN preload disk budget** | ~**700 MB** working set (+ margin) when segments run | Below-cutoff preload may require space for **full file** |
-| **Vanilla** | **Entire** source file (+ faststart sidecar for MP4) | Must fit on device |
+| **Vanilla** | **Entire** source file | Must fit on device |
 
 #### How to read logs
 
@@ -648,14 +650,9 @@ Use **`export_latest.txt`** to confirm which row ran (sparse vs vanilla vs HLS; 
 
 ### Faststart remux (on phone)
 
-**Faststart** = MP4 with **`moov` at the file head** (network-friendly layout) via `AVAssetExportSession` passthrough + `shouldOptimizeForNetworkUse` — **no re-encode**, container rearrange only (`MP4NetworkOptimize.swift`).
+**Faststart** = MP4 with **`moov` at the file head** via `AVAssetExportSession` passthrough + `shouldOptimizeForNetworkUse` (`MP4NetworkOptimize.swift`). **Vanilla downloads are not remuxed** — LAN keeps `_vanilla_download.*` even when `moov` is at EOF (Skybox may need the file complete). Remux runs only on **`loop/op_00.mp4`** / **`op_01.mp4`** after each segment if `moov` is still at EOF (skipped when audio is not AAC).
 
-| Output | When |
-|--------|------|
-| **`loop/op_00.mp4`**, **`op_01.mp4`** | After each segment is written, if `moov` is still at EOF (Skybox / LAN players) |
-| **`_vanilla_faststart.mp4`** | Only if **`_vanilla_download.mp4`** has moov-at-end; skipped when download already faststart |
-
-**Pre-faststarting files on pCloud** (ffmpeg before upload) is optional for “play full movie from pCloud WebDAV”; it does **not** fix WMV probe failures, doubles handling if you remux after upload, and invalidates in-progress sparse resume if you replace the cloud object. The app keeps cloud originals untouched.
+**Pre-faststarting files on pCloud** (ffmpeg before upload) is optional for “play full movie from pCloud WebDAV”; it does **not** fix WMV probe failures and invalidates in-progress sparse resume if you replace the cloud object. The app keeps cloud originals untouched.
 
 ### Export screen settings (LAN section)
 

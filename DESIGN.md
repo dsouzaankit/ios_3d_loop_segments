@@ -146,7 +146,7 @@ Served on LAN as `/pcld_ios_media/...`. Legacy `Documents/Exports/` is empty aft
 |------|------|
 | `loop/op_00.mp4`, `loop/op_01.mp4` | Rotating ~60s segments |
 | `_working.mp4` + `_working.sparse.json` | Sparse full-timeline mirror |
-| `_vanilla_download.<ext>`, `_vanilla_faststart.mp4` | Full WebDAV download (+ faststart when applicable) |
+| `_vanilla_download.<ext>` | Full WebDAV download (legacy `_vanilla_faststart.mp4` may still exist) |
 | `_working_pcloud_transcode.mp4` | Progressive HLS remux (REST token) |
 | `parked/<filename>/` + `_parked_meta.json` | Soft-pause / handoff partials (LAN-playable) |
 | `archive/` | Finished / handed-off root media (PC `.ps1` helpers may live here) |

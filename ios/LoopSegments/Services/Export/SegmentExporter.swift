@@ -888,7 +888,6 @@ final class SegmentExporter {
     private func finishVanillaWithout60sSegments(
         downloadURL: URL,
         downloadRel: String,
-        fastStartRelative: String?,
         seekMs: Int64,
         effectiveBytes: Int64,
         reason: String,
@@ -898,7 +897,6 @@ final class SegmentExporter {
         let seekSeconds = Double(seekMs) / 1000.0
         ExportPlaybackState.shared.beginVanillaExport(
             downloadRelativePath: downloadRel,
-            fastStartRelativePath: fastStartRelative,
             seekSeconds: seekSeconds,
             durationSeconds: durationSeconds,
             totalBytes: effectiveBytes
@@ -1274,16 +1272,11 @@ final class SegmentExporter {
         guard onDisk >= 4 * 1024 * 1024 else { return nil }
 
         let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
-        let ext = (item.name as NSString).pathExtension.lowercased()
-        let fastStartRelative = ["mp4", "mov", "m4v"].contains(ext)
-            ? ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL)
-            : nil
         let (estimatedDuration, _) = Self.estimatedVanillaDurationFromFileBytes(onDisk)
         let seekSeconds = Double(seekMs) / 1000.0
 
         ExportPlaybackState.shared.beginVanillaExport(
             downloadRelativePath: downloadRel,
-            fastStartRelativePath: fastStartRelative,
             seekSeconds: seekSeconds,
             durationSeconds: estimatedDuration,
             totalBytes: onDisk,
@@ -1352,7 +1345,6 @@ final class SegmentExporter {
                 fileKey: item.fileKey,
                 sourceHref: item.href,
                 totalLength: 0,
-                fastStartDestinationURL: nil,
                 authorizationProvider: authorizationProvider,
                 isCancelled: isCancelled,
                 log: logHandler,
@@ -1368,10 +1360,6 @@ final class SegmentExporter {
         guard effectiveBytes > 0 else { throw WebDAVResourceLoaderError.missingContentLength }
 
         let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
-        let ext = (item.name as NSString).pathExtension.lowercased()
-        let usesFastStartDuringDownload = ["mp4", "mov", "m4v"].contains(ext)
-        let fastStartURL = usesFastStartDuringDownload ? ExportPaths.vanillaFastStartURL : nil
-        let fastStartRelative = fastStartURL.map { ExportPaths.pathRelativeToExports($0) }
         let initialDownloadedBytes = VanillaDownloadResumeCatalog.initialDownloadedBytes(
             fileKey: item.fileKey,
             totalLength: effectiveBytes,
@@ -1391,7 +1379,6 @@ final class SegmentExporter {
         )
         ExportPlaybackState.shared.beginVanillaExport(
             downloadRelativePath: downloadRel,
-            fastStartRelativePath: fastStartRelative,
             seekSeconds: seekSeconds,
             durationSeconds: durationResolve.seconds,
             totalBytes: effectiveBytes,
@@ -1417,7 +1404,6 @@ final class SegmentExporter {
                 fileKey: item.fileKey,
                 sourceHref: item.href,
                 totalLength: effectiveBytes,
-                fastStartDestinationURL: fastStartURL,
                 authorizationProvider: authorizationProvider,
                 isCancelled: isCancelled,
                 log: logHandler,
@@ -1452,24 +1438,10 @@ final class SegmentExporter {
             ExportPlaybackState.shared.updateVanillaDownloadProgress(downloadedBytes: effectiveBytes)
         }
 
-        var exportAssetURL = downloadURL
-        var vanillaSourceAlreadyFaststart = false
-        if usesFastStartDuringDownload {
-            if FileManager.default.fileExists(atPath: ExportPaths.vanillaFastStartURL.path) {
-                exportAssetURL = ExportPaths.vanillaFastStartURL
-            } else if MP4NetworkOptimize.sourceAlreadyNetworkOptimized(at: downloadURL) {
-                vanillaSourceAlreadyFaststart = true
-                logHandler(
-                    "Using \(downloadURL.lastPathComponent) for export — moov already at head (pCloud pre-faststart)"
-                )
-            }
-        }
-
         if !containerFormat.supportsIOSegmentExport {
             return try await finishVanillaWithout60sSegments(
                 downloadURL: downloadURL,
                 downloadRel: downloadRel,
-                fastStartRelative: fastStartRelative,
                 seekMs: seekMs,
                 effectiveBytes: effectiveBytes,
                 reason:
@@ -1490,7 +1462,6 @@ final class SegmentExporter {
             return try await finishVanillaWithout60sSegments(
                 downloadURL: downloadURL,
                 downloadRel: downloadRel,
-                fastStartRelative: fastStartRelative,
                 seekMs: seekMs,
                 effectiveBytes: effectiveBytes,
                 reason: ExportDeliveryPolicy.skip60sSegmentsLogReason(
@@ -1505,14 +1476,13 @@ final class SegmentExporter {
         let audioFormat: CMFormatDescription?
         do {
             (durationSeconds, videoFormat, audioFormat) = try await probeLocalMetadata(
-                fileURL: exportAssetURL,
+                fileURL: downloadURL,
                 log: logHandler
             )
         } catch {
             let downloadRel = ExportPaths.pathRelativeToExports(downloadURL)
             ExportPlaybackState.shared.beginVanillaExport(
                 downloadRelativePath: downloadRel,
-                fastStartRelativePath: fastStartRelative,
                 seekSeconds: Double(seekMs) / 1000.0,
                 durationSeconds: 0,
                 totalBytes: effectiveBytes
@@ -1536,7 +1506,6 @@ final class SegmentExporter {
 
         ExportPlaybackState.shared.beginVanillaExport(
             downloadRelativePath: downloadRel,
-            fastStartRelativePath: fastStartRelative,
             seekSeconds: seekSeconds,
             durationSeconds: durationSeconds,
             totalBytes: effectiveBytes
@@ -1566,12 +1535,12 @@ final class SegmentExporter {
                 " (vanilla local file)"
         )
         logHandler(
-            "Publishing ~\(Int(Self.segmentDurationSeconds))s segments from \(exportAssetURL.lastPathComponent) — " +
+            "Publishing ~\(Int(Self.segmentDurationSeconds))s segments from \(downloadURL.lastPathComponent) — " +
                 "op_00/op_01; LAN full file at \(downloadRel)"
         )
 
         let localAsset = AVURLAsset(
-            url: exportAssetURL,
+            url: downloadURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
         )
         retainedAsset = localAsset

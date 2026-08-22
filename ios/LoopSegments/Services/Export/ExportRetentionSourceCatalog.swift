@@ -5,7 +5,7 @@ enum ExportRetentionSourceCatalog {
     struct Manifest: Codable {
         var sourceFileName: String
         var fileKey: String
-        /// Set when moov-at-end remux produced `_vanilla_faststart.mp4` (archive name gets `_appFast_`).
+        /// Legacy: older builds set this after vanilla remux. New exports never remux vanilla.
         var appFaststartRemux: Bool?
         /// Root slot filenames already copied/moved to `archive/` this export (e.g. `_working.mp4`).
         var archivedRootSlotNames: [String]?
@@ -45,16 +45,6 @@ enum ExportRetentionSourceCatalog {
 
     static func remove() {
         try? FileManager.default.removeItem(at: manifestURL)
-    }
-
-    static func markAppFaststartRemuxCompleted() {
-        guard var manifest = read() else { return }
-        manifest.appFaststartRemux = true
-        write(manifest)
-    }
-
-    static func hadAppFaststartRemux() -> Bool {
-        read()?.appFaststartRemux == true
     }
 
     static func isRootSlotAlreadyArchived(_ slotFileName: String) -> Bool {

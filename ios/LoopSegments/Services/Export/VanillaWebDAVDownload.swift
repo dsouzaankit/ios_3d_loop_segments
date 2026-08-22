@@ -5,7 +5,6 @@ enum VanillaWebDAVDownload {
     private static let enabledKey = "vanillaDownloadBackupEnabled"
     private static let chunkBytes: Int64 = 2 * 1024 * 1024
     private static let progressStepPercent = 5
-    private static let faststartRefreshStepPercent = 25
 
     static var isBackupEnabled: Bool {
         get {
@@ -21,12 +20,12 @@ enum VanillaWebDAVDownload {
         fileKey: String,
         sourceHref: String?,
         totalLength: Int64,
-        fastStartDestinationURL: URL? = nil,
         authorizationProvider: @escaping WebDAVAuthorizationProvider,
         isCancelled: @escaping () -> Bool,
         log: @escaping (String) -> Void,
         onDownloadedBytes: ((Int64) -> Void)? = nil
     ) async throws {
+        removeLeftoverFaststartSidecar(log: log)
         var expectedLength = totalLength
         if expectedLength <= 0 {
             log("Vanilla download — unknown Content-Length; using full GET")
@@ -56,9 +55,6 @@ enum VanillaWebDAVDownload {
             if fm.fileExists(atPath: destinationURL.path) {
                 try fm.removeItem(at: destinationURL)
             }
-            if let fastStartDestinationURL, fm.fileExists(atPath: fastStartDestinationURL.path) {
-                try? fm.removeItem(at: fastStartDestinationURL)
-            }
             guard fm.createFile(atPath: destinationURL.path, contents: nil) else {
                 throw SegmentExporterError.writerSetupFailed
             }
@@ -76,7 +72,7 @@ enum VanillaWebDAVDownload {
             offset = expectedLength
             log(
                 "Vanilla download already on disk — \(formatBytes(expectedLength)) " +
-                    "(skipping WebDAV fill; segments / faststart use local copy)"
+                    "(skipping WebDAV fill; segments use local copy)"
             )
             onDownloadedBytes?(offset)
         }
@@ -96,18 +92,7 @@ enum VanillaWebDAVDownload {
                     "LAN serves \(destinationURL.lastPathComponent) while bytes arrive)"
             )
         }
-        if let fastStartDestinationURL {
-            log(
-                "MP4 faststart sidecar → \(ExportPaths.pathRelativeToExports(fastStartDestinationURL)) " +
-                    "(replaces _vanilla_download.* after download when moov was at EOF; skipped when pCloud is pre-faststarted)"
-            )
-        }
-
         var lastLoggedPercent = offset > 0 ? Int(offset * 100 / expectedLength) - progressStepPercent : -1
-        var lastFaststartPercent = lastLoggedPercent >= 0
-            ? (lastLoggedPercent / faststartRefreshStepPercent) * faststartRefreshStepPercent
-            : 0
-        var skipFaststartSidecar = false
         var lastProgressLog = CFAbsoluteTimeGetCurrent()
         let auth = authorizationProvider()
 
@@ -183,20 +168,6 @@ enum VanillaWebDAVDownload {
                 lastLoggedPercent = (pct / progressStepPercent) * progressStepPercent
                 log("Vanilla download \(pct)% — \(formatBytes(offset)) / \(formatBytes(expectedLength))")
             }
-            if let fastStartDestinationURL,
-               !skipFaststartSidecar,
-               pct >= lastFaststartPercent + faststartRefreshStepPercent {
-                lastFaststartPercent = (pct / faststartRefreshStepPercent) * faststartRefreshStepPercent
-                if await refreshFaststartCopyIfPossible(
-                    from: destinationURL,
-                    to: fastStartDestinationURL,
-                    downloadedBytes: offset,
-                    log: log
-                ) == false,
-                   MP4NetworkOptimize.sourceAlreadyNetworkOptimized(at: destinationURL) {
-                    skipFaststartSidecar = true
-                }
-            }
         }
         try handle?.synchronize()
         VanillaDownloadResumeCatalog.save(fileKey: fileKey, totalLength: expectedLength, href: sourceHref)
@@ -219,21 +190,7 @@ enum VanillaWebDAVDownload {
                 }
             }
         }
-        if let fastStartDestinationURL {
-            let wroteSidecar = try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
-                from: destinationURL,
-                to: fastStartDestinationURL,
-                log: log
-            )
-            if wroteSidecar {
-                ExportPaths.replaceVanillaDownloadWithFaststartSidecar(log: log)
-            }
-        }
-        let completeRel = ExportPaths.pathRelativeToExports(
-            FileManager.default.fileExists(atPath: destinationURL.path)
-                ? destinationURL
-                : (fastStartDestinationURL ?? destinationURL)
-        )
+        let completeRel = ExportPaths.pathRelativeToExports(destinationURL)
         log("Vanilla download complete — \(formatBytes(onDisk)) (\(completeRel))")
     }
 
@@ -329,30 +286,15 @@ enum VanillaWebDAVDownload {
         log("Vanilla download via full GET — \(formatBytes(size)) → \(destinationURL.lastPathComponent)")
     }
 
-    /// `true` when a sidecar was written/updated; `false` when source is already faststart.
-    @discardableResult
-    private static func refreshFaststartCopyIfPossible(
-        from sourceURL: URL,
-        to destinationURL: URL,
-        downloadedBytes: Int64,
-        log: @escaping (String) -> Void
-    ) async -> Bool {
-        guard downloadedBytes > 8 * 1024 * 1024 else { return false }
-        if MP4NetworkOptimize.sourceAlreadyNetworkOptimized(at: sourceURL) {
-            return false
-        }
+    /// Drop a leftover `_vanilla_faststart.mp4` from older builds (never remux vanilla).
+    private static func removeLeftoverFaststartSidecar(log: @escaping (String) -> Void) {
+        let sidecar = ExportPaths.vanillaFastStartURL
+        guard FileManager.default.fileExists(atPath: sidecar.path) else { return }
         do {
-            return try await MP4NetworkOptimize.writeNetworkOptimizedCopy(
-                from: sourceURL,
-                to: destinationURL,
-                log: log
-            )
+            try FileManager.default.removeItem(at: sidecar)
+            log("Removed leftover \(ExportPaths.pathRelativeToExports(sidecar)) — LAN uses _vanilla_download.*")
         } catch {
-            log(
-                "Faststart refresh skipped at \(formatBytes(downloadedBytes)) — " +
-                    "\(error.localizedDescription)"
-            )
-            return false
+            log("Could not remove leftover \(sidecar.lastPathComponent): \(error.localizedDescription)")
         }
     }
 

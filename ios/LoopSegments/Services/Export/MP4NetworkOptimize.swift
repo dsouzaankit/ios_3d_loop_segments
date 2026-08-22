@@ -18,6 +18,9 @@ enum MP4NetworkOptimize {
             log("Segment moov in file head — OK for Skybox / LAN streaming")
             return
         }
+        if await shouldSkipFaststartRemuxToPreserveAudio(at: fileURL, log: log) {
+            return
+        }
 
         log("Segment has moov-at-end — remuxing with network optimize (Skybox / WebDAV)")
         try await remuxWithFastStart(from: fileURL, to: fileURL, log: log)
@@ -46,45 +49,69 @@ enum MP4NetworkOptimize {
         moovPresentInFirstBytes(of: fileURL, scanBytes: moovScanBytes)
     }
 
-    /// Network-optimized MP4 at `destinationURL` (leaves `sourceURL` unchanged when paths differ).
-    /// Skips remux when `sourceURL` already has `moov` at head — pCloud file was pre-faststarted.
-    @discardableResult
-    static func writeNetworkOptimizedCopy(
-        from sourceURL: URL,
-        to destinationURL: URL,
+    /// AVAssetExport passthrough keeps AAC; AC-3 / E-AC-3 / DTS / PCM become silent — skip those segments.
+    private static func audioSurvivesFaststartPassthrough(_ format: CMFormatDescription) -> Bool {
+        if CodecSupport.canPassthroughAudio(format) { return true }
+        let codec = CMFormatDescriptionGetMediaSubType(format)
+        return codec == kAudioFormatMPEG4AAC_HE
+            || codec == kAudioFormatMPEG4AAC_HE_V2
+            || codec == kAudioFormatMPEG4AAC_LD
+            || codec == kAudioFormatMPEG4AAC_ELD
+            || codec == kAudioFormatMPEG4AAC_ELD_SBR
+            || codec == kAudioFormatMPEG4AAC_ELD_V2
+    }
+
+    /// `true` = do not remux (keep source so soundtrack is not stripped).
+    private static func shouldSkipFaststartRemuxToPreserveAudio(
+        at fileURL: URL,
         log: @escaping (String) -> Void
-    ) async throws -> Bool {
-        if sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
-            if sourceAlreadyNetworkOptimized(at: sourceURL) {
-                log("Moov already in file head — OK for Skybox / LAN (no remux)")
-                return false
-            }
-            log("Moov-at-end — remuxing in place (network optimize)")
-            try await remuxWithFastStart(from: sourceURL, to: destinationURL, log: log)
+    ) async -> Bool {
+        let asset = AVURLAsset(url: fileURL)
+        let audioTracks: [AVAssetTrack]
+        let videoTracks: [AVAssetTrack]
+        do {
+            audioTracks = try await asset.loadTracks(withMediaType: .audio)
+            videoTracks = try await asset.loadTracks(withMediaType: .video)
+        } catch {
+            log(
+                "Faststart remux skipped — cannot inspect tracks yet " +
+                    "(\(error.localizedDescription)); keeping \(fileURL.lastPathComponent)"
+            )
             return true
         }
-        if sourceAlreadyNetworkOptimized(at: sourceURL) {
-            log(
-                "Download already faststart (moov in head) — skipping \(destinationURL.lastPathComponent); " +
-                    "LAN/export use \(ExportPaths.pathRelativeToExports(sourceURL))"
-            )
-            let fm = FileManager.default
-            if fm.fileExists(atPath: destinationURL.path) {
-                try? fm.removeItem(at: destinationURL)
+        if videoTracks.isEmpty, audioTracks.isEmpty {
+            log("Faststart remux skipped — no tracks readable yet; keeping \(fileURL.lastPathComponent)")
+            return true
+        }
+
+        var dropped: [String] = []
+        var sawAudioFormat = false
+        for track in audioTracks {
+            let formats = (try? await track.load(.formatDescriptions)) ?? []
+            for format in formats {
+                sawAudioFormat = true
+                if !audioSurvivesFaststartPassthrough(format) {
+                    dropped.append(CodecSupport.fourCCString(format))
+                }
             }
-            return false
         }
-        log(
-            "Writing faststart sidecar → \(ExportPaths.pathRelativeToExports(destinationURL)) " +
-                "(from \(ExportPaths.pathRelativeToExports(sourceURL)); removes _vanilla_download.* when download finishes)"
-        )
-        try await remuxWithFastStart(from: sourceURL, to: destinationURL, log: log)
-        if moovPresentInFirstBytes(of: destinationURL, scanBytes: moovScanBytes) {
-            log("Faststart sidecar ready — moov at head of \(destinationURL.lastPathComponent)")
-        } else {
-            log("Faststart sidecar finished (moov may still be past head on very large files)")
+        if !audioTracks.isEmpty, !sawAudioFormat {
+            log(
+                "Faststart remux skipped — audio track present but codec unread; " +
+                    "keeping \(fileURL.lastPathComponent)"
+            )
+            return true
         }
-        return true
+        if !dropped.isEmpty {
+            let unique = Array(Set(dropped)).sorted()
+            log(
+                "Faststart remux skipped — audio \(unique.joined(separator: ", ")) " +
+                    "would not survive AVFoundation passthrough (need AAC); " +
+                    "keeping \(fileURL.lastPathComponent)"
+            )
+            return true
+        }
+        return false
     }
 
     private static func remuxWithFastStart(

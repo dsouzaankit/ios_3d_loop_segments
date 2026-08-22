@@ -2003,7 +2003,7 @@ enum ExportLANServer {
             \(htmlDashboardStatsBlock())
             <p><em>Vanilla download — <code>\(rel)</code> (full file, original extension; not sparse <code>_working.mp4</code>).</em></p>
             \(seekNote)
-            <p>MP4 faststart copy (when built): <code>pcld_ios_media/_vanilla_faststart.mp4</code>. Prefer <code>loop/op_00.mp4</code> when segments exist.</p>
+            <p>Prefer <code>loop/op_00.mp4</code> when segments exist.</p>
             """
         }
         if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN()
@@ -2052,7 +2052,7 @@ enum ExportLANServer {
                 || name == ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL) {
                 let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
                 let vanillaNote = name.contains("_vanilla_faststart")
-                    ? " — faststart MP4 (replaces _vanilla_download.* after moov-at-end remux)"
+                    ? " — leftover faststart sidecar (older builds; not written anymore)"
                     : " — full vanilla WebDAV download (original extension)"
                 let seekNote = startSec > 0
                     ? " — export seek \(formatLANClock(startSec)) (download from 0:00)"
