@@ -544,6 +544,7 @@ function Find-LoopSegmentsRcloneMountProcess {
     $remoteToken = [regex]::Escape("${RemoteName}:")
     $match = @(Get-CimInstance Win32_Process -Filter "Name='rclone.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
+            if ($null -eq $_) { return $false }
             $cmd = [string]$_.CommandLine
             if ($cmd -notmatch '(?i)\bmount\b') { return $false }
             return ($cmd -match $driveToken -or $cmd -match $remoteToken -or $cmd -match '(?i)--volname[= ]LoopSegments')
@@ -757,10 +758,13 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         Test-RcloneWebDAVRemote -Name $remote
     }
 
+    $driveLetter = Resolve-LoopSegmentsMountDriveLetter -Override $DriveLetter -PersistIfChanged
+    $driveRoot = "${driveLetter}:\"
     if (Test-Path -LiteralPath $driveRoot) {
-        $used = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
-        if ($used) {
-            Write-Warning "$driveRoot already in use (Koofr?). Change mountDriveLetter in loop-segments-windows.json or -DriveLetter."
+        if (Test-LoopSegmentsRcloneMountOnDrive -DriveLetter $driveLetter) {
+            Write-Host "$driveRoot already mounted (loopsegments rclone). Reusing it."
+        } else {
+            throw "$driveRoot is still in use after picking a free letter. Close the other mapping or pass -DriveLetter."
         }
     }
 

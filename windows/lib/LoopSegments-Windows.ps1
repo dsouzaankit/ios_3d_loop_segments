@@ -95,7 +95,8 @@ function Import-LoopSegmentsLegacyLanHost {
     $legacy = Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-lan-host.txt'
     if (-not [string]::IsNullOrWhiteSpace($Settings.phoneLanHost)) { return $Settings }
     if (-not (Test-Path -LiteralPath $legacy)) { return $Settings }
-    $ip = (Get-Content -LiteralPath $legacy -Raw).Trim().Trim('"')
+    $raw = Get-Content -LiteralPath $legacy -Raw -ErrorAction SilentlyContinue
+    $ip = ([string]$raw).Trim().Trim('"')
     if (-not [string]::IsNullOrWhiteSpace($ip)) {
         $Settings.phoneLanHost = $ip
     }
@@ -110,7 +111,10 @@ function Get-LoopSegmentsWindowsSettings {
 }
 
 function Save-LoopSegmentsWindowsSettings {
-    param([hashtable] $Settings)
+    param(
+        [hashtable] $Settings,
+        [switch] $Quiet
+    )
     $path = Get-LoopSegmentsWindowsConfigPath
     $ordered = [ordered]@{}
     foreach ($key in (Get-DefaultLoopSegmentsWindowsSettings).Keys) {
@@ -118,16 +122,18 @@ function Save-LoopSegmentsWindowsSettings {
     }
     $json = $ordered | ConvertTo-Json -Depth 4
     Set-Content -LiteralPath $path -Value $json -Encoding UTF8
-    Write-Host "Saved: $path"
+    if (-not $Quiet) {
+        Write-Host "Saved: $path"
+    }
     $legacy = Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-lan-host.txt'
-    if (-not [string]::IsNullOrWhiteSpace($Settings.phoneLanHost)) {
-        $Settings.phoneLanHost.Trim() | Set-Content -LiteralPath $legacy -Encoding UTF8 -NoNewline
+    if (-not [string]::IsNullOrWhiteSpace([string]$Settings.phoneLanHost)) {
+        ([string]$Settings.phoneLanHost).Trim() | Set-Content -LiteralPath $legacy -Encoding UTF8 -NoNewline
     }
 }
 
 function Resolve-LoopSegmentsPath {
     param([string] $Path)
-    $t = $Path.Trim().Trim('"')
+    $t = ([string]$Path).Trim().Trim('"')
     if ([string]::IsNullOrWhiteSpace($t)) { return '' }
     return [System.IO.Path]::GetFullPath(
         [Environment]::ExpandEnvironmentVariables(
@@ -359,7 +365,7 @@ public static class LoopSegmentsShowWindow {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     public const int SW_SHOWMINNOACTIVE = 7;
 }
-'@
+'@ | Out-Null
     }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FilePath
@@ -400,7 +406,10 @@ function Invoke-LoopSegmentsRclone {
 
 function Get-LoopSegmentsLANHost {
     param([string] $Override = '')
-    $resolved = $Override.Trim()
+    $resolved = [string]$Override
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+        $resolved = $resolved.Trim()
+    }
     if ([string]::IsNullOrWhiteSpace($resolved)) {
         $resolved = (Get-LoopSegmentsWindowsSettings).phoneLanHost
     }
@@ -413,17 +422,196 @@ phoneLanHost is required.
   Or:  .\setup\Set-LoopSegmentsLANHost.ps1 <phone-ip>
 "@
     }
-    return $resolved.Trim()
+    return ([string]$resolved).Trim()
 }
 
 function Get-LoopSegmentsMountDriveLetter {
     param([string] $Override = '')
     if (-not [string]::IsNullOrWhiteSpace($Override)) {
-        return $Override.Trim().ToUpperInvariant()[0]
+        $o = $Override.Trim().ToUpperInvariant()
+        if ($o.Length -lt 1) { return 'L' }
+        return $o.Substring(0, 1)
     }
     $letter = [string](Get-LoopSegmentsWindowsSettings).mountDriveLetter
     if ([string]::IsNullOrWhiteSpace($letter)) { return 'L' }
-    return $letter.Trim().ToUpperInvariant()[0]
+    $letter = $letter.Trim().ToUpperInvariant()
+    if ($letter.Length -lt 1) { return 'L' }
+    return $letter.Substring(0, 1)
+}
+
+function Get-LoopSegmentsOccupiedDriveLetters {
+    $set = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $drives = @()
+    try {
+        $rawDrives = [System.IO.DriveInfo]::GetDrives()
+        if ($null -ne $rawDrives) { $drives = @($rawDrives | Where-Object { $null -ne $_ }) }
+    } catch { $drives = @() }
+    foreach ($d in $drives) {
+        if ($null -eq $d) { continue }
+        try {
+            $name = [string]$d.Name
+            if ($name.Length -ge 1) {
+                [void]$set.Add($name.Substring(0, 1))
+            }
+        } catch { }
+    }
+    Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | ForEach-Object {
+        $n = [string]$_.Name
+        if ($n.Length -eq 1) { [void]$set.Add($n) }
+    }
+    # Comma prevents PowerShell from enumerating an empty HashSet into $null.
+    return ,$set
+}
+
+function Test-LoopSegmentsRcloneCommandLineIsOurMount {
+    param([string] $CommandLine)
+    $cmd = [string]$CommandLine
+    if ([string]::IsNullOrWhiteSpace($cmd) -or $cmd -notmatch '(?i)\bmount\b') {
+        return $false
+    }
+    $remote = 'loopsegments'
+    if (Get-Command Get-LoopSegmentsRcloneRemoteName -ErrorAction SilentlyContinue) {
+        try {
+            $resolved = [string](Get-LoopSegmentsRcloneRemoteName)
+            if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+                $remote = $resolved.Trim()
+            }
+        } catch { }
+    }
+    $remoteToken = [regex]::Escape("${remote}:")
+    return [bool]($cmd -match $remoteToken)
+}
+
+function Get-LoopSegmentsWin32Processes {
+    param([string] $Name = '')
+    # Get-CimInstance returns $null when nothing matches. @($null) is a 1-element
+    # array, so foreach would call methods on $null ("You cannot call a method on a null-valued expression").
+    $raw = $null
+    try {
+        if ([string]::IsNullOrWhiteSpace($Name)) {
+            $raw = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+        } else {
+            $raw = Get-CimInstance Win32_Process -Filter "Name = '$Name'" -ErrorAction SilentlyContinue
+        }
+    } catch {
+        return @()
+    }
+    if ($null -eq $raw) { return @() }
+    return @($raw | Where-Object { $null -ne $_ })
+}
+
+function Get-LoopSegmentsRcloneMountedDriveLetters {
+    $set = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $procs = Get-LoopSegmentsWin32Processes -Name 'rclone.exe'
+    foreach ($proc in $procs) {
+        $cmd = [string]$proc.CommandLine
+        if (-not (Test-LoopSegmentsRcloneCommandLineIsOurMount -CommandLine $cmd)) {
+            continue
+        }
+        # rclone mount <remote:path> <X:> [flags]
+        if ($cmd -match '(?i)\bmount\s+\S+\s+["'']?([A-Za-z]):(?:\\)?["'']?(?:\s|$)') {
+            $ch = [string]$Matches[1]
+            if ($ch.Length -ge 1) {
+                [void]$set.Add($ch.ToUpperInvariant())
+            }
+        }
+    }
+    return ,$set
+}
+
+function Test-LoopSegmentsRcloneMountOnDrive {
+    param([Parameter(Mandatory = $true)][string] $DriveLetter)
+    $letter = ([string]$DriveLetter).Trim().ToUpperInvariant()
+    if ($letter.Length -lt 1) { return $false }
+    $letter = $letter.Substring(0, 1)
+    $ours = Get-LoopSegmentsRcloneMountedDriveLetters
+    if ($null -eq $ours) { return $false }
+    return $ours.Contains($letter)
+}
+
+function Get-LoopSegmentsFreeMountDriveLetters {
+    $occupied = Get-LoopSegmentsOccupiedDriveLetters
+    $free = [System.Collections.Generic.List[string]]::new()
+    foreach ($code in 68..90) {
+        $ch = [string][char]$code
+        $taken = ($null -ne $occupied -and $occupied.Contains($ch))
+        if (-not $taken -and -not (Test-Path -LiteralPath "${ch}:\")) {
+            $free.Add($ch)
+        }
+    }
+    return @($free)
+}
+
+function Set-LoopSegmentsMountDriveLetter {
+    param([Parameter(Mandatory = $true)][string] $DriveLetter)
+    $raw = ([string]$DriveLetter).Trim().ToUpperInvariant()
+    if ($raw.Length -lt 1) { return }
+    $letter = $raw.Substring(0, 1)
+    $settings = Get-LoopSegmentsWindowsSettings
+    $prev = ([string]$settings.mountDriveLetter).Trim().ToUpperInvariant()
+    if ($prev.Length -ge 1 -and $prev.Substring(0, 1) -eq $letter) {
+        return
+    }
+    $settings.mountDriveLetter = $letter
+    Save-LoopSegmentsWindowsSettings -Settings $settings -Quiet
+}
+
+function Resolve-LoopSegmentsMountDriveLetter {
+    <#
+      Prefer json / -DriveLetter. Reuse only an existing loopsegments rclone mount (not Koofr/other remotes).
+      If the preferred letter is taken by something else, pick a random free D–Z and optionally save it to json.
+    #>
+    param(
+        [string] $Override = '',
+        [switch] $PersistIfChanged
+    )
+    $preferred = [string](Get-LoopSegmentsMountDriveLetter -Override $Override)
+    if ([string]::IsNullOrWhiteSpace($preferred)) { $preferred = 'L' }
+    $preferred = $preferred.Trim().ToUpperInvariant().Substring(0, 1)
+
+    $ours = Get-LoopSegmentsRcloneMountedDriveLetters
+    if ($null -ne $ours -and $ours.Contains($preferred)) {
+        return $preferred
+    }
+    $existingOurs = @($ours)
+    if ($existingOurs.Count -gt 0) {
+        $picked = [string]$existingOurs[0]
+        if ([string]::IsNullOrWhiteSpace($picked)) {
+            $picked = $preferred
+        } else {
+            $picked = $picked.Trim().ToUpperInvariant().Substring(0, 1)
+        }
+        Write-Host "Phone rclone already mounted on ${picked}: (loopsegments remote). Reusing it instead of ${preferred}:."
+        if ($PersistIfChanged) {
+            try {
+                Set-LoopSegmentsMountDriveLetter -DriveLetter $picked
+                Write-Host "Saved mountDriveLetter=${picked} to loop-segments-windows.json (Unstick/companion will use it)."
+            } catch {
+                Write-Warning "Could not save mountDriveLetter=${picked}: $($_.Exception.Message)"
+            }
+        }
+        return $picked
+    }
+    $occupied = Get-LoopSegmentsOccupiedDriveLetters
+    if ($null -ne $occupied -and -not $occupied.Contains($preferred) -and -not (Test-Path -LiteralPath "${preferred}:\")) {
+        return $preferred
+    }
+
+    $free = @(Get-LoopSegmentsFreeMountDriveLetters)
+    if ($free.Count -eq 0) {
+        throw "No free drive letters (D-Z) for the phone rclone mount (preferred ${preferred}: is in use)."
+    }
+    $picked = [string]($free | Get-Random)
+    Write-Warning "Drive ${preferred}: is already in use. Mounting the phone on ${picked}: instead."
+    if ($PersistIfChanged) {
+        try {
+            Set-LoopSegmentsMountDriveLetter -DriveLetter $picked
+            Write-Host "Saved mountDriveLetter=${picked} to loop-segments-windows.json (Unstick/companion will use it)."
+        } catch {
+            Write-Warning "Could not save mountDriveLetter=${picked}: $($_.Exception.Message)"
+        }
+    }
+    return $picked
 }
 
 function Get-LoopSegmentsRcloneRemoteName {

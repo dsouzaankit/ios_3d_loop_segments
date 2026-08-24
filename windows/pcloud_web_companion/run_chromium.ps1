@@ -62,6 +62,9 @@ function Wait-EnterOnFatal {
 trap {
     Write-Host ""
     Write-Host ("[run] {0}" -f $_.Exception.Message) -ForegroundColor Red
+    if (Get-Command Remove-LoopSegmentsSkyboxRcloneFolderMapping -ErrorAction SilentlyContinue) {
+        try { Remove-LoopSegmentsSkyboxRcloneFolderMapping } catch {}
+    }
     if (Get-Command Stop-LoopSegmentsSkybox -ErrorAction SilentlyContinue) {
         try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
     }
@@ -114,7 +117,7 @@ if (Test-Path -LiteralPath $ClashHelper) {
 }
 
 $WindowsLib = Join-Path $LibDir 'LoopSegments-Windows.ps1'
-if ((Test-Path -LiteralPath $WindowsLib) -and -not (Get-Command Start-LoopSegmentsConsoleNoActivate -ErrorAction SilentlyContinue)) {
+if (Test-Path -LiteralPath $WindowsLib) {
     . $WindowsLib
 }
 
@@ -622,7 +625,7 @@ function Get-CompanionProxyBypassList {
         )) {
         [void]$parts.Add($p)
     }
-    $phone = $PhoneHost.Trim()
+    $phone = ([string]$PhoneHost).Trim()
     if ($phone -and -not $parts.Contains($phone)) {
         [void]$parts.Add($phone)
     }
@@ -954,16 +957,21 @@ function Get-CompanionMountDriveLetter {
             }
         } catch {}
     }
-    return $letter.Trim().ToUpperInvariant()[0]
+    $letter = ([string]$letter).Trim().ToUpperInvariant()
+    if ($letter.Length -lt 1) { return 'L' }
+    return $letter.Substring(0, 1)
 }
 
 function Test-RcloneMountProcessForDrive {
     param([Parameter(Mandatory = $true)][string]$DriveLetter)
+    if (Get-Command Test-LoopSegmentsRcloneMountOnDrive -ErrorAction SilentlyContinue) {
+        return [bool](Test-LoopSegmentsRcloneMountOnDrive -DriveLetter $DriveLetter)
+    }
     $escape = [regex]::Escape("${DriveLetter}:")
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='rclone.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
             $cmd = [string]$_.CommandLine
-            $cmd -match '(?i)\bmount\b' -and $cmd -match $escape
+            $cmd -match '(?i)\bmount\b' -and $cmd -match $escape -and $cmd -match '(?i)loopsegments:'
         })
     return ($procs.Count -gt 0)
 }
@@ -995,7 +1003,8 @@ function Invoke-PhoneLanRecoverIfNeeded {
         if ($msg -match 'LAN_RECOVER_EXIT:(\d+)') {
             $code = [int]$Matches[1]
         } else {
-            throw
+            Write-Warning "[lan-recover] $msg - falling back to LAN wait only"
+            return (Wait-PhoneLanPageReachable -TimeoutSec 45 -Label 'rclone')
         }
     } finally {
         $ErrorActionPreference = $prevEap
@@ -1010,14 +1019,48 @@ function Invoke-PhoneLanRecoverIfNeeded {
     return $true
 }
 
+function Sync-CompanionSkyboxRcloneIfReady {
+    param([string] $DriveLetter)
+    try {
+        $letter = ([string]$DriveLetter).Trim().ToUpperInvariant()
+        if ($letter.Length -lt 1) { return }
+        $letter = $letter.Substring(0, 1)
+        $root = "${letter}:\"
+        if (-not (Test-Path -LiteralPath $root -ErrorAction SilentlyContinue)) { return }
+        if (-not (Get-Command Sync-LoopSegmentsSkyboxRcloneFolder -ErrorAction SilentlyContinue)) { return }
+        $local = $root.TrimEnd('\')
+        if (Get-Command Resolve-LoopSegmentsSkyboxRcloneLocalPathFromDisk -ErrorAction SilentlyContinue) {
+            $local = Resolve-LoopSegmentsSkyboxRcloneLocalPathFromDisk -DriveRoot $root
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$local)) { return }
+        Sync-LoopSegmentsSkyboxRcloneFolder -LocalPath $local
+    } catch {
+        Write-Warning "[skybox] Could not sync rclone Add-folders mapping: $($_.Exception.Message)"
+    }
+}
+
 function Invoke-AttemptRcloneMount {
+    # Soft attempt: open Mount-LoopSegmentsRclone.ps1 in a separate console so Chromium is not blocked.
+    # Failures only warn - companion continues (same spirit as USB missing when LAN is up).
+    # Returns $true when the mount drive root looks ready.
+    try {
+        return (Invoke-AttemptRcloneMountCore)
+    } catch {
+        Write-Warning "[rclone] $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Invoke-AttemptRcloneMountCore {
     # Soft attempt: open Mount-LoopSegmentsRclone.ps1 in a separate console so Chromium is not blocked.
     # Failures only warn - companion continues (same spirit as USB missing when LAN is up).
     # Returns $true when the mount drive root looks ready.
     if ($SkipRcloneMount) {
         Write-Host "[rclone] Skipping phone mount (-SkipRcloneMount)"
         $letter = Get-CompanionMountDriveLetter
-        return (Test-Path -LiteralPath "${letter}:\")
+        $up = (Test-Path -LiteralPath "${letter}:\")
+        if ($up) { Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter }
+        return $up
     }
 
     $mountPs1 = Join-Path $WindowsDir "rclone\Mount-LoopSegmentsRclone.ps1"
@@ -1032,28 +1075,39 @@ function Invoke-AttemptRcloneMount {
         return $false
     }
 
-    $letter = Get-CompanionMountDriveLetter
+    $letter = if (Get-Command Resolve-LoopSegmentsMountDriveLetter -ErrorAction SilentlyContinue) {
+        Resolve-LoopSegmentsMountDriveLetter -PersistIfChanged
+    } else {
+        Get-CompanionMountDriveLetter
+    }
+    $letter = ([string]$letter).Trim().ToUpperInvariant()
+    if ($letter.Length -lt 1) { $letter = 'L' } else { $letter = $letter.Substring(0, 1) }
     $driveRoot = "${letter}:\"
 
     if (Test-RcloneMountProcessForDrive -DriveLetter $letter) {
-        Write-Host "[rclone] ${letter}: already mounted (rclone) - ok"
-        return [bool](Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue)
+        Write-Host "[rclone] ${letter}: already mounted (loopsegments rclone) - ok"
+        $ready = [bool](Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue)
+        if ($ready) { Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter }
+        return $ready
     }
 
-    if (Test-Path -LiteralPath $driveRoot) {
-        Write-Warning "[rclone] ${driveRoot} already in use - skip mount (change mountDriveLetter in loop-segments-windows.json if needed)"
-        return $true
+    if ((Test-Path -LiteralPath $driveRoot) -and -not (Test-RcloneMountProcessForDrive -DriveLetter $letter)) {
+        Write-Warning "[rclone] ${driveRoot} still in use after picking a free letter - skip mount"
+        return $false
     }
 
     try {
-        Write-Host "[rclone] Attempting mount ${letter}: via $mountPs1 -Quick (minimized console, no focus steal; Ctrl+C there to unmount)..."
+        Write-Host "[rclone] Attempting mount ${letter}: via $mountPs1 -Quick -DriveLetter $letter (minimized console, no focus steal; Ctrl+C there to unmount)..."
         # Start-Process ArgumentList treats \a \n in P:\all_scripts\... as escapes (same as
         # Chromium --load-extension). Forward slashes + one quoted -File string keep
         # "iOS apps" intact without eating \a. Array -File without quotes used to exit -196608.
         $mountFile = ([System.IO.Path]::GetFullPath($mountPs1) -replace '\\', '/')
-        $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Quick -NoWaitEnter' -f $mountFile
+        $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Quick -NoWaitEnter -DriveLetter {1}' -f $mountFile, $letter
         $proc = Start-LoopSegmentsConsoleNoActivate -FilePath (Get-LoopSegmentsPwshExe) -ArgumentList $argLine `
             -WorkingDirectory (Split-Path -Parent $mountPs1)
+        if ($proc -is [System.Array]) {
+            $proc = @($proc | Where-Object { $_ -is [System.Diagnostics.Process] } | Select-Object -Last 1)[0]
+        }
         if ($null -eq $proc) {
             Write-Warning "[rclone] Start-Process returned no process - continuing without ${letter}:"
             return $false
@@ -1068,9 +1122,10 @@ function Invoke-AttemptRcloneMount {
     while ([datetime]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $driveRoot) {
             Write-Host "[rclone] ${driveRoot} is up"
+            Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter
             return $true
         }
-        if ($proc.HasExited) {
+        if ($proc -is [System.Diagnostics.Process] -and $proc.HasExited) {
             Write-Warning "[rclone] Mount window exited early (code $($proc.ExitCode)) - check that console. Continuing with Chromium."
             $rcloneLog = Get-LoopSegmentsRcloneMountLogPath
             if (-not $rcloneLog) {
@@ -1103,7 +1158,9 @@ function Invoke-AttemptRcloneMount {
 
     if ((Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue) -or (Test-RcloneMountProcessForDrive -DriveLetter $letter)) {
         Write-Host "[rclone] ${driveRoot} mount in progress / up"
-        return (Test-Path -LiteralPath $driveRoot)
+        $ready = [bool](Test-Path -LiteralPath $driveRoot)
+        if ($ready) { Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter }
+        return $ready
     }
 
     Write-Warning "[rclone] Mount window started but ${driveRoot} not ready yet - check that console (WinFsp/rclone). Continuing with Chromium."
@@ -1125,7 +1182,8 @@ function Invoke-MeasureLanThroughputIfMounted {
 
     $letter = Get-CompanionMountDriveLetter
     $driveRoot = "${letter}:\"
-    $mountReady = $null -ne (Get-PSDrive -Name $letter -PSProvider FileSystem -ErrorAction SilentlyContinue)
+    $mountReady = [bool](Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue) -or
+        ($null -ne (Get-PSDrive -Name $letter -PSProvider FileSystem -ErrorAction SilentlyContinue))
 
     $psArgs = [System.Collections.Generic.List[string]]::new()
     [void]$psArgs.Add("-NoProfile")
@@ -1503,10 +1561,11 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): close Chromium, quit Skybox if we started it, sync profile, clear local, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): close Chromium, drop Skybox rclone folder, quit Skybox if we started it, sync profile, clear local, Home on phone..." -ForegroundColor Cyan
 
     try {
         Stop-ProfileChromium -ProfileDir $UserDataDir
+        try { Remove-LoopSegmentsSkyboxRcloneFolderMapping } catch {}
         try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
         Start-Sleep -Milliseconds 500
         if (Test-LocalProfileHasContent -ProfileDir $UserDataDir) {
@@ -1552,7 +1611,7 @@ function Register-CompanionCancelHandler {
                 $eventArgs.Cancel = $true
                 $script:CompanionShutdownRequested = $true
                 Write-Host ""
-                Write-Host "[run] Ctrl+C received - will close Chromium, quit Skybox if we started it, and sync profile..." -ForegroundColor Yellow
+                Write-Host "[run] Ctrl+C received - will close Chromium, drop Skybox rclone folder, quit Skybox if we started it, and sync profile..." -ForegroundColor Yellow
                 try { [CompanionConsoleGuard]::KillTrackedChrome() } catch {}
             }
             [Console]::CancelKeyPress += $script:CancelKeyPressHandler

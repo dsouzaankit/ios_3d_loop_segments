@@ -1,12 +1,13 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-  If the companion console dies without a graceful marker, close Chromium/Skybox and sync profile.
+  If the companion console dies without a graceful marker, close Chromium/Skybox shares and sync profile.
 
 .DESCRIPTION
   Started by run_chromium.ps1 while waiting on Chromium. When the parent PowerShell
   PID exits without writing the graceful-exit marker, this script force-closes the
-  profile Chromium, quits SKYBOX VR if this companion session started it, uploads
+  profile Chromium, unmaps Skybox Add-folders (AirScreen + phone rclone), quits SKYBOX VR
+  if this companion session started it, uploads
   the profile zip to the repo path, and clears local AppData (same finish path as a
   normal companion exit).
 #>
@@ -108,8 +109,11 @@ if (Test-Path -LiteralPath $GracefulMarkerPath) {
 }
 
 # Ungraceful close (console X, kill, crash): finish the companion session.
-Write-Host "[watchdog] Parent gone without graceful marker - closing Chromium, quitting Skybox if we started it, syncing profile"
+Write-Host "[watchdog] Parent gone without graceful marker - closing Chromium, dropping Skybox shares, quitting Skybox if we started it, syncing profile"
 Stop-ProfileChrome -Dir $ProfileDir
+if (Get-Command Remove-LoopSegmentsSkyboxRcloneFolderMapping -ErrorAction SilentlyContinue) {
+    try { Remove-LoopSegmentsSkyboxRcloneFolderMapping } catch {}
+}
 if (Get-Command Stop-LoopSegmentsSkybox -ErrorAction SilentlyContinue) {
     try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
 }

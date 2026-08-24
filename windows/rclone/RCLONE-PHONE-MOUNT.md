@@ -37,7 +37,7 @@ Mounted paths (start directory `pcld_ios_media/`):
 
 If Explorer instead shows **`L:\pcld_ios_media\`**, the mount is WebDAV root (folder missing at mount time). Use the same names under that folder. A nested empty **`L:\pcld_ios_media`** while `L:\loop` already exists is a leftover — delete it; it is not a second media tree.
 
-Use a different **`mountDriveLetter`** in `loop-segments-windows.json` if **`L:`** is already Koofr. That letter is config only (default `L`); Windows does not pick a free drive.
+Preferred **`mountDriveLetter`** in `loop-segments-windows.json` is tried first (default `L`). If that letter is already taken (Koofr, etc.), the mount script picks a **random free D–Z** and writes it back to json.
 
 ## When to skip rclone on the PC
 
