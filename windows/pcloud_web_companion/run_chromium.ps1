@@ -817,7 +817,7 @@ function Invoke-EnsureClashMdnsRoute {
         return
     }
     if (-not (Get-Command Write-LoopSegmentsClashMdnsNotice -ErrorAction SilentlyContinue)) {
-        Write-Warning "[clash] Helper not loaded (no env_setup\\Clash\\Get-Clash.ps1). Bonjour may stay empty under TUN."
+        Write-Warning "[clash] Helper not loaded (no env_setup\\altserver_refresh\\VpnMulticast\\Get-VpnMulticast.ps1). Bonjour may stay empty under TUN."
         return
     }
     if (-not (Get-Command Test-ClashRunning -ErrorAction SilentlyContinue) -or -not (Test-ClashRunning)) {

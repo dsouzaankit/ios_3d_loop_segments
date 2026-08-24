@@ -5,7 +5,7 @@
   Bring the phone onto the PC/AltServer subnet, then wait for the Loop Segments LAN page.
 
 .DESCRIPTION
-  Prefers USB/pcapd via env_setup\altserver_refresh\Invoke-AltServerPhoneSubnetIfNeeded.ps1
+  Prefers USB/pcapd via env_setup\altserver_refresh\lan\Invoke-AltServerPhoneSubnetIfNeeded.ps1
   (pymobiledevice3 phone Wi-Fi IP vs this PC's LAN). If the phone is already on a PC subnet,
   waits for http://phoneLanHost:8765/ and does not reboot routers just because the app is down.
 
@@ -246,7 +246,7 @@ try {
         }
     }
     $altSubnetPs1 = if ($altRefreshDir) {
-        Join-Path $altRefreshDir 'Invoke-AltServerPhoneSubnetIfNeeded.ps1'
+        Join-Path $altRefreshDir 'lan\Invoke-AltServerPhoneSubnetIfNeeded.ps1'
     } else {
         ''
     }

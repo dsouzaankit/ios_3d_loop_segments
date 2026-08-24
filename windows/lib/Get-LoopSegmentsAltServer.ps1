@@ -4,7 +4,7 @@
   Loop Segments wrappers around env_setup AltServer helpers.
 
 .DESCRIPTION
-  Core locate/start lives in env_setup\altserver_refresh\Get-AltServer.ps1
+  Core locate/start lives in env_setup\altserver_refresh\lib\Get-AltServer.ps1
   (git submodule env_setup, with a sibling-folder fallback).
   This file keeps Loop Segments-specific warnings and USB-list heuristics.
   Dot-source from Launch-LoopSegmentsViaUsb.ps1, run_chromium.ps1, Setup, etc.
@@ -39,7 +39,7 @@ function Get-LoopSegmentsAltserverRefreshDir {
     throw "Missing $(Join-Path $root 'altserver_refresh')"
 }
 
-$script:LoopSegmentsAltServerCore = Join-Path (Get-LoopSegmentsAltserverRefreshDir) 'Get-AltServer.ps1'
+$script:LoopSegmentsAltServerCore = Join-Path (Get-LoopSegmentsAltserverRefreshDir) 'lib\Get-AltServer.ps1'
 if (-not (Test-Path -LiteralPath $script:LoopSegmentsAltServerCore)) {
     throw "Missing AltServer core: $script:LoopSegmentsAltServerCore"
 }

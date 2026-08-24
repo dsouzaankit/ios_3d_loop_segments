@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Loop Segments wrapper around env_setup\Clash (mihomo multicast / Bonjour).
+  Loop Segments wrapper around env_setup\altserver_refresh\VpnMulticast (Bonjour).
 
 .DESCRIPTION
   Dot-source from pcloud_web_companion\run_chromium.ps1.
-  Core lives in env_setup\Clash (submodule or P:\all_scripts\iOS apps\env_setup).
+  Core lives in env_setup\altserver_refresh\VpnMulticast (submodule or P:\all_scripts\iOS apps\env_setup).
 #>
 
 function Get-LoopSegmentsClashDir {
@@ -25,9 +25,9 @@ function Get-LoopSegmentsClashDir {
         }
     }
     foreach ($root in $roots) {
-        $core = Join-Path $root 'Clash\Get-Clash.ps1'
+        $core = Join-Path $root 'altserver_refresh\VpnMulticast\Get-VpnMulticast.ps1'
         if (Test-Path -LiteralPath $core) {
-            return (Join-Path $root 'Clash')
+            return (Join-Path $root 'altserver_refresh\VpnMulticast')
         }
     }
     return $null
@@ -36,7 +36,7 @@ function Get-LoopSegmentsClashDir {
 $script:LoopSegmentsClashCore = $null
 $dir = Get-LoopSegmentsClashDir
 if ($dir) {
-    $core = Join-Path $dir 'Get-Clash.ps1'
+    $core = Join-Path $dir 'Get-VpnMulticast.ps1'
     if (Test-Path -LiteralPath $core) {
         $script:LoopSegmentsClashCore = $core
         . $core
@@ -49,5 +49,5 @@ function Write-LoopSegmentsClashMdnsNotice {
         return $false
     }
     if (-not (Test-ClashRunning)) { return $false }
-    return (Write-ClashMdnsNotice -FixRoute:$FixRoute)
+    return (Write-VpnMdnsNotice -FixRoute:$FixRoute)
 }
