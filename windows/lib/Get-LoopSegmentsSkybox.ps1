@@ -6,9 +6,9 @@
 .DESCRIPTION
   Dot-source from pcloud_web_companion\run_chromium.ps1.
   Process start / hide-to-tray / quit and the AirScreen share (p_cld_media by default)
-  come from P:\all_scripts\Skybox_vr_pc (SkyboxVrPc.UnmapPath.ps1). This file keeps the
+  come from the Skybox_vr_pc submodule (SkyboxVrPc.UnmapPath.ps1). This file keeps the
   companion-started marker, maps/unmaps phone rclone pcld_ios_media, and does not touch
-  3d_fullsbs_trans. Override the Skybox_vr_pc root with SKYBOX_VR_PC_ROOT.
+  3d_fullsbs_trans. Override with SKYBOX_VR_PC_ROOT; fallback is P:\all_scripts\Skybox_vr_pc.
 #>
 
 $script:LoopSegmentsSkyboxRcloneFolderName = 'pcld_ios_media'
@@ -36,6 +36,11 @@ function Get-LoopSegmentsSkyboxVrPcRoot {
     $candidates = [System.Collections.Generic.List[string]]::new()
     if (-not [string]::IsNullOrWhiteSpace($envRoot)) {
         [void]$candidates.Add($envRoot.Trim())
+    }
+    $windowsDir = Split-Path -Parent $PSScriptRoot
+    $repoRoot = Split-Path -Parent $windowsDir
+    if ($repoRoot) {
+        [void]$candidates.Add((Join-Path $repoRoot 'Skybox_vr_pc'))
     }
     [void]$candidates.Add('P:\all_scripts\Skybox_vr_pc')
     $walk = $PSScriptRoot
@@ -68,7 +73,7 @@ if ($script:LoopSegmentsSkyboxVrPcRootResolved) {
     . (Join-Path $script:LoopSegmentsSkyboxVrPcRootResolved 'SkyboxVrPc.UnmapPath.ps1')
     $script:LoopSegmentsSkyboxVrPcImported = $true
 } else {
-    Write-Warning '[skybox] Skybox_vr_pc not found (expected P:\all_scripts\Skybox_vr_pc or SKYBOX_VR_PC_ROOT).'
+    Write-Warning '[skybox] Skybox_vr_pc not found. git submodule update --init Skybox_vr_pc (or set SKYBOX_VR_PC_ROOT / P:\all_scripts\Skybox_vr_pc).'
 }
 
 function Initialize-LoopSegmentsSkyboxVrPcExeOverride {

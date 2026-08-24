@@ -11,7 +11,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
 
-**PC companion (browse + request export):** [`windows/pcloud_web_companion`](windows/pcloud_web_companion) — clone with **`--recurse-submodules`** (repo-root **`env_setup/`**: AltServer start + phone-subnet helpers). On each Windows PC run `windows\setup\Setup-LoopSegmentsWindows.ps1` once, then `windows\pcloud_web_companion\Run-PCloudWebCompanion.ps1` (USB-opens Loop Segments if unlocked; Chromium profile zip lives on P: as `windows\pcloud_web_companion\chromium-profile.zip`, extracted to local AppData and cleared after exit). Browse pCloud on the PC while the phone exports over cellular via LAN REST (`/export_from_folder.json`, etc.).
+**PC companion (browse + request export):** [`windows/pcloud_web_companion`](windows/pcloud_web_companion) — clone with **`--recurse-submodules`** (repo-root **`env_setup/`**: AltServer + phone-subnet; **`Skybox_vr_pc/`**: SKYBOX desktop AirScreen helpers). On each Windows PC run `windows\setup\Setup-LoopSegmentsWindows.ps1` once, then `windows\pcloud_web_companion\Run-PCloudWebCompanion.ps1` (USB-opens Loop Segments if unlocked; Chromium profile zip lives on P: as `windows\pcloud_web_companion\chromium-profile.zip`, extracted to local AppData and cleared after exit). Browse pCloud on the PC while the phone exports over cellular via LAN REST (`/export_from_folder.json`, etc.).
 
 | Step | Device | Connection |
 |------|--------|------------|
@@ -73,6 +73,7 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [ios/](ios/) | Loop Segments iPhone app |
 | [windows/README.md](windows/README.md) | **Portable PC setup** (`loop-segments-windows.json`) |
 | [env_setup/](env_setup/) | Submodule: start AltServer; phone Wi-Fi IPv4 (USB + `pcapd`) vs PC/AltServer subnet ([ios_env_setup](https://github.com/dsouzaankit/ios_env_setup)) |
+| [Skybox_vr_pc/](Skybox_vr_pc/) | Submodule: SKYBOX VR desktop start/hide/quit + AirScreen Add-folders ([skybox-vr-pc](https://github.com/dsouzaankit/skybox-vr-pc)) |
 | [windows/rclone/Mount-LoopSegmentsRclone.ps1](windows/rclone/Mount-LoopSegmentsRclone.ps1) | WebDAV **`-TestOnly`** / **mount** / `-Remove` / `-Unstick` / LAN watch — see [RCLONE-PHONE-MOUNT.md](windows/rclone/RCLONE-PHONE-MOUNT.md) |
 | [windows/setup/Set-LoopSegmentsWindows.ps1](windows/setup/Set-LoopSegmentsWindows.ps1) | Per-PC paths (rclone, WinFsp, drive letter) |
 | [windows/archive/](windows/archive/) | Legacy `net use` / port-80 proxy, `Sync-FromPhoneLAN.ps1` |

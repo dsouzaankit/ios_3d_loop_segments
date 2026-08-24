@@ -1,6 +1,6 @@
 # Loop Segments — Windows (portable)
 
-Scripts work on **any Windows PC** after you copy or clone this repo (`git clone --recurse-submodules` so **`env_setup`** is present). Machine-specific paths live in **`loop-segments-windows.json`** (gitignored) in this folder. Shared helpers live in **`lib\`**; entry-point scripts are grouped by role under subfolders.
+Scripts work on **any Windows PC** after you copy or clone this repo (`git clone --recurse-submodules` so **`env_setup`** and **`Skybox_vr_pc`** are present). Machine-specific paths live in **`loop-segments-windows.json`** (gitignored) in this folder. Shared helpers live in **`lib\`**; entry-point scripts are grouped by role under subfolders.
 
 **IPA → iCloud:** from the **repo root** (parent of this folder), run **`..\deploy.ps1`** (build/fetch, then calls **`copy-to-icloud.ps1`**) or **`..\copy-to-icloud.ps1`** alone (stamped `LoopSegments-b{build}-{time}.ipa`, like web_auto_parking). See [../ios/BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md).
 
@@ -243,7 +243,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `lib\Get-LoopSegmentsPython.ps1` | Shared Python picker (dot-sourced; prefer 3.12, skip 3.14+) |
 | `lib\LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
 | `lib\Get-LoopSegmentsAltServer.ps1` | Loop Segments wrapper around **`..\env_setup\altserver_refresh\lib\Get-AltServer.ps1`** (locate/start); 7-day / Trust copy stays here |
-| `lib\Get-LoopSegmentsSkybox.ps1` | Locate/start **SKYBOX VR desktop** and hide the main window to the **tray**; companion starts it when idle and quits it on finish if this session started it (`-SkipSkybox` to skip) |
+| `lib\Get-LoopSegmentsSkybox.ps1` | Companion Skybox setup/teardown: dotsources repo-root **`Skybox_vr_pc`** submodule ([skybox-vr-pc](https://github.com/dsouzaankit/skybox-vr-pc); fallback `P:\all_scripts\Skybox_vr_pc`) for start/hide/quit + AirScreen `p_cld_media`, maps phone rclone `pcld_ios_media` (`-SkipSkybox` to skip) |
 | `lib\Get-LoopSegmentsVirtualDesktop.ps1` | Locate/start **Virtual Desktop Streamer**, start the service if it is stopped, and hide the Streamer window to the **tray** (`-SkipVirtualDesktop` to skip). Companion finish does not quit Streamer |
 | `lib\Get-LoopSegmentsClash.ps1` | Optional: if Clash/mihomo is running, UAC-run **`env_setup\altserver_refresh\VpnMulticast\Remove-VpnMulticastRoute.ps1`** so TUN `224.0.0.0/4` does not steal `.local` mDNS. Phone-IP / `:8765` use numeric IPs and do not need this. |
 | `setup\Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
