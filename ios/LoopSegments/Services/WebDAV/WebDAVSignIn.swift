@@ -55,6 +55,8 @@ enum WebDAVSignIn {
         if lower != email {
             paths.append("/remote.php/dav/files/\(email)/")
         }
+        // Yesterday’s session listed /p_cld_media/… — pCloud often 404s on `/` even when those folders work.
+        paths.append(contentsOf: await extraListingPaths())
 
         var lastError: Error?
         for path in paths {
@@ -81,6 +83,26 @@ enum WebDAVSignIn {
             if let lastError { throw lastError }
             throw error
         }
+    }
+
+    /// Bookmarks + recent search folders (survives Sign out). Skip `/`.
+    private static func extraListingPaths() async -> [String] {
+        let bookmarks = await MainActor.run {
+            FolderBookmarkStore.shared.bookmarks().map(\.listingPath)
+        }
+        var seen = Set<String>()
+        var out: [String] = []
+        for path in bookmarks + SearchLocationCache.listingPaths() {
+            let normalized = WebDAVURLBuilder.directoryListingPath(path)
+            if normalized == "/" || seen.contains(normalized) { continue }
+            seen.insert(normalized)
+            out.append(normalized)
+            if out.count >= 6 { break }
+        }
+        if !out.isEmpty {
+            SearchDebugLog.log("sign-in: extra WebDAV paths \(out.joined(separator: ", "))")
+        }
+        return out
     }
 
     /// A hung EU probe must not hide a fast US HTTP 404/401.
