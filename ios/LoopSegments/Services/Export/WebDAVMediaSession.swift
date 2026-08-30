@@ -43,11 +43,11 @@ enum WebDAVMediaSession {
         return URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
     }()
 
-    /// Fast-fail probes for Sign in — export session retries/waits can exceed a 45s UI timeout.
+    /// Fast-fail probes for Sign in — export session retries/waits can exceed a UI timeout.
     private static let signIn: URLSession = {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 20
+        config.timeoutIntervalForRequest = 12
+        config.timeoutIntervalForResource = 15
         config.waitsForConnectivity = false
         config.allowsCellularAccess = true
         config.allowsExpensiveNetworkAccess = true

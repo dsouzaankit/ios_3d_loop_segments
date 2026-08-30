@@ -44,15 +44,18 @@ $LocalIpa = if (-not [string]::IsNullOrWhiteSpace($SourceIpa)) {
 }
 $ICloudDownloads = Join-Path $env:USERPROFILE 'iCloudDrive\Downloads'
 
-$configModule = Join-Path $ProjectRoot 'windows\lib\LoopSegments-Windows.ps1'
+$configModule = Join-Path $ProjectRoot 'windows\loop-segments-windows.json'
 if (Test-Path -LiteralPath $configModule) {
-    . $configModule
-    $winCfg = Get-LoopSegmentsWindowsSettings
-    if (-not [string]::IsNullOrWhiteSpace([string]$winCfg.iCloudDownloads)) {
-        $ICloudDownloads = [string]$winCfg.iCloudDownloads
-        if ($ICloudDownloads -notmatch '^[A-Za-z]:\\' -and -not $ICloudDownloads.StartsWith('\\')) {
-            $ICloudDownloads = Join-Path $env:USERPROFILE $ICloudDownloads
+    try {
+        $winCfg = Get-Content -LiteralPath $configModule -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace([string]$winCfg.iCloudDownloads)) {
+            $ICloudDownloads = [string]$winCfg.iCloudDownloads
+            if ($ICloudDownloads -notmatch '^[A-Za-z]:\\' -and -not $ICloudDownloads.StartsWith('\\')) {
+                $ICloudDownloads = Join-Path $env:USERPROFILE $ICloudDownloads
+            }
         }
+    } catch {
+        Write-Warning "Could not read iCloudDownloads from loop-segments-windows.json: $($_.Exception.Message)"
     }
 }
 
