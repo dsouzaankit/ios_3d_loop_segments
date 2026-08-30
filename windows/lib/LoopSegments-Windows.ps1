@@ -1241,3 +1241,79 @@ function Initialize-LoopSegmentsWindowsConfig {
         Save-LoopSegmentsWindowsSettings -Settings (Get-LoopSegmentsWindowsSettings)
     }
 }
+
+function Initialize-LoopSegmentsShellNotify {
+    if ([System.Management.Automation.PSTypeName]'LoopSegmentsShellNotify'.Type) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LoopSegmentsShellNotify {
+    public const uint SHCNE_DRIVEREMOVED = 0x00000080;
+    public const uint SHCNE_DRIVEADD = 0x00000100;
+    public const uint SHCNE_UPDATEDIR = 0x00001000;
+    public const uint SHCNF_PATHW = 0x0005;
+    public const uint SHCNF_FLUSHNOWAIT = 0x2000;
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern void SHChangeNotify(uint wEventId, uint uFlags, string dwItem1, IntPtr dwItem2);
+}
+'@
+}
+
+function Update-ExplorerForMappedDrive {
+    param(
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
+        [switch] $Removed
+    )
+    $root = $DriveRoot.Trim()
+    if ($root -notmatch '\\$') { $root = "$root\" }
+    try {
+        Initialize-LoopSegmentsShellNotify
+        $flags = [LoopSegmentsShellNotify]::SHCNF_PATHW -bor [LoopSegmentsShellNotify]::SHCNF_FLUSHNOWAIT
+        $evt = if ($Removed) {
+            [LoopSegmentsShellNotify]::SHCNE_DRIVEREMOVED
+        } else {
+            [LoopSegmentsShellNotify]::SHCNE_DRIVEADD
+        }
+        [LoopSegmentsShellNotify]::SHChangeNotify($evt, $flags, $root, [IntPtr]::Zero)
+        [LoopSegmentsShellNotify]::SHChangeNotify([LoopSegmentsShellNotify]::SHCNE_UPDATEDIR, $flags, $root, [IntPtr]::Zero)
+    } catch {
+        Write-Verbose ('[explorer] SHChangeNotify failed: {0}' -f $_.Exception.Message)
+    }
+    try {
+        $app = New-Object -ComObject Shell.Application
+        try {
+            $thisPc = $app.NameSpace(0x11)
+            if ($null -ne $thisPc) {
+                foreach ($item in @($thisPc.Items())) {
+                    try { $item.InvokeVerb('refresh') } catch {}
+                }
+            }
+        } catch {}
+        $driveToken = [regex]::Escape($root.TrimEnd('\').Replace('\', '/'))
+        foreach ($win in @($app.Windows())) {
+            try {
+                $exe = [string]$win.FullName
+                if ($exe -notmatch '(?i)\\explorer\.exe$') { continue }
+                $url = [string]$win.LocationURL
+                $title = [string]$win.LocationName
+                $isThisPc = ($url -match '20D04FE0-3AEA-1069-A2D8-08002B30309D') -or
+                    ($title -match '^(This PC|Computer)$')
+                $isDrive = ($url -match $driveToken) -or
+                    ($title -match ('^{0}' -f [regex]::Escape($root.TrimEnd('\'))))
+                if ($isThisPc -or $isDrive) {
+                    $win.Refresh()
+                }
+            } catch {}
+        }
+    } catch {}
+}
+
+function Restart-WindowsExplorerShell {
+    Write-Host 'Restarting Windows Explorer...'
+    Get-Process -Name explorer -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    Start-Sleep -Milliseconds 900
+    Start-Process -FilePath "$env:WINDIR\explorer.exe" | Out-Null
+}
