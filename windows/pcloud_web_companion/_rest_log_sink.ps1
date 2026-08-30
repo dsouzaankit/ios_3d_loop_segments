@@ -8,7 +8,11 @@ $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogFile) | Out-Null
 
 function Write-LogLine([string]$Line) {
-    Add-Content -LiteralPath $LogFile -Value $Line -Encoding utf8
+    try {
+        Add-Content -LiteralPath $LogFile -Value $Line -Encoding utf8 -ErrorAction Stop
+    } catch {
+        # pCloud Drive can briefly lock rest.log; never take down the sink for that.
+    }
 }
 
 if (-not ('CompanionNativeFocus' -as [type])) {
@@ -25,7 +29,13 @@ public static class CompanionNativeFocus {
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int dwProcessId);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    public static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_SHOWWINDOW = 0x0040;
     public const int SW_RESTORE = 9;
     public const int SW_SHOW = 5;
     public const int ASFW_ANY = -1;
@@ -67,6 +77,15 @@ function Show-HwndForeground {
         } else {
             [void][CompanionNativeFocus]::ShowWindow($Hwnd, [CompanionNativeFocus]::SW_SHOW)
         }
+        # Chromium popup still owns foreground — SetForegroundWindow alone is blocked.
+        # TOPMOST flip forces the Explorer window above Chromium without needing input focus rights.
+        $flags = [CompanionNativeFocus]::SWP_NOMOVE -bor [CompanionNativeFocus]::SWP_NOSIZE -bor [CompanionNativeFocus]::SWP_SHOWWINDOW
+        [void][CompanionNativeFocus]::SetWindowPos(
+            $Hwnd,
+            [CompanionNativeFocus]::HWND_TOPMOST,
+            0, 0, 0, 0,
+            $flags
+        )
         [void][CompanionNativeFocus]::BringWindowToTop($Hwnd)
         [CompanionNativeFocus]::keybd_event([CompanionNativeFocus]::VK_MENU, 0, 0, [UIntPtr]::Zero)
         [CompanionNativeFocus]::keybd_event([CompanionNativeFocus]::VK_MENU, 0, [CompanionNativeFocus]::KEYEVENTF_KEYUP, [UIntPtr]::Zero)
@@ -81,6 +100,12 @@ function Show-HwndForeground {
         } else {
             [void][CompanionNativeFocus]::SetForegroundWindow($Hwnd)
         }
+        [void][CompanionNativeFocus]::SetWindowPos(
+            $Hwnd,
+            [CompanionNativeFocus]::HWND_NOTOPMOST,
+            0, 0, 0, 0,
+            $flags
+        )
         return $true
     } catch {
         return $false
@@ -300,14 +325,23 @@ function ConvertTo-PCloudExplorerTarget {
 
 function Get-ExplorerHwndForPath {
     param([string]$FolderPath)
-    $want = [System.IO.Path]::GetFullPath($FolderPath).TrimEnd('\')
+    $want = [System.IO.Path]::GetFullPath($FolderPath).TrimEnd('\').ToLowerInvariant()
     try {
         $shell = New-Object -ComObject Shell.Application
         foreach ($win in @($shell.Windows())) {
             try {
-                $loc = [string]$win.Document.Folder.Self.Path
+                $loc = $null
+                try { $loc = [string]$win.Document.Folder.Self.Path } catch {}
+                if ([string]::IsNullOrWhiteSpace($loc)) {
+                    try {
+                        $url = [string]$win.LocationURL
+                        if ($url -match '^file:///') {
+                            $loc = [Uri]::UnescapeDataString($url.Substring(8) -replace '/', '\')
+                        }
+                    } catch {}
+                }
                 if ([string]::IsNullOrWhiteSpace($loc)) { continue }
-                $have = [System.IO.Path]::GetFullPath($loc).TrimEnd('\')
+                $have = [System.IO.Path]::GetFullPath($loc).TrimEnd('\').ToLowerInvariant()
                 if ($have -eq $want) {
                     return [IntPtr]$win.HWND
                 }
@@ -338,30 +372,34 @@ function Start-ExplorerAt {
 
     try {
         if ($selectPath) {
-            # Quote path — spaces break /select, otherwise.
             Start-Process -FilePath $explorer -ArgumentList @("/select,`"$selectPath`"")
         } else {
-            # Shell.Application.Open survives cold Explorer. Bare
-            # `explorer.exe <path>` often ignores the folder on the first launch,
-            # so the UI looks failed and a retry opens a duplicate window.
-            $shell = New-Object -ComObject Shell.Application
-            $shell.Open($folderForWindow)
+            # ShellExecute on the folder path (not explorer.exe args) — more reliable
+            # than explorer.exe <path> / Shell.Open when Chromium still owns focus.
+            Start-Process -FilePath $folderForWindow
         }
     } catch {
         if ($selectPath) {
             Start-Process -FilePath $explorer -ArgumentList @("/select,`"$selectPath`"")
         } else {
-            Start-Process -FilePath $explorer -ArgumentList @("/root,`"$folderForWindow`"")
+            try {
+                (New-Object -ComObject Shell.Application).Open($folderForWindow)
+            } catch {
+                Start-Process -FilePath $explorer -ArgumentList @("/root,`"$folderForWindow`"")
+            }
         }
     }
 
     $hwnd = [IntPtr]::Zero
-    for ($i = 0; $i -lt 30; $i++) {
-        Start-Sleep -Milliseconds 100
+    for ($i = 0; $i -lt 40; $i++) {
+        Start-Sleep -Milliseconds 125
         $hwnd = Get-ExplorerHwndForPath -FolderPath $folderForWindow
         if ($hwnd -ne [IntPtr]::Zero) { break }
     }
     if ($hwnd -ne [IntPtr]::Zero) {
+        [void](Show-HwndForeground -Hwnd $hwnd)
+        # Chromium may reclaim focus when the popup paints the result — nudge again.
+        Start-Sleep -Milliseconds 200
         [void](Show-HwndForeground -Hwnd $hwnd)
     } else {
         try {

@@ -412,6 +412,14 @@ async function postOpenExplorer({ folderPath, fileName }) {
   return payload;
 }
 
+function openExplorerFetchErrorMessage(err) {
+  const raw = String(err && err.message ? err.message : err || "");
+  if (/failed to fetch|networkerror|load failed|err_connection_refused/i.test(raw)) {
+    return "Companion sink not running on 127.0.0.1:18765 (restart Run-PCloudWebCompanion).";
+  }
+  return raw.slice(0, 240);
+}
+
 /**
  * Open the my.pcloud.com folder (tab URL, right-clicked tree node, or tracked
  * context) in Windows Explorer on the mounted pCloud Drive letter.
@@ -494,7 +502,7 @@ async function openCurrentPcloudFolderOnPDriveOnce({ url = null, folderId = null
   try {
     const opened = await postOpenExplorer({ folderPath, fileName });
     const shown = opened.path || pcloudPathToDriveRelative(folderPath);
-    await notifyUser("Loop Segments: opened pCloud Drive", shown);
+    // No success toast — chrome.notifications pulls Chromium over the Explorer window.
     await appendRestLog({
       phase: "open_explorer",
       ok: true,
@@ -506,7 +514,7 @@ async function openCurrentPcloudFolderOnPDriveOnce({ url = null, folderId = null
     });
     return { ok: true, path: shown, folderPath };
   } catch (err) {
-    const message = String(err && err.message ? err.message : err);
+    const message = openExplorerFetchErrorMessage(err);
     await notifyUser("Loop Segments: pCloud Drive", message);
     await appendRestLog({
       phase: "open_explorer",

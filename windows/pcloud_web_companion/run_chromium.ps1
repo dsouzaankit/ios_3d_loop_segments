@@ -497,6 +497,10 @@ public static class CompanionDetachedProc {
 }
 
 function Start-RestLogSink {
+    param(
+        # Mid-session revive: keep rest.log; do not wipe prior OPEN_EXPLORER lines.
+        [switch] $KeepExistingLog
+    )
     $sinkScript = Join-Path $ScriptDir "_rest_log_sink.ps1"
     # Keep on P: / repo companion folder (not LOCALAPPDATA) so logs sync with the project tree.
     $logFile = Join-Path $ScriptDir "rest.log"
@@ -506,11 +510,15 @@ function Start-RestLogSink {
     }
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logFile) | Out-Null
-    # Fresh log each launcher run
-    Set-Content -LiteralPath $logFile -Value "" -Encoding utf8
-    Write-Host "[rest-log] Cleared $logFile"
+    if (-not $KeepExistingLog) {
+        # Fresh log each launcher run
+        Set-Content -LiteralPath $logFile -Value "" -Encoding utf8
+        Write-Host "[rest-log] Cleared $logFile"
+    }
     Write-Host "[rest-log] Starting sink -> $logFile"
-    [void](Start-HiddenPowerShell -ArgumentList @(
+    # Break away from the console job — otherwise the sink can vanish mid-session while
+    # the companion console stays up, and every Open pCloud Drive folder click fails hard.
+    [void](Start-HiddenPowerShell -BreakAwayFromConsoleJob -ArgumentList @(
             "-ExecutionPolicy", "Bypass",
             "-File", $sinkScript,
             "-LogFile", $logFile,
@@ -544,6 +552,24 @@ function Start-RestLogSink {
             Write-Warning "[rest-log] Sink not reachable after 20s (extension logs / phone-lan relay may miss this run)"
         }
     }
+}
+
+function Test-RestLogSinkHealthy {
+    if (-not (Test-TcpPortOpen -HostName '127.0.0.1' -Port 18765 -TimeoutMs 400)) {
+        return $false
+    }
+    try {
+        $health = Invoke-LoopbackHttpGet -Path '/health' -Port 18765 -TimeoutMs 1500
+        return ($health.StatusCode -eq 200)
+    } catch {
+        return $false
+    }
+}
+
+function Ensure-RestLogSink {
+    if (Test-RestLogSinkHealthy) { return }
+    Write-Warning "[rest-log] Sink on :18765 is down — restarting (Open pCloud Drive folder / phone-lan need it)"
+    Start-RestLogSink -KeepExistingLog
 }
 
 function Test-TcpPortOpen {
@@ -1019,6 +1045,18 @@ function Invoke-PhoneLanRecoverIfNeeded {
     return $true
 }
 
+function Invoke-NotifyCompanionMountDriveInExplorer {
+    param([Parameter(Mandatory = $true)][string] $DriveLetter)
+    if (-not (Get-Command Update-ExplorerForMappedDrive -ErrorAction SilentlyContinue)) { return }
+    $letter = ([string]$DriveLetter).Trim().ToUpperInvariant()
+    if ($letter.Length -lt 1) { return }
+    $letter = $letter.Substring(0, 1)
+    $root = "${letter}:\"
+    if (-not (Test-Path -LiteralPath $root -ErrorAction SilentlyContinue)) { return }
+    Update-ExplorerForMappedDrive -DriveRoot $root
+    Write-Host "[rclone] Refreshed Explorer for $root"
+}
+
 function Sync-CompanionSkyboxRcloneIfReady {
     param([string] $DriveLetter)
     try {
@@ -1087,7 +1125,10 @@ function Invoke-AttemptRcloneMountCore {
     if (Test-RcloneMountProcessForDrive -DriveLetter $letter) {
         Write-Host "[rclone] ${letter}: already mounted (loopsegments rclone) - ok"
         $ready = [bool](Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue)
-        if ($ready) { Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter }
+        if ($ready) {
+            Invoke-NotifyCompanionMountDriveInExplorer -DriveLetter $letter
+            Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter
+        }
         return $ready
     }
 
@@ -1122,6 +1163,7 @@ function Invoke-AttemptRcloneMountCore {
     while ([datetime]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $driveRoot) {
             Write-Host "[rclone] ${driveRoot} is up"
+            Invoke-NotifyCompanionMountDriveInExplorer -DriveLetter $letter
             Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter
             return $true
         }
@@ -1159,7 +1201,10 @@ function Invoke-AttemptRcloneMountCore {
     if ((Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue) -or (Test-RcloneMountProcessForDrive -DriveLetter $letter)) {
         Write-Host "[rclone] ${driveRoot} mount in progress / up"
         $ready = [bool](Test-Path -LiteralPath $driveRoot)
-        if ($ready) { Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter }
+        if ($ready) {
+            Invoke-NotifyCompanionMountDriveInExplorer -DriveLetter $letter
+            Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter
+        }
         return $ready
     }
 
@@ -1670,6 +1715,7 @@ function Wait-ProfileChromiumExit {
 
     Write-Host "[run] Waiting for Chromium to exit (will upload profile to repo, then clear local)..."
     Write-Host "      Close the browser, or quit this window with Ctrl+C / X (graceful finish)."
+    $nextSinkCheck = [datetime]::UtcNow
     while ($true) {
         $pids = @(Get-CompanionProfileChromiumProcessIds -ProfileDir $ProfileDir)
         try { [CompanionConsoleGuard]::SetChromePids([int[]]$pids) } catch {}
@@ -1691,6 +1737,10 @@ function Wait-ProfileChromiumExit {
         if ($pids.Count -eq 0) {
             Write-Host "[run] Chromium exited"
             return
+        }
+        if ([datetime]::UtcNow -ge $nextSinkCheck) {
+            try { Ensure-RestLogSink } catch {}
+            $nextSinkCheck = [datetime]::UtcNow.AddSeconds(8)
         }
         Start-Sleep -Seconds 1
     }
