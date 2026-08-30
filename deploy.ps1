@@ -1,19 +1,4 @@
 #Requires -Version 5.1
-# Entry may start under Windows PowerShell 5.1; re-launch with pwsh when available.
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    $pwsh = @(
-        (Get-Command pwsh.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
-        (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe')
-        (Join-Path ${env:ProgramFiles(x86)} 'PowerShell\7\pwsh.exe')
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\PowerShell\7\pwsh.exe')
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
-    if ($pwsh) {
-        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
-        if ($args) { $argList += $args }
-        & $pwsh @argList
-        exit $LASTEXITCODE
-    }
-}
 <#
 .SYNOPSIS
   Build (or fetch) LoopSegments.ipa via GitHub Actions and copy it to iCloud Drive Downloads.
@@ -62,6 +47,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+# pCloud / no-ownership volume: `gh` shells out to git and fails without this.
+# Session env only — do not write git config.
+if ([string]::IsNullOrWhiteSpace($env:GIT_CONFIG_COUNT)) {
+    $env:GIT_CONFIG_COUNT = '1'
+    $env:GIT_CONFIG_KEY_0 = 'safe.directory'
+    $env:GIT_CONFIG_VALUE_0 = ($ProjectRoot -replace '\\', '/')
+}
 $IpaDir = Join-Path $ProjectRoot 'ios\build artifacts\ipa'
 $IpaName = 'LoopSegments.ipa'
 $LocalIpa = Join-Path $IpaDir $IpaName
