@@ -7,7 +7,7 @@
   Prefers a random media file under phone pcld_ios_media/archive/ (>= -MinBytes).
   If archive/ is empty, falls back to other phone media (loop/root/etc.).
 
-  Default: times both phone HTTP GET and an rclone mount copy of the same file.
+  Default: times both phone HTTP Range GET (capped, default 64 MB) and an rclone mount copy of the same file.
   Bitrate recommendation / low-throughput recovery use the lesser measured Mbps
   (then RecommendHeadroom). Mount-only numbers can still look cache-inflated; the
   lesser pick keeps an inflated mount from raising the encode cap.
@@ -537,43 +537,113 @@ function Copy-HttpMeasured {
         [long] $LimitBytes = 0
     )
 
+    # Full GET of a 400 MB+ archive RST's the phone NWConnection mid-read.
+    # Range GET so the server only sends the sample (default 64 MB).
+    $maxAttempts = 2
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            return Invoke-HttpMeasuredOnce -Url $Url -Destination $Destination `
+                -BufferSize $BufferSize -LimitBytes $LimitBytes
+        } catch {
+            $lastError = $_
+            $msg = [string]$_.Exception.Message
+            $transient = $msg -match 'forcibly closed|connection was aborted|connection reset|connection was closed'
+            if ($attempt -lt $maxAttempts -and $transient) {
+                Write-Warning ("[lan-bw] HTTP dropped ({0}) — retry {1}/{2} with Range GET" -f $msg, $attempt, $maxAttempts)
+                Start-Sleep -Seconds 1
+                continue
+            }
+            throw
+        }
+    }
+    throw $lastError
+}
+
+function Invoke-HttpMeasuredOnce {
+    param(
+        [Parameter(Mandatory = $true)][string] $Url,
+        [Parameter(Mandatory = $true)][string] $Destination,
+        [Parameter(Mandatory = $true)][int] $BufferSize,
+        [long] $LimitBytes = 0
+    )
+
     $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
     $buffer = New-Object byte[] $BufferSize
-    $req = [System.Net.HttpWebRequest]::Create($Url)
-    $req.Method = 'GET'
-    $req.Timeout = 120000
-    $req.ReadWriteTimeout = 120000
-    $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
-    foreach ($key in $auth.Keys) {
-        $req.Headers[$key] = [string]$auth[$key]
-    }
-
-    $resp = $null
-    $stream = $null
-    $dst = $null
+    $rangeWindow = [long]8MB
+    $offset = [long]0
     $total = [long]0
+    $knownLength = [long]-1
+    $dst = $null
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
-        $resp = $req.GetResponse()
-        $stream = $resp.GetResponseStream()
         $dst = [System.IO.File]::Create($Destination)
         while ($true) {
-            $toRead = $buffer.Length
-            if ($LimitBytes -gt 0) {
-                $left = $LimitBytes - $total
-                if ($left -le 0) { break }
-                if ($left -lt $toRead) { $toRead = [int]$left }
+            if ($LimitBytes -gt 0 -and $total -ge $LimitBytes) { break }
+            $want = if ($LimitBytes -gt 0) { $LimitBytes - $total } else { $rangeWindow }
+            if ($want -le 0) { break }
+            if ($LimitBytes -le 0 -and $want -gt $rangeWindow) { $want = $rangeWindow }
+            $rangeEnd = $offset + $want - 1
+
+            $req = [System.Net.HttpWebRequest]::Create($Url)
+            $req.Method = 'GET'
+            $req.Timeout = 120000
+            $req.ReadWriteTimeout = 120000
+            $req.KeepAlive = $false
+            $req.AllowAutoRedirect = $false
+            $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+            foreach ($key in $auth.Keys) {
+                $req.Headers[$key] = [string]$auth[$key]
             }
-            $n = $stream.Read($buffer, 0, $toRead)
-            if ($n -le 0) { break }
-            $dst.Write($buffer, 0, $n)
-            $total += $n
+            $req.AddRange([long]$offset, [long]$rangeEnd)
+
+            $resp = $null
+            $stream = $null
+            try {
+                try {
+                    $resp = $req.GetResponse()
+                } catch [System.Net.WebException] {
+                    $http = $_.Exception.Response
+                    if ($http -and [int]$http.StatusCode -eq 416) { break }
+                    throw
+                }
+                $httpResp = [System.Net.HttpWebResponse]$resp
+                if ($knownLength -lt 0 -and $httpResp.ContentLength -gt 0 -and [int]$httpResp.StatusCode -eq 200) {
+                    $knownLength = [long]$httpResp.ContentLength
+                }
+                $cr = [string]$httpResp.Headers['Content-Range']
+                if ($cr -match '/(\d+)\s*$') {
+                    $knownLength = [long]$Matches[1]
+                }
+                $stream = $httpResp.GetResponseStream()
+                $got = [long]0
+                while ($true) {
+                    $toRead = $buffer.Length
+                    if ($LimitBytes -gt 0) {
+                        $left = $LimitBytes - $total
+                        if ($left -le 0) { break }
+                        if ($left -lt $toRead) { $toRead = [int]$left }
+                    }
+                    $n = $stream.Read($buffer, 0, $toRead)
+                    if ($n -le 0) { break }
+                    $dst.Write($buffer, 0, $n)
+                    $total += $n
+                    $got += $n
+                }
+                $status = [int]$httpResp.StatusCode
+                if ($status -eq 200) { break }
+                if ($got -le 0) { break }
+                $offset += $got
+                if ($knownLength -ge 0 -and $offset -ge $knownLength) { break }
+                if ($LimitBytes -gt 0) { break }
+            } finally {
+                if ($stream) { $stream.Dispose() }
+                if ($resp) { $resp.Dispose() }
+            }
         }
     } finally {
         $sw.Stop()
         if ($dst) { $dst.Dispose() }
-        if ($stream) { $stream.Dispose() }
-        if ($resp) { $resp.Dispose() }
     }
 
     return [pscustomobject]@{
