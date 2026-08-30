@@ -89,6 +89,9 @@ final class WebDAVClient {
             return try await list(path: path, credentials: fresh, retriedAuth: true, context: context)
         }
         guard (200 ... 299).contains(http.statusCode) else {
+            if context == .signIn {
+                SearchDebugLog.log("sign-in: HTTP \(http.statusCode) \(listingURL.absoluteString)")
+            }
             throw WebDAVError.httpStatus(http.statusCode, context: context)
         }
 
@@ -120,7 +123,7 @@ final class WebDAVClient {
     }
 
     private func mediaProfile(for context: WebDAVHTTPContext) -> WebDAVMediaSession.Profile {
-        context == .signIn ? .signIn : .export
+        .export
     }
 
     private func effectiveMaxAttempts(_ maxAttempts: Int, context: WebDAVHTTPContext) -> Int {

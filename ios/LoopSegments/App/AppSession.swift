@@ -104,13 +104,31 @@ final class AppSession: ObservableObject {
         let previous = credentials
         WebDAVMediaSession.setActiveCredentials(attempt)
         do {
-            let verified = try await WebDAVSignIn.verify(credentials: attempt)
+            let api = try await PCloudAuth.confirmPassword(
+                email: attempt.email,
+                password: attempt.password,
+                preferredRegion: attempt.region
+            )
+            var verified = attempt
+            verified.region = api.region
+            verified.apiAuthToken = api.token
+            verified.apiAuthHost = api.apiHost
+            do {
+                verified = try await WebDAVSignIn.verify(credentials: verified)
+                SearchDebugLog.log("sign-in: WebDAV OK — opening browser")
+            } catch {
+                SearchDebugLog.log(
+                    "sign-in: WebDAV failed after API OK — \(error.localizedDescription); opening Browse anyway (browser GET 404 on webdav.pcloud.com is normal)"
+                )
+            }
+            if let start = await firstSignedInBrowsePath() {
+                browserPathStack = [start]
+            }
             PCloudWebDAVRootResolver.clearCache()
             credentialStore.save(verified)
             credentials = verified
             WebDAVMediaSession.setActiveCredentials(verified)
             UserDefaults.standard.set(verified.region.rawValue, forKey: "pcloud_region_last_sign_in")
-            SearchDebugLog.log("sign-in: WebDAV OK — opening browser (API token loads in background for search)")
             let snapshot = verified
             Task { @MainActor in
                 await self.finishSignInAPIEnrichment(snapshot)
@@ -134,6 +152,16 @@ final class AppSession: ObservableObject {
         browserPathStack = ["/"]
         WebDAVMediaSession.setActiveCredentials(nil)
         PCloudWebDAVRootResolver.clearCache()
+    }
+
+    /// Prefer a folder that listed yesterday over WebDAV `/` (this account 404s on `/`).
+    private func firstSignedInBrowsePath() async -> String? {
+        let bookmarks = FolderBookmarkStore.shared.bookmarks().map(\.listingPath)
+        for path in bookmarks + SearchLocationCache.listingPaths() {
+            let normalized = WebDAVURLBuilder.directoryListingPath(path)
+            if normalized != "/" { return normalized }
+        }
+        return nil
     }
 
     /// Refreshes WebDAV files root before search; API token only when REST search is enabled.

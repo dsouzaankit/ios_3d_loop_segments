@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 305 (1.2.69):** Sign-in succeeds when **pCloud API accepts the password** even if WebDAV PROPFIND 404s (same Apache “Not Found” a browser GET gets on `webdav.pcloud.com`). Opens Browse on a bookmark folder, not `/`. No EU wait.
+
 **Build 304 (1.2.68):** Sign-in uses **PROPFIND Depth 1** (same as Browse/export). Depth 0 404’d every path on this account, including `/p_cld_media/` that listed yesterday. Not VPN/2FA — wrong WebDAV depth.
 
 **Build 303 (1.2.67):** Sign-in **404 on `/` is expected** on this account — yesterday’s working session listed `/p_cld_media/…`, not the WebDAV root. After `/` 404s, probe **bookmarks + recent search folders** (same paths export used).

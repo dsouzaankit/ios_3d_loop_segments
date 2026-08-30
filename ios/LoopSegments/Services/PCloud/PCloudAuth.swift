@@ -27,6 +27,50 @@ enum PCloudAuth {
         return URLSession(configuration: config)
     }()
 
+    /// Password is valid when `userinfo` returns `result=0` (token may be missing).
+    static func confirmPassword(
+        email: String,
+        password: String,
+        preferredRegion: PCloudRegion
+    ) async throws -> (region: PCloudRegion, apiHost: String, token: String?) {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty, !trimmedPassword.isEmpty else {
+            throw PCloudAPIError.authenticationFailed("Email and password are required.")
+        }
+        var lastError: Error?
+        for region in [preferredRegion, preferredRegion.alternate] {
+            for username in uniqueUsernames(trimmedEmail) {
+                do {
+                    let json = try await PCloudAPIRequest.get(
+                        host: region.apiHost,
+                        method: "userinfo",
+                        parameters: baseAuthParameters(
+                            username: username,
+                            password: trimmedPassword,
+                            includeLogout: true
+                        ),
+                        session: signInFastSession
+                    )
+                    let code = PCloudAPIRequest.resultCode(json)
+                    if code == 0, json["userid"] != nil || extractAuthToken(json) != nil {
+                        let token = extractAuthToken(json)
+                        SearchDebugLog.log(
+                            "sign-in: API password OK region=\(region.rawValue) host=\(region.apiHost) token=\(token != nil)"
+                        )
+                        return (region, region.apiHost, token)
+                    }
+                    if code != 0 {
+                        lastError = PCloudAPIError.api(code: code, message: PCloudAPIRequest.errorMessage(json))
+                    }
+                } catch {
+                    lastError = error
+                }
+            }
+        }
+        throw lastError ?? PCloudAPIError.authenticationFailed(nil)
+    }
+
     /// Parallel US/EU `userinfo` on regional API hosts only — for fast Sign in before WebDAV.
     static func quickSignInSession(
         email: String,
