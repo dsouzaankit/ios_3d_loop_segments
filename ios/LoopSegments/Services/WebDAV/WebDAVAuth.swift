@@ -51,7 +51,7 @@ enum WebDAVAccessProbe {
             try await verifyMediaURL(url, authorization: authorization, log: log)
             return (url, item)
         } catch let error as WebDAVResourceLoaderError {
-            guard case .httpStatus(404) = error,
+            guard case .httpStatus(404, _) = error,
                   let parentPath = WebDAVRenameReconcile.parentBrowsePath(forFileHref: item.href) else {
                 throw error
             }

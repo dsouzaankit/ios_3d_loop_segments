@@ -650,7 +650,7 @@ private actor RangeFetchGate {
 
 enum WebDAVResourceLoaderError: LocalizedError {
     case invalidResponse
-    case httpStatus(Int)
+    case httpStatus(Int, context: WebDAVHTTPContext = .sparseSourceRead)
     case missingContentLength
     case suspiciousContentLength(Int64)
 
@@ -658,8 +658,8 @@ enum WebDAVResourceLoaderError: LocalizedError {
         switch self {
         case .invalidResponse:
             return "Invalid response loading media from pCloud."
-        case .httpStatus(let code):
-            return WebDAVHTTPMessages.requestFailed(code)
+        case .httpStatus(let code, let context):
+            return WebDAVHTTPMessages.requestFailed(code, context: context)
         case .missingContentLength:
             return "Could not determine file size from pCloud."
         case .suspiciousContentLength(let bytes):

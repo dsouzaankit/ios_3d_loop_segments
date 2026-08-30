@@ -110,7 +110,7 @@ enum VanillaWebDAVDownload {
                     log: log
                 )
             } catch let error as WebDAVResourceLoaderError {
-                if case .httpStatus(let code) = error, code == 404 || code == 416 {
+                if case .httpStatus(let code, _) = error, code == 404 || code == 416 {
                     let onDisk = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?
                         .int64Value ?? offset
                     if let reconciled = try await reconcileLengthAfterRangeFailure(
@@ -267,7 +267,7 @@ enum VanillaWebDAVDownload {
             throw WebDAVResourceLoaderError.invalidResponse
         }
         guard (200 ... 299).contains(http.statusCode) else {
-            throw WebDAVResourceLoaderError.httpStatus(http.statusCode)
+            throw WebDAVResourceLoaderError.httpStatus(http.statusCode, context: .vanillaDownloadResume)
         }
         if isCancelled() || Task.isCancelled { throw CancellationError() }
 

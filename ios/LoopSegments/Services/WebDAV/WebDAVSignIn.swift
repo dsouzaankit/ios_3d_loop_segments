@@ -19,14 +19,14 @@ enum WebDAVSignIn {
                 return attempt
             } catch let error as WebDAVError {
                 lastError = error
-                if case .httpStatus(let code) = error, code == 401 || code == 404 { continue }
+                if case .httpStatus(let code, _) = error, code == 401 || code == 404 { continue }
                 throw error
             } catch {
                 throw error
             }
         }
         if let lastError { throw lastError }
-        throw WebDAVError.httpStatus(401)
+        throw WebDAVError.httpStatus(401, context: .signIn)
     }
 
     /// Depth-0 PROPFIND on `/` can 404 even when a root list works; fall back before failing sign-in.
@@ -35,16 +35,16 @@ enum WebDAVSignIn {
         var lastPathError: Error?
         for path in probePaths {
             do {
-                try await client.verifyAccess(path: path, maxAttempts: 3)
+                try await client.verifyAccess(path: path, maxAttempts: 3, context: .signIn)
                 return
             } catch let error as WebDAVError {
                 lastPathError = error
-                if case .httpStatus(let code) = error, code == 404 { continue }
+                if case .httpStatus(let code, _) = error, code == 404 { continue }
                 throw error
             }
         }
         do {
-            _ = try await client.list(path: "/")
+            _ = try await client.list(path: "/", context: .signIn)
             SearchDebugLog.log("sign-in: WebDAV root list OK after PROPFIND 404 on \(probePaths.joined(separator: ", "))")
             return
         } catch {

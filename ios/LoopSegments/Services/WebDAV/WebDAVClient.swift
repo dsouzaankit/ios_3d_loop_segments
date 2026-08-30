@@ -7,17 +7,18 @@ final class WebDAVClient {
         self.credentials = credentials
     }
 
-    func list(path: String) async throws -> [WebDAVItem] {
-        try await list(path: path, credentials: credentials, retriedAuth: false)
+    func list(path: String, context: WebDAVHTTPContext = .generic) async throws -> [WebDAVItem] {
+        try await list(path: path, credentials: credentials, retriedAuth: false, context: context)
     }
 
     /// Lightweight sign-in check (PROPFIND Depth 0 — no folder children listing).
-    func verifyAccess(path: String = "/", maxAttempts: Int = 8) async throws {
+    func verifyAccess(path: String = "/", maxAttempts: Int = 8, context: WebDAVHTTPContext = .generic) async throws {
         try await verifyAccess(
             path: path,
             credentials: credentials,
             retriedAuth: false,
-            maxAttempts: maxAttempts
+            maxAttempts: maxAttempts,
+            context: context
         )
     }
 
@@ -25,7 +26,8 @@ final class WebDAVClient {
         path: String,
         credentials: WebDAVCredentials,
         retriedAuth: Bool,
-        maxAttempts: Int
+        maxAttempts: Int,
+        context: WebDAVHTTPContext
     ) async throws {
         let listingURL = resolveURL(for: path)
         var request = URLRequest(url: listingURL)
@@ -45,19 +47,21 @@ final class WebDAVClient {
                 path: path,
                 credentials: fresh,
                 retriedAuth: true,
-                maxAttempts: maxAttempts
+                maxAttempts: maxAttempts,
+                context: context
             )
             return
         }
         guard (200 ... 299).contains(http.statusCode) else {
-            throw WebDAVError.httpStatus(http.statusCode)
+            throw WebDAVError.httpStatus(http.statusCode, context: context)
         }
     }
 
     private func list(
         path: String,
         credentials: WebDAVCredentials,
-        retriedAuth: Bool
+        retriedAuth: Bool,
+        context: WebDAVHTTPContext
     ) async throws -> [WebDAVItem] {
         let listingURL = resolveURL(for: path)
         var request = URLRequest(url: listingURL)
@@ -73,10 +77,10 @@ final class WebDAVClient {
         if http.statusCode == 401, !retriedAuth,
            let fresh = CredentialStore().load(account: credentials.email),
            fresh.region == credentials.region {
-            return try await list(path: path, credentials: fresh, retriedAuth: true)
+            return try await list(path: path, credentials: fresh, retriedAuth: true, context: context)
         }
         guard (200 ... 299).contains(http.statusCode) else {
-            throw WebDAVError.httpStatus(http.statusCode)
+            throw WebDAVError.httpStatus(http.statusCode, context: context)
         }
 
         let listingPath = WebDAVURLBuilder.directoryListingPath(path)
@@ -109,13 +113,13 @@ final class WebDAVClient {
 
 enum WebDAVError: LocalizedError {
     case invalidResponse
-    case httpStatus(Int)
+    case httpStatus(Int, context: WebDAVHTTPContext = .generic)
     case parseFailed
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse: return "Invalid WebDAV response."
-        case .httpStatus(let code): return WebDAVHTTPMessages.requestFailed(code)
+        case .httpStatus(let code, let context): return WebDAVHTTPMessages.requestFailed(code, context: context)
         case .parseFailed: return "Could not parse WebDAV listing."
         }
     }

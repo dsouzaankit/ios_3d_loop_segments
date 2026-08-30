@@ -60,7 +60,7 @@ enum PCloudWebDAVRootResolver {
             let href = WebDAVURLBuilder.directoryListingPath(item.href)
             if isUserFilesRoot(href) { return href }
         }
-        throw WebDAVError.httpStatus(404)
+        throw WebDAVError.httpStatus(404, context: .filesRootDiscovery)
     }
 
     private static func isUserFilesRoot(_ href: String) -> Bool {

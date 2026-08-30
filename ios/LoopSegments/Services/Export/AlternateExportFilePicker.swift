@@ -64,9 +64,13 @@ enum AlternateExportFilePicker {
         WebDAVRenameReconcile.parentBrowsePath(forFileHref: item.href)
     }
 
-    static func listVideos(in path: String, credentials: WebDAVCredentials) async throws -> [WebDAVItem] {
+    static func listVideos(
+        in path: String,
+        credentials: WebDAVCredentials,
+        context: WebDAVHTTPContext = .generic
+    ) async throws -> [WebDAVItem] {
         let client = WebDAVClient(credentials: credentials)
-        let listed = try await client.list(path: path)
+        let listed = try await client.list(path: path, context: context)
         return listed
             .filter(\.isVideo)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -136,7 +140,7 @@ enum AlternateExportFilePicker {
         let target = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { throw PickerError.noVideos }
         let folder = WebDAVURLBuilder.directoryListingPath(folderPath)
-        let candidates = try await listVideos(in: folder, credentials: credentials)
+        let candidates = try await listVideos(in: folder, credentials: credentials, context: .pausedFolderResolve)
         let matches = candidates.filter { WebDAVRenameReconcile.namesEqual($0.name, target) }
         if matches.count == 1 { return matches[0] }
         if matches.isEmpty {

@@ -98,7 +98,7 @@ final class AppSession: ObservableObject {
             password: password.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         guard !attempt.email.isEmpty, !attempt.password.isEmpty else {
-            throw WebDAVError.httpStatus(401)
+            throw WebDAVError.httpStatus(401, context: .signIn)
         }
 
         let previous = credentials
