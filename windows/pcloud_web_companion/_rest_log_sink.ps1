@@ -321,16 +321,43 @@ function Start-ExplorerAt {
     param([string]$Path, [bool]$Select)
     $explorer = Join-Path $env:WINDIR 'explorer.exe'
     $folderForWindow = $Path
+    $selectPath = $null
     if ($Select -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
         $folderForWindow = Split-Path -Parent $Path
-        Start-Process -FilePath $explorer -ArgumentList @("/select,$Path")
-    } else {
-        Start-Process -FilePath $explorer -ArgumentList @($Path)
-        $folderForWindow = $Path
+        $selectPath = $Path
     }
+
+    # Same folder already open → foreground only (retry used to spawn a 2nd window).
+    if (-not $selectPath) {
+        $existing = Get-ExplorerHwndForPath -FolderPath $folderForWindow
+        if ($existing -ne [IntPtr]::Zero) {
+            [void](Show-HwndForeground -Hwnd $existing)
+            return
+        }
+    }
+
+    try {
+        if ($selectPath) {
+            # Quote path — spaces break /select, otherwise.
+            Start-Process -FilePath $explorer -ArgumentList @("/select,`"$selectPath`"")
+        } else {
+            # Shell.Application.Open survives cold Explorer. Bare
+            # `explorer.exe <path>` often ignores the folder on the first launch,
+            # so the UI looks failed and a retry opens a duplicate window.
+            $shell = New-Object -ComObject Shell.Application
+            $shell.Open($folderForWindow)
+        }
+    } catch {
+        if ($selectPath) {
+            Start-Process -FilePath $explorer -ArgumentList @("/select,`"$selectPath`"")
+        } else {
+            Start-Process -FilePath $explorer -ArgumentList @("/root,`"$folderForWindow`"")
+        }
+    }
+
     $hwnd = [IntPtr]::Zero
-    for ($i = 0; $i -lt 25; $i++) {
-        Start-Sleep -Milliseconds 120
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 100
         $hwnd = Get-ExplorerHwndForPath -FolderPath $folderForWindow
         if ($hwnd -ne [IntPtr]::Zero) { break }
     }

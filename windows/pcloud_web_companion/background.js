@@ -416,7 +416,18 @@ async function postOpenExplorer({ folderPath, fileName }) {
  * Open the my.pcloud.com folder (tab URL, right-clicked tree node, or tracked
  * context) in Windows Explorer on the mounted pCloud Drive letter.
  */
+let openPcloudDriveInFlight = null;
 async function openCurrentPcloudFolderOnPDrive({ url = null, folderId = null } = {}) {
+  if (openPcloudDriveInFlight) return openPcloudDriveInFlight;
+  openPcloudDriveInFlight = openCurrentPcloudFolderOnPDriveOnce({ url, folderId });
+  try {
+    return await openPcloudDriveInFlight;
+  } finally {
+    openPcloudDriveInFlight = null;
+  }
+}
+
+async function openCurrentPcloudFolderOnPDriveOnce({ url = null, folderId = null } = {}) {
   let resolvedFolderId = folderId ? String(folderId) : null;
   let fileName = null;
   let folderPath = null;

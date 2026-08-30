@@ -21,8 +21,13 @@ document.getElementById("clear").addEventListener("click", async () => {
   await chrome.storage.local.set({ restLogs: [] });
   render([]);
 });
+let openPBusy = false;
 document.getElementById("openP").addEventListener("click", async () => {
+  if (openPBusy) return;
+  openPBusy = true;
+  const btn = document.getElementById("openP");
   const meta = document.getElementById("meta");
+  btn.disabled = true;
   meta.textContent = "Opening pCloud Drive folder…";
   try {
     const result = await chrome.runtime.sendMessage({ type: "open-pcloud-on-p" });
@@ -31,6 +36,9 @@ document.getElementById("openP").addEventListener("click", async () => {
       : `pCloud Drive: ${result?.error || "failed"}`;
   } catch (err) {
     meta.textContent = `pCloud Drive: ${err && err.message ? err.message : err}`;
+  } finally {
+    openPBusy = false;
+    btn.disabled = false;
   }
 });
 
