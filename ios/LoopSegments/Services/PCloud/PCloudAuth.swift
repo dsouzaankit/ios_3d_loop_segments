@@ -28,6 +28,7 @@ enum PCloudAuth {
     }()
 
     /// Password is valid when `userinfo` returns `result=0` (token may be missing).
+    /// Picker region only — Europe `1022 Please provide 'code'` is the wrong datacenter, not 2FA.
     static func confirmPassword(
         email: String,
         password: String,
@@ -38,37 +39,125 @@ enum PCloudAuth {
         guard !trimmedEmail.isEmpty, !trimmedPassword.isEmpty else {
             throw PCloudAPIError.authenticationFailed("Email and password are required.")
         }
+        do {
+            return try await confirmPasswordOnRegion(
+                email: trimmedEmail,
+                password: trimmedPassword,
+                region: preferredRegion
+            )
+        } catch {
+            guard preferredRegion == .eu, isCode1022(error) else { throw error }
+            SearchDebugLog.log(
+                "sign-in: API Europe code=1022 — retrying United States (not account 2FA)"
+            )
+            return try await confirmPasswordOnRegion(
+                email: trimmedEmail,
+                password: trimmedPassword,
+                region: .us
+            )
+        }
+    }
+
+    private static func confirmPasswordOnRegion(
+        email: String,
+        password: String,
+        region: PCloudRegion
+    ) async throws -> (region: PCloudRegion, apiHost: String, token: String?) {
         var lastError: Error?
-        for region in [preferredRegion, preferredRegion.alternate] {
-            for username in uniqueUsernames(trimmedEmail) {
-                do {
-                    let json = try await PCloudAPIRequest.get(
-                        host: region.apiHost,
-                        method: "userinfo",
-                        parameters: baseAuthParameters(
-                            username: username,
-                            password: trimmedPassword,
-                            includeLogout: true
-                        ),
-                        session: signInFastSession
-                    )
-                    let code = PCloudAPIRequest.resultCode(json)
-                    if code == 0, json["userid"] != nil || extractAuthToken(json) != nil {
-                        let token = extractAuthToken(json)
-                        SearchDebugLog.log(
-                            "sign-in: API password OK region=\(region.rawValue) host=\(region.apiHost) token=\(token != nil)"
-                        )
-                        return (region, region.apiHost, token)
-                    }
-                    if code != 0 {
-                        lastError = PCloudAPIError.api(code: code, message: PCloudAPIRequest.errorMessage(json))
-                    }
-                } catch {
-                    lastError = error
+        for username in uniqueUsernames(email) {
+            do {
+                if let hit = try await userinfoLogin(
+                    username: username,
+                    password: password,
+                    region: region,
+                    useDigest: false
+                ) {
+                    return hit
                 }
+            } catch {
+                lastError = error
+                if isCode1022(error) { continue }
+            }
+            do {
+                if let hit = try await userinfoLogin(
+                    username: username,
+                    password: password,
+                    region: region,
+                    useDigest: true
+                ) {
+                    return hit
+                }
+            } catch {
+                lastError = error
             }
         }
         throw lastError ?? PCloudAPIError.authenticationFailed(nil)
+    }
+
+    private static func userinfoLogin(
+        username: String,
+        password: String,
+        region: PCloudRegion,
+        useDigest: Bool
+    ) async throws -> (region: PCloudRegion, apiHost: String, token: String?)? {
+        let json: [String: Any]
+        let style: String
+        if useDigest {
+            let digestJSON = try await PCloudAPIRequest.get(
+                host: region.apiHost,
+                method: "getdigest",
+                session: signInFastSession
+            )
+            try PCloudAPIRequest.throwIfAPIError(digestJSON)
+            guard let digest = digestJSON["digest"] as? String, !digest.isEmpty else {
+                throw PCloudAPIError.unexpectedResponse
+            }
+            let passwordDigest = makePasswordDigest(email: username, password: password, digest: digest)
+            json = try await PCloudAPIRequest.get(
+                host: region.apiHost,
+                method: "userinfo",
+                parameters: baseAuthParameters(
+                    username: username.lowercased(),
+                    digest: digest,
+                    passwordDigest: passwordDigest,
+                    includeLogout: true
+                ),
+                session: signInFastSession
+            )
+            style = "digest"
+        } else {
+            json = try await PCloudAPIRequest.get(
+                host: region.apiHost,
+                method: "userinfo",
+                parameters: baseAuthParameters(
+                    username: username,
+                    password: password,
+                    includeLogout: true
+                ),
+                session: signInFastSession
+            )
+            style = "plain"
+        }
+        let code = PCloudAPIRequest.resultCode(json)
+        SearchDebugLog.log(
+            "sign-in: API region=\(region.rawValue) host=\(region.apiHost) style=\(style) code=\(code)"
+        )
+        if code == 0, json["userid"] != nil || extractAuthToken(json) != nil {
+            let token = extractAuthToken(json)
+            SearchDebugLog.log(
+                "sign-in: API password OK region=\(region.rawValue) host=\(region.apiHost) token=\(token != nil)"
+            )
+            return (region, region.apiHost, token)
+        }
+        if code != 0 {
+            throw PCloudAPIError.api(code: code, message: PCloudAPIRequest.errorMessage(json))
+        }
+        return nil
+    }
+
+    static func isCode1022(_ error: Error) -> Bool {
+        if case PCloudAPIError.api(let code, _) = error { return code == 1022 }
+        return false
     }
 
     /// Parallel US/EU `userinfo` on regional API hosts only — for fast Sign in before WebDAV.

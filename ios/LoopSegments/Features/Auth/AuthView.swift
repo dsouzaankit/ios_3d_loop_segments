@@ -29,7 +29,7 @@ struct AuthView: View {
                         .textContentType(.password)
                 }
                 Section {
-                    Text("Use your normal pCloud email and password. Sign-in verifies WebDAV and pCloud search. If the wrong region was selected, the app tries the other datacenter automatically.")
+                    Text("Use your normal pCloud email and password. Pick United States unless my.pcloud.com is Europe. Europe error 1022 (code) is the other datacenter, not 2FA.")
                     Text("Two-factor authentication: use a pCloud app password here (not your 2FA login code). Browse/export can work without search, but search needs the API token from sign-in.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)

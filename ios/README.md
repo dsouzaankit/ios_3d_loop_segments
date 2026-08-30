@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 306 (1.2.70):** Europe API **1022 Please provide 'code'** is the **wrong datacenter**, not 2FA. Sign-in no longer lets that EU error replace a US result; Europe 1022 retries United States. US API fail still tries WebDAV and can open Browse on 404.
+
 **Build 305 (1.2.69):** Sign-in succeeds when **pCloud API accepts the password** even if WebDAV PROPFIND 404s (same Apache “Not Found” a browser GET gets on `webdav.pcloud.com`). Opens Browse on a bookmark folder, not `/`. No EU wait.
 
 **Build 304 (1.2.68):** Sign-in uses **PROPFIND Depth 1** (same as Browse/export). Depth 0 404’d every path on this account, including `/p_cld_media/` that listed yesterday. Not VPN/2FA — wrong WebDAV depth.

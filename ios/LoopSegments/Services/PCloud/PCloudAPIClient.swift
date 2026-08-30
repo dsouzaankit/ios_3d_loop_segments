@@ -398,6 +398,12 @@ enum PCloudAPIError: LocalizedError {
             If you use two-factor authentication, pCloud may require a separate security password for API access.
             \(detail.isEmpty ? "" : " (\(detail))")
             """
+        case 1022:
+            return """
+            pCloud Europe asked for a verification code (error 1022). \
+            That is usually the wrong datacenter, not 2FA — pick United States.
+            \(detail.isEmpty ? "" : " (\(detail))")
+            """
         case 1000:
             return "pCloud search requires login — sign out and sign in again."
         case 0:

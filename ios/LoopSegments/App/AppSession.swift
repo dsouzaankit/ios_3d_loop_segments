@@ -104,21 +104,38 @@ final class AppSession: ObservableObject {
         let previous = credentials
         WebDAVMediaSession.setActiveCredentials(attempt)
         do {
-            let api = try await PCloudAuth.confirmPassword(
-                email: attempt.email,
-                password: attempt.password,
-                preferredRegion: attempt.region
-            )
             var verified = attempt
-            verified.region = api.region
-            verified.apiAuthToken = api.token
-            verified.apiAuthHost = api.apiHost
+            do {
+                let api = try await PCloudAuth.confirmPassword(
+                    email: attempt.email,
+                    password: attempt.password,
+                    preferredRegion: attempt.region
+                )
+                verified.region = api.region
+                verified.apiAuthToken = api.token
+                verified.apiAuthHost = api.apiHost
+            } catch {
+                SearchDebugLog.log(
+                    "sign-in: API not OK on \(attempt.region.rawValue) — \(error.localizedDescription); trying WebDAV"
+                )
+                if attempt.region == .eu {
+                    verified.region = .us
+                    SearchDebugLog.log("sign-in: Europe API failed — WebDAV on United States")
+                }
+            }
             do {
                 verified = try await WebDAVSignIn.verify(credentials: verified)
                 SearchDebugLog.log("sign-in: WebDAV OK — opening browser")
+            } catch let webdav as WebDAVError {
+                if case .httpStatus(401, _) = webdav {
+                    throw webdav
+                }
+                SearchDebugLog.log(
+                    "sign-in: WebDAV failed — \(webdav.localizedDescription); opening Browse anyway (browser GET 404 on webdav.pcloud.com is normal)"
+                )
             } catch {
                 SearchDebugLog.log(
-                    "sign-in: WebDAV failed after API OK — \(error.localizedDescription); opening Browse anyway (browser GET 404 on webdav.pcloud.com is normal)"
+                    "sign-in: WebDAV failed — \(error.localizedDescription); opening Browse anyway"
                 )
             }
             if let start = await firstSignedInBrowsePath() {
