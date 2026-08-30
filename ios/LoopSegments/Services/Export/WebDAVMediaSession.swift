@@ -17,7 +17,7 @@ enum WebDAVMediaSession {
                 return
             }
             let credential = URLCredential(
-                user: credentials.email,
+                user: credentials.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
                 password: credentials.password,
                 persistence: .forSession
             )

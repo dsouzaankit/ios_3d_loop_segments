@@ -14,8 +14,9 @@ enum WebDAVHTTPMessages {
             return "pCloud denied access (HTTP 403). Check folder permissions or sign in again."
         case 404:
             return """
-            pCloud request failed (HTTP 404). The file may have moved, or the download offset is past the \
-            file end (stale resume). Clear _vanilla_download.* in Exports or retry export to start fresh.
+            pCloud WebDAV not found (HTTP 404). On Sign in, pick US or Europe to match my.pcloud.com \
+            (the app tries both). During export, 404 can mean a moved file or stale _vanilla_download.* resume — \
+            use Browse to re-pick the file or clear the partial in pcld_ios_media.
             """
         case 416:
             return """

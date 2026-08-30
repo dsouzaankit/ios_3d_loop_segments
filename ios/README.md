@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 296 (1.2.60):** Harden pCloud **Sign in** when WebDAV returns **HTTP 404** — probe `/` and `/remote.php/dav/`, fall back to root list, try both US/Europe datacenters, 45s timeout, clearer 404 text (vs stale export resume).
+
 **Build 295 (1.2.59):** No vanilla remux — keep `_vanilla_download.*` (no `_vanilla_faststart.mp4`, no silent `*_appFast_*` archive). Faststart remux stays on `loop/op_*.mp4` only. Re-export after this build to replace an existing silent `_appFast_` file.
 
 **Build 294 (1.2.58):** Companion multi-select no longer starts the next queued file while the first is still resolving its pCloud folder (that race put #2 on **Paused** and needed a manual Export). Orange banner shows **Starting…** during resolve so it does not wait for the export run to begin.

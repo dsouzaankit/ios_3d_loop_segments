@@ -12,14 +12,20 @@ final class WebDAVClient {
     }
 
     /// Lightweight sign-in check (PROPFIND Depth 0 — no folder children listing).
-    func verifyAccess(path: String = "/") async throws {
-        try await verifyAccess(path: path, credentials: credentials, retriedAuth: false)
+    func verifyAccess(path: String = "/", maxAttempts: Int = 8) async throws {
+        try await verifyAccess(
+            path: path,
+            credentials: credentials,
+            retriedAuth: false,
+            maxAttempts: maxAttempts
+        )
     }
 
     private func verifyAccess(
         path: String,
         credentials: WebDAVCredentials,
-        retriedAuth: Bool
+        retriedAuth: Bool,
+        maxAttempts: Int
     ) async throws {
         let listingURL = resolveURL(for: path)
         var request = URLRequest(url: listingURL)
@@ -28,14 +34,19 @@ final class WebDAVClient {
         request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
         request.setValue(credentials.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
 
-        let (_, response) = try await WebDAVMediaSession.data(for: request)
+        let (_, response) = try await WebDAVMediaSession.data(for: request, maxAttempts: maxAttempts)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVError.invalidResponse
         }
         if http.statusCode == 401, !retriedAuth,
            let fresh = CredentialStore().load(account: credentials.email),
            fresh.region == credentials.region {
-            try await verifyAccess(path: path, credentials: fresh, retriedAuth: true)
+            try await verifyAccess(
+                path: path,
+                credentials: fresh,
+                retriedAuth: true,
+                maxAttempts: maxAttempts
+            )
             return
         }
         guard (200 ... 299).contains(http.statusCode) else {
