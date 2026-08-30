@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 300 (1.2.64):** pCloud **Sign in** tries **REST API login first** (US+EU parallel, 10s) to find the right datacenter, then one WebDAV check — falls back to parallel WebDAV if API is blocked (2FA). Clearer timeout errors name build + VPN.
+
 **Build 299 (1.2.63):** pCloud **Sign in** probes **US and EU in parallel** (not sequential), drops the extra `/remote.php/dav/` hop, removes the 75s UI watchdog, and uses a 12s WebDAV request timeout — login should finish in a few seconds or show a real network/401 error.
 
 **Build 298 (1.2.62):** pCloud **Sign in** uses a fast WebDAV session (15s request timeout, no connectivity wait, no export retries) so login fails quickly on bad networks instead of hitting the 45s UI timeout; outer limit raised to 75s for US/EU probes.

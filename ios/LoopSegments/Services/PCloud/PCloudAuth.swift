@@ -15,6 +15,68 @@ enum PCloudAuth {
         return URLSession(configuration: config)
     }()
 
+    /// Fast Sign in — regional API hosts only (no getapiserver round-trips).
+    private static let signInFastSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 12
+        config.waitsForConnectivity = false
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: config)
+    }()
+
+    /// Parallel US/EU `userinfo` on regional API hosts only — for fast Sign in before WebDAV.
+    static func quickSignInSession(
+        email: String,
+        password: String,
+        preferredRegion: PCloudRegion
+    ) async throws -> (token: String, region: PCloudRegion, apiHost: String) {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty, !trimmedPassword.isEmpty else {
+            throw PCloudAPIError.authenticationFailed("Email and password are required.")
+        }
+
+        let regions = [preferredRegion, preferredRegion.alternate]
+        return try await withThrowingTaskGroup(of: Result<(String, PCloudRegion, String), Error>.self) { group in
+            let usernames = uniqueUsernames(trimmedEmail)
+            for region in regions {
+                group.addTask {
+                    for username in usernames {
+                        do {
+                            let hit = try await tryAuthOnHost(
+                                username: username,
+                                password: trimmedPassword,
+                                region: region,
+                                apiHost: region.apiHost,
+                                session: signInFastSession
+                            )
+                            return .success(hit)
+                        } catch {
+                            continue
+                        }
+                    }
+                    return .failure(PCloudAPIError.authenticationFailed(nil))
+                }
+            }
+
+            var lastError: Error?
+            for try await result in group {
+                switch result {
+                case .success(let hit):
+                    group.cancelAll()
+                    return hit
+                case .failure(let error):
+                    lastError = error
+                }
+            }
+            if let lastError { throw lastError }
+            throw PCloudAPIError.authenticationFailed(nil)
+        }
+    }
+
     /// Verifies REST API login (search). Returns the datacenter that accepted the password.
     static func verifyAPIAccess(
         credentials: WebDAVCredentials,

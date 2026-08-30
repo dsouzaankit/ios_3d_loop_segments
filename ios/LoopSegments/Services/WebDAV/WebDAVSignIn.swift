@@ -1,11 +1,47 @@
 import Foundation
 
-/// Verifies pCloud WebDAV login; tries US and EU in parallel when the picker region fails.
+/// Verifies pCloud login: fast REST probe (US+EU parallel), then WebDAV on the winning region.
 enum WebDAVSignIn {
     static func verify(credentials: WebDAVCredentials) async throws -> WebDAVCredentials {
+        SearchDebugLog.log("sign-in: start — picker=\(credentials.region.rawValue)")
+
+        var enriched = credentials
+        if let apiHit = try? await apiQuickProbe(credentials) {
+            enriched.region = apiHit.region
+            enriched.apiAuthToken = apiHit.token
+            enriched.apiAuthHost = apiHit.apiHost
+            SearchDebugLog.log(
+                "sign-in: API OK region=\(apiHit.region.rawValue) host=\(apiHit.apiHost) — verifying WebDAV"
+            )
+            do {
+                try await verifyWebDAVAccess(credentials: enriched)
+                return enriched
+            } catch {
+                SearchDebugLog.log(
+                    "sign-in: WebDAV failed on API region \(apiHit.region.rawValue) — \(error.localizedDescription)"
+                )
+            }
+        } else {
+            SearchDebugLog.log("sign-in: API probe failed or skipped — WebDAV-only (2FA / no API token is OK)")
+        }
+
+        return try await verifyWebDAVParallel(credentials: enriched)
+    }
+
+    private static func apiQuickProbe(
+        _ credentials: WebDAVCredentials
+    ) async throws -> (token: String, region: PCloudRegion, apiHost: String) {
+        try await PCloudAuth.quickSignInSession(
+            email: credentials.email,
+            password: credentials.password,
+            preferredRegion: credentials.region
+        )
+    }
+
+    private static func verifyWebDAVParallel(credentials: WebDAVCredentials) async throws -> WebDAVCredentials {
         let regions = [credentials.region, credentials.region.alternate]
         SearchDebugLog.log(
-            "sign-in: WebDAV probe start — picker=\(credentials.region.rawValue), parallel=\(regions.map(\.rawValue).joined(separator: "+"))"
+            "sign-in: WebDAV parallel — \(regions.map(\.rawValue).joined(separator: "+"))"
         )
 
         return try await withThrowingTaskGroup(of: Result<WebDAVCredentials, Error>.self) { group in
@@ -33,7 +69,12 @@ enum WebDAVSignIn {
                             "sign-in: WebDAV OK on \(verified.region.rawValue) datacenter (picker was \(credentials.region.rawValue))"
                         )
                     }
-                    return verified
+                    var merged = verified
+                    if let token = credentials.apiAuthToken, !token.isEmpty {
+                        merged.apiAuthToken = token
+                        merged.apiAuthHost = credentials.apiAuthHost
+                    }
+                    return merged
                 case .failure(let error):
                     lastError = error
                 }

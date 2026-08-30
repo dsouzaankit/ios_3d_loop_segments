@@ -184,6 +184,10 @@ final class AppSession: ObservableObject {
     }
 
     private func finishSignInAPIEnrichment(_ credentials: WebDAVCredentials) async {
+        if credentials.apiAuthToken?.isEmpty == false {
+            SearchDebugLog.log("sign-in: API token already saved during sign-in — skipping background fetch")
+            return
+        }
         do {
             let enriched = try await enrichWithAPIAccess(credentials, discoverFilesRoot: false)
             persistCredentials(enriched)

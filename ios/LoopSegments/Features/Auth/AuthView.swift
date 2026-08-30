@@ -84,7 +84,26 @@ struct AuthView: View {
         do {
             try await session.signIn(region: region, email: email, password: password)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = Self.friendlySignInError(error)
         }
+    }
+
+    private static func friendlySignInError(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut:
+                return """
+                pCloud timed out (build \(buildLabel)). Turn off VPN/Clash on the phone, use Wi‑Fi, \
+                then try again. If it still fails, confirm US/Europe matches my.pcloud.com.
+                """
+            case .notConnectedToInternet, .dataNotAllowed, .cannotConnectToHost, .networkConnectionLost:
+                return """
+                No route to pCloud (build \(buildLabel)). Check Wi‑Fi/cellular and turn off VPN on the phone.
+                """
+            default:
+                return "\(urlError.localizedDescription) (build \(buildLabel))"
+            }
+        }
+        return error.localizedDescription
     }
 }
