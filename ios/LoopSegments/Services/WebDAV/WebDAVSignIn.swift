@@ -42,47 +42,35 @@ enum WebDAVSignIn {
         }
     }
 
-    /// pCloud often 404s Depth-0 on `/` even when `/remote.php/dav/` works (build 296 probes).
+    /// Browse/export use Depth 1. Depth 0 on this account 404s even for `/p_cld_media/` (build 303 logs).
     private static func verifyWebDAVAccess(credentials: WebDAVCredentials) async throws {
         let client = WebDAVClient(credentials: credentials)
-        let email = credentials.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = email.lowercased()
-        var paths = [
-            "/",
-            "/remote.php/dav/",
-            "/remote.php/dav/files/\(lower)/",
-        ]
-        if lower != email {
-            paths.append("/remote.php/dav/files/\(email)/")
+        var paths = await extraListingPaths()
+        if !paths.contains("/") {
+            paths.append("/")
         }
-        // Yesterday’s session listed /p_cld_media/… — pCloud often 404s on `/` even when those folders work.
-        paths.append(contentsOf: await extraListingPaths())
 
         var lastError: Error?
         for path in paths {
             do {
-                try await client.verifyAccess(path: path, context: .signIn)
-                if path != "/" {
-                    SearchDebugLog.log("sign-in: WebDAV OK on \(credentials.region.rawValue) path=\(path)")
-                }
+                let items = try await client.list(path: path, context: .signIn)
+                SearchDebugLog.log(
+                    "sign-in: WebDAV OK on \(credentials.region.rawValue) list \(path) (\(items.count) item(s))"
+                )
                 return
             } catch let error as WebDAVError {
                 lastError = error
-                if case .httpStatus(let code, _) = error, code == 404 {
-                    SearchDebugLog.log("sign-in: HTTP 404 on \(credentials.region.rawValue) path=\(path)")
-                    continue
+                if case .httpStatus(let code, _) = error {
+                    SearchDebugLog.log(
+                        "sign-in: HTTP \(code) on \(credentials.region.rawValue) list \(path)"
+                    )
+                    if code == 404 { continue }
                 }
                 throw error
             }
         }
-        do {
-            _ = try await client.list(path: "/", context: .signIn)
-            SearchDebugLog.log("sign-in: WebDAV root list OK on \(credentials.region.rawValue) after PROPFIND 404")
-            return
-        } catch {
-            if let lastError { throw lastError }
-            throw error
-        }
+        if let lastError { throw lastError }
+        throw WebDAVError.httpStatus(404, context: .signIn)
     }
 
     /// Bookmarks + recent search folders (survives Sign out). Skip `/`.

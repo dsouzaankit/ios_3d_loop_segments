@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 304 (1.2.68):** Sign-in uses **PROPFIND Depth 1** (same as Browse/export). Depth 0 404’d every path on this account, including `/p_cld_media/` that listed yesterday. Not VPN/2FA — wrong WebDAV depth.
+
 **Build 303 (1.2.67):** Sign-in **404 on `/` is expected** on this account — yesterday’s working session listed `/p_cld_media/…`, not the WebDAV root. After `/` 404s, probe **bookmarks + recent search folders** (same paths export used).
 
 **Build 302 (1.2.66):** Sign-in logs showed **US WebDAV HTTP 404 in ~1s**, then **EU timed out (~15s)** and that timeout was shown as the failure. Restore `/remote.php/dav/` (+ files root) probes; if both regions fail, keep the HTTP error instead of the timeout.
