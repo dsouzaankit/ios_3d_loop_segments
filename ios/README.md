@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 302 (1.2.66):** Sign-in logs showed **US WebDAV HTTP 404 in ~1s**, then **EU timed out (~15s)** and that timeout was shown as the failure. Restore `/remote.php/dav/` (+ files root) probes; if both regions fail, keep the HTTP error instead of the timeout.
+
 **Build 301 (1.2.65):** pCloud **Sign in** is **WebDAV-only again** (US+EU in parallel). Build 300 waited on REST `userinfo` (plain+digest retries) before WebDAV, so login could hang even when WebDAV was fine. API token still loads in the background after a successful WebDAV login.
 
 **Build 300 (1.2.64):** pCloud **Sign in** tries **REST API login first** (US+EU parallel, 10s) to find the right datacenter, then one WebDAV check — falls back to parallel WebDAV if API is blocked (2FA). Clearer timeout errors name build + VPN.

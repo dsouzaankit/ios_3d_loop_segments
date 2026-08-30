@@ -23,7 +23,7 @@ enum WebDAVSignIn {
                 }
             }
 
-            var lastError: Error?
+            var errors: [Error] = []
             for try await result in group {
                 switch result {
                 case .success(let verified):
@@ -35,30 +35,67 @@ enum WebDAVSignIn {
                     }
                     return verified
                 case .failure(let error):
-                    lastError = error
+                    errors.append(error)
                 }
             }
-            if let lastError { throw lastError }
-            throw WebDAVError.httpStatus(401, context: .signIn)
+            throw preferredSignInError(errors)
         }
     }
 
-    /// Depth-0 PROPFIND on `/` can 404 even when a root list works; fall back before failing sign-in.
+    /// pCloud often 404s Depth-0 on `/` even when `/remote.php/dav/` works (build 296 probes).
     private static func verifyWebDAVAccess(credentials: WebDAVCredentials) async throws {
         let client = WebDAVClient(credentials: credentials)
-        do {
-            try await client.verifyAccess(path: "/", context: .signIn)
-            return
-        } catch let error as WebDAVError {
-            if case .httpStatus(let code, _) = error, code == 404 {
-                _ = try await client.list(path: "/", context: .signIn)
-                SearchDebugLog.log(
-                    "sign-in: WebDAV root list OK on \(credentials.region.rawValue) after PROPFIND 404 on /"
-                )
+        let email = credentials.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = email.lowercased()
+        var paths = [
+            "/",
+            "/remote.php/dav/",
+            "/remote.php/dav/files/\(lower)/",
+        ]
+        if lower != email {
+            paths.append("/remote.php/dav/files/\(email)/")
+        }
+
+        var lastError: Error?
+        for path in paths {
+            do {
+                try await client.verifyAccess(path: path, context: .signIn)
+                if path != "/" {
+                    SearchDebugLog.log("sign-in: WebDAV OK on \(credentials.region.rawValue) path=\(path)")
+                }
                 return
+            } catch let error as WebDAVError {
+                lastError = error
+                if case .httpStatus(let code, _) = error, code == 404 {
+                    SearchDebugLog.log("sign-in: HTTP 404 on \(credentials.region.rawValue) path=\(path)")
+                    continue
+                }
+                throw error
             }
+        }
+        do {
+            _ = try await client.list(path: "/", context: .signIn)
+            SearchDebugLog.log("sign-in: WebDAV root list OK on \(credentials.region.rawValue) after PROPFIND 404")
+            return
+        } catch {
+            if let lastError { throw lastError }
             throw error
         }
+    }
+
+    /// A hung EU probe must not hide a fast US HTTP 404/401.
+    private static func preferredSignInError(_ errors: [Error]) -> Error {
+        if errors.isEmpty {
+            return WebDAVError.httpStatus(401, context: .signIn)
+        }
+        let http = errors.first { isHTTPStatus($0) }
+        if let http { return http }
+        return errors[0]
+    }
+
+    private static func isHTTPStatus(_ error: Error) -> Bool {
+        if case .httpStatus = error as? WebDAVError { return true }
+        return false
     }
 
     private static func logRegionFailure(_ error: Error, region: PCloudRegion) {
@@ -67,7 +104,7 @@ enum WebDAVSignIn {
                 "sign-in: network \(error.code.rawValue) on \(region.rawValue) — \(error.localizedDescription)"
             )
         } else if let error = error as? WebDAVError, case .httpStatus(let code, _) = error {
-            SearchDebugLog.log("sign-in: HTTP \(code) on \(region.rawValue)")
+            SearchDebugLog.log("sign-in: HTTP \(code) on \(region.rawValue) (all probe paths)")
         } else {
             SearchDebugLog.log("sign-in: \(error.localizedDescription) on \(region.rawValue)")
         }
