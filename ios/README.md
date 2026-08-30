@@ -12,6 +12,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 298 (1.2.62):** pCloud **Sign in** uses a fast WebDAV session (15s request timeout, no connectivity wait, no export retries) so login fails quickly on bad networks instead of hitting the 45s UI timeout; outer limit raised to 75s for US/EU probes.
+
 **Build 297 (1.2.61):** WebDAV **HTTP 404** messages are **context-specific** — Paused folder miss no longer mentions `_vanilla_download.*`; sparse export (`_working.mp4`) vs vanilla resume vs Sign in each get their own text.
 
 **Build 296 (1.2.60):** Harden pCloud **Sign in** when WebDAV returns **HTTP 404** — probe `/` and `/remote.php/dav/`, fall back to root list, try both US/Europe datacenters, 45s timeout, clearer 404 text (vs stale export resume).

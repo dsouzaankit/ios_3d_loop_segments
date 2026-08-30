@@ -27,6 +27,11 @@ enum WebDAVMediaSession {
 
     private static let sessionDelegate = SessionDelegate()
 
+    enum Profile {
+        case export
+        case signIn
+    }
+
     static let shared: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 180
@@ -38,6 +43,25 @@ enum WebDAVMediaSession {
         return URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
     }()
 
+    /// Fast-fail probes for Sign in — export session retries/waits can exceed a 45s UI timeout.
+    private static let signIn: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 20
+        config.waitsForConnectivity = false
+        config.allowsCellularAccess = true
+        config.allowsExpensiveNetworkAccess = true
+        config.allowsConstrainedNetworkAccess = true
+        return URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
+    }()
+
+    private static func session(for profile: Profile) -> URLSession {
+        switch profile {
+        case .export: return shared
+        case .signIn: return signIn
+        }
+    }
+
     static func setActiveCredentials(_ credentials: WebDAVCredentials?) {
         sessionDelegate.credentials = credentials
     }
@@ -46,17 +70,20 @@ enum WebDAVMediaSession {
     static func data(
         for request: URLRequest,
         log: ((String) -> Void)? = nil,
-        maxAttempts: Int = 8
+        maxAttempts: Int = 8,
+        profile: Profile = .export
     ) async throws -> (Data, URLResponse) {
+        let session = session(for: profile)
+        let attempts = profile == .signIn ? 1 : max(1, maxAttempts)
         var lastError: Error?
-        for attempt in 1 ... maxAttempts {
+        for attempt in 1 ... attempts {
             do {
-                return try await shared.data(for: request)
+                return try await session.data(for: request)
             } catch {
                 lastError = error
-                guard isRetriable(error), attempt < maxAttempts else { throw error }
+                guard profile == .export, isRetriable(error), attempt < attempts else { throw error }
                 let delaySec = min(30, attempt * 3)
-                log?("pCloud retry \(attempt + 1)/\(maxAttempts) in \(delaySec)s: \(error.localizedDescription)")
+                log?("pCloud retry \(attempt + 1)/\(attempts) in \(delaySec)s: \(error.localizedDescription)")
                 try await Task.sleep(nanoseconds: UInt64(delaySec) * 1_000_000_000)
             }
         }

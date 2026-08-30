@@ -21,6 +21,12 @@ enum WebDAVSignIn {
                 lastError = error
                 if case .httpStatus(let code, _) = error, code == 401 || code == 404 { continue }
                 throw error
+            } catch let error as URLError {
+                SearchDebugLog.log(
+                    "sign-in: network \(error.code.rawValue) on \(attempt.region.rawValue) — \(error.localizedDescription)"
+                )
+                lastError = error
+                continue
             } catch {
                 throw error
             }
@@ -35,7 +41,7 @@ enum WebDAVSignIn {
         var lastPathError: Error?
         for path in probePaths {
             do {
-                try await client.verifyAccess(path: path, maxAttempts: 3, context: .signIn)
+                try await client.verifyAccess(path: path, context: .signIn)
                 return
             } catch let error as WebDAVError {
                 lastPathError = error

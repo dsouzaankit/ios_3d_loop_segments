@@ -104,7 +104,7 @@ final class AppSession: ObservableObject {
         let previous = credentials
         WebDAVMediaSession.setActiveCredentials(attempt)
         do {
-            let verified = try await ExportAsyncTimeout.run(seconds: 45, operation: "pCloud WebDAV sign-in") {
+            let verified = try await ExportAsyncTimeout.run(seconds: 75, operation: "pCloud WebDAV sign-in") {
                 try await WebDAVSignIn.verify(credentials: attempt)
             }
             PCloudWebDAVRootResolver.clearCache()
@@ -119,7 +119,13 @@ final class AppSession: ObservableObject {
             }
         } catch {
             WebDAVMediaSession.setActiveCredentials(previous)
-            SearchDebugLog.log("sign-in: failed — \(error.localizedDescription)")
+            if let timedOut = error as? ExportAsyncTimeout.TimedOut, timedOut.operation.contains("sign-in") {
+                SearchDebugLog.log(
+                    "sign-in: failed — \(timedOut.localizedDescription) (check Wi‑Fi/cellular and pCloud status)"
+                )
+            } else {
+                SearchDebugLog.log("sign-in: failed — \(error.localizedDescription)")
+            }
             throw error
         }
     }

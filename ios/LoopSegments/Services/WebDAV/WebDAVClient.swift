@@ -36,7 +36,13 @@ final class WebDAVClient {
         request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
         request.setValue(credentials.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
 
-        let (_, response) = try await WebDAVMediaSession.data(for: request, maxAttempts: maxAttempts)
+        let profile = mediaProfile(for: context)
+        let attempts = effectiveMaxAttempts(maxAttempts, context: context)
+        let (_, response) = try await WebDAVMediaSession.data(
+            for: request,
+            maxAttempts: attempts,
+            profile: profile
+        )
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVError.invalidResponse
         }
@@ -70,7 +76,8 @@ final class WebDAVClient {
         request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
         request.setValue(credentials.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await WebDAVMediaSession.data(for: request)
+        let profile = mediaProfile(for: context)
+        let (data, response) = try await WebDAVMediaSession.data(for: request, profile: profile)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVError.invalidResponse
         }
@@ -108,6 +115,14 @@ final class WebDAVClient {
             return credentials.region.baseURL
         }
         return WebDAVURLBuilder.fileURL(href: normalized, baseURL: credentials.region.baseURL)
+    }
+
+    private func mediaProfile(for context: WebDAVHTTPContext) -> WebDAVMediaSession.Profile {
+        context == .signIn ? .signIn : .export
+    }
+
+    private func effectiveMaxAttempts(_ maxAttempts: Int, context: WebDAVHTTPContext) -> Int {
+        context == .signIn ? 1 : maxAttempts
     }
 }
 
