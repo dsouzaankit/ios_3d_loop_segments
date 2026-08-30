@@ -35,6 +35,7 @@ final class WebDAVClient {
         request.setValue("0", forHTTPHeaderField: "Depth")
         request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
         request.setValue(credentials.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
+        applySignInTimeoutIfNeeded(&request, context: context)
 
         let profile = mediaProfile(for: context)
         let attempts = effectiveMaxAttempts(maxAttempts, context: context)
@@ -75,6 +76,7 @@ final class WebDAVClient {
         request.setValue("1", forHTTPHeaderField: "Depth")
         request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
         request.setValue(credentials.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
+        applySignInTimeoutIfNeeded(&request, context: context)
 
         let profile = mediaProfile(for: context)
         let (data, response) = try await WebDAVMediaSession.data(for: request, profile: profile)
@@ -123,6 +125,12 @@ final class WebDAVClient {
 
     private func effectiveMaxAttempts(_ maxAttempts: Int, context: WebDAVHTTPContext) -> Int {
         context == .signIn ? 1 : maxAttempts
+    }
+
+    /// URLRequest defaults to 60s even when the session is shorter — pin sign-in probes.
+    private func applySignInTimeoutIfNeeded(_ request: inout URLRequest, context: WebDAVHTTPContext) {
+        guard context == .signIn else { return }
+        request.timeoutInterval = 12
     }
 }
 
