@@ -108,7 +108,7 @@ If Explorer never shows **Loop Segments**:
 | Network timed out on export | Strong cellular; keep app foreground; try Wi‑Fi; read `Exports/export_latest.txt` |
 | LAN sync fails | Same Wi‑Fi; Local Network allowed for Loop Segments; IP in `loop-segments-lan-host.txt`; wait for `DLNA slot published` in `export_latest.txt` |
 | DLNA empty | Confirm `op_00.mp4` and `op_01.mp4` in `F:\f1_media\3d_fullsbs_trans` |
-| pCloud fails on phone | Approve WebDAV 2FA email; check cellular permission for app |
+| pCloud fails on phone | Approve WebDAV 2FA email; check cellular permission. **Authenticated WebDAV 404** (even on `/p_cld_media/`) while unauth still **401** is usually a **pCloud outage** — same 404 in browser/Cyberduck on `webdav.pcloud.com`; wait it out (see [ios/README.md](ios/README.md#pcloud-webdav-404-accountservice)). Europe API **1022** is wrong datacenter, not 2FA |
 | Export fails on phone | **Files → Loop Segments → Exports → export_latest.txt** on the phone |
 
 ---
