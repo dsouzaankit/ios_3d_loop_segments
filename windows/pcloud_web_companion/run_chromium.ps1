@@ -1356,7 +1356,7 @@ function ConvertTo-ChromiumUnpackedExtensionId {
     return [string]::new($chars)
 }
 
-# Pin the unpacked companion to the toolbar and bind Ctrl+E. Python json keeps
+# Pin the unpacked companion to the toolbar and bind Ctrl+E / Ctrl+Shift+H. Python json keeps
 # Chrome's large integers intact (PowerShell ConvertTo-Json does not).
 function Set-CompanionToolbarPinAndShortcut {
     param(
@@ -1364,7 +1364,7 @@ function Set-CompanionToolbarPinAndShortcut {
         [Parameter(Mandatory = $true)][string]$ExtensionDir
     )
     if (-not (Test-Path -LiteralPath $PythonExe)) {
-        Write-Warning "[ext] Python missing - skip toolbar pin / Ctrl+E prefs"
+        Write-Warning "[ext] Python missing - skip toolbar pin / Ctrl+E / Ctrl+Shift+H prefs"
         return
     }
     $extId = ConvertTo-ChromiumUnpackedExtensionId -ExtensionDir $ExtensionDir
@@ -1373,8 +1373,14 @@ function Set-CompanionToolbarPinAndShortcut {
     $py = @'
 import json, os, sys
 
-prefs_path, ext_id, accel = sys.argv[1], sys.argv[2], sys.argv[3]
-command_name = "open-pcloud-on-p"
+prefs_path, ext_id = sys.argv[1], sys.argv[2]
+bindings = sys.argv[3:]
+commands = [
+    ("open-pcloud-on-p", "windows:Ctrl+E"),
+    ("write-hybrid-media-list", "windows:Ctrl+Shift+H"),
+]
+if bindings:
+    commands = [(bindings[i], bindings[i + 1]) for i in range(0, len(bindings), 2)]
 
 if os.path.isfile(prefs_path):
     try:
@@ -1402,18 +1408,24 @@ ext["pinned_extensions"] = pinned
 cmds = ext.get("commands")
 if not isinstance(cmds, dict):
     cmds = {}
-    ext["commands"] = cmds
-for key in list(cmds):
-    item = cmds.get(key)
+    ext["commands"] = ext_cmds = cmds
+else:
+    ext_cmds = cmds
+
+command_names = {name for name, _ in commands}
+for key in list(ext_cmds):
+    item = ext_cmds.get(key)
     if not isinstance(item, dict):
         continue
-    if item.get("extension") == ext_id and item.get("command_name") == command_name:
-        del cmds[key]
-cmds[accel] = {
-    "command_name": command_name,
-    "extension": ext_id,
-    "global": False,
-}
+    if item.get("extension") == ext_id and item.get("command_name") in command_names:
+        del ext_cmds[key]
+
+for command_name, accel in commands:
+    ext_cmds[accel] = {
+        "command_name": command_name,
+        "extension": ext_id,
+        "global": False,
+    }
 
 tmp = prefs_path + ".tmp"
 with open(tmp, "w", encoding="utf-8", newline="\n") as f:
@@ -1424,14 +1436,14 @@ print(ext_id)
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($pyFile, $py, $utf8NoBom)
     try {
-        $null = & $PythonExe $pyFile $prefs $extId 'windows:Ctrl+E'
+        $null = & $PythonExe $pyFile $prefs $extId
         if ($LASTEXITCODE -ne 0) {
-            Write-Warning "[ext] Failed to write toolbar pin / Ctrl+E into Preferences"
+            Write-Warning "[ext] Failed to write toolbar pin / Ctrl+E / Ctrl+Shift+H into Preferences"
             return
         }
-        Write-Host "[ext] Pinned $extId to toolbar; shortcut windows:Ctrl+E"
+        Write-Host "[ext] Pinned $extId to toolbar; shortcuts Ctrl+E (Explorer), Ctrl+Shift+H (hybrid media_files.txt)"
     } catch {
-        Write-Warning "[ext] Toolbar pin / Ctrl+E prefs: $($_.Exception.Message)"
+        Write-Warning "[ext] Toolbar pin / shortcut prefs: $($_.Exception.Message)"
     }
 }
 

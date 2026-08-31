@@ -29,6 +29,41 @@ On **multi-select Download** (pCloud builds a **zip archive**):
 
 **Open this folder in pCloud Drive** (extension **1.7.15+**, companion sink must be running on `127.0.0.1:18765`). Resolves the my.pcloud.com folder (tree node `folder=` URL, current tab, or right-clicked node) to a pCloud path, maps **All Files** → the pCloud Drive root, and opens it in Explorer **in the foreground**. Drive letter comes from **`HKCU\SOFTWARE\pCloud` `SyncDrive`**, then a volume labeled **pCloud Drive** (pCloud picks the next letter if `P:` is taken). Each launch **pins the extension to the Chromium toolbar** and binds **Ctrl+E** (that replaces Chromium’s default Ctrl+E search; change it in `chrome://extensions/shortcuts` if needed). my.pcloud.com **blocks the browser context menu** (its own file menu uses `preventDefault` and often starts on right-button `pointerdown`); **Shift+right-click** stops those page handlers so Chrome’s menu can show → **Open this folder in pCloud Drive**. Same action: toolbar popup → **Open pCloud Drive folder**, or **Ctrl+E**. Restart the companion after an extension update so the MAIN-world hook reloads. Online-only folders still open if the Drive shows them; if the path is not on the Drive yet, Explorer opens the nearest existing parent. **1.7.14:** force Explorer above Chromium (TOPMOST flip; no success toast that stole focus). **1.7.13:** ShellExecute open + reuse existing window.
 
+**Write hybrid `media_files.txt` for 3d_playlist_local** (**1.7.21**, companion sink on `127.0.0.1:18765`):
+
+1. On my.pcloud.com, multi-select **video** tiles (`div.selected` with nested `div.playButton`; `data-id="f…"` per file).
+2. Trigger any of:
+   - **Ctrl+Shift+H** (H = hybrid; pinned on launch — see shortcut note below)
+   - Toolbar popup → **Write hybrid media_files.txt**
+   - **Shift+right-click** on the page → **Write hybrid media_files.txt** (same bypass as Explorer jump)
+3. Extension collects fileids, resolves each via pCloud `getpath`/`stat`, maps to full **pCloud Drive** paths (`.mp4`/`.mkv`/`.wmv`/`.ts` only), and **overwrites** `{SyncDrive}\p_cld_media\web_compann_plst\media_files.txt` (override: env `WEB_COMPANION_MEDIA_LIST` or `lan_config.json` → `webCompanionMediaListFile`).
+4. Sink opens `web_compann_plst` in Explorer after a successful write (foregrounds if already open; selects `media_files.txt`). Desktop notification reports written count and paths missing on Drive.
+5. Run any batch launcher beside that hub (`run_batch_vr_hybrid.ps1`, `run_batch_fisheye_v360.ps1`, `run_batch_convert_streamTo3D.ps1` + `3d_playlist_local\`). Batch reads absolute paths; clips need not live in the hub folder.
+
+**Hub layout** (deploy via `3d_playlist_local\setup_script_files.py` → `P:\p_cld_media\web_compann_plst`):
+
+```
+{SyncDrive}\p_cld_media\web_compann_plst\
+  media_files.txt              ← companion overwrite (absolute Drive paths, one per line)
+  run_batch_vr_hybrid.ps1
+  run_batch_fisheye_v360.ps1
+  run_batch_convert_streamTo3D.ps1
+  3d_playlist_local\
+```
+
+Do not store source videos inside `web_compann_plst\` (only the list + scripts). Online-only pCloud files are written to the list even when not yet hydrated locally; batch `Test-Path` skips missing clips until SyncDrive catches up.
+
+**Shortcut note:** Chrome disallows `Ctrl+Alt+*` in extension manifests (`Invalid value for 'commands…'`). Avoid `Ctrl+Shift+D` (pCloud download), `Ctrl+D` (bookmark), `Ctrl+Shift+W` (close window), and `Ctrl+Shift+P` (DevTools command menu when DevTools is open).
+
+**Dev reload** (Chromium can stay open):
+
+```powershell
+cd <repo>\windows\pcloud_web_companion
+.\Sync-Reload-PCloudWebCompanionDev.ps1
+```
+
+Then `chrome://extensions` → Reload → refresh my.pcloud.com.
+
 ## Run
 
 Integrated under **`windows\pcloud_web_companion`** (preferred):
@@ -65,7 +100,7 @@ Each launch:
 
 - Ensures a **machine-local** venv at `%LOCALAPPDATA%\pcloud_web_companion\venv` (Python 3.12 preferred; removes any legacy repo `.venv` on P:)
 - Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
-- Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive), then **pins it on the toolbar** and sets **Ctrl+E** in the profile `Preferences` (Python JSON, not PowerShell `ConvertTo-Json`)
+- Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive), then **pins it on the toolbar** and sets **Ctrl+E** + **Ctrl+Shift+H** in the profile `Preferences` (Python JSON, not PowerShell `ConvertTo-Json`)
 - Starts a local REST log sink
 - **Gateway Wi‑Fi reboot (when needed):** compares the PC’s IPv4 default gateway to `phoneLanHost` (app LAN page). If they are **not** on the same subnet, informs you, waits for **tcp/23**, **reboots Wi‑Fi on the current gateway**, then **polls up to ~20s** for a new PC LAN IP/gateway (or tcp/23 back after a drop — Windows can keep a stale lease while the AP is down; Clash TUN often changes the default route sooner). Then **re-checks** — up to **3** rounds. A failed telnet (host unreachable while the AP is still restarting) waits and retries once, then continues to the next round instead of aborting. Then fails and **waits for Enter** (`-SkipGatewayReboot` to skip). This still runs **before** Chromium so pCloud is not dropped mid-browse. Must run from `windows\lan\` (needs `windows\lib\`).
 - **Starts Chromium early** (after gateway check + profile sync) so you can use my.pcloud.com while USB/LAN recover/rclone continue in the companion console. If the app LAN page (`:8765`) is down, the extension **queues** intercepted downloads locally (desktop notification) and retries about once a minute; after **~5 minutes** it **denies** them with another notification. When LAN comes up, queued exports are POSTed automatically. **Click a toast** to bring the companion PowerShell window to the front.
@@ -94,9 +129,12 @@ Each launch:
   "phoneLanHost": "10.0.100.10",
   "lanPort": 8765,
   "webdavUser": "admin",
-  "webdavPassword": "iosadmin"
+  "webdavPassword": "iosadmin",
+  "webCompanionMediaListFile": "P:\\p_cld_media\\web_compann_plst\\media_files.txt"
 }
 ```
+
+`webCompanionMediaListFile` is optional — default is `{SyncDrive}\p_cld_media\web_compann_plst\media_files.txt` from registry. Env `WEB_COMPANION_MEDIA_LIST` overrides both.
 
 Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep Alive) so the export trigger is picked up.
 
@@ -104,7 +142,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 | Where | What |
 |-------|------|
-| `windows\pcloud_web_companion\rest.log` (P:) | JSON lines: `sw_boot`, `capture`, `cdn_tab` (tab left open; export still posted), `request`, `response`, `browse`, … (cleared each `run_chromium.ps1` start; gitignored) |
+| `windows\pcloud_web_companion\rest.log` (P:) | JSON lines: `sw_boot`, `capture`, `cdn_tab` (tab left open; export still posted), `request`, `response`, `browse`, `WRITE_HYBRID_MEDIA_LIST`, `OPEN_EXPLORER_HYBRID_HUB`, … (cleared each `run_chromium.ps1` start; gitignored) |
 | Extension toolbar icon | Same events in a popup |
 | Desktop notification | Archive/queue POST: queued OK, no fileids, empty resolve, or REST failed. First phone ack `rejected` (file missing from saved folder) → **Loop Segments: skipped `<name>`**. Later FIFO drain skips land on Paused **Unavailable** only. |
 
@@ -112,19 +150,19 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 | File | Role |
 |------|------|
-| `manifest.json` | MV3 permissions; **Ctrl+E** → open current folder in Explorer |
-| `background.js` | Download intercept, REST POST, LAN root `/` tab, Explorer jump |
+| `manifest.json` | MV3 permissions; **Ctrl+E** → open folder in Explorer; **Ctrl+Shift+H** → write hybrid `media_files.txt` |
+| `background.js` | Download intercept, REST POST, LAN root `/` tab, Explorer jump, hybrid media list write |
 | `pcloud_fileid_hook_main.js` | MAIN-world fetch/XHR `fileid`s; Shift+right-click bypass of pCloud’s overlay (`pointerdown` / `contextmenu`) |
-| `pcloud_folder_tracker.js` | Isolated-world `folder=` / tree node for Explorer jump |
+| `pcloud_folder_tracker.js` | Isolated-world `folder=` / tree node for Explorer jump; `collectSelectedVideoFileIds()` + **Ctrl+Shift+H** page hook |
 | `offscreen.html` / `offscreen.js` | Clipboard write |
-| `logs.html` / `logs.js` | In-browser REST log UI + **Open pCloud Drive folder** |
+| `logs.html` / `logs.js` | In-browser REST log UI + **Open pCloud Drive folder** + **Write hybrid media_files.txt** |
 | `lan_config.json` | Phone LAN target (synced on launch) |
-| `Run-PCloudWebCompanion.ps1` | Thin wrapper → `run_chromium.ps1` (preferred entry) |
-| `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, toolbar pin + **Ctrl+E** prefs, browser launch |
+| `Sync-Reload-PCloudWebCompanionDev.ps1` | Dev: sync extension to LOCALAPPDATA + restart sink (poll health up to ~25s; no Chromium exit); then `chrome://extensions` Reload |
+| `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, toolbar pin + **Ctrl+E** / **Ctrl+Shift+H** prefs, browser launch |
 | `_chromium_profile_sync.ps1` | Zip/unzip Chromium profile (cache off pCloud); used by launcher + exit watchdog |
 | `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium, unmap Skybox shares (AirScreen + phone rclone), quit Skybox if we started it, + sync/clear profile |
 | `requirements.txt` | `playwright` (launcher Chromium fetch only) |
-| `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log`; phone-LAN relay; **open-explorer** (detected pCloud Drive letter, Explorer to foreground) |
+| `_rest_log_sink.ps1` | Appends extension log POSTs to `rest.log`; phone-LAN relay; **open-explorer**; **POST /write-hybrid-media-list** (maps `items`/`paths` → Drive paths, overwrite UTF-8 list, open hub in Explorer) |
 | `chromium-profile.zip` | Canonical browser profile on P: (gitignored; extracted under `%LOCALAPPDATA%`) |
 
 ## Requirements

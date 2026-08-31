@@ -13,6 +13,8 @@ const LOCAL_LOG_URL = "http://127.0.0.1:18765/log";
 const LOCAL_LAN_RELAY_URL = "http://127.0.0.1:18765/phone-lan";
 const LOCAL_FOCUS_CONSOLE_URL = "http://127.0.0.1:18765/focus-console";
 const LOCAL_OPEN_EXPLORER_URL = "http://127.0.0.1:18765/open-explorer";
+const LOCAL_WRITE_HYBRID_MEDIA_LIST_URL =
+  "http://127.0.0.1:18765/write-hybrid-media-list";
 const LAN_FETCH_TIMEOUT_MS = 12000;
 const PENDING_LAN_KEY = "pendingPhoneLanExports";
 const PENDING_LAN_MAX = 24;
@@ -541,6 +543,16 @@ async function ensureExplorerContextMenu() {
         "https://my.pcloud.com/*",
         "https://e.pcloud.com/*",
         "https://www.pcloud.com/*",
+      ],
+    });
+    await chrome.contextMenus.create({
+      id: "write-hybrid-media-list",
+      title: "Write hybrid media_files.txt (web_compann_plst)",
+      contexts: ["page", "frame"],
+      documentUrlPatterns: [
+        "https://my.pcloud.com/*",
+        "https://e.pcloud.com/*",
+        "https://*.pcloud.com/*",
       ],
     });
   } catch (err) {
@@ -1988,6 +2000,11 @@ function isLikelyVideoName(name) {
   );
 }
 
+/** 3d_playlist_local batch / generate_media_listings_lcl.py extensions. */
+function isBatchVideoName(name) {
+  return /\.(mp4|wmv|ts|mkv)$/i.test(String(name || ""));
+}
+
 function parseFileIdsFromUrl(urlString) {
   if (!urlString) return [];
   try {
@@ -2250,6 +2267,7 @@ async function resolveFileIdsToExportItems(fileIds, folderHint) {
         items.push({
           folderPath,
           displayName,
+          pcloudPath: resolved.path,
           seekMs: 0,
           id: crypto.randomUUID(),
           fileId,
@@ -2266,6 +2284,7 @@ async function resolveFileIdsToExportItems(fileIds, folderHint) {
       items.push({
         folderPath: folderHint?.folderPath || null,
         displayName: resolved.name,
+        pcloudPath: null,
         seekMs: 0,
         id: crypto.randomUUID(),
         fileId,
@@ -2276,6 +2295,203 @@ async function resolveFileIdsToExportItems(fileIds, folderHint) {
     }
   }
   return { items, errors };
+}
+
+async function collectSelectedVideoFileIdsFromTab(tabId) {
+  if (tabId == null) return [];
+  try {
+    const res = await chrome.tabs.sendMessage(tabId, {
+      type: "collect-selected-video-fileids",
+    });
+    if (Array.isArray(res?.fileIds) && res.fileIds.length) {
+      return res.fileIds.map(String);
+    }
+  } catch {
+    // content script may be unavailable — inject fallback
+  }
+  try {
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const ids = new Set();
+        for (const tile of document.querySelectorAll("div.selected")) {
+          if (!tile.querySelector("div.playButton")) continue;
+          const raw = tile.getAttribute("data-id") || "";
+          const m = String(raw).match(/^f(\d+)$/i);
+          if (m) ids.add(m[1]);
+        }
+        return [...ids];
+      },
+    });
+    const ids = injected?.[0]?.result;
+    return Array.isArray(ids) ? ids.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function postWriteHybridMediaList(items) {
+  const body = JSON.stringify({
+    items: (items || []).map((it) => ({
+      folderPath: it.folderPath || null,
+      displayName: it.displayName || null,
+      pcloudPath: it.pcloudPath || null,
+      fileId: it.fileId || null,
+    })),
+  });
+  const res = await fetch(LOCAL_WRITE_HYBRID_MEDIA_LIST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    cache: "no-store",
+  });
+  let json = null;
+  try {
+    json = await res.json();
+  } catch {
+    json = { ok: false, error: `HTTP ${res.status}` };
+  }
+  if (!res.ok && json && !json.error) {
+    json.error = `HTTP ${res.status}`;
+  }
+  return json;
+}
+
+async function writeHybridMediaListFromSelection() {
+  const tabId = await findPcloudTabId();
+  if (tabId == null) {
+    const err = "no pCloud tab";
+    await appendRestLog({ phase: "hybrid_media_list", ok: false, error: err });
+    return { ok: false, error: err };
+  }
+
+  let fileIds = await collectSelectedVideoFileIdsFromTab(tabId);
+  let fileIdSource = "dom";
+  if (!fileIds.length) {
+    fileIds = await waitForSelectedFileIds({ timeoutMs: 800, intervalMs: 120 });
+    fileIdSource = "session";
+  }
+  if (!fileIds.length) {
+    const err = "no selected video tiles (select videos with playButton, then Ctrl+Shift+H)";
+    await appendRestLog({
+      phase: "hybrid_media_list",
+      ok: false,
+      error: err,
+      fileIdSource,
+    });
+    try {
+      await chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icon.png",
+        title: "3d playlist: no selection",
+        message: err,
+        priority: 2,
+      });
+    } catch {
+      // ignore
+    }
+    return { ok: false, error: err };
+  }
+
+  const folder = await resolvePcloudFolderContext({});
+  const { items, errors } = await resolveFileIdsToExportItems(fileIds, folder);
+  const batchItems = items.filter((it) => isBatchVideoName(it.displayName));
+  const skippedNonVideo = items.length - batchItems.length;
+
+  await appendRestLog({
+    phase: "hybrid_media_list_resolve",
+    ok: batchItems.length > 0,
+    fileIds,
+    itemCount: batchItems.length,
+    items: batchItems.slice(0, 8).map((it) => ({
+      displayName: it.displayName,
+      folderPath: it.folderPath,
+      pcloudPath: it.pcloudPath || null,
+      resolveMethod: it.resolveMethod || null,
+    })),
+    resolveErrors: errors.slice(0, 8),
+  });
+
+  if (!batchItems.length) {
+    const err =
+      errors[0] ||
+      "no batch video paths resolved (.mp4/.mkv/.wmv/.ts only)";
+    await appendRestLog({
+      phase: "hybrid_media_list",
+      ok: false,
+      error: err,
+      fileIds,
+      fileIdSource,
+      errors: errors.slice(0, 12),
+      skippedNonVideo,
+    });
+    try {
+      await chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icon.png",
+        title: "3d playlist: nothing to write",
+        message: err,
+        priority: 2,
+      });
+    } catch {
+      // ignore
+    }
+    return { ok: false, error: err, skippedNonVideo };
+  }
+
+  let api = null;
+  let apiError = null;
+  try {
+    api = await postWriteHybridMediaList(batchItems);
+  } catch (err) {
+    apiError = String(err && err.message ? err.message : err);
+  }
+
+  const ok = Boolean(api?.ok);
+  await appendRestLog({
+    phase: "hybrid_media_list",
+    ok,
+    fileIds,
+    fileIdSource,
+    itemCount: batchItems.length,
+    skippedNonVideo,
+    written: api?.written ?? null,
+    missingOnDisk: api?.missingOnDisk ?? null,
+    mediaListFile: api?.mediaListFile ?? null,
+    errors: errors.slice(0, 12),
+    sinkErrors: api?.errors || null,
+    apiError,
+    api,
+  });
+
+  const title = ok ? "3d playlist: media_files.txt" : "3d playlist: write failed";
+  const message = ok
+    ? `Wrote ${api.written} video path(s)` +
+      (api.missingOnDisk ? ` (${api.missingOnDisk} missing on Drive)` : "") +
+      (skippedNonVideo ? `; skipped ${skippedNonVideo} non-batch video` : "") +
+      (api.explorerOpened ? ` — opened ${api.explorerPath || api.mediaListFile}` : "")
+    : apiError || api?.error || "sink POST failed (is companion console running?)";
+  try {
+    await chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icon.png",
+      title,
+      message,
+      priority: 2,
+    });
+  } catch {
+    // ignore
+  }
+
+  return ok
+    ? {
+        ok: true,
+        written: api.written,
+        missingOnDisk: api.missingOnDisk,
+        mediaListFile: api.mediaListFile,
+        skippedNonVideo,
+      }
+    : { ok: false, error: apiError || api?.error || "write failed" };
 }
 
 async function postLanExportQueueNow(items, { mode = "prepend", startFirst = true } = {}) {
@@ -2898,6 +3114,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })();
     return true;
   }
+  if (message?.type === "write-hybrid-media-list") {
+    void (async () => {
+      const result = await writeHybridMediaListFromSelection();
+      sendResponse(result);
+    })();
+    return true;
+  }
   if (message?.type !== "pcloud-folder-context") return;
   const payload = message.payload || {};
   void (async () => {
@@ -2970,6 +3193,10 @@ if (chrome.webNavigation?.onBeforeNavigate) {
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info?.menuItemId === "write-hybrid-media-list") {
+    void writeHybridMediaListFromSelection();
+    return;
+  }
   if (info?.menuItemId !== "open-pcloud-on-p") return;
   void openCurrentPcloudFolderOnPDrive({
     url: info.linkUrl || info.pageUrl || tab?.url || null,
@@ -2979,8 +3206,18 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 if (chrome.commands?.onCommand) {
   chrome.commands.onCommand.addListener((command) => {
-    if (command !== "open-pcloud-on-p") return;
-    void openCurrentPcloudFolderOnPDrive();
+    void appendRestLog({
+      phase: "command",
+      ok: true,
+      command,
+    });
+    if (command === "open-pcloud-on-p") {
+      void openCurrentPcloudFolderOnPDrive();
+      return;
+    }
+    if (command === "write-hybrid-media-list") {
+      void writeHybridMediaListFromSelection();
+    }
   });
 }
 

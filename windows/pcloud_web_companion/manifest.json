@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "pCloud Download → Loop Segments",
-  "version": "1.7.15",
-  "description": "Cancels pCloud downloads ASAP and queues Loop Segments; leaves CDN view tabs open (Open Original). Multi-select archive → export_queue.json FIFO; single file → export_from_folder.json. Phone LAN via local relay (Clash TUN-safe).",
+  "version": "1.7.21",
+  "description": "Cancels pCloud downloads ASAP and queues Loop Segments; Ctrl+Shift+H writes hybrid media_files.txt on pCloud Drive. Leaves CDN view tabs open (Open Original). Multi-select archive → export_queue.json FIFO; single file → export_from_folder.json. Phone LAN via local relay (Clash TUN-safe).",
   "permissions": [
     "downloads",
     "offscreen",
@@ -60,6 +60,12 @@
         "default": "Ctrl+E"
       },
       "description": "Open the current pCloud folder in Explorer on the pCloud Drive"
+    },
+    "write-hybrid-media-list": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+H"
+      },
+      "description": "Write selected videos to web_compann_plst media_files.txt for 3d_playlist_local batch"
     }
   },
   "icons": {

@@ -144,6 +144,17 @@
     }
   }
 
+  function collectSelectedVideoFileIds() {
+    const ids = new Set();
+    for (const tile of document.querySelectorAll("div.selected")) {
+      if (!tile.querySelector("div.playButton")) continue;
+      const raw = tile.getAttribute("data-id") || "";
+      const m = String(raw).match(/^f(\d+)$/i);
+      if (m) ids.add(m[1]);
+    }
+    return [...ids];
+  }
+
   function rememberFileIds(ids, sourceUrl) {
     if (!ids || !ids.length) return;
     const payload = {
@@ -224,4 +235,39 @@
     setTimeout(publish, 0);
     return ret;
   };
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "collect-selected-video-fileids") {
+      sendResponse({ ok: true, fileIds: collectSelectedVideoFileIds() });
+      return;
+    }
+  });
+
+  let hybridHotkeyBusy = false;
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      const key = String(event.key || "").toLowerCase();
+      const ctrl = event.ctrlKey && !event.metaKey;
+      // Ctrl+Shift+H — Chrome commands disallow Ctrl+Alt+*; avoid Ctrl+Shift+D (pCloud download).
+      const hit = ctrl && event.shiftKey && !event.altKey && key === "h";
+      if (!hit) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (hybridHotkeyBusy) return;
+      hybridHotkeyBusy = true;
+      window.setTimeout(() => {
+        hybridHotkeyBusy = false;
+      }, 900);
+      try {
+        chrome.runtime.sendMessage({ type: "write-hybrid-media-list" }, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch {
+        // ignore
+      }
+    },
+    true
+  );
 })();

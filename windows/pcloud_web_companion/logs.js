@@ -42,4 +42,34 @@ document.getElementById("openP").addEventListener("click", async () => {
   }
 });
 
+let writeHybridBusy = false;
+document.getElementById("writeHybrid").addEventListener("click", async () => {
+  if (writeHybridBusy) return;
+  writeHybridBusy = true;
+  const btn = document.getElementById("writeHybrid");
+  const meta = document.getElementById("meta");
+  btn.disabled = true;
+  meta.textContent = "Writing web_compann_plst media_files.txt…";
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "write-hybrid-media-list",
+    });
+    if (result?.ok) {
+      let msg = `Wrote ${result.written} path(s)`;
+      if (result.missingOnDisk) msg += ` (${result.missingOnDisk} missing on Drive)`;
+      if (result.skippedNonVideo) msg += `; skipped ${result.skippedNonVideo} non-batch`;
+      if (result.mediaListFile) msg += ` → ${result.mediaListFile}`;
+      if (result.explorerOpened) msg += " (Explorer)";
+      meta.textContent = msg;
+    } else {
+      meta.textContent = `Hybrid list: ${result?.error || "failed"}`;
+    }
+  } catch (err) {
+    meta.textContent = `Hybrid list: ${err && err.message ? err.message : err}`;
+  } finally {
+    writeHybridBusy = false;
+    btn.disabled = false;
+  }
+});
+
 void load();

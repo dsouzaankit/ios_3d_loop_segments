@@ -507,6 +507,208 @@ function Invoke-PhoneLanRelay {
     }
 }
 
+function Get-WebCompanionMediaListFilePath {
+    $envPath = [string]$env:WEB_COMPANION_MEDIA_LIST
+    if (-not [string]::IsNullOrWhiteSpace($envPath)) {
+        return [System.IO.Path]::GetFullPath($envPath.Trim())
+    }
+    $configPath = Join-Path $PSScriptRoot 'lan_config.json'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        try {
+            $cfg = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $fromCfg = [string]$cfg.webCompanionMediaListFile
+            if (-not [string]::IsNullOrWhiteSpace($fromCfg)) {
+                return [System.IO.Path]::GetFullPath($fromCfg.Trim())
+            }
+        } catch {}
+    }
+    try {
+        $driveRoot = Get-PCloudDriveRoot
+        return [System.IO.Path]::GetFullPath((Join-Path $driveRoot 'p_cld_media\web_compann_plst\media_files.txt'))
+    } catch {
+        return 'P:\p_cld_media\web_compann_plst\media_files.txt'
+    }
+}
+
+function Test-BatchVideoLeafName {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
+    return $Name -match '\.(?i)(mp4|wmv|ts|mkv)$'
+}
+
+function Resolve-PCloudDriveMappedFolderFull {
+    param(
+        [string]$DriveRoot,
+        [string[]]$RelativeParts
+    )
+    $rootFull = [System.IO.Path]::GetFullPath($DriveRoot)
+    if (-not $rootFull.EndsWith('\')) { $rootFull += '\' }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($seg in @($RelativeParts)) {
+        $s = ([string]$seg).Trim()
+        if ([string]::IsNullOrWhiteSpace($s) -or $s -eq '.') { continue }
+        if ($s -eq '..') { throw "path must not contain .." }
+        if ($s -match '[:*?"<>|]') { throw "invalid path segment: $s" }
+        if ($parts.Count -eq 0 -and $s -match '^(?i)all files$') { continue }
+        [void]$parts.Add($s)
+    }
+    $folderFull = $rootFull
+    if ($parts.Count -gt 0) {
+        $folderFull = [System.IO.Path]::GetFullPath((Join-Path $rootFull ($parts -join '\')))
+    }
+    if (-not $folderFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "path is outside the pCloud drive"
+    }
+    return $folderFull
+}
+
+function Convert-PCloudLogicalPathToDriveFilePath {
+    param(
+        [string]$LogicalPath,
+        [string]$DriveRoot
+    )
+    if ([string]::IsNullOrWhiteSpace($LogicalPath)) { return $null }
+    $parts = @(
+        (($LogicalPath -replace '\\', '/') -split '/') |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ }
+    )
+    if ($parts.Count -lt 1) { return $null }
+    $fileName = $parts[$parts.Count - 1]
+    $folderParts = @()
+    if ($parts.Count -gt 1) {
+        $folderParts = $parts[0..($parts.Count - 2)]
+    }
+    $folderFull = Resolve-PCloudDriveMappedFolderFull -DriveRoot $DriveRoot -RelativeParts $folderParts
+    return [System.IO.Path]::GetFullPath((Join-Path $folderFull $fileName))
+}
+
+function Resolve-PCloudDriveFullFilePath {
+    param(
+        [string]$FolderPath,
+        [string]$FileName,
+        [string]$DriveRoot,
+        [string]$PcloudPath = ''
+    )
+    if (-not [string]::IsNullOrWhiteSpace($PcloudPath)) {
+        return Convert-PCloudLogicalPathToDriveFilePath -LogicalPath $PcloudPath -DriveRoot $DriveRoot
+    }
+    if ([string]::IsNullOrWhiteSpace($FileName)) { return $null }
+    $folderParts = @(
+        (($FolderPath -replace '\\', '/') -split '/') |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ }
+    )
+    $folderFull = Resolve-PCloudDriveMappedFolderFull -DriveRoot $DriveRoot -RelativeParts $folderParts
+    return [System.IO.Path]::GetFullPath((Join-Path $folderFull $FileName))
+}
+
+function Write-WebCompanionHybridMediaList {
+    param($JsonBody)
+    $obj = if ([string]::IsNullOrWhiteSpace($JsonBody)) { [pscustomobject]@{} } else { $JsonBody | ConvertFrom-Json }
+    $driveRoot = Get-PCloudDriveRoot
+    $outFile = Get-WebCompanionMediaListFilePath
+    $paths = [System.Collections.Generic.List[string]]::new()
+    $skippedNonVideo = 0
+    $missingOnDisk = 0
+    $errors = [System.Collections.Generic.List[string]]::new()
+
+    # @($null).Count is 1 in PowerShell — only use paths when the JSON key exists and has values.
+    $rawPaths = @()
+    if ($null -ne $obj.paths) {
+        $rawPaths = @($obj.paths) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    }
+    if ($rawPaths.Count -gt 0) {
+        foreach ($p in $rawPaths) {
+            $full = [string]$p
+            if ([string]::IsNullOrWhiteSpace($full)) { continue }
+            try { $full = [System.IO.Path]::GetFullPath($full.Trim()) } catch { continue }
+            $leaf = [System.IO.Path]::GetFileName($full)
+            if (-not (Test-BatchVideoLeafName $leaf)) {
+                $skippedNonVideo++
+                continue
+            }
+            if ($paths -notcontains $full) { [void]$paths.Add($full) }
+        }
+    } else {
+        foreach ($item in @($obj.items)) {
+            $displayName = [string]$item.displayName
+            $folderPath = [string]$item.folderPath
+            $pcloudPath = [string]$item.pcloudPath
+            if ([string]::IsNullOrWhiteSpace($pcloudPath) -and [string]::IsNullOrWhiteSpace($displayName)) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($pcloudPath)) {
+                $leaf = [System.IO.Path]::GetFileName(($pcloudPath -replace '/', '\'))
+                if (-not (Test-BatchVideoLeafName $leaf)) {
+                    $skippedNonVideo++
+                    continue
+                }
+            } elseif (-not (Test-BatchVideoLeafName $displayName)) {
+                $skippedNonVideo++
+                continue
+            }
+            try {
+                $full = Resolve-PCloudDriveFullFilePath -FolderPath $folderPath -FileName $displayName -DriveRoot $driveRoot -PcloudPath $pcloudPath
+            } catch {
+                [void]$errors.Add("${displayName}${pcloudPath} : $_")
+                continue
+            }
+            if ([string]::IsNullOrWhiteSpace($full)) {
+                [void]$errors.Add("${displayName}${pcloudPath} : could not map to Drive path")
+                continue
+            }
+            if ($paths -notcontains $full) { [void]$paths.Add($full) }
+        }
+    }
+
+    if ($paths.Count -lt 1) {
+        $detail = if ($errors.Count -gt 0) { " — " + ($errors -join "; ") } else { "" }
+        throw "no batch video paths to write (.mp4/.mkv/.wmv/.ts)$detail"
+    }
+
+    foreach ($full in $paths) {
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+            $missingOnDisk++
+        }
+    }
+
+    $dir = Split-Path -Parent $outFile
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    $text = (($paths | ForEach-Object { $_.Trim() }) -join "`r`n") + "`r`n"
+    [System.IO.File]::WriteAllText($outFile, $text, $utf8)
+    Write-LogLine "$(Get-Date -Format o) WRITE_HYBRID_MEDIA_LIST $outFile count=$($paths.Count) missing=$missingOnDisk skipped=$skippedNonVideo"
+
+    $explorerOpened = $false
+    $explorerPath = $dir
+    try {
+        Start-ExplorerAt -Path $outFile -Select $true
+        $explorerOpened = $true
+        Write-LogLine "$(Get-Date -Format o) OPEN_EXPLORER_HYBRID_HUB $outFile"
+    } catch {
+        try {
+            Start-ExplorerAt -Path $dir -Select $false
+            $explorerOpened = $true
+            Write-LogLine "$(Get-Date -Format o) OPEN_EXPLORER_HYBRID_HUB $dir (folder fallback)"
+        } catch {
+            Write-LogLine "$(Get-Date -Format o) OPEN_EXPLORER_HYBRID_HUB_ERROR $_"
+        }
+    }
+
+    return @{
+        ok              = $true
+        written         = $paths.Count
+        missingOnDisk   = $missingOnDisk
+        skippedNonVideo = $skippedNonVideo
+        mediaListFile   = $outFile
+        explorerOpened  = $explorerOpened
+        explorerPath    = $explorerPath
+        paths           = @($paths)
+        errors          = @($errors)
+    }
+}
+
 while ($true) {
     $client = $null
     try {
@@ -556,6 +758,19 @@ while ($true) {
             } catch {
                 $msg = "$_"
                 Write-LogLine "$(Get-Date -Format o) OPEN_EXPLORER_ERROR $msg"
+                $status = 400
+                if ($msg -match 'not mounted|is not available') { $status = 503 }
+                $payload = (@{ ok = $false; error = $msg } | ConvertTo-Json -Compress)
+                Write-HttpResponse -Stream $req.Stream -StatusCode $status -Body $payload
+            }
+        } elseif ($line -match '^POST\s+/write-hybrid-media-list\b') {
+            try {
+                $result = Write-WebCompanionHybridMediaList -JsonBody $req.Body
+                $payload = ($result | ConvertTo-Json -Compress -Depth 6)
+                Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body $payload
+            } catch {
+                $msg = "$_"
+                Write-LogLine "$(Get-Date -Format o) WRITE_HYBRID_MEDIA_LIST_ERROR $msg"
                 $status = 400
                 if ($msg -match 'not mounted|is not available') { $status = 503 }
                 $payload = (@{ ok = $false; error = $msg } | ConvertTo-Json -Compress)
