@@ -15,6 +15,8 @@ const LOCAL_FOCUS_CONSOLE_URL = "http://127.0.0.1:18765/focus-console";
 const LOCAL_OPEN_EXPLORER_URL = "http://127.0.0.1:18765/open-explorer";
 const LOCAL_WRITE_HYBRID_MEDIA_LIST_URL =
   "http://127.0.0.1:18765/write-hybrid-media-list";
+/** Coalesce Ctrl+Shift+H when both chrome.commands and the page hook fire. */
+let hybridMediaListWriteInFlight = null;
 const LAN_FETCH_TIMEOUT_MS = 12000;
 const PENDING_LAN_KEY = "pendingPhoneLanExports";
 const PENDING_LAN_MAX = 24;
@@ -2358,6 +2360,18 @@ async function postWriteHybridMediaList(items) {
 }
 
 async function writeHybridMediaListFromSelection() {
+  if (hybridMediaListWriteInFlight) {
+    return hybridMediaListWriteInFlight;
+  }
+  hybridMediaListWriteInFlight = writeHybridMediaListFromSelectionInner();
+  try {
+    return await hybridMediaListWriteInFlight;
+  } finally {
+    hybridMediaListWriteInFlight = null;
+  }
+}
+
+async function writeHybridMediaListFromSelectionInner() {
   const tabId = await findPcloudTabId();
   if (tabId == null) {
     const err = "no pCloud tab";

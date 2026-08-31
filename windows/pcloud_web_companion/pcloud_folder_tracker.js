@@ -249,7 +249,7 @@
     (event) => {
       const key = String(event.key || "").toLowerCase();
       const ctrl = event.ctrlKey && !event.metaKey;
-      // Ctrl+Shift+H — Chrome commands disallow Ctrl+Alt+*; avoid Ctrl+Shift+D (pCloud download).
+      // Ctrl+Shift+H — page hook only when chrome.commands did not consume the chord.
       const hit = ctrl && event.shiftKey && !event.altKey && key === "h";
       if (!hit) return;
       event.preventDefault();
@@ -259,7 +259,7 @@
       hybridHotkeyBusy = true;
       window.setTimeout(() => {
         hybridHotkeyBusy = false;
-      }, 900);
+      }, 1500);
       try {
         chrome.runtime.sendMessage({ type: "write-hybrid-media-list" }, () => {
           void chrome.runtime.lastError;

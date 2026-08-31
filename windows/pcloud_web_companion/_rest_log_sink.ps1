@@ -361,13 +361,11 @@ function Start-ExplorerAt {
         $selectPath = $Path
     }
 
-    # Same folder already open → foreground only (retry used to spawn a 2nd window).
-    if (-not $selectPath) {
-        $existing = Get-ExplorerHwndForPath -FolderPath $folderForWindow
-        if ($existing -ne [IntPtr]::Zero) {
-            [void](Show-HwndForeground -Hwnd $existing)
-            return
-        }
+    # Folder already open → foreground only (/select always spawns another Explorer window).
+    $existing = Get-ExplorerHwndForPath -FolderPath $folderForWindow
+    if ($existing -ne [IntPtr]::Zero) {
+        [void](Show-HwndForeground -Hwnd $existing)
+        return
     }
 
     try {
