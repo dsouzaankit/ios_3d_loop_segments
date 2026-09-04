@@ -49,7 +49,7 @@ Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT
 |-------|--------|
 | **Install IPA** | On the **iPhone**: **SideStore** or **AltStore** → **My Apps → +** (not AltServer/Sideloadly “sideload from PC” if you want in-store refresh) |
 | **SideStore** | Use **nightly** ([docs](https://docs.sidestore.io/docs/installation/prerequisites)): **iloader** (USB once) + **LocalDevVPN** (on for every install/refresh). Stable SideStore hit the same **incorrect data format** as AltStore; **nightly worked**. Free ID = **3 apps** — do **not** keep AltStore + SideStore together |
-| **Refresh (SideStore)** | LocalDevVPN connected → SideStore → tap **7 DAYS** / Refresh (no AltServer) |
+| **Refresh (SideStore)** | **No PC** — LocalDevVPN + Wi‑Fi → SideStore → tap **7 DAYS** / Refresh (works after expiry too). PC only if pairing dies (iloader). |
 | **Refresh (AltStore)** | **You** tap **AltStore → Refresh All** (**USB**) — AltServer signs; it does **not** refresh on plug-in alone. USB works even with multiple gateways. Wi‑Fi: often **broken** on Win11 — see [BUILD-WITHOUT-MAC.md §3](ios/BUILD-WITHOUT-MAC.md#3-automate-weekly-refresh-altserver--altstore) |
 | **Signing errors** | AltStore: iCloud (Apple direct) + **iTunes → Deauthorize → Authorize**. SideStore: change anisette / re-pair with iloader. Wait for a **fully local** IPA (no iCloud stub) before My Apps → + |
 | **Trust** | [Once per install](ios/BUILD-WITHOUT-MAC.md#trust-the-developer-on-iphone-required-once-not-weekly) — Settings → General → VPN & Device Management |

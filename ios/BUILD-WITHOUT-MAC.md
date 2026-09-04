@@ -145,7 +145,7 @@ Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, s
 2. LocalDevVPN → **Connect**.
 3. **SideStore → My Apps → +** → pick the IPA (or Files → Share → SideStore).
 4. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
-5. Refresh: tap the **7 DAYS** counter (LocalDevVPN still on).
+5. Refresh: tap the **7 DAYS** counter (LocalDevVPN still on). **No PC** for weekly refresh or after expiry — PC only if the pairing file dies (iloader).
 
 **incorrect data format on SideStore:** same two causes as AltStore — (1) partial iCloud IPA, (2) bad anisette. Fix IPA locality first; then SideStore Settings → change **Anisette** server / sign out+in / re-place pairing with iloader. If stable still fails, use **nightly**.
 
