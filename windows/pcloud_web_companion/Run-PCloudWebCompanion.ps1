@@ -17,6 +17,7 @@
   minLanThroughputMbps (default 40), reboots Wi-Fi on other known routers (not the
   current gateway), waits to settle, and re-measures — up to 2 retries. Chromium
   stays open (this PC's AP is not bounced).
+  AltServer is skipped by default (SideStore); pass -EnsureAltServer for AltStore.
   Exit code 3 (phone locked) aborts Chromium. No USB / other USB failures abort only when
   phone LAN is also down; if LAN is up, warns and continues.
   On any error / non-zero exit, waits for a single Enter so a double-clicked console
@@ -57,6 +58,9 @@
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -SkipClashMdnsRoute
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -EnsureAltServer
 #>
 [CmdletBinding()]
 param(
@@ -77,6 +81,7 @@ param(
     [switch] $SkipSkybox,
     [switch] $SkipVirtualDesktop,
     [switch] $SkipClashMdnsRoute,
+    [switch] $EnsureAltServer,
     [string] $StartUrl = "https://my.pcloud.com"
 )
 
@@ -126,6 +131,7 @@ try {
         SkipSkybox                      = $SkipSkybox
         SkipVirtualDesktop              = $SkipVirtualDesktop
         SkipClashMdnsRoute              = $SkipClashMdnsRoute
+        EnsureAltServer                 = $EnsureAltServer
         NoWaitEnterOnFatal              = $true
         StartUrl                        = $StartUrl
     }

@@ -31,6 +31,8 @@ param(
     [switch]$SkipVirtualDesktop,
     # Do not try to drop Clash/mihomo TUN 224.0.0.0/4 when Clash is running (Bonjour).
     [switch]$SkipClashMdnsRoute,
+    # Opt-in: print/start AltServer for AltStore ~7-day refresh. Default skips (SideStore path).
+    [switch]$EnsureAltServer,
     [string]$StartUrl = "https://my.pcloud.com"
 )
 
@@ -96,6 +98,7 @@ if (-not (Test-Path -LiteralPath $PythonHelper)) {
 . $PythonHelper
 
 $AltServerHelper = Join-Path $LibDir "Get-LoopSegmentsAltServer.ps1"
+# Always load wrappers (usbmux helpers + skip-by-default notices). env_setup core is lazy.
 if (-not (Test-Path -LiteralPath $AltServerHelper)) {
     throw "Missing shared AltServer helper: $AltServerHelper"
 }
@@ -889,9 +892,8 @@ function Invoke-GatewayWifiRebootIfNeeded {
 }
 
 function Invoke-LoopSegmentsUsbLaunch {
-    # Always warn if AltServer missing (7-day AltStore cert), even with -SkipUsbLaunch.
-    # If installed but idle, start it so AltStore can refresh before the ~7-day expiry.
-    [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureStarted)
+    # AltServer is opt-in (-EnsureAltServer) for AltStore users. SideStore needs LocalDevVPN only.
+    [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureStarted -EnsureAltServer:$EnsureAltServer)
 
     $lanUp = Test-PhoneLanPageReachable
     if ($lanUp) {
@@ -919,6 +921,9 @@ function Invoke-LoopSegmentsUsbLaunch {
     # Default SkipMount: DDI is usually already mounted after the first run.
     if (-not $UsbLaunchMount) {
         [void]$psArgs.Add("-SkipMount")
+    }
+    if ($EnsureAltServer) {
+        [void]$psArgs.Add("-EnsureAltServer")
     }
 
     if ($lanUp) {
@@ -952,7 +957,7 @@ Plug in USB later for Home-on-quit / foreground.
         throw @"
 [usb] No iPhone on USB (exit 2). Plug in, Trust This Computer, unlock.
 Phone LAN is also down, so the companion cannot talk to Loop Segments yet.
-Install AltServer if missing: https://altstore.io
+Refresh via SideStore (LocalDevVPN) or AltStore (-EnsureAltServer / https://altstore.io).
 Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launch.
 "@
     }

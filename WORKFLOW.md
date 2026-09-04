@@ -30,7 +30,7 @@ The PC never pulls from pCloud and never runs ffmpeg for this workflow. The phon
 
 You need an **IPA** built in the cloud (no local Mac). See [ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md).
 
-Install via **TestFlight** or sideload (**AltStore** recommended; Sideloadly fallback) with a free or paid Apple ID — see [ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md).
+Install via **TestFlight** or sideload (**SideStore nightly** preferred when AltStore flakes; else **AltStore**; Sideloadly last) with a free or paid Apple ID — see [ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md).
 
 ---
 

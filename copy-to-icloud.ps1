@@ -18,10 +18,13 @@
 .PARAMETER SourceIpa
   Optional override path to an .ipa (default: ios\build artifacts\ipa\LoopSegments.ipa).
 
+.PARAMETER EnsureAltStorePrep
+  Opt-in: start AltServer / Clash multicast prep after copy. Default skips (SideStore).
+  deploy.ps1 can pass this; when deploy runs prep itself it passes -SkipAltStorePrep to this child.
+
 .PARAMETER SkipAltStorePrep
-  Do not start AltServer / Clash multicast prep (env_setup). Phone-subnet
-  check is USB plug-in, not this script. deploy.ps1 passes this so prep
-  runs once after the copy.
+  Deprecated alias for the default (skip AltServer prep). Also used by deploy.ps1 so prep
+  runs once in the parent.
 
 .PARAMETER NoWaitEnter
   Do not wait for Enter (when invoked as a child of deploy.ps1).
@@ -29,6 +32,7 @@
 param(
     [switch] $FetchIfMissing,
     [string] $SourceIpa = '',
+    [switch] $EnsureAltStorePrep,
     [switch] $SkipAltStorePrep,
     [switch] $NoWaitEnter
 )
@@ -101,7 +105,10 @@ trap {
 }
 
 function Invoke-ProjectAltStoreDeployPrep {
-    if ($SkipAltStorePrep) { return }
+    if (-not $EnsureAltStorePrep -or $SkipAltStorePrep) {
+        Write-Host '[altserver] Deploy prep skipped (default). Pass -EnsureAltStorePrep for AltStore tray.' -ForegroundColor DarkYellow
+        return
+    }
     $join = @(
         (Join-Path $ProjectRoot 'env_setup\altserver_refresh\lib\Join-AltStoreDeployPrep.ps1')
         (Join-Path $ProjectRoot 'env_setup\altserver_refresh\Join-AltStoreDeployPrep.ps1')
@@ -171,8 +178,8 @@ Write-Host "Build: $BuildNumber"
 Write-Host ''
 Write-Host 'Next on iPhone:'
 Write-Host '  Wait for iCloud to sync Downloads (new filename triggers Files refresh)'
-Write-Host "  AltStore → My Apps → + → $DestIpaName"
-Write-Host '  Or Files → iCloud Drive → Downloads → Share → AltStore'
+Write-Host "  SideStore or AltStore → My Apps → + → $DestIpaName"
+Write-Host '  Or Files → iCloud Drive → Downloads → Share → SideStore / AltStore'
 Write-Host ''
 Invoke-ProjectAltStoreDeployPrep
 Exit-WithEnter 0

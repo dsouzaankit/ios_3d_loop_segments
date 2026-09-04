@@ -291,7 +291,7 @@ ios_3d_loop_segments/
 | iOS suspends long export | Keep Alive on; avoid Low Power Mode; optional Auto-Lock → Never |
 | WebDAV seek / moov-at-end HEVC slow | Dense fill + vanilla/HLS fallbacks; show progress in `export_latest.txt` |
 | CDN URLs expire on phone | Companion uses folder+name REST, not `getfilelink` |
-| Free AltStore cert (~7 days) | AltServer + USB **Refresh All**; companion auto-starts AltServer |
+| Free AltStore cert (~7 days) | SideStore Refresh (default) or AltServer + USB **Refresh All** (`-EnsureAltServer` / `-EnsureAltStorePrep`) |
 | Icon blank after upgrade | Delete old app before installing new IPA (iOS caches blank icons) |
 
 ---

@@ -23,6 +23,9 @@
 .PARAMETER ForceCompanionVenv
   Recreate the companion venv even if it looks healthy.
 
+.PARAMETER EnsureAltServer
+  Opt-in: print AltServer install/status (AltStore). Default skips (SideStore).
+
 .EXAMPLE
   .\setup\Setup-LoopSegmentsWindows.ps1
 
@@ -34,7 +37,8 @@ param(
     [string] $PhoneHost = '',
     [switch] $SkipCompanion,
     [switch] $SkipUsbTools,
-    [switch] $ForceCompanionVenv
+    [switch] $ForceCompanionVenv,
+    [switch] $EnsureAltServer
 )
 
 Set-StrictMode -Version Latest
@@ -55,7 +59,7 @@ Write-Host "=== Loop Segments Windows setup (portable) ===" -ForegroundColor Cya
 Write-Host "Repo windows folder: $WindowsRoot"
 Write-Host "Machine-local companion data: $(Join-Path $env:LOCALAPPDATA 'pcloud_web_companion')"
 Write-Host ""
-[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus)
+[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureAltServer:$EnsureAltServer)
 Write-Host ""
 
 # --- per-PC json ---

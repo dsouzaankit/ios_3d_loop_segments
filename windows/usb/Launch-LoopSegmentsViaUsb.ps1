@@ -53,6 +53,12 @@
   Launch even if Loop Segments is already the foreground app (USB DVT proclist).
   Also omits --no-kill-existing so DVT may restart the process.
 
+.PARAMETER EnsureAltServer
+  Opt-in: print/start AltServer for AltStore ~7-day refresh. Default skips (SideStore).
+
+.PARAMETER SkipAltServer
+  Deprecated alias for the default (skip AltServer). Ignored if -EnsureAltServer is set.
+
 .EXITCODES
   0  Launched, already foreground (skipped relaunch), or ListOnly ok
   1  Launch/trust/generic failure
@@ -64,6 +70,9 @@
 
 .EXAMPLE
   .\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld
+
+.EXAMPLE
+  .\Launch-LoopSegmentsViaUsb.ps1 -EnsureAltServer
 #>
 [CmdletBinding()]
 param(
@@ -72,7 +81,9 @@ param(
     [switch] $UseTunneld,
     [switch] $ListOnly,
     [switch] $SkipUnlockProbe,
-    [switch] $ForceRelaunch
+    [switch] $ForceRelaunch,
+    [switch] $EnsureAltServer,
+    [switch] $SkipAltServer
 )
 
 Set-StrictMode -Version Latest
@@ -177,9 +188,9 @@ $(Get-LoopSegmentsPythonInstallHint)
 }
 Write-Host "pymobiledevice3 import OK"
 
-# Always surface AltServer install status (7-day AltStore cert depends on it).
-# Start it when installed but idle (do not wait for USB-detect failure).
-[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureStarted)
+# AltServer is opt-in (-EnsureAltServer) for AltStore; SideStore is the default.
+$script:DoAltServer = $EnsureAltServer -and -not $SkipAltServer
+[void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureStarted -EnsureAltServer:$script:DoAltServer)
 
 function Invoke-UsbmuxList {
     Write-Host "Listing USB / usbmux devices..."
@@ -193,23 +204,26 @@ $list = Invoke-UsbmuxList
 if (-not (Test-LoopSegmentsUsbmuxListHasDevice -ExitCode $list.ExitCode -Lines $list.Lines)) {
     Write-Host ""
     Write-Host "iPhone USB detection failed (no usbmux device)." -ForegroundColor Yellow
-    Write-Host "Trying AltServer start/ensure, then one retry..." -ForegroundColor Yellow
-    [void](Start-LoopSegmentsAltServer -WaitSeconds 4)
-    Start-Sleep -Seconds 2
-    $list = Invoke-UsbmuxList
+    if ($script:DoAltServer) {
+        Write-Host "Trying AltServer start/ensure, then one retry..." -ForegroundColor Yellow
+        [void](Start-LoopSegmentsAltServer -WaitSeconds 4)
+        Start-Sleep -Seconds 2
+        $list = Invoke-UsbmuxList
+        if (Test-LoopSegmentsUsbmuxListHasDevice -ExitCode $list.ExitCode -Lines $list.Lines) {
+            Write-Host "USB device visible after AltServer recovery." -ForegroundColor Green
+        }
+    }
     if (-not (Test-LoopSegmentsUsbmuxListHasDevice -ExitCode $list.ExitCode -Lines $list.Lines)) {
         Write-Host @"
 
 usbmux still empty. Plug in USB, unlock, Trust This Computer, keep Apple Mobile Device Support running.
-If AltServer is missing, install it from https://altstore.io — without weekly AltStore refresh,
-Loop Segments (free/Personal Team) stops working after ~7 days.
+Refresh Loop Segments via SideStore (LocalDevVPN) or AltStore (-EnsureAltServer) before the ~7-day cert dies.
 
 $(Get-LoopSegmentsAppUnavailableResolution)
 
 "@ -ForegroundColor Yellow
         exit 2
     }
-    Write-Host "USB device visible after AltServer recovery." -ForegroundColor Green
 }
 
 if ($ListOnly) { return }
@@ -245,7 +259,7 @@ Write-Host "Resolving installed bundle id for '$BundleId'..."
 $resolve = Invoke-PythonRuntime -Runtime $rt -ArgumentList @($resolveScript, $BundleId)
 Write-CommandLines -Lines $resolve.Lines
 if ($resolve.ExitCode -ne 0) {
-    Write-Host "Loop Segments not found on device. Install/refresh via AltStore, then retry." -ForegroundColor Yellow
+    Write-Host "Loop Segments not found on device. Install/refresh via SideStore or AltStore, then retry." -ForegroundColor Yellow
     Write-Host (Get-LoopSegmentsAppUnavailableResolution) -ForegroundColor Yellow
     exit 2
 }

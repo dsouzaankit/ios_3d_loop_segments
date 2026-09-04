@@ -8,10 +8,14 @@
   (git submodule env_setup, with a sibling-folder fallback).
   This file keeps Loop Segments-specific warnings and USB-list heuristics.
   Dot-source from Launch-LoopSegmentsViaUsb.ps1, run_chromium.ps1, Setup, etc.
+
+  AltServer is optional (SideStore default). Callers pass -EnsureAltServer /
+  -EnsureStarted only for the AltStore path. Core env_setup load is lazy.
 #>
 
 $script:LoopSegmentsWindowsRoot = Split-Path -Parent $PSScriptRoot
 $script:LoopSegmentsRepoRoot = Split-Path -Parent $script:LoopSegmentsWindowsRoot
+$script:LoopSegmentsAltServerCoreLoaded = $false
 
 function Get-LoopSegmentsEnvSetupRoot {
     $candidates = @(
@@ -39,17 +43,23 @@ function Get-LoopSegmentsAltserverRefreshDir {
     throw "Missing $(Join-Path $root 'altserver_refresh')"
 }
 
-$script:LoopSegmentsAltServerCore = Join-Path (Get-LoopSegmentsAltserverRefreshDir) 'lib\Get-AltServer.ps1'
-if (-not (Test-Path -LiteralPath $script:LoopSegmentsAltServerCore)) {
-    throw "Missing AltServer core: $script:LoopSegmentsAltServerCore"
+function Ensure-LoopSegmentsAltServerCore {
+    if ($script:LoopSegmentsAltServerCoreLoaded) { return }
+    $core = Join-Path (Get-LoopSegmentsAltserverRefreshDir) 'lib\Get-AltServer.ps1'
+    if (-not (Test-Path -LiteralPath $core)) {
+        throw "Missing AltServer core: $core"
+    }
+    . $core
+    $script:LoopSegmentsAltServerCoreLoaded = $true
 }
-. $script:LoopSegmentsAltServerCore
 
 function Get-LoopSegmentsAltServerPath {
+    Ensure-LoopSegmentsAltServerCore
     Get-AltServerPath
 }
 
 function Test-LoopSegmentsAltServerRunning {
+    Ensure-LoopSegmentsAltServerCore
     Test-AltServerRunning
 }
 
@@ -57,29 +67,35 @@ function Get-LoopSegmentsAppUnavailableResolution {
     return @"
 When Loop Segments becomes unavailable (won't open / "Unable to Verify App" /
 "Unable to Trust iPhone Developer: you@email" / USB launch blocked by signature):
+
+  SideStore path (no AltServer) — default:
+  1. LocalDevVPN Connect -> SideStore -> Refresh (or My Apps -> + reinstall IPA).
+  2. Prefer SideStore nightly if stable shows incorrect data format.
+  3. Trust the developer on the phone if iOS asks:
+       Settings -> General -> VPN & Device Management -> DEVELOPER APP -> Trust
+  4. Open Loop Segments once, then re-run the companion / USB launch.
+
+  AltStore path (opt-in -EnsureAltServer / -EnsureAltStorePrep):
   1. Install/start AltServer on this PC (https://altstore.io) - tray icon should be visible.
   2. Plug the iPhone in over USB, unlock it, Trust This Computer.
   3. Open AltStore on the phone -> My Apps -> Refresh All (or refresh Loop Segments).
-  4. Trust the developer certificate on the phone (your Apple ID email under DEVELOPER APP):
-       Settings -> General -> VPN & Device Management
-       -> tap "iPhone Developer: <your Apple ID email>"
-       -> Trust "<your Apple ID email>" -> Trust (confirm popup)
-     If Loop Segments / that email is not listed yet: wait for AltStore "Complete",
-     open (or fail-open) the app once, leave Settings and return - the DEVELOPER APP
-     entry often appears only then; trust it and open the app again.
+  4. Trust the developer certificate (same Settings path as above).
   5. Open Loop Segments once by hand, then re-run the companion / USB launch script.
-Wi-Fi background refresh only works if AltServer is running and AltStore Background App Refresh
-is on; on Windows 11, USB + Refresh All weekly is the reliable path.
-See ios/BUILD-WITHOUT-MAC.md (Trust the developer on iPhone).
+
+Wi-Fi AltStore background refresh needs AltServer + Background App Refresh; on Windows 11,
+USB + Refresh All weekly is the reliable AltStore path. SideStore needs LocalDevVPN only.
+See ios/BUILD-WITHOUT-MAC.md.
 "@
 }
 
 function Get-LoopSegmentsAltServerSevenDayWarning {
     return @"
-Without AltServer + AltStore refresh, a free / Personal Team sideload of Loop Segments
-expires in about 7 days: the app icon may still show, but opens fail until you refresh.
-Install AltServer: https://altstore.io
-Optional: .\sideload\Register-AltServerAtLogon.ps1  (tray at logon)
+Without a weekly refresh, a free / Personal Team sideload of Loop Segments expires in ~7 days
+(icon may still show; opens fail until refresh).
+  SideStore: LocalDevVPN on -> Refresh (no AltServer). Prefer nightly if stable flakes.
+  AltStore: AltServer tray (https://altstore.io) + My Apps -> Refresh All (USB OK).
+Optional AltStore logon start: .\sideload\Register-AltServerAtLogon.ps1
+Scripts skip AltServer by default; pass -EnsureAltServer / -EnsureAltStorePrep for AltStore.
 "@
 }
 
@@ -87,9 +103,29 @@ function Write-LoopSegmentsAltServerNotice {
     param(
         [switch] $AlwaysStatus,
         [switch] $IncludeResolution,
-        [switch] $EnsureStarted
+        [switch] $EnsureStarted,
+        [switch] $SkipAltServer,
+        [switch] $EnsureAltServer
     )
 
+    # Default: skip. Opt-in with -EnsureAltServer (or legacy callers that only pass EnsureStarted
+    # without Skip must now also pass EnsureAltServer from entry scripts).
+    $doAlt = $EnsureAltServer -and -not $SkipAltServer
+    if (-not $doAlt) {
+        if ($AlwaysStatus) {
+            Write-Host '[altserver] Skipped (default). SideStore + LocalDevVPN for ~7-day refresh. Pass -EnsureAltServer for AltStore.' -ForegroundColor DarkYellow
+        }
+        if ($IncludeResolution) {
+            Write-Host (Get-LoopSegmentsAppUnavailableResolution) -ForegroundColor Yellow
+        }
+        return [pscustomobject]@{
+            Installed = $false
+            Running   = $false
+            Skipped   = $true
+        }
+    }
+
+    Ensure-LoopSegmentsAltServerCore
     $result = Write-AltServerNotice -AlwaysStatus:$AlwaysStatus -EnsureStarted:$EnsureStarted
     if (-not $result.Installed) {
         Write-Host (Get-LoopSegmentsAltServerSevenDayWarning) -ForegroundColor Yellow
@@ -100,7 +136,7 @@ function Write-LoopSegmentsAltServerNotice {
     }
 
     if ($AlwaysStatus) {
-        Write-Host '[altserver] If app unavailable after ~7 days: AltServer -> USB -> AltStore Refresh All -> Trust developer -> open once.' -ForegroundColor DarkYellow
+        Write-Host '[altserver] If app unavailable after ~7 days: SideStore Refresh (LocalDevVPN) or AltServer -> USB -> AltStore Refresh All -> Trust -> open once.' -ForegroundColor DarkYellow
     }
     if ($IncludeResolution) {
         Write-Host (Get-LoopSegmentsAppUnavailableResolution) -ForegroundColor Yellow
@@ -113,6 +149,7 @@ function Start-LoopSegmentsAltServer {
         [int] $WaitSeconds = 3
     )
 
+    Ensure-LoopSegmentsAltServerCore
     $result = Start-AltServer -WaitSeconds $WaitSeconds
     if (-not $result.Installed) {
         Write-Host (Get-LoopSegmentsAltServerSevenDayWarning) -ForegroundColor Yellow

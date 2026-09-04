@@ -10,7 +10,7 @@
   Deploy workflow:
     1. Run:  .\deploy.ps1   (build/fetch + iCloud paste via copy-to-icloud.ps1)
     2. Wait for iCloud sync on the iPhone (no cloud badge on the IPA)
-    3. AltStore → My Apps → + → LoopSegments.ipa (or Files → Share → AltStore)
+    3. SideStore or AltStore → My Apps → + → LoopSegments.ipa (or Files → Share)
 
   Re-paste only (stamped IPA name, no build): .\copy-to-icloud.ps1
 
@@ -23,9 +23,12 @@
 .PARAMETER SkipICloud
   Only refresh ios\build artifacts\ipa\LoopSegments.ipa (no iCloud copy).
 
+.PARAMETER EnsureAltStorePrep
+  Opt-in: start AltServer / Clash multicast prep (env_setup) after copy. Default skips
+  (SideStore). Phone-subnet check stays on USB plug-in, not this script.
+
 .PARAMETER SkipAltStorePrep
-  Do not start AltServer / Clash multicast prep (env_setup). Phone-subnet
-  check is USB plug-in, not this script.
+  Deprecated alias for the default (skip AltServer prep).
 
 .PARAMETER NoWaitEnter
   Do not wait for Enter (child callers). Direct run waits, including on errors.
@@ -35,11 +38,15 @@
 
 .EXAMPLE
   .\deploy.ps1 -UseLatest
+
+.EXAMPLE
+  .\deploy.ps1 -EnsureAltStorePrep
 #>
 param(
     [switch] $UseLatest,
     [string] $RunId = '',
     [switch] $SkipICloud,
+    [switch] $EnsureAltStorePrep,
     [switch] $SkipAltStorePrep,
     [switch] $NoWaitEnter
 )
@@ -88,7 +95,10 @@ function Write-Step([string] $Message) {
 }
 
 function Invoke-ProjectAltStoreDeployPrep {
-    if ($SkipAltStorePrep) { return }
+    if (-not $EnsureAltStorePrep -or $SkipAltStorePrep) {
+        Write-Host '[altserver] Deploy prep skipped (default). Pass -EnsureAltStorePrep for AltStore tray.' -ForegroundColor DarkYellow
+        return
+    }
     $join = @(
         (Join-Path $ProjectRoot 'env_setup\altserver_refresh\lib\Join-AltStoreDeployPrep.ps1')
         (Join-Path $ProjectRoot 'env_setup\altserver_refresh\Join-AltStoreDeployPrep.ps1')
@@ -186,9 +196,9 @@ Assert-Gh
 Write-Host ''
 Write-Host 'Deploy workflow:'
 Write-Host '  [PC]  1. This script (GitHub Actions IPA -> local + iCloud Downloads)'
-Write-Host '  [PC]     AltServer tray (env_setup); phone subnet is USB plug-in. -SkipAltStorePrep to skip tray'
+Write-Host '  [PC]     AltServer tray skipped by default. Pass -EnsureAltStorePrep for AltStore.'
 Write-Host '  [YOU] 2. Wait for iCloud sync on iPhone (no cloud badge)'
-Write-Host '  [YOU] 3. AltStore -> My Apps -> + -> LoopSegments.ipa'
+Write-Host '  [YOU] 3. SideStore or AltStore -> My Apps -> + -> LoopSegments.ipa'
 Write-Host ''
 
 $resolvedRunId = $RunId.Trim()

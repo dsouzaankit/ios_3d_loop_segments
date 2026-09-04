@@ -39,22 +39,22 @@ Copy segment files into your DLNA folder (or use [WORKFLOW.md](WORKFLOW.md)). Se
 
 ## iPhone app (no Mac on your desk)
 
-Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md)** — **AltStore + AltServer** (primary) or paid TestFlight; Sideloadly only if AltStore fails.
+Sources: [`ios/`](ios/). Install: **[ios/BUILD-WITHOUT-MAC.md](ios/BUILD-WITHOUT-MAC.md)** — **SideStore nightly** (preferred when AltStore flakes) or **AltStore + AltServer**; paid TestFlight; Sideloadly only as last resort.
 
-**Deploy IPA to iCloud (Windows):** from repo root, `.\deploy.ps1` triggers GitHub **ios-build**, downloads the IPA locally, then **calls `.\copy-to-icloud.ps1`** (requires `gh auth login`). After the copy it starts **AltServer** (`env_setup` / `Join-AltStoreDeployPrep.ps1`; `-SkipAltStorePrep` to skip). Phone-subnet check stays on **USB plug-in**, not IPA deploy. Paste-only (no build): `.\copy-to-icloud.ps1` — stamped `LoopSegments-b{build}-{time}.ipa` + prune older `LoopSegments*.ipa` (same idea as `web_auto_parking\deploy.ps1`).
+**Deploy IPA to iCloud (Windows):** from repo root, `.\deploy.ps1` triggers GitHub **ios-build**, downloads the IPA locally, then **calls `.\copy-to-icloud.ps1`** (requires `gh auth login`). AltServer tray prep is **skipped by default** — pass `-EnsureAltStorePrep` for AltStore. Phone-subnet check stays on **USB plug-in**, not IPA deploy. Paste-only (no build): `.\copy-to-icloud.ps1` — stamped `LoopSegments-b{build}-{time}.ipa` + prune older `LoopSegments*.ipa` (same idea as `web_auto_parking\deploy.ps1`).
 
 **Free install (~7-day certs):**
 
 | Piece | Notes |
 |-------|--------|
-| **Install IPA** | On the **iPhone**: AltStore → **My Apps → +** (not AltServer sideload on PC) |
-| **Refresh** | **You** tap **AltStore → Refresh All** (**USB**) — AltServer signs; it does **not** refresh on plug-in alone. USB works even with multiple gateways. Wi‑Fi: AltStore may refresh in background if pairing works ([§3](ios/BUILD-WITHOUT-MAC.md#3-automate-weekly-refresh-altserver--altstore)) |
-| **Wi‑Fi refresh** | Often **broken** on Windows 11 (iTunes Wi‑Fi sync / Apple Devices / proxy). Needs same Wi‑Fi. **Reliable habit: USB + Refresh All** weekly — see [BUILD-WITHOUT-MAC.md §3](ios/BUILD-WITHOUT-MAC.md#3-automate-weekly-refresh-altserver--altstore) |
-| **Signing errors** | iCloud (Apple direct, not Store) + **iTunes → Account → Authorizations → Deauthorize → Authorize** |
-| **AMDS missing** | Full **iTunes uninstall/reinstall** (`iTunes64Setup.exe`, admin). **Do not** install Microsoft Store **Apple Devices** afterward — it removes **Apple Mobile Device Service** |
+| **Install IPA** | On the **iPhone**: **SideStore** or **AltStore** → **My Apps → +** (not AltServer/Sideloadly “sideload from PC” if you want in-store refresh) |
+| **SideStore** | Use **nightly** ([docs](https://docs.sidestore.io/docs/installation/prerequisites)): **iloader** (USB once) + **LocalDevVPN** (on for every install/refresh). Stable SideStore hit the same **incorrect data format** as AltStore; **nightly worked**. Free ID = **3 apps** — do **not** keep AltStore + SideStore together |
+| **Refresh (SideStore)** | LocalDevVPN connected → SideStore → tap **7 DAYS** / Refresh (no AltServer) |
+| **Refresh (AltStore)** | **You** tap **AltStore → Refresh All** (**USB**) — AltServer signs; it does **not** refresh on plug-in alone. USB works even with multiple gateways. Wi‑Fi: often **broken** on Win11 — see [BUILD-WITHOUT-MAC.md §3](ios/BUILD-WITHOUT-MAC.md#3-automate-weekly-refresh-altserver--altstore) |
+| **Signing errors** | AltStore: iCloud (Apple direct) + **iTunes → Deauthorize → Authorize**. SideStore: change anisette / re-pair with iloader. Wait for a **fully local** IPA (no iCloud stub) before My Apps → + |
 | **Trust** | [Once per install](ios/BUILD-WITHOUT-MAC.md#trust-the-developer-on-iphone-required-once-not-weekly) — Settings → General → VPN & Device Management |
 
-Optional: `windows/sideload/Register-AltServerAtLogon.ps1` keeps AltServer in the tray; companion / USB launch also **start AltServer if it is installed but idle** (`env_setup/altserver_refresh`). You still plug in USB for refresh when Wi‑Fi pairing fails.
+Optional (AltStore path only): `windows/sideload/Register-AltServerAtLogon.ps1` keeps AltServer in the tray. Scripts **skip AltServer by default** — pass `-EnsureAltServer` (companion / USB / setup) or `-EnsureAltStorePrep` (deploy / copy-to-icloud).
 
 Export uses **AVFoundation** on device (no embedded ffmpeg). **iOS 26.x:** **1.0.5+** to launch; **1.1.0** for export and fixed logs. Rebuild IPA from GitHub Actions if the phone still shows 1.0.5.
 

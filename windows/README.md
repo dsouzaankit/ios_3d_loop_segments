@@ -30,8 +30,9 @@ cd <repo>\windows
 # 1) Once per PC (Python 3.12, pymobiledevice3, companion venv/Chromium, portable json)
 .\setup\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 
-# 2) Once (optional): AltServer at logon — needed for AltStore / ~7-day sideload refresh
+# 2) Once (optional, AltStore only): AltServer at logon — ~7-day sideload refresh
 .\sideload\Register-AltServerAtLogon.ps1
+# SideStore users: skip this; refresh with LocalDevVPN instead.
 
 # 3) Day-to-day: pCloud companion (gateway check → LAN status; USB-foregrounds app unless -SkipUsbLaunch)
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
@@ -47,11 +48,11 @@ cd <repo>\windows
 .\rclone\Mount-LoopSegmentsRclone.ps1             # mount L: (optional; WinFsp)
 ```
 
-If Loop Segments won’t open after ~7 days: start **AltServer** → USB + unlock → AltStore **Refresh All** (works even when phone and PC are on different gateways) → **Settings → General → VPN & Device Management → DEVELOPER APP → iPhone Developer: \<email\> → Trust** (entry may appear only after a failed open) → open app once → retry.
+If Loop Segments won’t open after ~7 days: **SideStore** (LocalDevVPN → Refresh) or start **AltServer** → USB + unlock → AltStore **Refresh All** (works even when phone and PC are on different gateways) → **Settings → General → VPN & Device Management → DEVELOPER APP → iPhone Developer: \<email\> → Trust** (entry may appear only after a failed open) → open app once → retry.
+
+**AltStore / SideStore “data isn’t in the correct format”:** often the IPA is still syncing in iCloud (partial file). Wait for iCloud to finish, then **retry My Apps → + several times**. **SideStore stable** hit the same error here; **SideStore nightly** worked. If it persists after a fully local file on AltStore, see [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) (iTunes authorize / anisette). SideStore: change anisette / re-pair with iloader.
 
 **AltStore “could not determine this device's UDID” (error 1006):** AltStore was not installed (or was corrupted) by AltServer — UDID is embedded only when AltServer installs AltStore. Update AltServer → USB + unlock → tray **Install AltStore** (not Sideloadly / random IPA) → Trust developer if prompted → open AltStore → **Refresh All**. If Loop Segments then says **“not available”** (or is missing from My Apps): no new build required — **My Apps → +** → same `LoopSegments.ipa` (or delete the home-screen icon and install again). Details: [../ios/BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md).
-
-**AltStore “data isn’t in the correct format” on Install from iCloud Downloads:** often the IPA is still syncing (partial file). Wait for iCloud to finish, then **retry My Apps → + several times** — confirmed to succeed once the full IPA is local. If it persists after a fully local file, see [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) (iTunes authorize / anisette steps).
 
 ## First time on a PC
 
@@ -95,6 +96,7 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Ch
 # locked phone no longer blocks Chromium. Low throughput reboots other APs (not this PC's gateway) and re-checks (up to 2 retries).
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipGatewayReboot  # skip Wi-Fi reboot check
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only (still tries rclone if LAN up)
+# .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -EnsureAltServer # AltStore path: start AltServer if idle (default skips)
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipRcloneMount # no drive-letter mount window
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLanThroughput # no media copy Mbps probe
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLowThroughputGatewayReboot # keep going even if below minLanThroughputMbps
@@ -129,9 +131,9 @@ py -3.12 -m pip install -U pymobiledevice3
 | App ID renew vs suffix | AltStore **Renew App IDs** extends the same Apple slot — it does **not** change the resigned suffix. A new suffix appears only if AltStore **registers a new** App ID (e.g. delete + reinstall after the old slot expired). USB launch still finds the app either way. |
 | Unlock | Needed for companion startup USB launch. Exit **3** if locked during launch — companion **warns** and Chromium stays open. Companion always probes LAN (prints UP/DOWN) then USB-launches to foreground the app unless `-SkipUsbLaunch` (skips relaunch when USB DVT already sees Loop Segments **foreground**; otherwise **`--no-kill-existing`** so a running export is not killed). If USB is missing but LAN is UP, warns and continues. Finish-time Home is skipped when the phone is locked (treated as already backgrounded) |
 | Home on quit | Companion finish backgrounds Loop Segments over USB (`usb\Go-IphoneHomeViaUsb.ps1`) **only if it is still the foreground app**. Lock screen or already-backgrounded → skip (exit 0). Prefers **DVT `--userspace`** (SpringBoard, then Settings) — the same path as USB launch. **`core-device hid --userspace`** is skipped by default (iOS 26 RSD `TimeoutError` typer dump); pass `-TryUserspaceHid` to try it anyway. No USB → skip. Each attempt times out (~25s); `-SkipGoHome` never presses Home. A failed Home press does **not** fail the companion session (still exit 0), but the window **waits for Enter** so the dump stays readable. Direct runs of the Home script also wait on error unless `-NoWaitEnter`. Export continues in background only if the app’s **Keep Alive** is on (default since build 272 — details in [../ios/README.md](../ios/README.md)) |
-| Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without AltStore refresh (cert refresh — separate from App ID renew above). **Resolution:** start AltServer → USB + unlock → AltStore **Refresh All** (USB works across multiple gateways; same Wi‑Fi is only for background refresh) → **Settings → General → VPN & Device Management → Developer App → Trust** → open Loop Segments once → retry. Missing AltServer is always reported. Companion / USB launch auto-start AltServer when installed but idle |
+| Trust / 7-day cert | Free/Personal Team installs **stop opening after ~7 days** without refresh. **SideStore:** LocalDevVPN → Refresh. **AltStore:** start AltServer → USB + unlock → **Refresh All** → Trust → open once. Scripts **skip AltServer by default**; pass `-EnsureAltServer` / `-EnsureAltStorePrep` for AltStore |
 | AltStore UDID (1006) | **“could not determine this device's UDID”** — reinstall AltStore from AltServer (USB). Then **Refresh All**. If Loop Segments is **“not available”**, reinstall the **same** IPA via My Apps → **+** (new GitHub build not required). See tip above / [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) |
-| AltServer | Companion / USB launch report status and **start AltServer if installed but not running** (core: `..\env_setup\altserver_refresh\sideload\Invoke-AltServerIfNeeded.ps1`). Setup reports status only. Optional logon start: `.\sideload\Register-AltServerAtLogon.ps1` |
+| AltServer | **Skipped by default** everywhere. Opt-in: companion/USB/setup `-EnsureAltServer`; deploy/copy-to-icloud `-EnsureAltStorePrep`. Optional logon start: `.\sideload\Register-AltServerAtLogon.ps1` |
 | “already mounted” | Harmless — DDI is up; script skips remount (or use `-SkipMount`) |
 | Background launch | **Not supported** — USB launch opens/foregrounds the app (DVT **`--no-kill-existing`** unless `-ForceRelaunch`); lock only after Keep Alive is running (app setting) |
 | iOS 17+ / 26 launch | Tries **`dvt launch --userspace --no-kill-existing`** first (no admin). `core-device --userspace` RSD handshake timeouts are collapsed to one line and the next method is tried. If DVT also fails: elevated `py -3.12 -m pymobiledevice3 remote tunneld`, then `.\usb\Launch-LoopSegmentsViaUsb.ps1 -UseTunneld -SkipMount` |

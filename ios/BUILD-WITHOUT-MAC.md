@@ -23,14 +23,15 @@ You still need **something running macOS once** (or in the cloud) to **compile**
 ### What you need
 
 1. **Free Apple ID** ([appleid.apple.com](https://appleid.apple.com)) — not the paid Developer Program; sign in at [developer.apple.com](https://developer.apple.com) once and **accept the free developer agreement** (no $99)
-2. **Windows PC** on the **same Wi‑Fi** as the phone (AltStore + `Sync-FromPhoneLAN.ps1`)
+2. **Windows PC** (SideStore: USB once for iloader; AltStore: same Wi‑Fi / USB for refresh)
 3. A **`.ipa`** file (see [Get an IPA without a Mac](#get-an-ipa-without-a-mac) below)
-4. **[AltServer + AltStore](#2-install-with-altstore-primary--windows)** — primary (iTunes + iCloud from Apple + AltServer)
-5. **Last resort:** [Sideloadly fallback](#5-sideloadly-fallback-only-if-altstore-fails) (iTunes + USB)
+4. **[SideStore nightly](#2a-install-with-sidestore-nightly--preferred-when-altstore-flakes)** — preferred when AltStore hits **incorrect data format** / flaky signing (LocalDevVPN + iloader; no AltServer after setup)
+5. **[AltServer + AltStore](#2-install-with-altstore-primary--windows)** — still fine if it works on your PC (iTunes + iCloud from Apple + AltServer)
+6. **Last resort:** [Sideloadly fallback](#5-sideloadly-fallback-only-if-altstore-fails) (iTunes + USB; app-specific passwords **not** supported; login often fails with −22406 / “incorrect password”)
 
 ### Trust the developer on iPhone (required once; not weekly)
 
-After **AltStore** (or Sideloadly fallback) installs the app, iOS blocks it until **you** tap **Trust** in Settings. **Apple does not allow the PC or AltStore to do this for you** — it is a deliberate security step on the phone.
+After **SideStore**, **AltStore**, or Sideloadly installs the app, iOS blocks it until **you** tap **Trust** in Settings. **Apple does not allow the PC or store app to do this for you** — it is a deliberate security step on the phone.
 
 | When | Trust developer in VPN & Device Management? |
 |------|---------------------------------------------|
@@ -97,13 +98,13 @@ Pick one:
 2. Open the repo → **Actions** → **ios-build** → **Run workflow** (manual run builds the IPA; pushes only run the simulator smoke test).
 3. When the run finishes, open the run → **Artifacts** → download **`LoopSegments-ipa`** → unzip → `LoopSegments.ipa`.  
    On this PC you can keep it at `ios\build artifacts\ipa\LoopSegments.ipa` (see [Refresh the IPA later](#refresh-the-ipa-later)), or copy to iCloud Drive → Downloads for AltStore on the phone.
-4. Install with [AltStore](#2-install-with-altstore-primary--windows).
+4. Install with [SideStore nightly](#2a-install-with-sidestore-nightly--preferred-when-altstore-flakes) or [AltStore](#2-install-with-altstore-primary--windows).
 
 **Signing on GitHub (optional)**
 
 | Mode | Secrets | Use when |
 |------|---------|----------|
-| **Unsigned IPA** (default) | none | Re-sign in **AltStore** with your Apple ID |
+| **Unsigned IPA** (default) | none | Re-sign in **SideStore** / **AltStore** with your Apple ID |
 | **Signed IPA** | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | You want the IPA already signed with the same Apple ID used in CI |
 
 For **signed** builds, add [repository secrets](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions):
@@ -122,7 +123,35 @@ Connect the repo, use [codemagic.yaml](../codemagic.yaml). In Codemagic → Code
 **C — One cloud Mac session**  
 Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, sign with **Personal Team** (free Apple ID), **Product → Archive → Distribute → Development**, export IPA.
 
-### 2. Install with AltStore (primary — Windows)
+### 2a. Install with SideStore nightly (preferred when AltStore flakes)
+
+[SideStore](https://sidestore.io) refreshes on-device (no AltServer). Official setup: [Prerequisites](https://docs.sidestore.io/docs/installation/prerequisites) → [Install](https://docs.sidestore.io/docs/installation/install).
+
+**Confirmed on this project:** SideStore **stable** showed the same **incorrect data format** as AltStore when installing/refreshing. **SideStore nightly** succeeded. Prefer **nightly** from iloader / SideStore releases until stable catches up.
+
+| Need | Notes |
+|------|--------|
+| **iloader** (PC, once) | USB install SideStore; later: pairing repair ([pairing file](https://docs.sidestore.io/docs/advanced/pairing-file)) |
+| **LocalDevVPN** (App Store) | **Connected** for every install / refresh / update in SideStore |
+| **Wi‑Fi** | Required (not cellular-only) while using SideStore |
+| **Apple ID** | Same free ID limits: **3** apps, **~7-day** certs |
+| **Developer Mode** | Settings → Privacy & Security → on (after Trust) |
+
+**Free 3-app slots:** SideStore counts as **1**. Example that blocks a 4th install: AltStore + Web Auto Parking + Loop Segments. **Delete AltStore** if you switch to SideStore (do not keep both on a free ID). Leave Loop Segments and Parking as normal sideloaded apps (not LiveContainer guests — background / LAN / Keep Alive need a real install).
+
+**Install Loop Segments:**
+
+1. Put a **fully local** `LoopSegments.ipa` on the phone (wait out iCloud stubs; or USB / Safari download).
+2. LocalDevVPN → **Connect**.
+3. **SideStore → My Apps → +** → pick the IPA (or Files → Share → SideStore).
+4. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
+5. Refresh: tap the **7 DAYS** counter (LocalDevVPN still on).
+
+**incorrect data format on SideStore:** same two causes as AltStore — (1) partial iCloud IPA, (2) bad anisette. Fix IPA locality first; then SideStore Settings → change **Anisette** server / sign out+in / re-place pairing with iloader. If stable still fails, use **nightly**.
+
+---
+
+### 2. Install with AltStore (Windows)
 
 Wi‑Fi + **AltServer**. AltStore’s [Windows guide](https://faq.altstore.io/getting-started/how-to-install-altstore-windows) requires **iTunes + iCloud from Apple** (not Microsoft Store) — needed for refresh/sign-in, not only for Sideloadly.
 
@@ -177,7 +206,7 @@ If Loop Segments is on the home screen and **`com.loopsegments.app` is in App ID
 4. Wait until AltStore shows install complete — **Loop Segments** should appear under **My Apps**.
 5. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
 
-If **+** install fails with **incorrect data format**, first check whether the IPA came from **iCloud Drive / Downloads**: wait until the file is fully downloaded (no cloud badge / “waiting…”), then **retry Install several times** — confirmed to clear once sync finishes (partial cloud copy looks like a corrupt IPA). If that does not help, see [Fix install / refresh](#fix-install--refresh--do-in-order-usb) — try **iTunes → Account → Authorizations → Deauthorize → Authorize** first (USB; confirmed working). Otherwise check **Store iCloud** or unsigned-in iTunes, not the IPA. If error is **1007** only, use a fresh IPA from **Actions → ios-build → Run workflow** (build **243+**). Do not mix Sideloadly and AltStore for the same app.
+If **+** install fails with **incorrect data format**, first check whether the IPA came from **iCloud Drive / Downloads**: wait until the file is fully downloaded (no cloud badge / “waiting…”), then **retry Install several times** — confirmed to clear once sync finishes (partial cloud copy looks like a corrupt IPA). If that does not help on **AltStore**, see [Fix install / refresh](#fix-install--refresh--do-in-order-usb) — try **iTunes → Account → Authorizations → Deauthorize → Authorize** first (USB; confirmed working). Otherwise check **Store iCloud** or unsigned-in iTunes, not the IPA. If error is **1007** only, use a fresh IPA from **Actions → ios-build → Run workflow** (build **243+**). **Same toast on SideStore stable:** try **SideStore nightly** (confirmed working here) and a fully local IPA. Do not mix Sideloadly and AltStore/SideStore for the same app.
 
 #### Wi‑Fi sync for AltStore (one-time) — often broken on Windows 11
 
@@ -395,16 +424,17 @@ If it still fails: delete **AltStore** from the phone, optionally clear `%Progra
 
 **Refresh / Install failed: “The data couldn’t be read because it isn’t in the correct format”**
 
-Same message on **Install** (My Apps → +) or **Refresh**. Two common causes:
+Same message on **Install** (My Apps → +) or **Refresh**. Common causes:
 
-1. **IPA from iCloud not fully synced** (install from Files / iCloud Drive / Downloads) — file still downloading or a stub. Wait for sync to finish, then **retry AltStore Install several times** (confirmed: clears once the full IPA is local). Prefer copying a known-good local `LoopSegments.ipa` if retries keep failing.
-2. **AltServer ↔ Apple login** (invalid *anisette*) — AltStore expected JSON from Apple and got garbage or an HTML error page. Not usually a broken Loop Segments IPA.
+1. **IPA from iCloud not fully synced** (install from Files / iCloud Drive / Downloads) — file still downloading or a stub. Wait for sync to finish, then **retry Install several times** (confirmed: clears once the full IPA is local). Prefer copying a known-good local `LoopSegments.ipa` if retries keep failing.
+2. **Apple login / anisette** — store expected JSON from Apple and got garbage or an HTML error page. Not usually a broken Loop Segments IPA.
+3. **SideStore stable** — hit the same **incorrect data format** as AltStore here; **SideStore nightly** fixed it. Prefer nightly.
 
-| AltStore error (if shown) | Meaning |
-|---------------------------|---------|
+| Store error (if shown) | Meaning |
+|------------------------|---------|
 | **1006** UDID unknown | AltStore not installed by latest AltServer — see UDID section above |
-| **2013** / **3023** / anisette invalid | iCloud/iTunes from **Microsoft Store**, or not signed in, or stale `adi` cache |
-| **1007** / **2007** app invalid format | Rare for our IPA — re-download `LoopSegments.ipa` from GitHub Actions; if installed from iCloud, wait for full sync + retry |
+| **2013** / **3023** / anisette invalid | iCloud/iTunes from **Microsoft Store**, or not signed in, or stale `adi` cache (AltStore); on SideStore try another anisette / re-pair |
+| **1007** / **2007** app invalid format | Rare for our IPA — re-download `LoopSegments.ipa` from GitHub Actions; if installed from iCloud, wait for full sync + retry; SideStore → try **nightly** |
 
 ### Fix install / refresh — do in order (USB)
 
@@ -430,7 +460,7 @@ Same message on **Install** (My Apps → +) or **Refresh**. Two common causes:
 | VPN / DNS | Off VPN; try phone on **same Wi‑Fi** as PC during install (USB + Wi‑Fi together is OK) |
 | Developer agreement | [developer.apple.com](https://developer.apple.com) → sign in → accept agreement |
 | Store iCloud required | If you **must** keep Store iCloud: [AltStore “Windows Store iCloud” workaround](https://faq.altstore.io/altstore-classic/troubleshooting-guide) (copy Apple support folders before swapping) |
-| Bypass AltStore sign | Install **Loop Segments** with [Sideloadly](#5-sideloadly-fallback-only-if-altstore-fails) + **Automatic App Refresh** (USB daemon) |
+| Bypass AltStore sign | Prefer [SideStore nightly](#2a-install-with-sidestore-nightly--preferred-when-altstore-flakes); or [Sideloadly](#5-sideloadly-fallback-only-if-altstore-fails) + **Automatic App Refresh** (USB daemon; login often broken) |
 
 **Verify IPA is OK (only if error code 1007 / 2007):** unzip `LoopSegments.ipa` on PC — should contain `Payload/LoopSegments.app/Info.plist` with `CFBundleIdentifier` = `com.loopsegments.app`. Re-download artifact if corrupt.
 
@@ -448,17 +478,19 @@ If refresh still fails after the above, use [Sideloadly fallback](#5-sideloadly-
 
 Then [WORKFLOW.md](../WORKFLOW.md): export → `Sync-FromPhoneLAN.ps1 -Watch` → DLNA on WLAN.
 
-### 5. Sideloadly (fallback only if AltStore fails)
+### 5. Sideloadly (last resort)
 
-Use only when AltStore cannot install or refresh. Requires **iTunes (64-bit from Apple)** + USB. See [Sideloadly fallback details](#sideloadly-fallback-details) at the end of this doc.
+Use only when SideStore and AltStore cannot install or refresh. Requires **iTunes (64-bit from Apple)** + USB. See [Sideloadly fallback details](#sideloadly-fallback-details) at the end of this doc.
 
 Brief steps: install iTunes → USB **Trust This Computer** → [Sideloadly](https://sideloadly.io) → drag IPA → enable **Automatic App Refresh** → [trust developer](#trust-the-developer-on-iphone-required-once-not-weekly). Optional PC helper: `.\sideload\Register-SideloadlyAutoRefresh.ps1 -WatchUsb` (see [windows/README.md](../windows/README.md)).
+
+**Login / −22406 / “incorrect password”:** Sideloadly does **not** support app-specific passwords — use the normal Apple ID password + 2FA when prompted. If the browser login works but Sideloadly still rejects the password, that is Sideloadly’s anisette/login bug — use SideStore nightly or AltStore instead.
 
 ---
 
 ## Refresh the IPA later
 
-Free Apple ID certificates last **~7 days**. See **[§3 Automate weekly refresh](#3-automate-weekly-refresh-altserver--altstore)** (AltStore, primary) before apps stop opening.
+Free Apple ID certificates last **~7 days**. Prefer **SideStore** (LocalDevVPN + Refresh) or **[§3 Automate weekly refresh](#3-automate-weekly-refresh-altserver--altstore)** (AltStore) before apps stop opening.
 
 ### If you don’t refresh in time
 
@@ -467,13 +499,13 @@ Free Apple ID certificates last **~7 days**. See **[§3 Automate weekly refresh]
 | **App won’t open** | Tapping the icon shows “Unable to Verify App” / similar, or the app closes immediately. |
 | **Your export files** | Usually **still on the phone** in the app’s Documents until you delete the app — but you can’t run a new export until you reinstall/refresh. |
 | **PC / DLNA** | **Unchanged** — files already copied or played from the PC are not affected. |
-| **Fix** | **AltStore:** **Refresh All** (AltServer on PC, same Wi‑Fi). If AltStore died, reinstall from AltServer first. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) only if iOS asks. |
+| **Fix** | **SideStore:** LocalDevVPN on → Refresh. **AltStore:** **Refresh All** (AltServer on PC). If the store app itself died, reinstall it first (iloader / AltServer). [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) only if iOS asks. |
 | **What does not happen** | No charge from Apple, phone is not locked, app does not auto-update from the App Store. |
 
 | Goal | What to do |
 |------|------------|
-| **Extend the same install** | **AltStore → Refresh All** on home Wi‑Fi ([§3](#3-automate-weekly-refresh-altserver--altstore)) |
-| **New build** | Repo root: **`.\deploy.ps1`** (or Actions → **ios-build** → **Run workflow**) → wait for iCloud sync → reinstall in AltStore |
+| **Extend the same install** | **SideStore** Refresh (LocalDevVPN) or **AltStore → Refresh All** ([§3](#3-automate-weekly-refresh-altserver--altstore)) |
+| **New build** | Repo root: **`.\deploy.ps1`** (or Actions → **ios-build** → **Run workflow**) → wait for iCloud sync → reinstall in SideStore / AltStore |
 
 **Local IPA path (this repo on Windows):**
 
@@ -495,13 +527,13 @@ cd "P:\all_scripts\iOS apps\ios_3d_loop_segments"
 # gh run download <RUN_ID> -n LoopSegments-ipa
 ```
 
-Reinstall with **AltStore** after iCloud finishes syncing the IPA on the phone.
+Reinstall with **SideStore** or **AltStore** after iCloud finishes syncing the IPA on the phone.
 
 ---
 
 ## Sideloadly fallback details
 
-Only if [AltStore](#2-install-with-altstore-primary--windows) fails. Requires **iTunes (64-bit from Apple, not Microsoft Store)** + USB.
+Only if [SideStore](#2a-install-with-sidestore-nightly--preferred-when-altstore-flakes) and [AltStore](#2-install-with-altstore-primary--windows) fail. Requires **iTunes (64-bit from Apple, not Microsoft Store)** + USB.
 
 #### iTunes setup
 
@@ -519,7 +551,7 @@ Only if [AltStore](#2-install-with-altstore-primary--windows) fails. Requires **
 4. Optional: `.\sideload\Register-SideloadlyAutoRefresh.ps1 -WatchUsb` ([windows/README.md](../windows/README.md)).
 5. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly).
 
-**Login fails?** Accept agreement at [developer.apple.com](https://developer.apple.com), update Sideloadly, clear `%LOCALAPPDATA%\cache\sideloadly`, try **Anisette → Remote**. Prefer fixing AltStore instead.
+**Login fails (−22406 / incorrect password)?** Sideloadly does **not** support app-specific passwords. Accept agreement at [developer.apple.com](https://developer.apple.com), update Sideloadly, clear `%LOCALAPPDATA%\cache\sideloadly`, try **Anisette → Remote**. Prefer **SideStore nightly** or AltStore instead.
 
 ---
 
