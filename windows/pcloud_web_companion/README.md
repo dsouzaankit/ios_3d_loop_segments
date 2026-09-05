@@ -72,9 +72,9 @@ Integrated under **`windows\pcloud_web_companion`** (preferred):
 cd <repo>\windows
 .\setup\Setup-LoopSegmentsWindows.ps1    # once per PC (pwsh)
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
-# same as:
-.\pcloud_web_companion\run_chromium.ps1
 ```
+
+Prefer **`Run-PCloudWebCompanion.ps1`** (wrapper: Enter-on-error, forwards flags). `run_chromium.ps1` is the implementation — fine from a **pwsh** prompt; avoid Explorer “Run with PowerShell” / double-click on it (Windows PowerShell 5.1). Entry scripts are UTF-8 with BOM so a 5.1 start can re-launch under `pwsh` instead of flash-closing.
 | Flag | Effect |
 |------|--------|
 | `-RecreateVenv` | Recreate machine-local venv under `%LOCALAPPDATA%\pcloud_web_companion\venv` |
@@ -170,7 +170,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 ## Requirements
 
-- Windows + **PowerShell 7** (`pwsh`; install from https://aka.ms/powershell). Run from a **pwsh** prompt — do not start `.ps1` files from a Windows PowerShell 5.1 (blue) shell. A 5.1 start **re-runs the same script under `pwsh`**; prefer opening 7 first.
+- Windows + **PowerShell 7** (`pwsh`; install from https://aka.ms/powershell). Prefer a **pwsh** prompt. A Windows PowerShell 5.1 (blue) start of `Run-PCloudWebCompanion.ps1` / `run_chromium.ps1` **re-runs under `pwsh`** when the file parses (UTF-8 BOM); still prefer opening 7 first.
 - Windows + Python (`py`) — for the launcher’s Chromium install via Playwright
 - Loop Segments app LAN server on port 8765 (USB launch opens the app first when possible)
 - `windows\loop-segments-windows.json` with `phoneLanHost`

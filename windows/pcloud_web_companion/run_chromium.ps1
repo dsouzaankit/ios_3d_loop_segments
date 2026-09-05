@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$RecreateVenv,
     [switch]$ForceDeps,
     [switch]$NoLaunch,
@@ -20,7 +20,7 @@ param(
     [switch]$KeepLocalProfile,
     # Never simulate Home on companion finish (default already skips when backgrounded or locked).
     [switch]$SkipGoHome,
-    # Do not POST wifi_www_probe.json before Home (default: probe Wi‑Fi→www; bounce phone AP on fail).
+    # Do not POST wifi_www_probe.json before Home (default: probe Wi-Fi->www; bounce phone AP on fail).
     [switch]$SkipWifiWwwProbeOnQuit,
     # Do not force Chromium UI dark mode (default: --force-dark-mode only; no WebContentsForceDark -
     # page auto-darkening can hide media seekbars / controls on pCloud and similar players).
@@ -523,7 +523,7 @@ function Start-RestLogSink {
         Write-Host "[rest-log] Cleared $logFile"
     }
     Write-Host "[rest-log] Starting sink -> $logFile"
-    # Break away from the console job — otherwise the sink can vanish mid-session while
+    # Break away from the console job - otherwise the sink can vanish mid-session while
     # the companion console stays up, and every Open pCloud Drive folder click fails hard.
     [void](Start-HiddenPowerShell -BreakAwayFromConsoleJob -ArgumentList @(
             "-ExecutionPolicy", "Bypass",
@@ -575,7 +575,7 @@ function Test-RestLogSinkHealthy {
 
 function Ensure-RestLogSink {
     if (Test-RestLogSinkHealthy) { return }
-    Write-Warning "[rest-log] Sink on :18765 is down — restarting (Open pCloud Drive folder / phone-lan need it)"
+    Write-Warning "[rest-log] Sink on :18765 is down - restarting (Open pCloud Drive folder / phone-lan need it)"
     Start-RestLogSink -KeepExistingLog
 }
 
@@ -947,11 +947,11 @@ function Invoke-GatewayWifiRebootIfNeeded {
     [void]$psArgs.Add("Bypass")
     [void]$psArgs.Add("-File")
     [void]$psArgs.Add($rebootPs1)
+    # Always -NoWaitEnter: companion owns the console Enter prompt (SkipGatewayReboot
+    # used to omit it and left "Press Enter to close..." mid-startup).
+    [void]$psArgs.Add("-NoWaitEnter")
     if ($SkipGatewayReboot) {
         [void]$psArgs.Add("-SkipGatewayReboot")
-    } else {
-        # Parent Run-PCloudWebCompanion waits for Enter on failure; avoid a second prompt in the child.
-        [void]$psArgs.Add("-NoWaitEnter")
     }
 
     Write-Host "[gateway] Checking default gateway vs phone LAN page subnet..."
@@ -1659,7 +1659,7 @@ function Invoke-BouncePhoneLanAp {
     [void]$psArgs.Add("-BouncePhoneLanAp")
     [void]$psArgs.Add("-NoWaitEnter")
 
-    Write-Host "[wifi-www] Bouncing phone LAN AP (Wi‑Fi→www probe failed)..."
+    Write-Host "[wifi-www] Bouncing phone LAN AP (Wi-Fi->www probe failed)..."
     Write-Host "[wifi-www] > pwsh $($psArgs -join ' ')"
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -1726,13 +1726,13 @@ function Get-PhoneExportBusyReason {
 
 function Invoke-PhoneWifiWwwProbeBeforeHome {
     if ($SkipWifiWwwProbeOnQuit) {
-        Write-Host "[wifi-www] Skipping Wi‑Fi → www probe (-SkipWifiWwwProbeOnQuit)"
+        Write-Host "[wifi-www] Skipping Wi-Fi -> www probe (-SkipWifiWwwProbeOnQuit)"
         return
     }
 
     $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
     if (-not (Test-Path -LiteralPath $lanConfigPath)) {
-        Write-Warning "[wifi-www] Missing lan_config.json - skip Wi‑Fi → www probe"
+        Write-Warning "[wifi-www] Missing lan_config.json - skip Wi-Fi -> www probe"
         return
     }
 
@@ -1745,7 +1745,7 @@ function Invoke-PhoneWifiWwwProbeBeforeHome {
 
     $hostName = [string]$lan.phoneLanHost
     if ([string]::IsNullOrWhiteSpace($hostName)) {
-        Write-Warning "[wifi-www] phoneLanHost empty - skip Wi‑Fi → www probe"
+        Write-Warning "[wifi-www] phoneLanHost empty - skip Wi-Fi -> www probe"
         return
     }
 
@@ -1755,17 +1755,17 @@ function Invoke-PhoneWifiWwwProbeBeforeHome {
     }
 
     if (-not (Test-PhoneLanPageReachable -Quiet)) {
-        Write-Warning "[wifi-www] Phone LAN not reachable — skip Wi‑Fi → www probe (probe needs :$port before Home)"
+        Write-Warning "[wifi-www] Phone LAN not reachable - skip Wi-Fi -> www probe (probe needs :$port before Home)"
         return
     }
 
     if (-not (Get-Command Get-LoopSegmentsPhoneWebDavAuthHeader -ErrorAction SilentlyContinue)) {
-        Write-Warning "[wifi-www] Auth helper missing - skip Wi‑Fi → www probe"
+        Write-Warning "[wifi-www] Auth helper missing - skip Wi-Fi -> www probe"
         return
     }
 
     $uri = "http://${hostName}:${port}/wifi_www_probe.json"
-    Write-Host "[wifi-www] POST $uri (on-device Wi‑Fi-only www check; cellular blocked)..."
+    Write-Host "[wifi-www] POST $uri (on-device Wi-Fi-only www check; cellular blocked)..."
     try {
         $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
         $resp = Invoke-DirectHttpPostJson -Uri $uri -Headers $auth -Body '{}' -TimeoutSec 20
@@ -1792,18 +1792,18 @@ function Invoke-PhoneWifiWwwProbeBeforeHome {
         }
         $busy = Get-PhoneExportBusyReason -HostName $hostName -Port $port
         if ($busy) {
-            Write-Warning "[wifi-www] FAIL: $detail — skip AP bounce (export in progress: $busy)"
+            Write-Warning "[wifi-www] FAIL: $detail - skip AP bounce (export in progress: $busy)"
             return
         }
-        Write-Warning "[wifi-www] FAIL: $detail — bouncing phone LAN AP before Home"
+        Write-Warning "[wifi-www] FAIL: $detail - bouncing phone LAN AP before Home"
         Invoke-BouncePhoneLanAp
     } catch {
         $busy = Get-PhoneExportBusyReason -HostName $hostName -Port $port
         if ($busy) {
-            Write-Warning "[wifi-www] Probe request failed: $($_.Exception.Message) — skip AP bounce (export in progress: $busy)"
+            Write-Warning "[wifi-www] Probe request failed: $($_.Exception.Message) - skip AP bounce (export in progress: $busy)"
             return
         }
-        Write-Warning "[wifi-www] Probe request failed: $($_.Exception.Message) — bouncing phone LAN AP before Home"
+        Write-Warning "[wifi-www] Probe request failed: $($_.Exception.Message) - bouncing phone LAN AP before Home"
         Invoke-BouncePhoneLanAp
     }
 }
@@ -1861,7 +1861,7 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): close Chromium, drop Skybox rclone folder, quit Skybox if we started it, sync profile, clear local, Wi‑Fi→www probe, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): close Chromium, drop Skybox rclone folder, quit Skybox if we started it, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
 
     try {
         Stop-ProfileChromium -ProfileDir $UserDataDir
@@ -1882,7 +1882,7 @@ function Invoke-CompanionGracefulFinish {
         Write-Host "[run] Companion finish complete." -ForegroundColor Green
         if ($script:HomeFailedNeedEnter) {
             # Home is not a fatal companion stop (still exit 0), and the launcher
-            # passes -NoWaitEnterOnFatal — so Wait-EnterOnFatal would skip.
+            # passes -NoWaitEnterOnFatal - so Wait-EnterOnFatal would skip.
             Write-Host ""
             Write-Host "Press Enter to close..." -ForegroundColor Yellow
             try {

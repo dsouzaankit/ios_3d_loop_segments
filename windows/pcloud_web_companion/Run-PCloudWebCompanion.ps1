@@ -1,4 +1,4 @@
-# Entry may start under Windows PowerShell 5.1 (file association); re-launch with pwsh.
+﻿# Entry may start under Windows PowerShell 5.1 (file association); re-launch with pwsh.
 <#
 .SYNOPSIS
   Start integrated pcloud_web_companion Chromium helper (USB-launches Loop Segments first).
@@ -15,7 +15,7 @@
   -SkipRcloneMount) in a separate window when LAN is up, then probes LAN
   throughput off the mount (unless -SkipLanThroughput). If throughput is below
   minLanThroughputMbps (default 40), reboots Wi-Fi on other known routers (not the
-  current gateway), waits to settle, and re-measures — up to 2 retries. Chromium
+  current gateway), waits to settle, and re-measures - up to 2 retries. Chromium
   stays open (this PC's AP is not bounced).
   AltServer is skipped by default (SideStore); pass -EnsureAltServer for AltStore.
   Exit code 3 (phone locked) aborts Chromium. No USB / other USB failures abort only when
@@ -23,7 +23,7 @@
   On any error / non-zero exit, waits for a single Enter so a double-clicked console
   does not close immediately (child scripts use -NoWaitEnter / -NoWaitEnterOnFatal
   so you are not prompted twice).
-  On finish, POSTs `/wifi_www_probe.json` (on-device Wi‑Fi-only www) before USB Home;
+  On finish, POSTs `/wifi_www_probe.json` (on-device Wi-Fi-only www) before USB Home;
   on fail, bounces the phone LAN AP (`-BouncePhoneLanAp`). USB Home runs only if
   Loop Segments is still the foreground app (skipped when already backgrounded or lock screen).
 
