@@ -149,6 +149,21 @@ function Test-LoopSegmentsSkyboxStartedByCompanion {
     Test-Path -LiteralPath (Get-LoopSegmentsSkyboxStartedMarkerPath)
 }
 
+function Reset-LoopSegmentsSkyboxStartedMarkerForNewSession {
+    <#
+      Clear quit-ownership only when SKYBOX is not running (stale marker).
+      If SKYBOX is still up and the marker exists, keep it so companion quit still
+      closes the instance a prior companion session started.
+    #>
+    if (Test-LoopSegmentsSkyboxRunning) {
+        if (Test-LoopSegmentsSkyboxStartedByCompanion) {
+            Write-Host '[skybox] Prior companion still owns this SKYBOX instance (will quit on finish).' -ForegroundColor DarkYellow
+        }
+        return
+    }
+    Clear-LoopSegmentsSkyboxStartedMarker
+}
+
 function Invoke-LoopSegmentsSkyboxVrPcMap {
     if (-not (Import-LoopSegmentsSkyboxVrPc)) { return $false }
     if (-not (Get-Command Map-SkyboxVrPcShare -ErrorAction SilentlyContinue)) { return $false }
@@ -228,6 +243,17 @@ function Remove-LoopSegmentsSkyboxRcloneFolderMapping {
     }
 }
 
+function Test-LoopSegmentsSkyboxOwnedForQuit {
+    if (Test-LoopSegmentsSkyboxStartedByCompanion) { return $true }
+    # Skybox_vr_pc session marker (set when Start-SkyboxVrPcProcess launches SKYBOX).
+    if (Get-Command Test-SkyboxVrPcStartedByThisSession -ErrorAction SilentlyContinue) {
+        try {
+            if (Test-SkyboxVrPcStartedByThisSession) { return $true }
+        } catch {}
+    }
+    return $false
+}
+
 function Stop-LoopSegmentsSkybox {
     param([switch] $OnlyIfCompanionStarted)
 
@@ -238,13 +264,17 @@ function Stop-LoopSegmentsSkybox {
     Invoke-LoopSegmentsSkyboxVrPcUnmap
     Remove-LoopSegmentsSkyboxRcloneFolderMapping
 
-    if ($OnlyIfCompanionStarted -and -not (Test-LoopSegmentsSkyboxStartedByCompanion)) {
+    if ($OnlyIfCompanionStarted -and -not (Test-LoopSegmentsSkyboxOwnedForQuit)) {
         return
     }
     if (Get-Command Stop-SkyboxVrPcProcess -ErrorAction SilentlyContinue) {
+        # Force quit when companion owns it (Ignore Skybox_vr_pc OnlyIfThisSessionStarted).
         Stop-SkyboxVrPcProcess
     }
     Clear-LoopSegmentsSkyboxStartedMarker
+    if (Get-Command Clear-SkyboxVrPcStartedMarker -ErrorAction SilentlyContinue) {
+        try { Clear-SkyboxVrPcStartedMarker } catch {}
+    }
 }
 
 function Start-LoopSegmentsSkybox {
@@ -261,9 +291,15 @@ function Start-LoopSegmentsSkybox {
     }
     $wasRunning = Test-LoopSegmentsSkyboxRunning
     $api = Start-SkyboxVrPcProcess
+    # Own quit if we launched SKYBOX this call (do not rely only on Skybox_vr_pc marker).
     $started = $false
-    if (-not $wasRunning -and (Get-Command Test-SkyboxVrPcStartedByThisSession -ErrorAction SilentlyContinue)) {
-        $started = [bool](Test-SkyboxVrPcStartedByThisSession)
+    if (-not $wasRunning) {
+        if (Get-Command Test-SkyboxVrPcStartedByThisSession -ErrorAction SilentlyContinue) {
+            try { $started = [bool](Test-SkyboxVrPcStartedByThisSession) } catch { $started = $false }
+        }
+        if (-not $started -and ((Test-LoopSegmentsSkyboxRunning) -or $api)) {
+            $started = $true
+        }
     }
     if ($started) {
         try { Set-LoopSegmentsSkyboxStartedMarker } catch {}

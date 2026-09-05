@@ -141,8 +141,15 @@ $LegacyRepoVenv = Join-Path $ScriptDir ".venv"
 $UserDataDir = Join-Path $CompanionLocalRoot "chromium-profile"
 $RepoProfileDir = Join-Path $ScriptDir "chromium-profile"
 $RepoProfileZip = Join-Path $ScriptDir "chromium-profile.zip"
-# Stale "we started Skybox" marker from a prior crash / -NoLaunch must not quit an unrelated client.
-try { Clear-LoopSegmentsSkyboxStartedMarker } catch {}
+# Drop stale "we started Skybox" only when SKYBOX is not running. If a prior companion
+# started it and left it up (crash / kill), keep the marker so this session still quits it.
+try {
+    if (Get-Command Reset-LoopSegmentsSkyboxStartedMarkerForNewSession -ErrorAction SilentlyContinue) {
+        Reset-LoopSegmentsSkyboxStartedMarkerForNewSession
+    } elseif (Get-Command Clear-LoopSegmentsSkyboxStartedMarker -ErrorAction SilentlyContinue) {
+        Clear-LoopSegmentsSkyboxStartedMarker
+    }
+} catch {}
 
 if (-not (Test-Path $ManifestPath)) {
     throw "Extension manifest not found: $ManifestPath"
