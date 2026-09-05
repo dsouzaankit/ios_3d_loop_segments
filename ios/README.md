@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 307 (1.2.71):** LAN **Wi‑Fi → www** probe (`POST /wifi_www_probe.json`, `allowsCellularAccess = false`) + monitor button; `status.json` includes `wifiWwwProbe`. Companion quit runs the probe before USB Home and bounces the phone LAN AP on fail.
+
 **Build 306 (1.2.70):** Europe API **1022 Please provide 'code'** is the **wrong datacenter**, not 2FA. Sign-in no longer lets that EU error replace a US result; Europe 1022 retries United States. US API fail still tries WebDAV and can open Browse on 404.
 
 **Build 305 (1.2.69):** Sign-in succeeds when **pCloud API accepts the password** even if WebDAV PROPFIND 404s (same Apache “Not Found” a browser GET gets on `webdav.pcloud.com`). Opens Browse on a bookmark folder, not `/`. No EU wait.

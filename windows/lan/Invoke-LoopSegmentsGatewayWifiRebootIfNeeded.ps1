@@ -25,6 +25,11 @@
   -RebootOtherRouters: reboot Wi-Fi on every known router except the PC's current
   default gateway (low-throughput recovery; leaves this PC's AP up).
 
+  -BouncePhoneLanAp: reboot Wi-Fi on the AP that serves phoneLanHost (same /24 as
+  known ROUTER_IP scripts). Prefers the PC default gateway when it already shares
+  that subnet; otherwise reboots every known router on the phone LAN page subnet.
+  Used when the phone's on-device Wi‑Fi→www probe fails (companion quit).
+
   When run directly (double-click / console), waits for Enter before closing so you can
   read the result. Pass -NoWaitEnter when invoked as a child so the parent keeps a
   single prompt.
@@ -37,6 +42,9 @@
 
 .EXAMPLE
   .\lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -RebootOffSubnetRouters
+
+.EXAMPLE
+  .\lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -BouncePhoneLanAp -NoWaitEnter
 #>
 [CmdletBinding()]
 param(
@@ -49,6 +57,8 @@ param(
     [switch] $RebootOffSubnetRouters,
     # Reboot every known router except the current default gateway (low LAN throughput).
     [switch] $RebootOtherRouters,
+    # Reboot the phone's Wi-Fi AP (ROUTER_IP on phoneLanHost subnet) after a failed Wi‑Fi→www probe.
+    [switch] $BouncePhoneLanAp,
     [string] $PhoneLanHost = '',
     [string] $RebootScriptsRoot = 'P:\all_scripts\5g_router_reboot',
     [int] $PrefixLength = 0,
@@ -487,7 +497,7 @@ function Invoke-RouterWifiRebootScript {
 }
 
 try {
-if ($SkipGatewayReboot) {
+if ($SkipGatewayReboot -and -not $BouncePhoneLanAp) {
     Write-Host '[gateway] Skipping gateway Wi-Fi reboot check (-SkipGatewayReboot)'
     Exit-WithEnter 0
 }
@@ -504,6 +514,70 @@ if (-not $runtime) {
 [gateway] No usable Python found to run the router reboot script.
 $(Get-LoopSegmentsPythonInstallHint)
 "@
+}
+
+# --- Bounce phone LAN AP (Wi‑Fi→www probe fail): reboot ROUTER_IP on phoneLanHost subnet ---
+if ($BouncePhoneLanAp) {
+    Write-Host ''
+    Write-Host ('[gateway] Bouncing phone LAN AP for Wi‑Fi→www recovery (phone LAN page {0}, /{1}).' -f $phoneHost, $prefix) -ForegroundColor Yellow
+
+    $allRouters = @(Get-KnownRouterRebootTargets -ScriptsRoot $RebootScriptsRoot)
+    if ($allRouters.Count -eq 0) {
+        Write-Warning ("[gateway] No router reboot scripts found under {0}" -f $RebootScriptsRoot)
+        Exit-WithEnter 0
+    }
+
+    $sameSubnet = @()
+    foreach ($router in $allRouters) {
+        if (Test-SameIpv4Subnet -IpA $router.Ip -IpB $phoneHost -PrefixLen $prefix) {
+            $sameSubnet += $router
+        }
+    }
+
+    if ($sameSubnet.Count -eq 0) {
+        Write-Warning ("[gateway] No known ROUTER_IP shares the phone LAN page subnet ({0}/{1}). Skip bounce." -f $phoneHost, $prefix)
+        Exit-WithEnter 0
+    }
+
+    $targets = @()
+    if (-not [string]::IsNullOrWhiteSpace($gatewayIp)) {
+        foreach ($router in $sameSubnet) {
+            if ($router.Ip -eq $gatewayIp) {
+                $targets = @($router)
+                Write-Host ('[gateway] Prefer PC default gateway on phone subnet: {0} ({1})' -f $router.Ip, $router.Model)
+                break
+            }
+        }
+    }
+    if (@($targets).Count -eq 0) {
+        $targets = @($sameSubnet)
+        Write-Host ('[gateway] PC gateway not on phone subnet (or unknown); bouncing {0} known phone-subnet AP(s).' -f $targets.Count)
+    }
+
+    Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
+    $settle = [Math]::Max(1, $SettleSecBetweenRouters)
+    $index = 0
+    $targetList = @($targets)
+    foreach ($router in $targetList) {
+        $index++
+        Write-Host ''
+        Write-Host ('[gateway] ({0}/{1}) Rebooting phone-LAN AP {2} ({3})...' -f `
+            $index, $targetList.Count, $router.Ip, $router.Model) -ForegroundColor Cyan
+        try {
+            Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime `
+                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot
+            Write-Host ('[gateway] Reboot finished for {0}.' -f $router.Ip) -ForegroundColor Green
+        } catch {
+            Write-Warning ("[gateway] Reboot failed for {0}: {1}" -f $router.Ip, $_.Exception.Message)
+        }
+        if ($index -lt $targetList.Count) {
+            Write-Host ('[gateway] Waiting {0}s before the next AP...' -f $settle)
+            Start-Sleep -Seconds $settle
+        }
+    }
+
+    Write-Host '[gateway] Phone LAN AP bounce pass complete.' -ForegroundColor Green
+    Exit-WithEnter 0
 }
 
 # --- Off-subnet recovery: reboot every known router NOT on the phone LAN page subnet ---

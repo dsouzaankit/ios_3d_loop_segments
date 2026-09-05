@@ -712,6 +712,10 @@ enum ExportLANServer {
             sendStatusListsJSON(connection, done: done)
             return
         }
+        if normalized == "wifi_www_probe.json" {
+            sendJSONPayload(WifiWwwProbe.currentSnapshot().statusJSON(), connection: connection, done: done, status: 200)
+            return
+        }
         let (resourcePath, query) = splitPathAndQuery(normalized)
         if resourcePath == "pcloud_list.json" {
             guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
@@ -1385,11 +1389,40 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "wifi_www_probe.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            receiveRequestBody(
+                on: connection,
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                maxBytes: 4_096
+            ) { result in
+                switch result {
+                case .failure(.missingContentLength):
+                    // Allow empty POST with no Content-Length (companion / curl -X POST).
+                    break
+                case .failure(.payloadTooLarge):
+                    sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+                    return
+                case .failure(.readFailed):
+                    connection.cancel()
+                    done()
+                    return
+                case .success:
+                    break
+                }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let snap = WifiWwwProbe.runBlocking(timeout: 8)
+                    sendJSONPayload(snap.statusJSON(), connection: connection, done: done, status: 200)
+                }
+            }
+            return
+        }
         sendResponse(
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, and /paused_exports.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, and /wifi_www_probe.json".utf8),
             done: done
         )
     }
@@ -2455,6 +2488,7 @@ enum ExportLANServer {
         var links = [
             #"<a href="export_latest.txt">export_latest.txt</a>"#,
             #"<a href="status.json">status.json</a>"#,
+            #"<a href="wifi_www_probe.json">wifi_www_probe.json</a>"#,
             "<a href=\"\(LANExportTriggerControl.ackRelativePath)\">export_trigger.ack.json</a>",
             #"<a href="export_from_folder.json">export_from_folder.json</a>"#,
             #"<a href="export_queue.json">export_queue.json</a>"#,
@@ -2624,6 +2658,7 @@ enum ExportLANServer {
                 applyLive(j.lanLive);
                 applyPendingQueue(j.pendingExportQueue);
                 applyPausedExports(j.pausedExports);
+                if (j.wifiWwwProbe) applyWifiWwwProbe(j.wifiWwwProbe);
                 if (typeof j.playbackStatusHTML === "string") {
                   var status = document.getElementById("lan-playback-status");
                   if (status) status.innerHTML = j.playbackStatusHTML;
@@ -2645,6 +2680,42 @@ enum ExportLANServer {
           var listsBtn = document.getElementById("lan-refresh-lists");
           if (statusBtn) statusBtn.onclick = refreshStatus;
           if (listsBtn) listsBtn.onclick = refreshLists;
+          function applyWifiWwwProbe(j) {
+            var el = document.getElementById("lan-wifi-www-probe-result");
+            if (!el || !j) return;
+            if (j.ok === true) {
+              el.textContent = "Wi‑Fi → www OK" + (j.durationMs != null ? (" (" + j.durationMs + " ms)") : "")
+                + (j.statusCode != null ? (" HTTP " + j.statusCode) : "");
+            } else if (j.ok === false) {
+              el.textContent = "Wi‑Fi → www FAIL: " + (j.error || ("HTTP " + (j.statusCode || "?")));
+            } else {
+              el.textContent = "Wi‑Fi → www: not probed yet";
+            }
+          }
+          function runWifiWwwProbe() {
+            var btn = document.getElementById("lan-wifi-www-probe");
+            var el = document.getElementById("lan-wifi-www-probe-result");
+            if (btn) btn.disabled = true;
+            if (el) el.textContent = "Probing Wi‑Fi → www (cellular blocked)…";
+            var auth = "Basic " + btoa("\(lanWebDAVUsername):\(lanWebDAVPassword)");
+            return fetch("wifi_www_probe.json", {
+              method: "POST",
+              headers: { "Authorization": auth, "Content-Type": "application/json", "Content-Length": "2" },
+              body: "{}",
+              cache: "no-store"
+            })
+              .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+              .then(function (res) {
+                if (res.j) applyWifiWwwProbe(res.j);
+                else if (el) el.textContent = "Probe failed (bad JSON)";
+              })
+              .catch(function (e) {
+                if (el) el.textContent = "Probe request failed: " + (e && e.message ? e.message : e);
+              })
+              .finally(function () { if (btn) btn.disabled = false; });
+          }
+          var probeBtn = document.getElementById("lan-wifi-www-probe");
+          if (probeBtn) probeBtn.onclick = runWifiWwwProbe;
           function uuid() {
             return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
               var r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
@@ -2916,7 +2987,9 @@ enum ExportLANServer {
                 <p>
                   <button type="button" id="lan-refresh-status">Refresh status</button>
                   <button type="button" id="lan-refresh-lists">Refresh file list</button>
+                  <button type="button" id="lan-wifi-www-probe">Probe Wi‑Fi → www</button>
                 </p>
+                <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
                 <h2>On phone (playback)</h2>
                 <ul id="lan-playback-files">
                 \(htmlMonitorStaticPlaybackLinks())
@@ -2980,7 +3053,9 @@ enum ExportLANServer {
             <p>
               <button type="button" id="lan-refresh-status">Refresh status</button>
               <button type="button" id="lan-refresh-lists">Refresh file list</button>
+              <button type="button" id="lan-wifi-www-probe">Probe Wi‑Fi → www</button>
             </p>
+            <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
             """ : "")
             <h2>On phone (playback)</h2>
             <div class="lan-playback-section">
@@ -4154,6 +4229,7 @@ enum ExportLANServer {
         }
         payload["pendingExportQueue"] = pendingExportQueueStatusPayload()
         payload["pausedExports"] = pausedExportsStatusPayload()
+        payload["wifiWwwProbe"] = WifiWwwProbe.currentSnapshot().statusJSON()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return

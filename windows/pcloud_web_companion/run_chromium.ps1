@@ -20,6 +20,8 @@ param(
     [switch]$KeepLocalProfile,
     # Never simulate Home on companion finish (default already skips when backgrounded or locked).
     [switch]$SkipGoHome,
+    # Do not POST wifi_www_probe.json before Home (default: probe Wi‑Fi→www; bounce phone AP on fail).
+    [switch]$SkipWifiWwwProbeOnQuit,
     # Do not force Chromium UI dark mode (default: --force-dark-mode only; no WebContentsForceDark -
     # page auto-darkening can hide media seekbars / controls on pCloud and similar players).
     [switch]$NoDarkMode,
@@ -717,6 +719,65 @@ function Invoke-DirectHttpGet {
         $resp = $req.GetResponse()
         return @{ StatusCode = [int]$resp.StatusCode }
     } finally {
+        if ($null -ne $resp) {
+            try { $resp.Close() } catch {}
+            try { $resp.Dispose() } catch {}
+        }
+    }
+}
+
+function Invoke-DirectHttpPostJson {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [hashtable]$Headers = @{},
+        [string]$Body = '{}',
+        [int]$TimeoutSec = 20
+    )
+    $req = [System.Net.HttpWebRequest]::Create($Uri)
+    $req.Method = 'POST'
+    $req.Timeout = [Math]::Max(1, $TimeoutSec) * 1000
+    $req.ReadWriteTimeout = $req.Timeout
+    $req.AllowAutoRedirect = $true
+    $req.ContentType = 'application/json'
+    $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+    foreach ($key in $Headers.Keys) {
+        if ($key -ieq 'Authorization') {
+            $req.Headers['Authorization'] = [string]$Headers[$key]
+        } else {
+            $req.Headers[$key] = [string]$Headers[$key]
+        }
+    }
+    $payload = [Text.Encoding]::UTF8.GetBytes($Body)
+    $req.ContentLength = $payload.Length
+    $stream = $null
+    $resp = $null
+    try {
+        $stream = $req.GetRequestStream()
+        $stream.Write($payload, 0, $payload.Length)
+        $stream.Close()
+        $stream = $null
+        $resp = $req.GetResponse()
+        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+        $text = $reader.ReadToEnd()
+        $reader.Close()
+        return @{
+            StatusCode = [int]$resp.StatusCode
+            Body       = $text
+        }
+    } catch [System.Net.WebException] {
+        $exResp = $_.Exception.Response
+        if ($null -eq $exResp) { throw }
+        $reader = New-Object System.IO.StreamReader($exResp.GetResponseStream())
+        $text = $reader.ReadToEnd()
+        $reader.Close()
+        return @{
+            StatusCode = [int]$exResp.StatusCode
+            Body       = $text
+        }
+    } finally {
+        if ($null -ne $stream) {
+            try { $stream.Close() } catch {}
+        }
         if ($null -ne $resp) {
             try { $resp.Close() } catch {}
             try { $resp.Dispose() } catch {}
@@ -1570,6 +1631,115 @@ function Stop-CompanionRestLogSink {
         }
 }
 
+function Invoke-BouncePhoneLanAp {
+    $rebootPs1 = Join-Path $WindowsDir "lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1"
+    if (-not (Test-Path -LiteralPath $rebootPs1)) {
+        Write-Warning "[wifi-www] Missing $rebootPs1 - cannot bounce phone LAN AP"
+        return
+    }
+
+    $psArgs = [System.Collections.Generic.List[string]]::new()
+    [void]$psArgs.Add("-NoProfile")
+    [void]$psArgs.Add("-ExecutionPolicy")
+    [void]$psArgs.Add("Bypass")
+    [void]$psArgs.Add("-File")
+    [void]$psArgs.Add($rebootPs1)
+    [void]$psArgs.Add("-BouncePhoneLanAp")
+    [void]$psArgs.Add("-NoWaitEnter")
+
+    Write-Host "[wifi-www] Bouncing phone LAN AP (Wi‑Fi→www probe failed)..."
+    Write-Host "[wifi-www] > pwsh $($psArgs -join ' ')"
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & (Get-LoopSegmentsPwshExe) @psArgs
+        $code = 0
+        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prev
+        $global:LASTEXITCODE = 0
+    }
+    if ($code -eq 0) {
+        Write-Host "[wifi-www] Phone LAN AP bounce finished" -ForegroundColor Green
+    } else {
+        Write-Warning "[wifi-www] Phone LAN AP bounce exited $code (continuing with Home)"
+    }
+}
+
+function Invoke-PhoneWifiWwwProbeBeforeHome {
+    if ($SkipWifiWwwProbeOnQuit) {
+        Write-Host "[wifi-www] Skipping Wi‑Fi → www probe (-SkipWifiWwwProbeOnQuit)"
+        return
+    }
+
+    $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
+    if (-not (Test-Path -LiteralPath $lanConfigPath)) {
+        Write-Warning "[wifi-www] Missing lan_config.json - skip Wi‑Fi → www probe"
+        return
+    }
+
+    try {
+        $lan = Get-Content -LiteralPath $lanConfigPath -Raw | ConvertFrom-Json
+    } catch {
+        Write-Warning "[wifi-www] Could not read lan_config.json: $_"
+        return
+    }
+
+    $hostName = [string]$lan.phoneLanHost
+    if ([string]::IsNullOrWhiteSpace($hostName)) {
+        Write-Warning "[wifi-www] phoneLanHost empty - skip Wi‑Fi → www probe"
+        return
+    }
+
+    $port = 8765
+    if ($null -ne $lan.lanPort -and [int]$lan.lanPort -gt 0) {
+        $port = [int]$lan.lanPort
+    }
+
+    if (-not (Test-PhoneLanPageReachable -Quiet)) {
+        Write-Warning "[wifi-www] Phone LAN not reachable — skip Wi‑Fi → www probe (probe needs :$port before Home)"
+        return
+    }
+
+    if (-not (Get-Command Get-LoopSegmentsPhoneWebDavAuthHeader -ErrorAction SilentlyContinue)) {
+        Write-Warning "[wifi-www] Auth helper missing - skip Wi‑Fi → www probe"
+        return
+    }
+
+    $uri = "http://${hostName}:${port}/wifi_www_probe.json"
+    Write-Host "[wifi-www] POST $uri (on-device Wi‑Fi-only www check; cellular blocked)..."
+    try {
+        $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
+        $resp = Invoke-DirectHttpPostJson -Uri $uri -Headers $auth -Body '{}' -TimeoutSec 20
+        $json = $null
+        if (-not [string]::IsNullOrWhiteSpace([string]$resp.Body)) {
+            try { $json = ([string]$resp.Body) | ConvertFrom-Json } catch {}
+        }
+        $ok = $false
+        if ($null -ne $json -and $null -ne $json.ok) {
+            $ok = [bool]$json.ok
+        }
+        if ($ok) {
+            $ms = if ($null -ne $json.durationMs) { " ($($json.durationMs) ms)" } else { '' }
+            $code = if ($null -ne $json.statusCode) { " HTTP $($json.statusCode)" } else { '' }
+            Write-Host "[wifi-www] OK$ms$code" -ForegroundColor Green
+            return
+        }
+        $detail = if ($null -ne $json -and $json.error) {
+            [string]$json.error
+        } elseif ($null -ne $json -and $null -ne $json.statusCode) {
+            "HTTP $($json.statusCode)"
+        } else {
+            "HTTP $($resp.StatusCode)"
+        }
+        Write-Warning "[wifi-www] FAIL: $detail — bouncing phone LAN AP before Home"
+        Invoke-BouncePhoneLanAp
+    } catch {
+        Write-Warning "[wifi-www] Probe request failed: $($_.Exception.Message) — bouncing phone LAN AP before Home"
+        Invoke-BouncePhoneLanAp
+    }
+}
+
 function Invoke-GoIphoneHome {
     if ($SkipGoHome) {
         Write-Host "[home] Skipping iPhone Home press (-SkipGoHome)"
@@ -1623,7 +1793,7 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): close Chromium, drop Skybox rclone folder, quit Skybox if we started it, sync profile, clear local, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): close Chromium, drop Skybox rclone folder, quit Skybox if we started it, sync profile, clear local, Wi‑Fi→www probe, Home on phone..." -ForegroundColor Cyan
 
     try {
         Stop-ProfileChromium -ProfileDir $UserDataDir
@@ -1638,6 +1808,8 @@ function Invoke-CompanionGracefulFinish {
         }
         Clear-LocalProfileMinimal -ProfileDir $UserDataDir
         Stop-CompanionRestLogSink
+        # Probe while Loop Segments is still foreground (Home/background can kill :8765 if Keep Alive is off).
+        Invoke-PhoneWifiWwwProbeBeforeHome
         Invoke-GoIphoneHome
         Write-Host "[run] Companion finish complete." -ForegroundColor Green
         if ($script:HomeFailedNeedEnter) {

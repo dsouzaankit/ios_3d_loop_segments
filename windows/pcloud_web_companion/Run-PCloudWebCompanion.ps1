@@ -23,8 +23,8 @@
   On any error / non-zero exit, waits for a single Enter so a double-clicked console
   does not close immediately (child scripts use -NoWaitEnter / -NoWaitEnterOnFatal
   so you are not prompted twice).
-  While Chromium is running, Ctrl+C or closing the console (X) kills that Chromium profile
-  and syncs/clears the profile the same as a normal exit. On finish, USB Home runs only if
+  On finish, POSTs `/wifi_www_probe.json` (on-device Wi‑Fi-only www) before USB Home;
+  on fail, bounces the phone LAN AP (`-BouncePhoneLanAp`). USB Home runs only if
   Loop Segments is still the foreground app (skipped when already backgrounded or lock screen).
 
   Prefer: .\Run-PCloudWebCompanion.ps1 (PowerShell 7). Opening this .ps1 under 5.1 re-launches pwsh.
@@ -46,6 +46,12 @@
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -SkipLowThroughputGatewayReboot
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -SkipGoHome
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -SkipWifiWwwProbeOnQuit
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -NoDarkMode
@@ -77,6 +83,7 @@ param(
     [switch] $DetachChromium,
     [switch] $KeepLocalProfile,
     [switch] $SkipGoHome,
+    [switch] $SkipWifiWwwProbeOnQuit,
     [switch] $NoDarkMode,
     [switch] $SkipSkybox,
     [switch] $SkipVirtualDesktop,
@@ -126,8 +133,9 @@ try {
         SkipProfileSync                 = $SkipProfileSync
         DetachChromium                  = $DetachChromium
         KeepLocalProfile                = $KeepLocalProfile
-        SkipGoHome                      = $SkipGoHome
-        NoDarkMode                      = $NoDarkMode
+        SkipGoHome                       = $SkipGoHome
+        SkipWifiWwwProbeOnQuit           = $SkipWifiWwwProbeOnQuit
+        NoDarkMode                       = $NoDarkMode
         SkipSkybox                      = $SkipSkybox
         SkipVirtualDesktop              = $SkipVirtualDesktop
         SkipClashMdnsRoute              = $SkipClashMdnsRoute
