@@ -2684,19 +2684,19 @@ enum ExportLANServer {
             var el = document.getElementById("lan-wifi-www-probe-result");
             if (!el || !j) return;
             if (j.ok === true) {
-              el.textContent = "Wi‑Fi → www OK" + (j.durationMs != null ? (" (" + j.durationMs + " ms)") : "")
+              el.textContent = "Phone Wi‑Fi → www OK" + (j.durationMs != null ? (" (" + j.durationMs + " ms)") : "")
                 + (j.statusCode != null ? (" HTTP " + j.statusCode) : "");
             } else if (j.ok === false) {
-              el.textContent = "Wi‑Fi → www FAIL: " + (j.error || ("HTTP " + (j.statusCode || "?")));
+              el.textContent = "Phone Wi‑Fi → www FAIL: " + (j.error || ("HTTP " + (j.statusCode || "?")));
             } else {
-              el.textContent = "Wi‑Fi → www: not probed yet";
+              el.textContent = "Phone Wi‑Fi → www: not probed yet";
             }
           }
           function runWifiWwwProbe() {
             var btn = document.getElementById("lan-wifi-www-probe");
             var el = document.getElementById("lan-wifi-www-probe-result");
             if (btn) btn.disabled = true;
-            if (el) el.textContent = "Probing Wi‑Fi → www (cellular blocked)…";
+            if (el) el.textContent = "Probing Phone Wi‑Fi → www (cellular blocked)…";
             var auth = "Basic " + btoa("\(lanWebDAVUsername):\(lanWebDAVPassword)");
             return fetch("wifi_www_probe.json", {
               method: "POST",
@@ -2987,7 +2987,7 @@ enum ExportLANServer {
                 <p>
                   <button type="button" id="lan-refresh-status">Refresh status</button>
                   <button type="button" id="lan-refresh-lists">Refresh file list</button>
-                  <button type="button" id="lan-wifi-www-probe">Probe Wi‑Fi → www</button>
+                  <button type="button" id="lan-wifi-www-probe">Probe Phone Wi‑Fi → www</button>
                 </p>
                 <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
                 <h2>On phone (playback)</h2>
@@ -3053,7 +3053,7 @@ enum ExportLANServer {
             <p>
               <button type="button" id="lan-refresh-status">Refresh status</button>
               <button type="button" id="lan-refresh-lists">Refresh file list</button>
-              <button type="button" id="lan-wifi-www-probe">Probe Wi‑Fi → www</button>
+              <button type="button" id="lan-wifi-www-probe">Probe Phone Wi‑Fi → www</button>
             </p>
             <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
             """ : "")
