@@ -67,6 +67,9 @@
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -EnsureAltServer
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -SkipOpenLanTabOnStart
 #>
 [CmdletBinding()]
 param(
@@ -89,6 +92,7 @@ param(
     [switch] $SkipVirtualDesktop,
     [switch] $SkipClashMdnsRoute,
     [switch] $EnsureAltServer,
+    [switch] $SkipOpenLanTabOnStart,
     [string] $StartUrl = "https://my.pcloud.com"
 )
 
@@ -140,6 +144,7 @@ try {
         SkipVirtualDesktop              = $SkipVirtualDesktop
         SkipClashMdnsRoute              = $SkipClashMdnsRoute
         EnsureAltServer                 = $EnsureAltServer
+        SkipOpenLanTabOnStart           = $SkipOpenLanTabOnStart
         NoWaitEnterOnFatal              = $true
         StartUrl                        = $StartUrl
     }

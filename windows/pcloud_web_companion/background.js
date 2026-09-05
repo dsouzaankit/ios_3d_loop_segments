@@ -2596,40 +2596,51 @@ async function postLanExportQueue(items, { mode = "prepend", startFirst = true }
   );
 }
 
-async function openLanBrowse(cfg) {
+async function openLanBrowseNow(cfg) {
   const base = lanBaseUrl(cfg);
   const rootUrl = `${base}/`;
   try {
     const tabs = await chrome.tabs.query({});
     const sameHost = tabs.filter((t) => {
-      if (!t.url) return false;
-      try {
-        const u = new URL(t.url);
-        return `${u.protocol}//${u.host}` === base;
-      } catch {
-        return false;
+      for (const raw of [t.url, t.pendingUrl]) {
+        if (!raw) continue;
+        try {
+          const u = new URL(raw);
+          if (`${u.protocol}//${u.host}` === base) return true;
+        } catch {
+          /* ignore */
+        }
       }
+      return false;
     });
     const existing =
       sameHost.find((t) => {
-        try {
-          const p = new URL(t.url).pathname;
-          return p === "/" || p === "";
-        } catch {
-          return false;
+        for (const raw of [t.url, t.pendingUrl]) {
+          if (!raw) continue;
+          try {
+            const p = new URL(raw).pathname;
+            return p === "/" || p === "";
+          } catch {
+            /* ignore */
+          }
         }
+        return false;
       }) || sameHost[0];
 
     if (existing?.id != null) {
       // Prefer LAN monitor root; navigate away from /browse if that was the old target.
       // Never activate/focus — stay on my.pcloud.com during queue/download clicks.
       const needRoot = (() => {
-        try {
-          const p = new URL(existing.url).pathname;
-          return p !== "/" && p !== "";
-        } catch {
-          return true;
+        for (const raw of [existing.url, existing.pendingUrl]) {
+          if (!raw) continue;
+          try {
+            const p = new URL(raw).pathname;
+            return p !== "/" && p !== "";
+          } catch {
+            return true;
+          }
         }
+        return true;
       })();
 
       if (needRoot) {
@@ -2668,6 +2679,14 @@ async function openLanBrowse(cfg) {
       error: String(err && err.message ? err.message : err),
     });
   }
+}
+
+/** Serialize so parallel callers (export + flush) cannot each create a LAN tab. */
+let openLanBrowseChain = Promise.resolve();
+function openLanBrowse(cfg) {
+  const run = openLanBrowseChain.then(() => openLanBrowseNow(cfg));
+  openLanBrowseChain = run.catch(() => {});
+  return run;
 }
 
 async function recordCapture(entry) {
@@ -3260,6 +3279,7 @@ chrome.runtime.onInstalled.addListener(() => {
   void cancelAllInFlightPcloudDownloads("onInstalled");
   void schedulePendingLanFlush();
   void flushPendingLanExports();
+  // LAN monitor tab: run_chromium CLI 2nd URL only (SW/onInstalled used to race → 3 tabs).
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -3298,3 +3318,4 @@ void logServiceWorkerBoot("service_worker_eval");
 void cancelAllInFlightPcloudDownloads("service_worker_eval");
 void schedulePendingLanFlush();
 void flushPendingLanExports();
+// Startup LAN tab: run_chromium CLI only.

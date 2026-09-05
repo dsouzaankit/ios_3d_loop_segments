@@ -13,7 +13,7 @@ On a **single-file** pCloud download click:
 3. If `folderPath` is missing/garbled (e.g. search UI text like `"darina" in "/All Files/"`), runs **right-click → Open Location** on the file, then re-resolves; falls back to pCloud `search` API if needed
 4. Copies clipboard lines: download URL, filename, folder path, folder name (when known)
 5. If the phone LAN page is up: `POST /export_from_folder.json` with `{ folderPath, displayName, seekMs, id }` only — CDN download URLs are **not** posted to the phone. If `:8765` is down (companion still doing USB/LAN recover): **queue locally**, desktop notification **waiting for LAN**, retry ~every minute; after **~5 minutes** **deny** with a notification. When LAN returns, pending items are POSTed automatically.
-6. Opens `http://<phoneLanHost>:8765/` (LAN monitor root) in a **background** tab only after a successful POST (not while waiting for LAN)
+6. After a successful POST, reuses (or opens) `http://<phoneLanHost>:8765/` in a **background** tab without stealing focus from pCloud. **At companion launch**, that LAN URL is already opened as Chromium’s **2nd CLI tab** (pCloud stays focused) — not by the extension.
 
 On **multi-select Download** (pCloud builds a **zip archive**):
 
@@ -96,6 +96,7 @@ cd <repo>\windows
 | `-SkipVirtualDesktop` | Do not check/start Virtual Desktop Streamer (default: start if idle, hide to tray) |
 | `-SkipClashMdnsRoute` | Do not try to drop Clash/mihomo TUN multicast when Clash is running |
 | `-EnsureAltServer` | Opt-in: print/start **AltServer** for AltStore ~7-day refresh (default **skips** — SideStore + LocalDevVPN) |
+| `-SkipOpenLanTabOnStart` | Do not open `http://<phoneLanHost>:8765/` as a 2nd background tab at Chromium launch (default opens it; focus stays on pCloud) |
 | `-StartUrl "..."` | Override start page (default `https://my.pcloud.com`) |
 
 Each launch:
@@ -105,7 +106,7 @@ Each launch:
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive), then **pins it on the toolbar** and sets **Ctrl+E** + **Ctrl+Shift+H** in the profile `Preferences` (Python JSON, not PowerShell `ConvertTo-Json`)
 - Starts a local REST log sink
 - **Gateway Wi‑Fi reboot (when needed):** compares the PC’s IPv4 default gateway to `phoneLanHost` (app LAN page). If they are **not** on the same subnet, informs you, waits for **tcp/23**, **reboots Wi‑Fi on the current gateway**, then **polls up to ~20s** for a new PC LAN IP/gateway (or tcp/23 back after a drop — Windows can keep a stale lease while the AP is down; Clash TUN often changes the default route sooner). Then **re-checks** — up to **3** rounds. A failed telnet (host unreachable while the AP is still restarting) waits and retries once, then continues to the next round instead of aborting. Then fails and **waits for Enter** (`-SkipGatewayReboot` to skip). This still runs **before** Chromium so pCloud is not dropped mid-browse. Must run from `windows\lan\` (needs `windows\lib\`).
-- **Starts Chromium early** (after gateway check + profile sync) so you can use my.pcloud.com while USB/LAN recover/rclone continue in the companion console. If the app LAN page (`:8765`) is down, the extension **queues** intercepted downloads locally (desktop notification) and retries about once a minute; after **~5 minutes** it **denies** them with another notification. When LAN comes up, queued exports are POSTed automatically. **Click a toast** to bring the companion PowerShell window to the front.
+- **Starts Chromium early** (after gateway check + profile sync) so you can use my.pcloud.com while USB/LAN recover/rclone continue in the companion console. Passes **pCloud then** `http://<phoneLanHost>:8765/` as Chromium start URLs so the LAN monitor is a **2nd tab** with **focus on pCloud** (`-SkipOpenLanTabOnStart` to skip). Extension does **not** open a startup LAN tab (that raced and duplicated tabs). If `:8765` is down, the extension **queues** intercepted downloads locally (desktop notification) and retries about once a minute; after **~5 minutes** it **denies** them with another notification. When LAN comes up, queued exports are POSTed automatically. **Click a toast** to bring the companion PowerShell window to the front.
 - **SKYBOX VR desktop:** after Chromium is up, companion dotsources repo-root **`Skybox_vr_pc`** (`Start-SkyboxVrPcProcess` / `Map-SkyboxVrPcShare` / `Unmap-SkyboxVrPcShare`) — starts SKYBOX if idle, hides to tray, and maps the AirScreen share from that submodule’s `skybox_vr_pc.config.json` (default **`P:\p_cld_media`** as `p_cld_media`). After rclone finalizes a drive letter it also maps phone **`pcld_ios_media`** (does not change `3d_fullsbs_trans`). Hide-to-tray is a short first-show pass (Skybox recreates its window a few times); it **does not keep hiding** after the window has stayed in the tray, so a manual restore from the notify icon sticks. Missing install only warns. `-SkipSkybox` to skip. Companion quit/abort **unmaps both shares while Skybox is still up**, then **quits SKYBOX only if this session started it**.
 - **Virtual Desktop:** after Skybox, **starts Virtual Desktop Streamer if it is idle** (starts **Virtual Desktop Service** if that service is stopped; does not bounce a running service or quit a running Streamer) and **hides the Streamer window to the tray**. Retries ~30s as the window appears. Missing install only warns. `-SkipVirtualDesktop` to skip. Companion finish does **not** quit Streamer.
 - **Clash / mihomo:** optional UAC for `env_setup\altserver_refresh\VpnMulticast\Remove-VpnMulticastRoute.ps1` so TUN does not steal `.local` mDNS. Phone-IP (`pcapd`) and `:8765` (numeric `phoneLanHost` + local sink) do not need it. `-SkipClashMdnsRoute` to skip. Details: [`../../env_setup/Clash/README.md`](../../env_setup/Clash/README.md) (profiles) and [`../../env_setup/altserver_refresh/README.md`](../../env_setup/altserver_refresh/README.md) (drop).
@@ -153,7 +154,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | File | Role |
 |------|------|
 | `manifest.json` | MV3 permissions; **Ctrl+E** → open folder in Explorer; **Ctrl+Shift+H** → write hybrid `media_files.txt` |
-| `background.js` | Download intercept, REST POST, LAN root `/` tab, Explorer jump, hybrid media list write |
+| `background.js` | Download intercept, REST POST, reuse LAN `/` tab after export (no startup open), Explorer jump, hybrid media list write |
 | `pcloud_fileid_hook_main.js` | MAIN-world fetch/XHR `fileid`s; Shift+right-click bypass of pCloud’s overlay (`pointerdown` / `contextmenu`) |
 | `pcloud_folder_tracker.js` | Isolated-world `folder=` / tree node for Explorer jump; `collectSelectedVideoFileIds()` + **Ctrl+Shift+H** page hook |
 | `offscreen.html` / `offscreen.js` | Clipboard write |

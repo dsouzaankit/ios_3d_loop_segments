@@ -35,6 +35,8 @@ param(
     [switch]$SkipClashMdnsRoute,
     # Opt-in: print/start AltServer for AltStore ~7-day refresh. Default skips (SideStore path).
     [switch]$EnsureAltServer,
+    # Do not open http://phoneLanHost:lanPort/ as a 2nd Chromium tab on launch (default: open, leave focus on pCloud).
+    [switch]$SkipOpenLanTabOnStart,
     [string]$StartUrl = "https://my.pcloud.com"
 )
 
@@ -2044,14 +2046,40 @@ if ($proxyServer) {
     Write-Host "[run] No HTTP proxy detected; Chromium uses direct connections + bypass list"
 }
 Write-Host "[run] Proxy bypass: $proxyBypass"
+# First URL stays focused; second is a background tab (Chromium activates the first).
 [void]$chromeArgList.Add("`"$StartUrl`"")
+$lanStartUrl = $null
+if (-not $SkipOpenLanTabOnStart) {
+    $lanHostForTab = Get-LanConfigPhoneHost
+    if (-not [string]::IsNullOrWhiteSpace($lanHostForTab)) {
+        $lanPortForTab = 8765
+        $lanCfgPath = Join-Path $ExtensionDir "lan_config.json"
+        if (Test-Path -LiteralPath $lanCfgPath) {
+            try {
+                $lanCfgObj = Get-Content -LiteralPath $lanCfgPath -Raw | ConvertFrom-Json
+                if ($null -ne $lanCfgObj.lanPort -and [int]$lanCfgObj.lanPort -gt 0) {
+                    $lanPortForTab = [int]$lanCfgObj.lanPort
+                }
+            } catch {}
+        }
+        $lanStartUrl = "http://${lanHostForTab}:${lanPortForTab}/"
+        [void]$chromeArgList.Add("`"$lanStartUrl`"")
+    }
+}
 $ChromeArgString = $chromeArgList -join " "
 
 Write-Host "[run] Launching Chromium with extension loaded from:"
 Write-Host "      $ChromeExtension"
 Write-Host "[run] Profile (local): $ChromeUserData"
 Write-Host "[run] Profile (repo zip): $RepoProfileZip"
-Write-Host "[run] URL: $StartUrl"
+Write-Host "[run] URL (focus): $StartUrl"
+if ($lanStartUrl) {
+    Write-Host "[run] LAN tab (background, 2nd): $lanStartUrl"
+} elseif ($SkipOpenLanTabOnStart) {
+    Write-Host "[run] Skipping LAN tab on start (-SkipOpenLanTabOnStart)"
+} else {
+    Write-Host "[run] No phoneLanHost in lan_config.json - LAN tab not opened at launch"
+}
 Write-Host "[run] REST disk log: $(Join-Path $ScriptDir 'rest.log')"
 Write-Host "[run] In-browser logs: click the extension icon"
 Write-Host "[run] Args: $ChromeArgString"
