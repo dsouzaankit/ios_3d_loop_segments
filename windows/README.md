@@ -52,7 +52,7 @@ cd <repo>\windows
 .\rclone\Mount-LoopSegmentsRclone.ps1             # mount L: (optional; WinFsp)
 ```
 
-If Loop Segments won’t open after ~7 days: **SideStore** (LocalDevVPN → Refresh) or start **AltServer** → USB + unlock → AltStore **Refresh All** (works even when phone and PC are on different gateways) → **Settings → General → VPN & Device Management → DEVELOPER APP → iPhone Developer: \<email\> → Trust** (entry may appear only after a failed open) → open app once → retry.
+If Loop Segments won’t open after ~7 days: **SideStore** (LocalDevVPN → Refresh; optional daily/weekly **Shortcuts → Refresh All Apps** Automation — caveats in [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md#sidestore-shortcuts-auto-refresh-optional)) or start **AltServer** → USB + unlock → AltStore **Refresh All** (works even when phone and PC are on different gateways) → **Settings → General → VPN & Device Management → DEVELOPER APP → iPhone Developer: \<email\> → Trust** (entry may appear only after a failed open) → open app once → retry.
 
 **AltStore / SideStore “data isn’t in the correct format”:** often the IPA is still syncing in iCloud (partial file). Wait for iCloud to finish, then **retry My Apps → + several times**. **SideStore stable** hit the same error here; **SideStore nightly** worked. If it persists after a fully local file on AltStore, see [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) (iTunes authorize / anisette). SideStore: change anisette / re-pair with iloader.
 

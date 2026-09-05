@@ -43,7 +43,9 @@ After **SideStore**, **AltStore**, or Sideloadly installs the app, iOS blocks it
 
 **Automatic refresh does not remove the first-time trust step.** It only avoids **weekly manual reinstall** on the PC — not this one-time (or occasional) phone setting.
 
-**iOS Shortcut?** **No.** Shortcuts cannot tap **Trust** or **Allow & Restart** for you — Apple blocks that on purpose. A shortcut might open **Settings** (prefs URLs are unreliable and change per iOS version), but you still must tap trust yourself. **TestFlight** and **MDM/supervised** work devices are different; sideloaded AltStore apps are not.
+**iOS Shortcut for Trust?** **No.** Shortcuts cannot tap **Trust** or **Allow & Restart** for you — Apple blocks that on purpose. A shortcut might open **Settings** (prefs URLs are unreliable and change per iOS version), but you still must tap trust yourself. **TestFlight** and **MDM/supervised** work devices are different; sideloaded AltStore/SideStore apps are not.
+
+**iOS Shortcut for SideStore refresh?** **Yes (optional)** — SideStore exposes **Refresh All Apps** to Shortcuts; you can schedule a **Personal Automation**. That is **not** the same as Trust (above). Official docs still document **tap 7 DAYS** + LocalDevVPN; Shortcuts automation is a community/supported app action, not the primary install guide. Setup + caveats: [SideStore Shortcuts auto-refresh](#sidestore-shortcuts-auto-refresh-optional).
 
 | When | What to trust |
 |------|----------------|
@@ -145,9 +147,28 @@ Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, s
 2. LocalDevVPN → **Connect**.
 3. **SideStore → My Apps → +** → pick the IPA (or Files → Share → SideStore).
 4. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
-5. Refresh: tap the **7 DAYS** counter (LocalDevVPN still on). **No PC** for weekly refresh or after expiry — PC only if the pairing file dies (iloader).
+5. Refresh: tap the **7 DAYS** counter (LocalDevVPN still on). **No PC** for weekly refresh or after expiry — PC only if the pairing file dies (iloader). Optional: schedule Shortcuts automation below instead of remembering the tap.
 
 **incorrect data format on SideStore:** same two causes as AltStore — (1) partial iCloud IPA, (2) bad anisette. Fix IPA locality first; then SideStore Settings → change **Anisette** server / sign out+in / re-place pairing with iloader. If stable still fails, use **nightly**.
+
+#### SideStore Shortcuts auto-refresh (optional)
+
+SideStore registers a Shortcuts action (**Refresh All Apps**). Community setup (also discussed on SideStore GitHub):
+
+1. **Shortcuts** → new shortcut → **Apps → SideStore → Refresh All Apps** (optional: connect **LocalDevVPN** / WireGuard first, **Wait** 10–20s, then refresh; some people run refresh twice or disconnect VPN in a second automation a few minutes later).
+2. Run the shortcut once manually; grant **Always Allow** on every permission prompt.
+3. **Automation** → **Personal Automation** → e.g. **Time of Day** (daily or 2×/week) or **Is Charging** → **Run Shortcut** → pick that shortcut → **Run Immediately** (Ask Before Running **off**).
+
+Official SideStore docs still say: Wi‑Fi + LocalDevVPN on, then tap **7 DAYS** / refresh in My Apps ([install](https://docs.sidestore.io/docs/installation/install), [FAQ](https://docs.sidestore.io/docs/faq) — background refresh is mentioned; Shortcuts scheduling is not the primary guide).
+
+| Caveat | Detail |
+|--------|--------|
+| **Wi‑Fi + LocalDevVPN** | Required for refresh. Cellular-only fails. VPN on-demand helps if WireGuard/LocalDevVPN drops. |
+| **Not 100% reliable** | Timeouts, “file doesn’t exist” (bad/missing pairing — fix with [iloader pairing](https://docs.sidestore.io/docs/advanced/pairing-file)), VPN detection races in Shortcuts. |
+| **Locked phone** | Often fails on newer iOS when the screen is locked / no UI context; unlocked is more reliable. |
+| **Trust still manual** | Automation does **not** tap Trust / Allow & Restart ([above](#trust-the-developer-on-iphone-required-once-not-weekly)). |
+| **First-run permissions** | Without **Always Allow**, Automation stops for prompts. |
+| **Still check weekly** | If the shortcut fails for a few days, certs expire — open SideStore and refresh manually. |
 
 ---
 
@@ -490,7 +511,7 @@ Brief steps: install iTunes → USB **Trust This Computer** → [Sideloadly](htt
 
 ## Refresh the IPA later
 
-Free Apple ID certificates last **~7 days**. Prefer **SideStore** (LocalDevVPN + Refresh) or **[§3 Automate weekly refresh](#3-automate-weekly-refresh-altserver--altstore)** (AltStore) before apps stop opening.
+Free Apple ID certificates last **~7 days**. Prefer **SideStore** (LocalDevVPN + Refresh, or optional [Shortcuts Automation](#sidestore-shortcuts-auto-refresh-optional)) or **[§3 Automate weekly refresh](#3-automate-weekly-refresh-altserver--altstore)** (AltStore) before apps stop opening.
 
 ### If you don’t refresh in time
 
@@ -504,7 +525,7 @@ Free Apple ID certificates last **~7 days**. Prefer **SideStore** (LocalDevVPN +
 
 | Goal | What to do |
 |------|------------|
-| **Extend the same install** | **SideStore** Refresh (LocalDevVPN) or **AltStore → Refresh All** ([§3](#3-automate-weekly-refresh-altserver--altstore)) |
+| **Extend the same install** | **SideStore** Refresh (LocalDevVPN; optional [Shortcuts Automation](#sidestore-shortcuts-auto-refresh-optional)) or **AltStore → Refresh All** ([§3](#3-automate-weekly-refresh-altserver--altstore)) |
 | **New build** | Repo root: **`.\deploy.ps1`** (or Actions → **ios-build** → **Run workflow**) → wait for iCloud sync → reinstall in SideStore / AltStore |
 
 **Local IPA path (this repo on Windows):**
