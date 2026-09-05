@@ -273,7 +273,7 @@ function Wait-RouterTelnetReady {
         }
         if (([datetime]::UtcNow - $lastLog).TotalSeconds -ge 15) {
             $lastLog = [datetime]::UtcNow
-            $left = if ($unlimited) { '∞' } else { [int]($deadline - [datetime]::UtcNow).TotalSeconds }
+            $left = if ($unlimited) { '∞' } else { [Math]::Max(0, [int]($deadline - [datetime]::UtcNow).TotalSeconds) }
             Write-Host ('[gateway] Still no tcp/23 on {0} ({1}s left)' -f $Ip, $left)
         }
     }
@@ -460,40 +460,98 @@ function Invoke-RouterWifiRebootScript {
         [int] $PollSec = 4,
         [switch] $AllowFail
     )
-    if (-not [string]::IsNullOrWhiteSpace($RouterIp)) {
-        [void](Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec)
+
+    function Get-NativeExitCode {
+        if ($null -eq $LASTEXITCODE) { return -1 }
+        return [int]$LASTEXITCODE
     }
 
-    $runOnce = {
+    function Invoke-RebootPythonOnce {
         Write-Host ('[gateway] Running: {0}' -f $ScriptPath) -ForegroundColor Cyan
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
             $allArgs = @($Runtime.Prefix) + @($ScriptPath)
-            & $Runtime.Exe @allArgs
-            $code = 0
-            if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+            & $Runtime.Exe @allArgs | Out-Host
+            return (Get-NativeExitCode)
         } finally {
             $ErrorActionPreference = $prev
         }
-        $code
-    }.GetNewClosure()
-
-    $code = & $runOnce
-    if ($code -ne 0 -and -not [string]::IsNullOrWhiteSpace($RouterIp)) {
-        Write-Warning ('[gateway] Telnet reboot failed (exit {0}) — waiting for tcp/23 then retrying once...' -f $code)
-        [void](Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec)
-        $code = & $runOnce
     }
-    if ($code -ne 0) {
-        $msg = ('[gateway] Reboot script failed (exit {0}): {1}' -f $code, $ScriptPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($RouterIp)) {
+        [void](Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec)
+    }
+
+    $exitCode = Invoke-RebootPythonOnce
+    if ($exitCode -eq 0) {
+        return $true
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RouterIp)) {
+        $msg = ('[gateway] Reboot script failed (exit {0}): {1}' -f $exitCode, $ScriptPath)
         if ($AllowFail) {
             Write-Warning $msg
             return $false
         }
         throw $msg
     }
-    return $true
+
+    # WifiRestart often drops the telnet session mid-script (non-zero exit) even when the
+    # command was accepted. Wait for tcp/23; if it dropped and returned, do not reboot twice.
+    Write-Warning ('[gateway] Telnet reboot exited {0} — checking whether Wi‑Fi restart already dropped the AP...' -f $exitCode)
+    $sawDrop = $false
+    $dropDeadline = [datetime]::UtcNow.AddSeconds(15)
+    while ([datetime]::UtcNow -lt $dropDeadline) {
+        if (-not (Test-RouterTcp23 -Ip $RouterIp)) {
+            $sawDrop = $true
+            break
+        }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $sawDrop -and -not (Test-RouterTcp23 -Ip $RouterIp)) {
+        $sawDrop = $true
+    }
+
+    $ready = Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec
+    if ($ready -and $sawDrop) {
+        Write-Host ('[gateway] tcp/23 {0} is back after a drop — treating Wi‑Fi restart as issued (skip second reboot).' -f $RouterIp) -ForegroundColor Green
+        return $true
+    }
+
+    if (-not $ready) {
+        Write-Warning ('[gateway] tcp/23 {0} still down after {1}s — retrying reboot script once...' -f $RouterIp, $TelnetWaitSec)
+    } else {
+        Write-Warning ('[gateway] tcp/23 {0} stayed up — first attempt likely did not restart Wi‑Fi; retrying once...' -f $RouterIp)
+    }
+
+    $exitCode = Invoke-RebootPythonOnce
+    if ($exitCode -eq 0) {
+        return $true
+    }
+
+    # Second attempt may also drop the session after a successful WifiRestart.
+    $sawDrop2 = $false
+    $dropDeadline2 = [datetime]::UtcNow.AddSeconds(15)
+    while ([datetime]::UtcNow -lt $dropDeadline2) {
+        if (-not (Test-RouterTcp23 -Ip $RouterIp)) {
+            $sawDrop2 = $true
+            break
+        }
+        Start-Sleep -Seconds 2
+    }
+    $ready2 = Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec
+    if ($ready2 -and ($sawDrop2 -or $sawDrop)) {
+        Write-Host ('[gateway] tcp/23 {0} recovered after retry — treating Wi‑Fi restart as issued.' -f $RouterIp) -ForegroundColor Green
+        return $true
+    }
+
+    $msg = ('[gateway] Reboot script failed (exit {0}): {1}' -f $exitCode, $ScriptPath)
+    if ($AllowFail) {
+        Write-Warning $msg
+        return $false
+    }
+    throw $msg
 }
 
 try {
@@ -524,7 +582,7 @@ if ($BouncePhoneLanAp) {
     $allRouters = @(Get-KnownRouterRebootTargets -ScriptsRoot $RebootScriptsRoot)
     if ($allRouters.Count -eq 0) {
         Write-Warning ("[gateway] No router reboot scripts found under {0}" -f $RebootScriptsRoot)
-        Exit-WithEnter 0
+        Exit-WithEnter 1
     }
 
     $sameSubnet = @()
@@ -536,7 +594,7 @@ if ($BouncePhoneLanAp) {
 
     if ($sameSubnet.Count -eq 0) {
         Write-Warning ("[gateway] No known ROUTER_IP shares the phone LAN page subnet ({0}/{1}). Skip bounce." -f $phoneHost, $prefix)
-        Exit-WithEnter 0
+        Exit-WithEnter 1
     }
 
     $targets = @()
@@ -557,6 +615,7 @@ if ($BouncePhoneLanAp) {
     Write-Host ('[gateway] Python: {0}' -f $runtime.Display)
     $settle = [Math]::Max(1, $SettleSecBetweenRouters)
     $index = 0
+    $failCount = 0
     $targetList = @($targets)
     foreach ($router in $targetList) {
         $index++
@@ -564,10 +623,16 @@ if ($BouncePhoneLanAp) {
         Write-Host ('[gateway] ({0}/{1}) Rebooting phone-LAN AP {2} ({3})...' -f `
             $index, $targetList.Count, $router.Ip, $router.Model) -ForegroundColor Cyan
         try {
-            Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime `
-                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot
-            Write-Host ('[gateway] Reboot finished for {0}.' -f $router.Ip) -ForegroundColor Green
+            $ok = Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime `
+                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot -AllowFail
+            if ($ok) {
+                Write-Host ('[gateway] Reboot finished for {0}.' -f $router.Ip) -ForegroundColor Green
+            } else {
+                $failCount++
+                Write-Warning ("[gateway] Reboot did not confirm for {0}." -f $router.Ip)
+            }
         } catch {
+            $failCount++
             Write-Warning ("[gateway] Reboot failed for {0}: {1}" -f $router.Ip, $_.Exception.Message)
         }
         if ($index -lt $targetList.Count) {
@@ -576,6 +641,10 @@ if ($BouncePhoneLanAp) {
         }
     }
 
+    if ($failCount -gt 0) {
+        Write-Warning ('[gateway] Phone LAN AP bounce finished with {0} failure(s).' -f $failCount)
+        Exit-WithEnter 1
+    }
     Write-Host '[gateway] Phone LAN AP bounce pass complete.' -ForegroundColor Green
     Exit-WithEnter 0
 }
