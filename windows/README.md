@@ -32,7 +32,10 @@ cd <repo>\windows
 
 # 2) Once (optional, AltStore only): AltServer at logon — ~7-day sideload refresh
 .\sideload\Register-AltServerAtLogon.ps1
-# SideStore users: skip this; refresh with LocalDevVPN instead.
+# SideStore: do not register. If it (or UsbWatch) was already registered, unregister:
+#   .\sideload\Register-AltServerAtLogon.ps1 -Unregister
+#   pwsh -File ..\env_setup\altserver_refresh\usb\Register-IphoneUsbAltServer.ps1 -Unregister
+# Why: SideStore refreshes on Wi‑Fi with LocalDevVPN; no AltServer / USB watch.
 
 # 3) Day-to-day: pCloud companion (gateway check → LAN status; USB-foregrounds app unless -SkipUsbLaunch)
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
@@ -265,7 +268,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish if it is still foreground (skip when backgrounded or lock screen; DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); no USB → skip. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` and companion pauses itself after a Home fail |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |
 | `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
-| `sideload\Register-AltServerAtLogon.ps1` | **AltServer** at logon ([BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md) §3). Wi‑Fi refresh often fails on Win11 — **USB + AltStore Refresh All** weekly is the reliable path |
+| `sideload\Register-AltServerAtLogon.ps1` | **AltStore only:** AltServer at logon. **SideStore:** skip or `-Unregister` (LocalDevVPN Wi‑Fi refresh; no PC). UsbWatch is a **different** task — unregister with `env_setup\altserver_refresh\usb\Register-IphoneUsbAltServer.ps1 -Unregister` |
 | `sideload\Register-SideloadlyAutoRefresh.ps1` | **Fallback only** — Sideloadly daemon if AltStore fails |
 | `archive/` | Legacy `net use` / port-80 proxy, `Sync-FromPhoneLAN.ps1`, optional HTTP **`Copy-ToLoopSegmentsPhoneLAN.ps1`** (no **L:** mount) |
 

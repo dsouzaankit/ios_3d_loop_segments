@@ -16,6 +16,11 @@
 
 .EXAMPLE
   .\Register-AltServerAtLogon.ps1
+
+.EXAMPLE
+  .\Register-AltServerAtLogon.ps1 -Unregister
+  # SideStore: logon tray not needed. UsbWatch is a separate task
+  # (env_setup\altserver_refresh\usb\Register-IphoneUsbAltServer.ps1 -Unregister).
 #>
 [CmdletBinding()]
 param(
