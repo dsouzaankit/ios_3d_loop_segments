@@ -275,10 +275,11 @@ try {
             Write-Host '[lan-recover] Phone and PC/AltServer are on the same subnet.'
             $usbSubnetOk = $true
         } elseif ($altCode -eq 2 -or $altCode -eq 4) {
-            Write-Host ('[lan-recover] USB/pcapd could not give a phone LAN IP (exit {0}) — falling back to LAN-page wait + off-subnet router reboots.' -f $altCode)
+            Write-Host ('[lan-recover] USB/pcapd could not finish AltServer subnet check (exit {0}) — falling back to LAN-page wait + off-subnet router reboots.' -f $altCode)
         } else {
-            Write-Warning ("[lan-recover] AltServer subnet refresh failed (exit {0})" -f $altCode)
-            Exit-WithEnter $altCode
+            # Exit 1 = rounds exhausted / hard subnet fail. Still try :8765 wait + off-subnet reboot
+            # rather than aborting companion mount recover (PC may briefly have no usable LAN IPv4).
+            Write-Warning ("[lan-recover] AltServer subnet refresh failed (exit {0}) — falling back to LAN-page wait + off-subnet router reboots." -f $altCode)
         }
     }
 
