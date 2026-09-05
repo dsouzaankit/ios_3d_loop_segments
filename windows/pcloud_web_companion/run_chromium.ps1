@@ -707,7 +707,8 @@ function ConvertTo-ChromeProxyServerArg {
 function Invoke-DirectHttpGet {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
-        [int]$TimeoutSec = 3
+        [int]$TimeoutSec = 3,
+        [switch]$IncludeBody
     )
     $req = [System.Net.HttpWebRequest]::Create($Uri)
     $req.Method = 'GET'
@@ -719,7 +720,16 @@ function Invoke-DirectHttpGet {
     $resp = $null
     try {
         $resp = $req.GetResponse()
-        return @{ StatusCode = [int]$resp.StatusCode }
+        $body = $null
+        if ($IncludeBody) {
+            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+            $body = $reader.ReadToEnd()
+            $reader.Close()
+        }
+        return @{
+            StatusCode = [int]$resp.StatusCode
+            Body       = $body
+        }
     } finally {
         if ($null -ne $resp) {
             try { $resp.Close() } catch {}
@@ -1668,6 +1678,52 @@ function Invoke-BouncePhoneLanAp {
     }
 }
 
+function Get-PhoneExportBusyReason {
+    param(
+        [Parameter(Mandatory = $true)][string]$HostName,
+        [int]$Port = 8765
+    )
+    $uri = "http://${HostName}:${Port}/status.json"
+    try {
+        $resp = Invoke-DirectHttpGet -Uri $uri -TimeoutSec 5 -IncludeBody
+        if ($resp.StatusCode -lt 200 -or $resp.StatusCode -ge 300) { return $null }
+        if ([string]::IsNullOrWhiteSpace([string]$resp.Body)) { return $null }
+        $status = ([string]$resp.Body) | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+
+    $reasons = [System.Collections.Generic.List[string]]::new()
+    $phase = $null
+    if ($null -ne $status.exportSource -and $null -ne $status.exportSource.phase) {
+        $phase = [string]$status.exportSource.phase
+    }
+    if ($phase -eq 'running') {
+        $name = ''
+        if ($null -ne $status.exportSource.displayName) {
+            $name = [string]$status.exportSource.displayName
+        }
+        if ($name) {
+            [void]$reasons.Add("export running ($name)")
+        } else {
+            [void]$reasons.Add('export running')
+        }
+    } elseif ($null -ne $status.lanLive) {
+        [void]$reasons.Add('export active (lanLive)')
+    }
+
+    $pendingCount = 0
+    if ($null -ne $status.pendingExportQueue -and $null -ne $status.pendingExportQueue.count) {
+        $pendingCount = [int]$status.pendingExportQueue.count
+    }
+    if ($pendingCount -gt 0) {
+        [void]$reasons.Add("pending queue ($pendingCount)")
+    }
+
+    if ($reasons.Count -eq 0) { return $null }
+    return ($reasons -join '; ')
+}
+
 function Invoke-PhoneWifiWwwProbeBeforeHome {
     if ($SkipWifiWwwProbeOnQuit) {
         Write-Host "[wifi-www] Skipping Wi‑Fi → www probe (-SkipWifiWwwProbeOnQuit)"
@@ -1734,9 +1790,19 @@ function Invoke-PhoneWifiWwwProbeBeforeHome {
         } else {
             "HTTP $($resp.StatusCode)"
         }
+        $busy = Get-PhoneExportBusyReason -HostName $hostName -Port $port
+        if ($busy) {
+            Write-Warning "[wifi-www] FAIL: $detail — skip AP bounce (export in progress: $busy)"
+            return
+        }
         Write-Warning "[wifi-www] FAIL: $detail — bouncing phone LAN AP before Home"
         Invoke-BouncePhoneLanAp
     } catch {
+        $busy = Get-PhoneExportBusyReason -HostName $hostName -Port $port
+        if ($busy) {
+            Write-Warning "[wifi-www] Probe request failed: $($_.Exception.Message) — skip AP bounce (export in progress: $busy)"
+            return
+        }
         Write-Warning "[wifi-www] Probe request failed: $($_.Exception.Message) — bouncing phone LAN AP before Home"
         Invoke-BouncePhoneLanAp
     }
