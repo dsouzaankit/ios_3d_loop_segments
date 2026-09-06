@@ -4,7 +4,7 @@
   Read the USB-connected iPhone Wi-Fi IPv4 (pcapd) and save phoneLanHost.
 
 .DESCRIPTION
-  Uses env_setup\altserver_refresh\lan\Get-IphoneLanIpv4.py over USB. Does not
+  Uses env_setup\lan\Get-IphoneLanIpv4.py over USB. Does not
   TCP-scan the LAN. Phone + PC same-subnet recovery:
   .\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1
 

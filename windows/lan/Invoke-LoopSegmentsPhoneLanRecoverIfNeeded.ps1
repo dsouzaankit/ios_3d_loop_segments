@@ -2,10 +2,10 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Bring the phone onto the PC/AltServer subnet, then wait for the Loop Segments LAN page.
+  Bring the phone onto the PC LAN subnet, then wait for the Loop Segments LAN page.
 
 .DESCRIPTION
-  Prefers USB/pcapd via env_setup\altserver_refresh\lan\Invoke-AltServerPhoneSubnetIfNeeded.ps1
+  Prefers USB/pcapd via env_setup\lan\Invoke-PhonePcSubnetIfNeeded.ps1
   (pymobiledevice3 phone Wi-Fi IP vs this PC's LAN). If the phone is already on a PC subnet,
   waits for http://phoneLanHost:8765/ and does not reboot routers just because the app is down.
 
@@ -231,55 +231,46 @@ try {
 
     $usbSubnetOk = $false
     $repoRoot = Split-Path -Parent $WindowsDir
-    $altRefreshDir = $null
+    $altSubnetPs1 = ''
     foreach ($candidate in @(
-            (Join-Path $repoRoot 'env_setup\altserver_refresh')
-            (Join-Path $repoRoot 'env_setup\altserver_refresh_scripts')
-            (Join-Path $repoRoot 'env_setup\altserver_refresh_script')
-            'P:\all_scripts\iOS apps\env_setup\altserver_refresh'
-            'P:\all_scripts\iOS apps\env_setup\altserver_refresh_scripts'
-            'P:\all_scripts\iOS apps\env_setup\altserver_refresh_script'
+            (Join-Path $repoRoot 'env_setup\lan\Invoke-PhonePcSubnetIfNeeded.ps1')
+            'P:\all_scripts\iOS apps\env_setup\lan\Invoke-PhonePcSubnetIfNeeded.ps1'
         )) {
         if (Test-Path -LiteralPath $candidate) {
-            $altRefreshDir = $candidate
+            $altSubnetPs1 = $candidate
             break
         }
     }
-    $altSubnetPs1 = if ($altRefreshDir) {
-        Join-Path $altRefreshDir 'lan\Invoke-AltServerPhoneSubnetIfNeeded.ps1'
-    } else {
-        ''
-    }
     if (Test-Path -LiteralPath $altSubnetPs1) {
-        Write-Host '[lan-recover] Using USB/pcapd AltServer subnet check (pymobiledevice3)...'
+        Write-Host '[lan-recover] Using USB/pcapd phone-PC subnet check (pymobiledevice3)...'
         Write-Host ("[lan-recover] > {0} -NoWaitEnter" -f $altSubnetPs1)
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Stop'
         $altCode = 0
         try {
-            # Same pwsh process so [altserver-subnet] lines show immediately (child pwsh from P: was silent).
+            # Same pwsh process so [phone-pc-subnet] lines show immediately (child pwsh from P: was silent).
             & $altSubnetPs1 -NoWaitEnter -RebootScriptsRoot $RebootScriptsRoot
             if ($null -ne $LASTEXITCODE) { $altCode = [int]$LASTEXITCODE }
         } catch {
             $msg = [string]$_.Exception.Message
-            if ($msg -match 'ALTSERVER_SUBNET_EXIT:(\d+)') {
+            if ($msg -match 'PHONE_PC_SUBNET_EXIT:(\d+)') {
                 $altCode = [int]$Matches[1]
             } else {
-                Write-Warning ("[lan-recover] AltServer subnet check threw: {0} — falling back to LAN-page wait + off-subnet router reboots." -f $msg)
+                Write-Warning ("[lan-recover] Phone-PC subnet check threw: {0} - falling back to LAN-page wait + off-subnet router reboots." -f $msg)
                 $altCode = 4
             }
         } finally {
             $ErrorActionPreference = $prev
         }
         if ($altCode -eq 0) {
-            Write-Host '[lan-recover] Phone and PC/AltServer are on the same subnet.'
+            Write-Host '[lan-recover] Phone and PC are on the same subnet.'
             $usbSubnetOk = $true
         } elseif ($altCode -eq 2 -or $altCode -eq 4) {
-            Write-Host ('[lan-recover] USB/pcapd could not finish AltServer subnet check (exit {0}) — falling back to LAN-page wait + off-subnet router reboots.' -f $altCode)
+            Write-Host ('[lan-recover] USB/pcapd could not finish phone-PC subnet check (exit {0}) - falling back to LAN-page wait + off-subnet router reboots.' -f $altCode)
         } else {
             # Exit 1 = rounds exhausted / hard subnet fail. Still try :8765 wait + off-subnet reboot
             # rather than aborting companion mount recover (PC may briefly have no usable LAN IPv4).
-            Write-Warning ("[lan-recover] AltServer subnet refresh failed (exit {0}) — falling back to LAN-page wait + off-subnet router reboots." -f $altCode)
+            Write-Warning ("[lan-recover] Phone-PC subnet refresh failed (exit {0}) - falling back to LAN-page wait + off-subnet router reboots." -f $altCode)
         }
     }
 
@@ -291,7 +282,7 @@ try {
     }
 
     if ($usbSubnetOk) {
-        Write-Warning '[lan-recover] Phone is on the PC/AltServer subnet but :8765 is still down (open Loop Segments / Keep Alive). Skipping off-subnet router reboots.'
+        Write-Warning '[lan-recover] Phone is on the PC subnet but :8765 is still down (open Loop Segments / Keep Alive). Skipping off-subnet router reboots.'
         Exit-WithEnter 1
     }
 
