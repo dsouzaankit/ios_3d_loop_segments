@@ -46,7 +46,8 @@ cd <repo>\windows
 
 # Optional helpers
 .\setup\Set-LoopSegmentsWindows.ps1 -Show          # show/edit per-PC json
-.\setup\Set-LoopSegmentsLANHost.ps1 <phone-ip>     # IP changed on Wi-Fi
+.\setup\Set-LoopSegmentsLANHost.ps1               # USB pcapd → phoneLanHost (or pass <phone-ip>)
+.\lan\Discover-LoopSegmentsLanHost.ps1            # same USB read; -Force re-reads even if :8765 up
 .\usb\Launch-LoopSegmentsViaUsb.ps1 -SkipMount    # open app over USB only
 .\rclone\Mount-LoopSegmentsRclone.ps1 -TestOnly   # probe phone LAN / WebDAV
 .\rclone\Mount-LoopSegmentsRclone.ps1             # mount L: (optional; WinFsp)
@@ -73,6 +74,8 @@ cd <repo>\windows   # e.g. where this README lives
 
 Or step by step: copy `loop-segments-windows.example.json` → `loop-segments-windows.json`, then `.\setup\Set-LoopSegmentsWindows.ps1`.
 
+**`phoneLanHost` (USB, not a LAN scan):** with the phone **USB-connected**, unlocked, and on Wi‑Fi, `.\setup\Set-LoopSegmentsLANHost.ps1` (no args) or `.\lan\Discover-LoopSegmentsLanHost.ps1` reads the phone’s Wi‑Fi IPv4 via **`env_setup\altserver_refresh\lan\Get-IphoneLanIpv4.py`** (pymobiledevice3 **pcapd**) and writes `loop-segments-windows.json`. The companion does the same when the saved host is empty or `:8765` is unreachable. **No TCP subnet scan** for the phone IP. Pass an IP explicitly if you prefer. Phone + PC on the **same subnet** is separate: `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1` (also used by companion / rclone).
+
 Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). Writable paths support **PUT** (≤ 2 MB), **MKCOL**, **DELETE**, and **MOVE** (build **282+**; Explorer rename stays on-phone). No server **COPY** yet. **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**.
 
 ## App LAN vs primary router
@@ -85,7 +88,7 @@ Low Mbps on the **right** subnet is **suspected to be Wi‑Fi channel congestion
 
 ## pCloud web helper (integrated)
 
-Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then **starts Chromium** so you can browse pCloud while SKYBOX / USB-launch / phone-LAN recover / rclone continue. If `:8765` is down, the extension **queues** downloads (desktop notification) and retries; after ~5 minutes it **denies** them. **Click a toast** to bring the companion PowerShell window to the front. After Chromium is up it **starts SKYBOX VR desktop** via the **`Skybox_vr_pc`** submodule (hide to tray; **does not keep re-hiding** after a tray restore), maps AirScreen **`p_cld_media`**, then **starts Virtual Desktop Streamer** if idle and **hides it to the tray** (`-SkipSkybox` / `-SkipVirtualDesktop` to skip). USB-launches Loop Segments to foreground the app (locked phone no longer blocks Chromium; DVT **`--no-kill-existing`** so a running Keep Alive export is not killed), **attempts an rclone mount** in a separate window (then maps phone **`pcld_ios_media`** in Skybox Add-folders), then **probes LAN Mbps** (HTTP + mount when the letter is up, **HTTP-only** if it is not). If that is below `minLanThroughputMbps` (default **40**), it **reboots other routers** (not this PC’s app-LAN gateway), waits, and re-checks — up to **2** retries. The app LAN gateway is tethered to a primary router; those two APs must use the **same Wi‑Fi channel**.
+Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. On start it syncs `lan_config.json` from `loop-segments-windows.json`, and if `phoneLanHost` is empty or `:8765` is down it **overrides** that host from USB/`pcapd` (see above). Before Chromium starts it checks whether the PC default gateway shares a subnet with `phoneLanHost` (app LAN page); if not, it **reboots Wi‑Fi on the current gateway**, **waits for this PC to get a new LAN IP**, and **retries up to 3 rounds** until the gateway is on the app LAN subnet (via `P:\all_scripts\5g_router_reboot`), then **starts Chromium** so you can browse pCloud while SKYBOX / USB-launch / phone-LAN recover / rclone continue. If `:8765` is down, the extension **queues** downloads (desktop notification) and retries; after ~5 minutes it **denies** them. **Click a toast** to bring the companion PowerShell window to the front. After Chromium is up it **starts SKYBOX VR desktop** via the **`Skybox_vr_pc`** submodule (hide to tray; **does not keep re-hiding** after a tray restore), maps AirScreen **`p_cld_media`**, then **starts Virtual Desktop Streamer** if idle and **hides it to the tray** (`-SkipSkybox` / `-SkipVirtualDesktop` to skip). USB-launches Loop Segments to foreground the app (locked phone no longer blocks Chromium; DVT **`--no-kill-existing`** so a running Keep Alive export is not killed), **attempts an rclone mount** in a separate window (then maps phone **`pcld_ios_media`** in Skybox Add-folders), then **probes LAN Mbps** (HTTP + mount when the letter is up, **HTTP-only** if it is not). If that is below `minLanThroughputMbps` (default **40**), it **reboots other routers** (not this PC’s app-LAN gateway), waits, and re-checks — up to **2** retries. The app LAN gateway is tethered to a primary router; those two APs must use the **same Wi‑Fi channel**.
 
 **Multi-select tip:** in my.pcloud.com, click the **`v`** control to filter the folder by one of **five** types (including **Video**), then multi-select → Download — the companion cancels the zip and queues videos on the phone FIFO. **Folder right-click → Download is not supported** (zip cancelled, no `fileid`s → “no selection ids”); open the folder, select the videos, then Download instead. **Open this folder in pCloud Drive** (Shift+right-click for the Chrome menu — my.pcloud.com blocks a normal right-click — toolbar popup, or **Ctrl+E**) resolves the tree/`folder=` URL and opens the matching path in Explorer in the foreground; the drive letter comes from pCloud `SyncDrive` / the **pCloud Drive** volume, not a hardcoded `P:`. The companion pins the extension on the Chromium toolbar each launch. **CDN view tabs stay open** (Open Original / inline play); the downloads shelf is still cancelled. **Same full href** is not posted again this Chromium session. Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
@@ -205,7 +208,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 
 | Field | Purpose |
 |-------|---------|
-| `phoneLanHost` | Primary iPhone IP for rclone mount (changes per Wi‑Fi) |
+| `phoneLanHost` | Primary iPhone Wi‑Fi IP for rclone / companion (USB pcapd can refresh; changes per Wi‑Fi) |
 | `phoneLanHosts` | Optional array `{ host, label?, port? }` — unified LAN listing across multiple iPhones |
 | `lanPort` | Usually `8765` |
 | `minLanThroughputMbps` | Companion/measure: if LAN probe is below this (default `40`), reboot other routers (not current gateway), settle, re-check (up to 2 retries) |
@@ -254,7 +257,8 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `lib\Get-LoopSegmentsVirtualDesktop.ps1` | Locate/start **Virtual Desktop Streamer**, start the service if it is stopped, and hide the Streamer window to the **tray** (`-SkipVirtualDesktop` to skip). Companion finish does not quit Streamer |
 | `lib\Get-LoopSegmentsClash.ps1` | Optional: if Clash/mihomo is running, UAC-run **`env_setup\altserver_refresh\VpnMulticast\Remove-VpnMulticastRoute.ps1`** so TUN `224.0.0.0/4` does not steal `.local` mDNS. Phone-IP / `:8765` use numeric IPs and do not need this. |
 | `setup\Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
-| `setup\Set-LoopSegmentsLANHost.ps1` | Quick IP-only update |
+| `setup\Set-LoopSegmentsLANHost.ps1` | Set `phoneLanHost` (no args = USB pcapd; or pass IP; `-ForceDiscover` re-reads USB even if `:8765` up) |
+| `lan\Discover-LoopSegmentsLanHost.ps1` | USB pcapd → save `phoneLanHost` (`-Force`, `-NoSave` print only; Enter on direct run, `-NoWaitEnter` for callers) |
 | `lan\Get-LoopSegmentsUnifiedLANListing.ps1` | **Pool media listings** from all `phoneLanHosts` → JSON or HTML |
 | `lan\Serve-LoopSegmentsUnifiedLAN.ps1` | PC HTTP index on `:8766` (merged view; phones still serve files on `:8765`) |
 | `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1` | Wrong-subnet **loop** (wait tcp/23 → reboot → wait up to ~20s for new PC LAN IP or AP back on telnet → re-check, max 3 rounds; telnet fail continues) / forced / **off-subnet sequential** / **`-BouncePhoneLanAp`** (phone LAN page subnet AP after Wi‑Fi→www probe fail; ~20s tcp/23 wait; if WifiRestart drops the telnet session then tcp/23 returns, treats that as success and does **not** reboot twice; exits 1 if bounce does not confirm). Direct run waits for Enter; companion passes `-NoWaitEnter`. |

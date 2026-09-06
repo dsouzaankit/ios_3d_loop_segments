@@ -338,10 +338,27 @@ function Sync-LanConfigFromLoopSegments {
         return
     }
 
+    # Prefer saved phoneLanHost when reachable; otherwise USB pcapd Wi-Fi IP → phoneLanHost.
+    if (Get-Command Update-LoopSegmentsLANHostFromDiscovery -ErrorAction SilentlyContinue) {
+        try {
+            [void](Update-LoopSegmentsLANHostFromDiscovery)
+        } catch {
+            Write-Warning "[lan] Auto-discover phoneLanHost failed: $($_.Exception.Message)"
+        }
+        # Discovery writes loop-segments-windows.json via the shared lib path.
+        $libConfig = $null
+        if (Get-Command Get-LoopSegmentsWindowsConfigPath -ErrorAction SilentlyContinue) {
+            try { $libConfig = Get-LoopSegmentsWindowsConfigPath } catch {}
+        }
+        if ($libConfig -and (Test-Path -LiteralPath $libConfig)) {
+            $sourcePath = $libConfig
+        }
+    }
+
     $settings = Get-Content -LiteralPath $sourcePath -Raw | ConvertFrom-Json
     $hostName = [string]$settings.phoneLanHost
     if ([string]::IsNullOrWhiteSpace($hostName)) {
-        throw "phoneLanHost is empty in $sourcePath"
+        throw "phoneLanHost is empty in $sourcePath (USB pcapd found nothing — plug in USB or run ..\setup\Set-LoopSegmentsLANHost.ps1 <ip>)"
     }
 
     $port = 8765

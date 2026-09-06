@@ -29,7 +29,7 @@ Full guide: **[WORKFLOW.md](WORKFLOW.md)**
 
 ```powershell
 cd P:\all_scripts\ios_3d_loop_segments\windows
-.\setup\Set-LoopSegmentsLANHost.ps1 <phone-ip>
+.\setup\Set-LoopSegmentsLANHost.ps1   # USB-connected phone → Wi-Fi IP (or pass <phone-ip>)
 .\rclone\Mount-LoopSegmentsRclone.ps1 -TestOnly
 ```
 

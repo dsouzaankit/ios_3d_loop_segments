@@ -102,7 +102,7 @@ Prefer **`Run-PCloudWebCompanion.ps1`** (wrapper: Enter-on-error, forwards flags
 Each launch:
 
 - Ensures a **machine-local** venv at `%LOCALAPPDATA%\pcloud_web_companion\venv` (Python 3.12 preferred; removes any legacy repo `.venv` on P:)
-- Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`
+- Syncs LAN host/auth from `windows\loop-segments-windows.json` → `lan_config.json`. If `phoneLanHost` is empty or `:8765` is unreachable, **USB pcapd** (`env_setup\…\Get-IphoneLanIpv4.py`) overrides `phoneLanHost` — no LAN TCP scan. Subnet align stays in gateway reboot / `Invoke-LoopSegmentsPhoneLanRecoverIfNeeded`
 - Copies the extension to `%LOCALAPPDATA%\pcloud_web_companion\extension` (Chromium will not load unpacked extensions from the pCloud `P:` drive), then **pins it on the toolbar** and sets **Ctrl+E** + **Ctrl+Shift+H** in the profile `Preferences` (Python JSON, not PowerShell `ConvertTo-Json`)
 - Starts a local REST log sink
 - **Gateway Wi‑Fi reboot (when needed):** compares the PC’s IPv4 default gateway to `phoneLanHost` (app LAN page). If they are **not** on the same subnet, informs you, waits for **tcp/23**, **reboots Wi‑Fi on the current gateway**, then **polls up to ~20s** for a new PC LAN IP/gateway (or tcp/23 back after a drop — Windows can keep a stale lease while the AP is down; Clash TUN often changes the default route sooner). Then **re-checks** — up to **3** rounds. A failed telnet (host unreachable while the AP is still restarting) waits and retries once, then continues to the next round instead of aborting. Then fails and **waits for Enter** (`-SkipGatewayReboot` to skip). This still runs **before** Chromium so pCloud is not dropped mid-browse. Must run from `windows\lan\` (needs `windows\lib\`).

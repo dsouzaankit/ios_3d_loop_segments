@@ -405,7 +405,11 @@ function Invoke-LoopSegmentsRclone {
 }
 
 function Get-LoopSegmentsLANHost {
-    param([string] $Override = '')
+    param(
+        [string] $Override = '',
+        # When phoneLanHost is empty, read Wi-Fi IPv4 from USB-connected phone (pcapd).
+        [switch] $AllowDiscover
+    )
     $resolved = [string]$Override
     if (-not [string]::IsNullOrWhiteSpace($resolved)) {
         $resolved = $resolved.Trim()
@@ -413,16 +417,273 @@ function Get-LoopSegmentsLANHost {
     if ([string]::IsNullOrWhiteSpace($resolved)) {
         $resolved = (Get-LoopSegmentsWindowsSettings).phoneLanHost
     }
+    if ([string]::IsNullOrWhiteSpace($resolved) -and $AllowDiscover) {
+        $resolved = Update-LoopSegmentsLANHostFromDiscovery -Quiet
+    }
     if ([string]::IsNullOrWhiteSpace($resolved)) {
         throw @"
 phoneLanHost is required.
 
   Copy loop-segments-windows.example.json to loop-segments-windows.json
-  Run: .\setup\Set-LoopSegmentsWindows.ps1
+  Run: .\setup\Set-LoopSegmentsLANHost.ps1            # USB phone Wi-Fi IP via pcapd
   Or:  .\setup\Set-LoopSegmentsLANHost.ps1 <phone-ip>
+  Or:  .\lan\Discover-LoopSegmentsLanHost.ps1
 "@
     }
     return ([string]$resolved).Trim()
+}
+
+function Test-LoopSegmentsLanHttpLooksLikeApp {
+    param(
+        [Parameter(Mandatory = $true)][string] $HostName,
+        [int] $Port = 8765,
+        [int] $TimeoutMs = 2000
+    )
+    $hostClean = $HostName.Trim().TrimEnd('/')
+    if ($hostClean -match '^https?://') {
+        try { $hostClean = ([Uri]$hostClean).Host } catch {}
+    }
+    if ([string]::IsNullOrWhiteSpace($hostClean) -or $Port -le 0) { return $false }
+
+    $paths = @('/status.json', '/')
+    foreach ($path in $paths) {
+        $resp = $null
+        try {
+            $req = [System.Net.HttpWebRequest]::Create("http://${hostClean}:${Port}${path}")
+            $req.Method = 'GET'
+            $req.Timeout = $TimeoutMs
+            $req.ReadWriteTimeout = $TimeoutMs
+            $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+            $req.UserAgent = 'LoopSegments-LanDiscover/1.0'
+            $req.KeepAlive = $false
+            if ($path -eq '/') {
+                $req.Accept = 'text/html,application/xhtml+xml'
+            }
+            $resp = $req.GetResponse()
+            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
+            try {
+                $body = $reader.ReadToEnd()
+            } finally {
+                $reader.Close()
+            }
+            if ([string]::IsNullOrWhiteSpace($body)) { continue }
+            if ($body.Length -gt 16000) { $body = $body.Substring(0, 16000) }
+            # Reject Parking LAN logs on the same port if present on the subnet.
+            if ($body -match 'Parking\s*[—\-]\s*LAN logs' -or $body -match '(?i)webautoparking') {
+                continue
+            }
+            if ($path -eq '/status.json') {
+                if ($body -match '"workingSourcePlayback"' -or
+                    $body -match '"exportElapsedSeconds"' -or
+                    $body -match '"backgroundFillPercent"' -or
+                    $body -match 'pcld_ios_media') {
+                    return $true
+                }
+                try {
+                    $json = $body | ConvertFrom-Json
+                    if ($null -ne $json.workingSourcePlayback -or
+                        $null -ne $json.exportStartedAt -or
+                        $null -ne $json.playbackStatusHTML) {
+                        return $true
+                    }
+                } catch {}
+            } else {
+                if ($body -match 'Loop Segments' -and $body -match 'LAN (monitor|export)') {
+                    return $true
+                }
+            }
+        } catch {
+            # try next path
+        } finally {
+            if ($null -ne $resp) {
+                try { $resp.Close() } catch {}
+                try { $resp.Dispose() } catch {}
+            }
+        }
+    }
+    return $false
+}
+
+function Get-LoopSegmentsIphoneLanIpv4ScriptPath {
+    $repoRoot = Split-Path -Parent $script:LoopSegmentsWindowsRoot
+    $candidates = @(
+        (Join-Path $repoRoot 'env_setup\altserver_refresh\lan\Get-IphoneLanIpv4.py')
+        'P:\all_scripts\iOS apps\env_setup\altserver_refresh\lan\Get-IphoneLanIpv4.py'
+    )
+    foreach ($c in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($c) -and (Test-Path -LiteralPath $c)) {
+            return $c
+        }
+    }
+    return $null
+}
+
+function Test-LoopSegmentsSameIpv4Slash24 {
+    param(
+        [Parameter(Mandatory = $true)][string] $IpA,
+        [Parameter(Mandatory = $true)][string] $IpB
+    )
+    try {
+        $a = [System.Net.IPAddress]::Parse($IpA.Trim()).GetAddressBytes()
+        $b = [System.Net.IPAddress]::Parse($IpB.Trim()).GetAddressBytes()
+        if ($a.Length -ne 4 -or $b.Length -ne 4) { return $false }
+        return ($a[0] -eq $b[0] -and $a[1] -eq $b[1] -and $a[2] -eq $b[2])
+    } catch {
+        return $false
+    }
+}
+
+function Get-LoopSegmentsPcLanIpv4Addresses {
+    $skipAlias = '(?i)loopback|clash|meta|mihomo|wintun|wireguard|nord|mullvad|vpn|tap-windows|tun\b|vethernet|hyper-v|docker|wsl|virtualbox|vmware|localdevvpn|stosvpn|zerotier|hamachi|radmin'
+    $out = [System.Collections.Generic.List[string]]::new()
+    try {
+        $addrs = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.IPAddress -and
+                $_.IPAddress -notmatch '^(127\.|169\.254\.|198\.18\.)' -and
+                ($_.PrefixOrigin -ne 'WellKnown') -and
+                (-not ($_.InterfaceAlias -and $_.InterfaceAlias -match $skipAlias))
+            }
+        foreach ($a in @($addrs)) {
+            $ip = [string]$a.IPAddress
+            if ($ip -and -not ($out -contains $ip)) { [void]$out.Add($ip) }
+        }
+    } catch {}
+    return @($out.ToArray())
+}
+
+function Get-LoopSegmentsIphoneLanIpv4ViaUsb {
+    param([switch] $Quiet)
+
+    $pyHelper = Join-Path $PSScriptRoot 'Get-LoopSegmentsPython.ps1'
+    if ((Test-Path -LiteralPath $pyHelper) -and -not (Get-Command Get-LoopSegmentsPythonRuntime -ErrorAction SilentlyContinue)) {
+        . $pyHelper
+    }
+    if (-not (Get-Command Get-LoopSegmentsPythonRuntime -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{ Ok = $false; Ip = $null; Source = $null; ExitCode = 1; Error = 'Get-LoopSegmentsPython.ps1 not loaded' }
+    }
+
+    $scriptPath = Get-LoopSegmentsIphoneLanIpv4ScriptPath
+    if ([string]::IsNullOrWhiteSpace($scriptPath)) {
+        return [pscustomobject]@{
+            Ok       = $false
+            Ip       = $null
+            Source   = $null
+            ExitCode = 1
+            Error    = 'Missing env_setup\altserver_refresh\lan\Get-IphoneLanIpv4.py'
+        }
+    }
+
+    $rt = Get-LoopSegmentsPythonRuntime -RequirePymobiledevice3
+    if ($null -eq $rt) {
+        $rt = Get-LoopSegmentsPythonRuntime
+    }
+    if ($null -eq $rt) {
+        return [pscustomobject]@{
+            Ok       = $false
+            Ip       = $null
+            Source   = $null
+            ExitCode = 1
+            Error    = 'No suitable Python runtime (need 3.12 + pymobiledevice3)'
+        }
+    }
+
+    if (-not $Quiet) {
+        Write-Host "[lan-discover] USB pcapd: reading phone Wi-Fi IPv4 ($($rt.Display))…"
+    }
+
+    $result = Invoke-LoopSegmentsPythonRuntime -Runtime $rt -ArgumentList @('-u', $scriptPath)
+    $jsonLine = @($result.Lines | Where-Object { $_.Trim().StartsWith('{') }) | Select-Object -Last 1
+    $errText = (@($result.Lines | Where-Object { $_ -notmatch '^\s*\{' })) -join "`n"
+    $ip = $null
+    $source = $null
+    if ($jsonLine) {
+        try {
+            $obj = $jsonLine | ConvertFrom-Json
+            if ($obj.ip) { $ip = [string]$obj.ip }
+            if ($obj.source) { $source = [string]$obj.source }
+            if ($obj.ok -eq $true -and $ip) {
+                return [pscustomobject]@{
+                    Ok       = $true
+                    Ip       = $ip.Trim()
+                    Source   = $source
+                    ExitCode = [int]$result.ExitCode
+                    Error    = $errText
+                }
+            }
+        } catch {}
+    }
+    return [pscustomobject]@{
+        Ok       = $false
+        Ip       = $ip
+        Source   = $source
+        ExitCode = [int]$result.ExitCode
+        Error    = $errText
+    }
+}
+
+function Update-LoopSegmentsLANHostFromDiscovery {
+    param(
+        [switch] $Force,
+        [switch] $Quiet,
+        [int] $Port = 0
+    )
+    Initialize-LoopSegmentsWindowsConfig
+    $settings = Get-LoopSegmentsWindowsSettings
+    if ($Port -le 0) { $Port = Get-LoopSegmentsLanPort }
+    $current = ([string]$settings.phoneLanHost).Trim()
+
+    if (-not $Force -and -not [string]::IsNullOrWhiteSpace($current)) {
+        if (Test-LoopSegmentsLanHttpLooksLikeApp -HostName $current -Port $Port) {
+            if (-not $Quiet) {
+                Write-Host "[lan-discover] keep configured $current (reachable on :$Port)"
+            }
+            return $current
+        }
+        if (-not $Quiet) {
+            Write-Warning "[lan-discover] configured $current not reachable — USB pcapd for phone Wi-Fi IP…"
+        }
+    } elseif (-not $Quiet) {
+        Write-Host "[lan-discover] resolving phone Wi-Fi IP via USB (pcapd)"
+    }
+
+    $usb = Get-LoopSegmentsIphoneLanIpv4ViaUsb -Quiet:$Quiet
+    if (-not $usb.Ok -or [string]::IsNullOrWhiteSpace($usb.Ip)) {
+        if (-not $Quiet) {
+            $hint = if ($usb.Error) { $usb.Error.Trim() } else { "exit $($usb.ExitCode)" }
+            Write-Warning "[lan-discover] USB pcapd did not return a phone Wi-Fi IP ($hint). Plug in USB, unlock phone, join Wi-Fi."
+        }
+        return $null
+    }
+
+    $pick = $usb.Ip.Trim()
+    $pcIps = @(Get-LoopSegmentsPcLanIpv4Addresses)
+    $onSame = $false
+    foreach ($pc in $pcIps) {
+        if (Test-LoopSegmentsSameIpv4Slash24 -IpA $pick -IpB $pc) {
+            $onSame = $true
+            break
+        }
+    }
+    if (-not $Quiet) {
+        if ($onSame) {
+            Write-Host "[lan-discover] phone $pick and PC appear on the same /24"
+        } else {
+            $pcList = if ($pcIps.Count -gt 0) { $pcIps -join ', ' } else { '(none)' }
+            Write-Warning "[lan-discover] phone $pick not on PC /24 ($pcList) — run lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1 (or companion recover) to align subnet"
+        }
+    }
+
+    if ($pick -ne $current) {
+        $settings.phoneLanHost = $pick
+        Save-LoopSegmentsWindowsSettings -Settings $settings -Quiet:$Quiet
+        if (-not $Quiet) {
+            Write-Host "[lan-discover] phoneLanHost -> $pick (source=$($usb.Source))"
+        }
+    } elseif (-not $Quiet) {
+        Write-Host "[lan-discover] phoneLanHost already $pick"
+    }
+    return $pick
 }
 
 function Get-LoopSegmentsMountDriveLetter {
