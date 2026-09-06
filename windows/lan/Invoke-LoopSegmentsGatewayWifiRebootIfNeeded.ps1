@@ -480,7 +480,14 @@ function Invoke-RouterWifiRebootScript {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($RouterIp)) {
-        [void](Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec)
+        if (-not (Wait-RouterTelnetReady -Ip $RouterIp -TimeoutSec $TelnetWaitSec -PollSec $PollSec)) {
+            $msg = ('[gateway] tcp/23 {0} not ready — skipping telnet (avoids ~60s WinError 10060).' -f $RouterIp)
+            if ($AllowFail) {
+                Write-Warning $msg
+                return $false
+            }
+            throw $msg
+        }
     }
 
     $exitCode = Invoke-RebootPythonOnce
@@ -682,11 +689,16 @@ if ($RebootOffSubnetRouters) {
     foreach ($router in $offSubnet) {
         $index++
         Write-Host ''
-        Write-Host ('[gateway] ({0}/{1}) Rebooting off-subnet router {2} ({3}) so clients can leave that AP...' -f `
+        Write-Host ('[gateway] ({0}/{1}) Off-subnet router {2} ({3})...' -f `
             $index, $offSubnet.Count, $router.Ip, $router.Model) -ForegroundColor Cyan
+        if (-not (Test-RouterTcp23 -Ip $router.Ip)) {
+            Write-Warning ('[gateway] Skip {0} — tcp/23 closed from this PC (not routable here; avoids telnet WinError 10060).' -f $router.Ip)
+            continue
+        }
         try {
             Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime `
-                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot
+                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot `
+                -AllowFail
             Write-Host ('[gateway] Reboot finished for {0}.' -f $router.Ip) -ForegroundColor Green
         } catch {
             Write-Warning ("[gateway] Reboot failed for {0}: {1}" -f $router.Ip, $_.Exception.Message)
@@ -730,11 +742,17 @@ if ($RebootOtherRouters) {
     foreach ($router in $others) {
         $index++
         Write-Host ''
-        Write-Host ('[gateway] ({0}/{1}) Rebooting other router {2} ({3})...' -f `
+        Write-Host ('[gateway] ({0}/{1}) Other router {2} ({3})...' -f `
             $index, $others.Count, $router.Ip, $router.Model) -ForegroundColor Cyan
+        # Quick probe: routers on another SSID/subnet (or powered off) are not reachable from here.
+        if (-not (Test-RouterTcp23 -Ip $router.Ip)) {
+            Write-Warning ('[gateway] Skip {0} — tcp/23 closed (not on this LAN / AP down; avoids telnet WinError 10060).' -f $router.Ip)
+            continue
+        }
         try {
             Invoke-RouterWifiRebootScript -ScriptPath $router.Script -Runtime $runtime `
-                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot
+                -RouterIp $router.Ip -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot `
+                -AllowFail
             Write-Host ('[gateway] Reboot finished for {0}.' -f $router.Ip) -ForegroundColor Green
         } catch {
             Write-Warning ("[gateway] Reboot failed for {0}: {1}" -f $router.Ip, $_.Exception.Message)
