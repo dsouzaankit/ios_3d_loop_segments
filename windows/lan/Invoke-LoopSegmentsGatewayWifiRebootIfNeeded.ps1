@@ -32,7 +32,8 @@
 
   When run directly (double-click / console), waits for Enter before closing so you can
   read the result. Pass -NoWaitEnter when invoked as a child so the parent keeps a
-  single prompt.
+  single prompt. Pass -InProcessThrowExit with -NoWaitEnter when the companion runs this
+  in the same pwsh (throws GATEWAY_EXIT:<code> instead of exit, so the host survives).
 
 .EXAMPLE
   .\lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1
@@ -74,7 +75,9 @@ param(
     [ValidateRange(1, 100)]
     [int] $MaxWrongSubnetRounds = 3,
     # Skip local Enter on fatal errors (companion parent prompts once instead).
-    [switch] $NoWaitEnter
+    [switch] $NoWaitEnter,
+    # Companion in-process call: throw GATEWAY_EXIT:<n> instead of exit (keeps host alive).
+    [switch] $InProcessThrowExit
 )
 
 Set-StrictMode -Version Latest
@@ -91,9 +94,17 @@ function Wait-EnterToClose {
     }
 }
 
+# Cached for trap{} — script switch params are not reliably visible inside trap.
+$script:GatewayInProcess = [bool]$InProcessThrowExit
+
 function Exit-WithEnter {
     param([int] $ExitCode = 0)
     Wait-EnterToClose
+    if ($script:GatewayInProcess -or $InProcessThrowExit) {
+        # Companion reads $global:LoopSegmentsGatewayExitCode after trap break.
+        $global:LoopSegmentsGatewayExitCode = [int]$ExitCode
+        throw "GATEWAY_EXIT:$ExitCode"
+    }
     exit $ExitCode
 }
 
@@ -104,8 +115,23 @@ function Wait-EnterOnError {
 
 # Pause on fatal errors when this script is the console entry (not via companion).
 trap {
+    $msg = "$($_.Exception.Message)"
+    if (-not $msg) { $msg = "$_" }
+    # Do not require $InProcessThrowExit here — it is often unset in trap scope, which
+    # previously fell through to Write-Host and dumped GATEWAY_EXIT:0 stacks on success.
+    if ($msg -match 'GATEWAY_EXIT:(\d+)') {
+        $global:LoopSegmentsGatewayExitCode = [int]$Matches[1]
+        break
+    }
+    if ($null -ne $global:LoopSegmentsGatewayExitCode) {
+        break
+    }
+    if ($script:GatewayInProcess) {
+        $global:LoopSegmentsGatewayExitCode = 1
+        break
+    }
     Write-Host ""
-    Write-Host ('[gateway] {0}' -f $_.Exception.Message) -ForegroundColor Red
+    Write-Host ('[gateway] {0}' -f $msg) -ForegroundColor Red
     if ($NoWaitEnter) {
         throw $_
     }
@@ -876,8 +902,16 @@ Phone LAN page: {2}
         -PollSec $PollSecAfterReboot)
 }
 } catch {
+    $msg = "$($_.Exception.Message)"
+    if (-not $msg) { $msg = "$_" }
+    # In-process Exit-WithEnter throws GATEWAY_EXIT:<n> inside this try — that is
+    # control flow (including success 0), not a failure. Do not Write-Host / stack-dump.
+    if ($msg -match 'GATEWAY_EXIT:(\d+)') {
+        $global:LoopSegmentsGatewayExitCode = [int]$Matches[1]
+        return
+    }
     Write-Host ""
-    Write-Host ('[gateway] {0}' -f $_.Exception.Message) -ForegroundColor Red
+    Write-Host ('[gateway] {0}' -f $msg) -ForegroundColor Red
     if ($_.ScriptStackTrace) {
         Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
     }

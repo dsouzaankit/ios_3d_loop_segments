@@ -824,6 +824,101 @@ function Get-LoopSegmentsRcloneMountedDriveLetters {
     return ,$set
 }
 
+function Stop-LoopSegmentsPhoneRcloneMount {
+    <#
+    .SYNOPSIS
+      Kill phone rclone mount + mount console in-process.
+
+    .DESCRIPTION
+      Used before companion finish spawns any new work that must not hang on a dead
+      WinFsp letter (InitializeDefaultDrives). Does not Remove-PSDrive / Test-Path the
+      mount letter — those can block forever on a wedged drive.
+    #>
+    param(
+        [string] $DriveLetter = '',
+        [switch] $Quiet
+    )
+
+    $letters = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    if (-not [string]::IsNullOrWhiteSpace($DriveLetter)) {
+        $ch = ([string]$DriveLetter).Trim().ToUpperInvariant().Substring(0, 1)
+        [void]$letters.Add($ch)
+    }
+    try {
+        $preferred = [string](Get-LoopSegmentsMountDriveLetter)
+        if (-not [string]::IsNullOrWhiteSpace($preferred)) {
+            [void]$letters.Add($preferred.Trim().ToUpperInvariant().Substring(0, 1))
+        }
+    } catch {}
+    try {
+        foreach ($mounted in @(Get-LoopSegmentsRcloneMountedDriveLetters)) {
+            if (-not [string]::IsNullOrWhiteSpace($mounted)) {
+                [void]$letters.Add(([string]$mounted).Trim().ToUpperInvariant().Substring(0, 1))
+            }
+        }
+    } catch {}
+    if ($letters.Count -eq 0) { [void]$letters.Add('L') }
+
+    $stoppedRclone = 0
+    $stoppedPs = 0
+    $selfPid = $PID
+
+    Get-LoopSegmentsWin32Processes -Name 'rclone.exe' | ForEach-Object {
+        $cmd = [string]$_.CommandLine
+        if (-not (Test-LoopSegmentsRcloneCommandLineIsOurMount -CommandLine $cmd)) { return }
+        if (-not $Quiet) {
+            Write-Host "[rclone] Kill mount rclone PID $($_.ProcessId) before Wi-Fi bounce / Home"
+        }
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        $stoppedRclone++
+    }
+
+    Get-LoopSegmentsWin32Processes | Where-Object {
+        $_.ProcessId -ne $selfPid -and
+        $_.Name -match '(?i)^(powershell|pwsh)(\.exe)?$' -and
+        [string]$_.CommandLine -match 'Mount-LoopSegmentsRclone\.ps1'
+    } | ForEach-Object {
+        if (-not $Quiet) {
+            Write-Host "[rclone] Kill mount console PID $($_.ProcessId)"
+        }
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        $stoppedPs++
+    }
+
+    # Do not Remove-PSDrive / Test-Path — dead WinFsp letters hang those forever.
+    foreach ($letter in @($letters)) {
+        $driveRoot = "${letter}:"
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = "$env:SystemRoot\System32\cmd.exe"
+            $psi.Arguments = "/c net use ${driveRoot} /delete /y"
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $p = [System.Diagnostics.Process]::Start($psi)
+            if ($null -ne $p -and -not $p.WaitForExit(3000)) {
+                try { $p.Kill() } catch {}
+            }
+        } catch {}
+        if (Get-Command Update-ExplorerForMappedDrive -ErrorAction SilentlyContinue) {
+            try { Update-ExplorerForMappedDrive -DriveRoot "${driveRoot}\" -Removed } catch {}
+        }
+    }
+
+    if (($stoppedRclone -gt 0 -or $stoppedPs -gt 0) -and -not $Quiet) {
+        $list = (@($letters) | Sort-Object) -join ','
+        Write-Host "[rclone] Stopped phone mount (${stoppedRclone} rclone, ${stoppedPs} console) so new pwsh will not hang on dead ${list}:"
+        Start-Sleep -Milliseconds 600
+    }
+
+    return [pscustomobject]@{
+        Rclone       = $stoppedRclone
+        PowerShell   = $stoppedPs
+        DriveLetters = @($letters)
+    }
+}
+
 function Test-LoopSegmentsRcloneMountOnDrive {
     param([Parameter(Mandatory = $true)][string] $DriveLetter)
     $letter = ([string]$DriveLetter).Trim().ToUpperInvariant()

@@ -14,6 +14,9 @@
   Each pymobiledevice3 attempt has a hard timeout (default 25s). Without that,
   hid/userspace can hang forever and leave the companion stuck on finish.
 
+  Pass -NoWaitEnter when the companion/watchdog invokes this in-process: Exit-Home
+  throws HOME_USB_EXIT:<code> instead of exit (so the host process survives).
+
 .EXITCODES
   0  Home pressed, or skipped (already backgrounded / lock screen)
   1  Tooling / generic failure
@@ -50,6 +53,10 @@ function Exit-Home {
     # 0 = ok, 2 = no USB (skip). Error/locked pause unless -NoWaitEnter (companion prompts).
     if ($ExitCode -ne 0 -and $ExitCode -ne 2) {
         Wait-EnterToClose
+    }
+    # Companion / watchdog invoke this in-process; exit would kill their host.
+    if ($NoWaitEnter) {
+        throw "HOME_USB_EXIT:$ExitCode"
     }
     exit $ExitCode
 }

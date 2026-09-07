@@ -33,6 +33,10 @@ $SkyboxHelper = Join-Path $WindowsLib "Get-LoopSegmentsSkybox.ps1"
 if (Test-Path -LiteralPath $SkyboxHelper) {
     . $SkyboxHelper
 }
+$WindowsSettingsLib = Join-Path $WindowsLib "LoopSegments-Windows.ps1"
+if (Test-Path -LiteralPath $WindowsSettingsLib) {
+    . $WindowsSettingsLib
+}
 $ProfileSyncHelper = Join-Path $PSScriptRoot "_chromium_profile_sync.ps1"
 if (Test-Path -LiteralPath $ProfileSyncHelper) {
     . $ProfileSyncHelper
@@ -123,20 +127,18 @@ Clear-Local -Dir $ProfileDir
 
 $homePs1 = Join-Path (Split-Path -Parent $PSScriptRoot) "usb\Go-IphoneHomeViaUsb.ps1"
 if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {
+    # Drop dead WinFsp letter before any further work; run Home in-process (no new pwsh).
+    if (Get-Command Stop-LoopSegmentsPhoneRcloneMount -ErrorAction SilentlyContinue) {
+        try { [void](Stop-LoopSegmentsPhoneRcloneMount) } catch {}
+    }
     Write-Host "[watchdog] USB Home if Loop Segments is still foreground..."
     try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = (Get-LoopSegmentsPwshExe)
-        $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`" -NoWaitEnter"
-        $psi.UseShellExecute = $false
-        $psi.CreateNoWindow = $true
-        $hp = [System.Diagnostics.Process]::Start($psi)
-        if ($null -ne $hp) {
-            if (-not $hp.WaitForExit(120000)) {
-                try { & taskkill.exe /PID $hp.Id /T /F 2>&1 | Out-Null } catch {}
-                try { $hp.Kill() } catch {}
-            }
+        & $homePs1 -NoWaitEnter
+    } catch {
+        $msg = [string]$_.Exception.Message
+        if ($msg -notmatch 'HOME_USB_EXIT:') {
+            Write-Host "[watchdog] Home: $msg"
         }
-    } catch {}
+    }
 }
 exit 0

@@ -1188,9 +1188,12 @@ function Stop-CompanionPhoneRcloneMountForFinish {
     # After phone LAN AP bounce (or when :8765 dies), L: is a dead WinFsp/rclone drive.
     # Spawning a new pwsh for Home then hangs on InitializeDefaultDrives for that letter.
     # Kill mount in-process before bounce/Home — do not start another pwsh to -Unstick.
-    $letter = Get-PreferredMountDriveLetter
-    $driveRoot = "${letter}:"
-    $driveToken = [regex]::Escape($driveRoot)
+    # Never Remove-PSDrive / Test-Path the letter (those hang on wedged WinFsp).
+    if (Get-Command Stop-LoopSegmentsPhoneRcloneMount -ErrorAction SilentlyContinue) {
+        [void](Stop-LoopSegmentsPhoneRcloneMount)
+        return
+    }
+    $letter = Get-CompanionMountDriveLetter
     $stoppedRclone = 0
     $stoppedPs = 0
 
@@ -1198,7 +1201,7 @@ function Stop-CompanionPhoneRcloneMountForFinish {
         Where-Object {
             $cmd = [string]$_.CommandLine
             if ($cmd -notmatch '(?i)\bmount\b') { return $false }
-            return ($cmd -match $driveToken -or $cmd -match '(?i)loopsegments:' -or $cmd -match '(?i)LoopSegments')
+            return ($cmd -match '(?i)loopsegments:' -or $cmd -match '(?i)LoopSegments')
         } |
         ForEach-Object {
             Write-Host "[rclone] Kill mount rclone PID $($_.ProcessId) before Wi-Fi bounce / Home"
@@ -1218,16 +1221,9 @@ function Stop-CompanionPhoneRcloneMountForFinish {
             $stoppedPs++
         }
 
-    try {
-        Remove-PSDrive -Name $letter -Force -ErrorAction SilentlyContinue
-    } catch {}
-    try {
-        & cmd.exe /c "net use ${driveRoot} /delete /y" 2>$null | Out-Null
-    } catch {}
-
     if ($stoppedRclone -gt 0 -or $stoppedPs -gt 0) {
-        Write-Host "[rclone] Stopped phone mount (${stoppedRclone} rclone, ${stoppedPs} console) so Home pwsh will not hang on dead ${driveRoot}"
-        Start-Sleep -Milliseconds 400
+        Write-Host "[rclone] Stopped phone mount (${stoppedRclone} rclone, ${stoppedPs} console) so Home will not hang on dead ${letter}:"
+        Start-Sleep -Milliseconds 600
     }
 }
 
@@ -1808,31 +1804,48 @@ function Invoke-BouncePhoneLanAp {
         return
     }
 
-    $psArgs = [System.Collections.Generic.List[string]]::new()
-    [void]$psArgs.Add("-NoProfile")
-    [void]$psArgs.Add("-ExecutionPolicy")
-    [void]$psArgs.Add("Bypass")
-    [void]$psArgs.Add("-File")
-    [void]$psArgs.Add($rebootPs1)
-    [void]$psArgs.Add("-BouncePhoneLanAp")
-    [void]$psArgs.Add("-NoWaitEnter")
     $activeHost = Get-LanConfigPhoneHost
+    $bounceArgs = @{
+        BouncePhoneLanAp     = $true
+        NoWaitEnter          = $true
+        InProcessThrowExit   = $true
+    }
     if (-not [string]::IsNullOrWhiteSpace($activeHost)) {
-        [void]$psArgs.Add("-PhoneLanHost")
-        [void]$psArgs.Add($activeHost)
+        $bounceArgs['PhoneLanHost'] = $activeHost
     }
 
     Write-Host "[wifi-www] Bouncing phone LAN AP (Wi-Fi->www probe failed)..."
-    Write-Host "[wifi-www] > pwsh $($psArgs -join ' ')"
+    Write-Host "[wifi-www] Running AP bounce in-process (avoids InitializeDefaultDrives hang on dead mount)..."
     $prev = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
+    $ErrorActionPreference = "Stop"
+    $global:LoopSegmentsGatewayExitCode = $null
+    $code = 0
     try {
-        & (Get-LoopSegmentsPwshExe) @psArgs
-        $code = 0
-        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+        & $rebootPs1 @bounceArgs
+        if ($null -ne $global:LoopSegmentsGatewayExitCode) {
+            $code = [int]$global:LoopSegmentsGatewayExitCode
+        } else {
+            $code = 0
+        }
+    } catch {
+        if ($null -ne $global:LoopSegmentsGatewayExitCode) {
+            $code = [int]$global:LoopSegmentsGatewayExitCode
+        } else {
+            $msg = [string]$_.Exception.Message
+            if ($msg -notmatch 'GATEWAY_EXIT:(\d+)') {
+                $msg = [string]$_
+            }
+            if ($msg -match 'GATEWAY_EXIT:(\d+)') {
+                $code = [int]$Matches[1]
+            } else {
+                Write-Warning "[wifi-www] AP bounce error: $msg"
+                $code = 1
+            }
+        }
     } finally {
         $ErrorActionPreference = $prev
         $global:LASTEXITCODE = 0
+        $global:LoopSegmentsGatewayExitCode = $null
     }
     if ($code -eq 0) {
         Write-Host "[wifi-www] Phone LAN AP bounce finished" -ForegroundColor Green
@@ -2000,27 +2013,20 @@ function Invoke-GoIphoneHome {
         return
     }
     Write-Host "[home] USB Home if Loop Segments is still foreground (skip when backgrounded or locked)..."
-    # Fresh pwsh after a dead L: hangs on FileSystem InitializeDefaultDrives; mount was stopped above.
+    # In-process: a fresh pwsh hangs on FileSystem InitializeDefaultDrives when WinFsp L: is dead.
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $code = 1
     try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = (Get-LoopSegmentsPwshExe)
-        $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`" -NoWaitEnter"
-        $psi.UseShellExecute = $false
-        $psi.CreateNoWindow = $false
-        $psi.WorkingDirectory = $env:SystemRoot
-        $p = [System.Diagnostics.Process]::Start($psi)
-        # Outer cap: import + list + DVT SpringBoard/Settings (HID --userspace skipped on iOS 26).
-        $outerMs = 120000
-        if (-not $p.WaitForExit($outerMs)) {
-            Write-Warning "[home] Outer timeout (${outerMs}ms) - killing Home script process tree"
-            try { & taskkill.exe /PID $p.Id /T /F 2>&1 | Out-Null } catch {}
-            try { $p.Kill() } catch {}
-            $code = 1
+        & $homePs1 -NoWaitEnter
+        $code = 0
+    } catch {
+        $msg = [string]$_.Exception.Message
+        if ($msg -match 'HOME_USB_EXIT:(\d+)') {
+            $code = [int]$Matches[1]
         } else {
-            $code = [int]$p.ExitCode
+            Write-Warning "[home] $($_.Exception.Message)"
+            $code = 1
         }
     } finally {
         $ErrorActionPreference = $prev
@@ -2059,6 +2065,7 @@ function Invoke-CompanionGracefulFinish {
         Clear-LocalProfileMinimal -ProfileDir $UserDataDir
         Stop-CompanionRestLogSink
         # Drop L: before AP bounce / Home — dead WinFsp letter hangs new pwsh (InitializeDefaultDrives).
+        # Bounce + Home run in-process for the same reason.
         try { Stop-CompanionPhoneRcloneMountForFinish } catch {
             Write-Warning "[rclone] Pre-finish mount stop: $($_.Exception.Message)"
         }
