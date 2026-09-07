@@ -1,4 +1,4 @@
-﻿# Entry may start under Windows PowerShell 5.1 (file association); re-launch with pwsh.
+# Entry may start under Windows PowerShell 5.1 (file association); re-launch with pwsh.
 <#
 .SYNOPSIS
   Start integrated pcloud_web_companion Chromium helper (USB-launches Loop Segments first).
@@ -93,6 +93,7 @@ param(
     [switch] $SkipClashMdnsRoute,
     [switch] $EnsureAltServer,
     [switch] $SkipOpenLanTabOnStart,
+    [switch] $NoTranscript,
     [string] $StartUrl = "https://my.pcloud.com"
 )
 
@@ -145,6 +146,7 @@ try {
         SkipClashMdnsRoute              = $SkipClashMdnsRoute
         EnsureAltServer                 = $EnsureAltServer
         SkipOpenLanTabOnStart           = $SkipOpenLanTabOnStart
+        NoTranscript                    = $NoTranscript
         NoWaitEnterOnFatal              = $true
         StartUrl                        = $StartUrl
     }

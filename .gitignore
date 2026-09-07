@@ -49,5 +49,6 @@ windows/pcloud_web_companion/chromium-profile/
 windows/pcloud_web_companion/chromium-profile.zip
 
 windows/pcloud_web_companion/rest.log
+windows/pcloud_web_companion/logs/
 
 windows/rclone/loopsegments-rclone-mount.log

@@ -97,6 +97,7 @@ Prefer **`Run-PCloudWebCompanion.ps1`** (wrapper: Enter-on-error, forwards flags
 | `-SkipClashMdnsRoute` | Do not try to drop Clash/mihomo TUN multicast when Clash is running |
 | `-EnsureAltServer` | Opt-in: print/start **AltServer** for AltStore ~7-day refresh (default **skips** — SideStore + LocalDevVPN) |
 | `-SkipOpenLanTabOnStart` | Do not open `http://<phoneLanHost>:8765/` as a 2nd background tab at Chromium launch (default opens it; focus stays on pCloud) |
+| `-NoTranscript` | Do not `Start-Transcript` to `logs\companion-console-*.log` (default on) |
 | `-StartUrl "..."` | Override start page (default `https://my.pcloud.com`) |
 
 Each launch:
@@ -116,7 +117,7 @@ Each launch:
 - **Profile sync:** zip the local AppData profile (**Cache / Code Cache / GPU / Safe Browsing / Service Worker** left out) → copy one **`chromium-profile.zip`** onto P: (Windows Explorer–readable zip, not `tar.exe`’s `./` layout which looks empty). On start, copy that zip off P: and extract locally. If the zip is missing, a one-time copy of the old unpacked `chromium-profile\` folder still runs (same cache dirs skipped); after a successful zip upload that unpacked tree is **deleted in the background**. Empty local never uploads over P:. Use `-KeepLocalProfile` to skip the local wipe. Zip and folder are gitignored.
 - Closes any prior profile Chromium, clears tabs/session + download history (**cookies kept**)
 - Launches Chromium (from `%LOCALAPPDATA%\ms-playwright`, or `LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS`) with the extension loaded and **Chromium UI dark mode** (`--force-dark-mode`; `-NoDarkMode` to disable). Page auto-darkening (`WebContentsForceDark`) is not used — it can hide media seekbars; waits for exit unless `-DetachChromium`
-- **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, **unmaps Skybox Add-folders** (AirScreen **`p_cld_media`** and phone **`pcld_ios_media`**) while SKYBOX is still up, then **quits SKYBOX only if this session started it**, uploads the profile **zip** to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X), then **POSTs `/wifi_www_probe.json`** (on-device Wi‑Fi-only www; cellular blocked) **before** USB Home — on fail, **bounces the phone LAN AP** (`-BouncePhoneLanAp`, same `/24` as `phoneLanHost`; ~20s tcp/23 wait; session drop after WifiRestart that recovers is success, not a second reboot) **unless** `status.json` shows an export running or a non-empty pending queue; then USB-Homes Loop Segments **only if it is still foreground** (skipped when already backgrounded or lock screen; DVT `--userspace`; HID Home is skipped on iOS 26). Use `-SkipWifiWwwProbeOnQuit` / `-SkipGoHome` to skip those steps
+- **Graceful quit:** close the browser, **Ctrl+C**, or console **X** — kills this profile’s Chromium, **unmaps Skybox Add-folders** (AirScreen **`p_cld_media`** and phone **`pcld_ios_media`**) while SKYBOX is still up, then **quits SKYBOX only if this session started it**, uploads the profile **zip** to P:, clears local AppData (`_profile_exit_watchdog.ps1` covers console X), **stops the phone rclone mount** (dead `L:` after AP bounce otherwise hangs a new `pwsh` on `InitializeDefaultDrives`), then **POSTs `/wifi_www_probe.json`** (on-device Wi‑Fi-only www; cellular blocked) **before** USB Home — on fail, **bounces the phone LAN AP** (`-BouncePhoneLanAp`, same `/24` as active `phoneLanHost`; ~20s tcp/23 wait; session drop after WifiRestart that recovers is success, not a second reboot) **unless** `status.json` shows an export running or a non-empty pending queue; then USB-Homes Loop Segments **only if it is still foreground** (skipped when already backgrounded or lock screen; DVT `--userspace`; HID Home is skipped on iOS 26). Console transcript: `logs\companion-console-*.log`. Use `-SkipWifiWwwProbeOnQuit` / `-SkipGoHome` / `-NoTranscript` to skip those steps.
 - **Fatal errors:** any failure that stops the companion ends with a **single** “Press Enter to close…” (child scripts skip their own Enter so you are not prompted twice). USB Home-on-quit failure also pauses for Enter (it does not fail the companion session, so the fatal prompt would not run)
 
 ## Playwright
@@ -147,9 +148,21 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 | Where | What |
 |-------|------|
-| `windows\pcloud_web_companion\rest.log` (P:) | JSON lines: `sw_boot`, `capture`, `cdn_tab` (tab left open; export still posted), `request`, `response`, `browse`, `WRITE_HYBRID_MEDIA_LIST`, `OPEN_EXPLORER_HYBRID_HUB`, … (cleared each `run_chromium.ps1` start; gitignored) |
-| Extension toolbar icon | REST logs popup |
+| `windows\pcloud_web_companion\logs\companion-console-*.log` | Full companion **console transcript** (`Start-Transcript` from `run_chromium.ps1`; includes `[lan]` / `[gateway]` / `[wifi-www]` / finish). Gitignored. |
+| `windows\pcloud_web_companion\rest.log` | Live extension/sink JSON lines (`sw_boot`, `capture`, `request`, …). Truncated each companion start (previous file archived). |
+| `windows\pcloud_web_companion\logs\rest-*.log` | Archived `rest.log` from prior runs |
+| Extension toolbar icon | REST logs popup (current session) |
 | Desktop notification | Archive/queue POST: queued OK, no fileids, empty resolve, or REST failed. First phone ack `rejected` (file missing from saved folder) → **Loop Segments: skipped `<name>`**. Later FIFO drain skips land on Paused **Unavailable** only. |
+
+**Retention** (`_companion_logging.ps1`, applied at each start):
+
+| Kind | Keep |
+|------|------|
+| `companion-console-*.log` | **Last 5** runs |
+| `rest-*.log` archives | **Last 5** runs |
+| Whole `logs\` (those patterns) | Soft cap **100 MB** (oldest deleted first) |
+
+`-NoTranscript` skips the console transcript only; rest.log rotate/retention still runs.
 
 ## Extension files
 
@@ -163,7 +176,8 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | `logs.html` / `logs.js` | In-browser REST log UI + **Open pCloud Drive folder** + **Write hybrid media_files.txt** |
 | `lan_config.json` | Phone LAN target (synced on launch) |
 | `Sync-Reload-PCloudWebCompanionDev.ps1` | Dev: sync extension to LOCALAPPDATA + restart sink (poll health up to ~25s; no Chromium exit); then `chrome://extensions` Reload |
-| `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, toolbar pin + **Ctrl+E** / **Ctrl+Shift+H** prefs, browser launch |
+| `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, toolbar pin + **Ctrl+E** / **Ctrl+Shift+H** prefs, browser launch, console transcript |
+| `_companion_logging.ps1` | `Start-Transcript` + `rest.log` archive + retention under `logs\` |
 | `_chromium_profile_sync.ps1` | Zip/unzip Chromium profile (cache off pCloud); used by launcher + exit watchdog |
 | `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium, unmap Skybox shares (AirScreen + phone rclone), quit Skybox if we started it, + sync/clear profile |
 | `requirements.txt` | `playwright` (launcher Chromium fetch only) |

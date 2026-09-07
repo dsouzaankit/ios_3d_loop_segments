@@ -37,6 +37,8 @@ param(
     [switch]$EnsureAltServer,
     # Do not open http://phoneLanHost:lanPort/ as a 2nd Chromium tab on launch (default: open, leave focus on pCloud).
     [switch]$SkipOpenLanTabOnStart,
+    # Do not Start-Transcript companion console to logs\companion-console-*.log.
+    [switch]$NoTranscript,
     [string]$StartUrl = "https://my.pcloud.com"
 )
 
@@ -74,6 +76,9 @@ trap {
     if (Get-Command Stop-LoopSegmentsSkybox -ErrorAction SilentlyContinue) {
         try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
     }
+    if (Get-Command Stop-CompanionConsoleTranscript -ErrorAction SilentlyContinue) {
+        try { Stop-CompanionConsoleTranscript } catch {}
+    }
     Wait-EnterOnFatal -ExitCode 1
     if ($NoWaitEnterOnFatal) {
         throw $_
@@ -83,6 +88,14 @@ trap {
 
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $ScriptDir) { throw "Cannot resolve script directory; run with: pwsh -File `"$($MyInvocation.MyCommand.Path)`"" }
+
+$CompanionLoggingHelper = Join-Path $ScriptDir "_companion_logging.ps1"
+if (-not (Test-Path -LiteralPath $CompanionLoggingHelper)) {
+    throw "Missing companion logging helper: $CompanionLoggingHelper"
+}
+. $CompanionLoggingHelper
+$script:CompanionTranscriptActive = $false
+[void](Start-CompanionConsoleTranscript -CompanionRoot $ScriptDir -Skip:$NoTranscript)
 
 $ProfileSyncHelper = Join-Path $ScriptDir "_chromium_profile_sync.ps1"
 if (-not (Test-Path -LiteralPath $ProfileSyncHelper)) {
@@ -600,9 +613,8 @@ function Start-RestLogSink {
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logFile) | Out-Null
     if (-not $KeepExistingLog) {
-        # Fresh log each launcher run
-        Set-Content -LiteralPath $logFile -Value "" -Encoding utf8
-        Write-Host "[rest-log] Cleared $logFile"
+        # Archive previous rest.log under logs\, then truncate (retention applied there).
+        Initialize-CompanionRestLogArchive -RestLogPath $logFile -CompanionRoot $ScriptDir
     }
     Write-Host "[rest-log] Starting sink -> $logFile"
     # Break away from the console job - otherwise the sink can vanish mid-session while
@@ -1172,6 +1184,53 @@ function Test-RcloneMountProcessForDrive {
     return ($procs.Count -gt 0)
 }
 
+function Stop-CompanionPhoneRcloneMountForFinish {
+    # After phone LAN AP bounce (or when :8765 dies), L: is a dead WinFsp/rclone drive.
+    # Spawning a new pwsh for Home then hangs on InitializeDefaultDrives for that letter.
+    # Kill mount in-process before bounce/Home — do not start another pwsh to -Unstick.
+    $letter = Get-PreferredMountDriveLetter
+    $driveRoot = "${letter}:"
+    $driveToken = [regex]::Escape($driveRoot)
+    $stoppedRclone = 0
+    $stoppedPs = 0
+
+    Get-CimInstance Win32_Process -Filter "Name='rclone.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $cmd = [string]$_.CommandLine
+            if ($cmd -notmatch '(?i)\bmount\b') { return $false }
+            return ($cmd -match $driveToken -or $cmd -match '(?i)loopsegments:' -or $cmd -match '(?i)LoopSegments')
+        } |
+        ForEach-Object {
+            Write-Host "[rclone] Kill mount rclone PID $($_.ProcessId) before Wi-Fi bounce / Home"
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            $stoppedRclone++
+        }
+
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ProcessId -ne $PID -and
+            $_.Name -match '(?i)^(powershell|pwsh)(\.exe)?$' -and
+            [string]$_.CommandLine -match 'Mount-LoopSegmentsRclone\.ps1'
+        } |
+        ForEach-Object {
+            Write-Host "[rclone] Kill mount console PID $($_.ProcessId)"
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            $stoppedPs++
+        }
+
+    try {
+        Remove-PSDrive -Name $letter -Force -ErrorAction SilentlyContinue
+    } catch {}
+    try {
+        & cmd.exe /c "net use ${driveRoot} /delete /y" 2>$null | Out-Null
+    } catch {}
+
+    if ($stoppedRclone -gt 0 -or $stoppedPs -gt 0) {
+        Write-Host "[rclone] Stopped phone mount (${stoppedRclone} rclone, ${stoppedPs} console) so Home pwsh will not hang on dead ${driveRoot}"
+        Start-Sleep -Milliseconds 400
+    }
+}
+
 function Invoke-PhoneLanRecoverIfNeeded {
     # Probe expected phone LAN page; if down, reboot off-subnet routers and wait (standalone script).
     if ($SkipGatewayReboot) {
@@ -1456,6 +1515,7 @@ if ($NoLaunch) {
     [void](Invoke-AttemptRcloneMount)
     Invoke-MeasureLanThroughputIfMounted
     Write-Host "[run] Setup complete (-NoLaunch). Extension: $ExtensionDir"
+    try { Stop-CompanionConsoleTranscript } catch {}
     exit 0
 }
 
@@ -1795,29 +1855,47 @@ function Get-PhoneExportBusyReason {
     } catch {
         return $null
     }
+    if ($null -eq $status) { return $null }
 
+    # StrictMode-safe: status.json fields vary by app build / phase.
     $reasons = [System.Collections.Generic.List[string]]::new()
-    $phase = $null
-    if ($null -ne $status.exportSource -and $null -ne $status.exportSource.phase) {
-        $phase = [string]$status.exportSource.phase
+    $exportSource = $null
+    $exportProp = $status.PSObject.Properties['exportSource']
+    if ($null -ne $exportProp) { $exportSource = $exportProp.Value }
+
+    $phase = ''
+    if ($null -ne $exportSource) {
+        $phaseProp = $exportSource.PSObject.Properties['phase']
+        if ($null -ne $phaseProp) { $phase = [string]$phaseProp.Value }
     }
     if ($phase -eq 'running') {
         $name = ''
-        if ($null -ne $status.exportSource.displayName) {
-            $name = [string]$status.exportSource.displayName
+        if ($null -ne $exportSource) {
+            $nameProp = $exportSource.PSObject.Properties['displayName']
+            if ($null -ne $nameProp) { $name = [string]$nameProp.Value }
         }
-        if ($name) {
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
             [void]$reasons.Add("export running ($name)")
         } else {
             [void]$reasons.Add('export running')
         }
-    } elseif ($null -ne $status.lanLive) {
-        [void]$reasons.Add('export active (lanLive)')
+    } else {
+        $lanLiveProp = $status.PSObject.Properties['lanLive']
+        if ($null -ne $lanLiveProp -and $null -ne $lanLiveProp.Value) {
+            $lanLive = $lanLiveProp.Value
+            if ($lanLive -eq $true -or "$lanLive" -eq 'True' -or "$lanLive" -eq '1') {
+                [void]$reasons.Add('export active (lanLive)')
+            }
+        }
     }
 
     $pendingCount = 0
-    if ($null -ne $status.pendingExportQueue -and $null -ne $status.pendingExportQueue.count) {
-        $pendingCount = [int]$status.pendingExportQueue.count
+    $pendingProp = $status.PSObject.Properties['pendingExportQueue']
+    if ($null -ne $pendingProp -and $null -ne $pendingProp.Value) {
+        $countProp = $pendingProp.Value.PSObject.Properties['count']
+        if ($null -ne $countProp -and $null -ne $countProp.Value) {
+            try { $pendingCount = [int]$countProp.Value } catch { $pendingCount = 0 }
+        }
     }
     if ($pendingCount -gt 0) {
         [void]$reasons.Add("pending queue ($pendingCount)")
@@ -1922,16 +2000,17 @@ function Invoke-GoIphoneHome {
         return
     }
     Write-Host "[home] USB Home if Loop Segments is still foreground (skip when backgrounded or locked)..."
+    # Fresh pwsh after a dead L: hangs on FileSystem InitializeDefaultDrives; mount was stopped above.
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $code = 1
     try {
-        # Same console so pymobiledevice3 progress/timeouts are visible (hidden child looked "stuck").
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = (Get-LoopSegmentsPwshExe)
         $psi.Arguments = "-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File `"$homePs1`" -NoWaitEnter"
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $false
+        $psi.WorkingDirectory = $env:SystemRoot
         $p = [System.Diagnostics.Process]::Start($psi)
         # Outer cap: import + list + DVT SpringBoard/Settings (HID --userspace skipped on iOS 26).
         $outerMs = 120000
@@ -1979,6 +2058,10 @@ function Invoke-CompanionGracefulFinish {
         }
         Clear-LocalProfileMinimal -ProfileDir $UserDataDir
         Stop-CompanionRestLogSink
+        # Drop L: before AP bounce / Home — dead WinFsp letter hangs new pwsh (InitializeDefaultDrives).
+        try { Stop-CompanionPhoneRcloneMountForFinish } catch {
+            Write-Warning "[rclone] Pre-finish mount stop: $($_.Exception.Message)"
+        }
         # Probe while Loop Segments is still foreground (Home/background can kill :8765 if Keep Alive is off).
         Invoke-PhoneWifiWwwProbeBeforeHome
         Invoke-GoIphoneHome
@@ -1997,6 +2080,7 @@ function Invoke-CompanionGracefulFinish {
     } catch {
         Write-Warning "[run] Finish had errors: $($_.Exception.Message)"
     } finally {
+        try { Stop-CompanionConsoleTranscript } catch {}
         # Marker only after finish attempt so a killed-mid-sync console X still lets the watchdog upload.
         try {
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $GracefulExitMarker) | Out-Null
@@ -2250,6 +2334,9 @@ if ($lanStartUrl) {
     Write-Host "[run] No phoneLanHost in lan_config.json - LAN tab not opened at launch"
 }
 Write-Host "[run] REST disk log: $(Join-Path $ScriptDir 'rest.log')"
+if ($script:CompanionTranscriptPath) {
+    Write-Host "[run] Console transcript: $($script:CompanionTranscriptPath)"
+}
 Write-Host "[run] In-browser logs: click the extension icon"
 Write-Host "[run] Args: $ChromeArgString"
 
@@ -2337,6 +2424,7 @@ if (-not $script:CompanionShutdownRequested) {
 
 if ($DetachChromium) {
     Write-Host "[run] Detached (-DetachChromium). Full local profile kept until next run uploads, then clears."
+    try { Stop-CompanionConsoleTranscript } catch {}
     exit 0
 } else {
     try {
