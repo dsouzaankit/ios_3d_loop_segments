@@ -106,7 +106,7 @@ If Explorer never shows **Loop Segments**:
 | Internal Storage only `202605_a` folders | Those are **Photos**, not the app. Use **Files → On My iPhone → Loop Segments → Exports** on the phone; try **Apple Devices** app on PC for File Sharing |
 | PC can’t see iPhone | Unlock phone, replug USB, open **Apple Devices** app; if Exports vanished during export, **stop export**, unlock, then browse again. Copy path from Explorer → `-SourceRoot` |
 | Network timed out on export | Strong cellular; keep app foreground; try Wi‑Fi; read `Exports/export_latest.txt` |
-| LAN sync fails | Same Wi‑Fi; Local Network allowed for Loop Segments; IP in `loop-segments-lan-host.txt`; wait for `DLNA slot published` in `export_latest.txt` |
+| LAN sync fails | Same Wi‑Fi; Local Network allowed for Loop Segments; IP in `windows/loop-segments-windows.json` (`phoneLanHost`); wait for `DLNA slot published` in `export_latest.txt` |
 | DLNA empty | Confirm `op_00.mp4` and `op_01.mp4` in `F:\f1_media\3d_fullsbs_trans` |
 | pCloud fails on phone | Approve WebDAV 2FA email; check cellular permission. **Authenticated WebDAV 404** (even on `/p_cld_media/`) while unauth still **401** is usually a **pCloud outage** — same 404 in browser/Cyberduck on `webdav.pcloud.com`; wait it out (see [ios/README.md](ios/README.md#pcloud-webdav-404-accountservice)). Europe API **1022** is wrong datacenter, not 2FA |
 | Export fails on phone | **Files → Loop Segments → Exports → export_latest.txt** on the phone |

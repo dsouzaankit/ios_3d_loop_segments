@@ -707,6 +707,52 @@ function Write-WebCompanionHybridMediaList {
     }
 }
 
+function Write-LanConfigFiles {
+    param(
+        [Parameter(Mandatory = $true)][string] $HostName,
+        [int] $Port = 8765,
+        [string] $User = 'admin',
+        [string] $Password = 'iosadmin',
+        [bool] $PreferUsb = $false,
+        [string] $ConfigPhoneLanHost = ''
+    )
+    $payload = [ordered]@{
+        phoneLanHost          = $HostName.Trim()
+        lanPort               = $Port
+        webdavUser            = $User
+        webdavPassword        = $Password
+        phoneLanHostSource    = $(if ($PreferUsb) { 'usb' } else { 'config' })
+        preferUsbPhoneLanHost = [bool]$PreferUsb
+        configPhoneLanHost    = $(if ($ConfigPhoneLanHost) { $ConfigPhoneLanHost.Trim() } else { '' })
+    }
+    $json = ($payload | ConvertTo-Json -Depth 3) + "`n"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    $targets = @(
+        (Join-Path $PSScriptRoot 'lan_config.json')
+        (Join-Path $env:LOCALAPPDATA 'pcloud_web_companion\extension\lan_config.json')
+    )
+    foreach ($path in $targets) {
+        $dir = Split-Path -Parent $path
+        if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
+    }
+    return $payload
+}
+
+function Get-CompanionLoopSegmentsLib {
+    $windowsDir = Split-Path -Parent $PSScriptRoot
+    $lib = Join-Path $windowsDir 'lib\LoopSegments-Windows.ps1'
+    if (-not (Test-Path -LiteralPath $lib)) {
+        throw "Missing $lib"
+    }
+    if (-not (Get-Command Get-LoopSegmentsWindowsSettings -ErrorAction SilentlyContinue)) {
+        . $lib
+    }
+    Initialize-LoopSegmentsWindowsConfig
+}
+
 while ($true) {
     $client = $null
     try {

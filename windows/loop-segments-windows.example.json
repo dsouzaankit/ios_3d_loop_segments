@@ -1,8 +1,8 @@
 {
-  "phoneLanHost": "192.168.1.42",
+  "phoneLanHost": "10.0.100.10",
   "phoneLanHosts": [
-    { "host": "192.168.1.42", "label": "iPhone A" },
-    { "host": "192.168.1.43", "label": "iPhone B" }
+    { "host": "10.0.100.10", "label": "iPhone A" },
+    { "host": "10.0.100.11", "label": "iPhone B" }
   ],
   "lanPort": 8765,
   "mountDriveLetter": "L",
@@ -12,11 +12,13 @@
   "winfspDllPath": "",
   "skipWinFspCheck": false,
   "minLanThroughputMbps": 40,
+  "phoneLanHostSource": "config",
+  "preferUsbPhoneLanHost": false,
   "dlnaFolder": "",
   "skyboxExe": "",
   "virtualDesktopStreamerExe": "",
   "webdavUser": "admin",
   "webdavPassword": "iosadmin",
   "iCloudDownloads": "",
-  "notes": "Per-PC file (gitignored). Copy to loop-segments-windows.json on each Windows PC. Empty rcloneConfigPath = auto-detect. Empty iCloudDownloads = %USERPROFILE%\\iCloudDrive\\Downloads (used by repo-root deploy.ps1). phoneLanHosts pools multiple iPhones for lan\\Get-LoopSegmentsUnifiedLANListing.ps1; phoneLanHost remains the primary mount target for rclone. minLanThroughputMbps = companion/measure reboots other routers and re-checks when LAN probe is below this. skyboxExe = optional SKYBOX.exe path. virtualDesktopStreamerExe = optional VirtualDesktop.Streamer.exe path (companion starts Streamer if idle, starts the service if stopped, and hides Streamer to the tray)."
+  "notes": "Per-PC file (gitignored). Copy to loop-segments-windows.json on each Windows PC. Empty rcloneConfigPath = auto-detect. Empty iCloudDownloads = %USERPROFILE%\\iCloudDrive\\Downloads (used by repo-root deploy.ps1). phoneLanHosts pools multiple iPhones for lan\\Get-LoopSegmentsUnifiedLANListing.ps1; phoneLanHost remains the primary mount target for rclone. phoneLanHostSource (super-config, set before companion; default config): config = force saved phoneLanHost; usb = current Wi-Fi via USB pcapd — preferUsbPhoneLanHost mirrors it; Set-LoopSegmentsPhoneLanHostSource.ps1. minLanThroughputMbps = companion/measure reboots other routers and re-checks when LAN probe is below this. skyboxExe = optional SKYBOX.exe path. virtualDesktopStreamerExe = optional VirtualDesktop.Streamer.exe path (companion starts Streamer if idle, starts the service if stopped, and hides Streamer to the tray)."
 }

@@ -15,7 +15,7 @@
   Save the phone IP from the export log (LAN export: http://...) or -Discover.
 
 .PARAMETER PhoneHost
-  iPhone LAN IPv4 (e.g. 192.168.1.42). Default: loop-segments-lan-host.txt in this folder.
+  iPhone LAN IPv4 (e.g. 10.0.100.10). Default: phoneLanHost in loop-segments-windows.json.
 
 .PARAMETER Port
   LAN server port (default 8765).
@@ -53,7 +53,7 @@ $SegmentNames = @('op_00.mp4', 'op_01.mp4')
 $RemoteSegmentName = 'loop/op_00.mp4'
 
 function Get-LoopSegmentsLANHostConfigPath {
-    Join-Path (Split-Path $PSScriptRoot -Parent) 'loop-segments-lan-host.txt'
+    Join-Path (Split-Path $PSScriptRoot -Parent) 'loop-segments-windows.json'
 }
 
 function Get-LoopSegmentsLANHost {
@@ -62,12 +62,19 @@ function Get-LoopSegmentsLANHost {
     if ([string]::IsNullOrWhiteSpace($resolved)) {
         $configFile = Get-LoopSegmentsLANHostConfigPath
         if (Test-Path -LiteralPath $configFile -PathType Leaf) {
-            $resolved = (Get-Content -LiteralPath $configFile -Raw).Trim().Trim('"')
+            try {
+                $json = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
+                $prop = $json.PSObject.Properties['phoneLanHost']
+                if ($null -ne $prop) {
+                    $resolved = ([string]$prop.Value).Trim().Trim('"')
+                }
+            } catch {}
         }
     }
     if ([string]::IsNullOrWhiteSpace($resolved)) {
         throw @"
 PhoneHost is required. Copy the IP from the app export log (LAN export: http://...).
+Set phoneLanHost in loop-segments-windows.json or pass -PhoneHost.
 
 Run once:
   .\Set-LoopSegmentsLANHost.ps1 192.168.1.42

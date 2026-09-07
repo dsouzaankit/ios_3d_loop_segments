@@ -12,7 +12,7 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 
 | Folder | Role |
 |--------|------|
-| *(this folder)* | `README.md`, `loop-segments-windows.json` (+ example), legacy `loop-segments-lan-host.txt` |
+| *(this folder)* | `README.md`, `loop-segments-windows.json` (+ example) |
 | `lib/` | Shared helpers: `LoopSegments-Windows.ps1`, Python picker, AltServer wrappers (`env_setup` submodule), Skybox wrappers (`Skybox_vr_pc` submodule) |
 | `setup/` | New-PC bootstrap + edit per-PC json / LAN IP |
 | `usb/` | Force-open / Home over USB (`pymobiledevice3`) |
@@ -74,7 +74,7 @@ cd <repo>\windows   # e.g. where this README lives
 
 Or step by step: copy `loop-segments-windows.example.json` → `loop-segments-windows.json`, then `.\setup\Set-LoopSegmentsWindows.ps1`.
 
-**`phoneLanHost` (USB, not a LAN scan):** with the phone **USB-connected**, unlocked, and on Wi‑Fi, `.\setup\Set-LoopSegmentsLANHost.ps1` (no args) or `.\lan\Discover-LoopSegmentsLanHost.ps1` reads the phone’s Wi‑Fi IPv4 via **`env_setup\lan\Get-IphoneLanIpv4.py`** (pymobiledevice3 **pcapd**) and writes `loop-segments-windows.json`. The companion does the same when the saved host is empty or `:8765` is unreachable. **No TCP subnet scan** for the phone IP. Pass an IP explicitly if you prefer. Phone + PC on the **same subnet** is separate: `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1` (also used by companion / rclone).
+**`phoneLanHostSource` (super-config, before companion):** `"config"` (default) = force saved `phoneLanHost` (PC may be aligned to that subnet); `"usb"` = keep the phone’s **current** Wi‑Fi IPv4 via USB pcapd for `lan_config` + gateway/recover — **does not overwrite** saved `phoneLanHost`. Set with `.\setup\Set-LoopSegmentsPhoneLanHostSource.ps1` (bare run / double-click **toggles**; or `-Usb` / `-Config` / `-Show`) or edit json. **`phoneLanHost`** itself is the saved IP (`.\setup\Set-LoopSegmentsLANHost.ps1` / discover). **No TCP subnet scan**. Phone + PC same subnet: `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`.
 
 Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). Writable paths support **PUT** (≤ 2 MB), **MKCOL**, **DELETE**, and **MOVE** (build **282+**; Explorer rename stays on-phone). No server **COPY** yet. **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**.
 
@@ -166,10 +166,10 @@ Each phone runs its own LAN server on **`http://<phone-ip>:8765/`**. To browse *
 1. Add every phone to **`phoneLanHosts`** in `loop-segments-windows.json` (keep **`phoneLanHost`** as the primary rclone mount target):
 
 ```json
-"phoneLanHost": "192.168.1.42",
+"phoneLanHost": "10.0.100.10",
 "phoneLanHosts": [
-  { "host": "192.168.1.42", "label": "iPhone A" },
-  { "host": "192.168.1.43", "label": "iPhone B" }
+  { "host": "10.0.100.10", "label": "iPhone A" },
+  { "host": "10.0.100.11", "label": "iPhone B" }
 ]
 ```
 
@@ -208,7 +208,9 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 
 | Field | Purpose |
 |-------|---------|
-| `phoneLanHost` | Primary iPhone Wi‑Fi IP for rclone / companion (USB pcapd can refresh; changes per Wi‑Fi) |
+| `phoneLanHost` | Saved iPhone Wi‑Fi IP (fallback / forced when `phoneLanHostSource=config`) |
+| `phoneLanHostSource` | **Super-config:** `config` (default) = force `phoneLanHost`; `usb` = current Wi‑Fi via pcapd at companion start. Bare run of `setup\Set-LoopSegmentsPhoneLanHostSource.ps1` toggles |
+| `preferUsbPhoneLanHost` | Mirror of `phoneLanHostSource` (`true`↔`usb`) for older callers |
 | `phoneLanHosts` | Optional array `{ host, label?, port? }` — unified LAN listing across multiple iPhones |
 | `lanPort` | Usually `8765` |
 | `minLanThroughputMbps` | Companion/measure: if LAN probe is below this (default `40`), reboot other routers (not current gateway), settle, re-check (up to 2 retries) |
@@ -243,8 +245,6 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `chromium-profile.zip` (shared pCloud login) | Playwright browsers, unpacked extension, REST log |
 | | `loop-segments-windows.json` (per-PC phone IP) |
 
-Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compatibility (gitignored).
-
 ## Scripts
 
 | Script | Role |
@@ -257,6 +257,7 @@ Legacy one-line IP file `loop-segments-lan-host.txt` is still updated for compat
 | `lib\Get-LoopSegmentsVirtualDesktop.ps1` | Locate/start **Virtual Desktop Streamer**, start the service if it is stopped, and hide the Streamer window to the **tray** (`-SkipVirtualDesktop` to skip). Companion finish does not quit Streamer |
 | `lib\Get-LoopSegmentsClash.ps1` | Optional: if Clash/mihomo is running, UAC-run **`env_setup\altserver_refresh\VpnMulticast\Remove-VpnMulticastRoute.ps1`** so TUN `224.0.0.0/4` does not steal `.local` mDNS. Phone-IP / `:8765` use numeric IPs and do not need this. |
 | `setup\Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
+| `setup\Set-LoopSegmentsPhoneLanHostSource.ps1` | **Super-config** before companion: bare run / double-click **toggles** `usb`↔`config`; also `-Usb` / `-Config` / `-Show` |
 | `setup\Set-LoopSegmentsLANHost.ps1` | Set `phoneLanHost` (no args = USB pcapd; or pass IP; `-ForceDiscover` re-reads USB even if `:8765` up) |
 | `lan\Discover-LoopSegmentsLanHost.ps1` | USB pcapd → save `phoneLanHost` (`-Force`, `-NoSave` print only; Enter on direct run, `-NoWaitEnter` for callers) |
 | `lan\Get-LoopSegmentsUnifiedLANListing.ps1` | **Pool media listings** from all `phoneLanHosts` → JSON or HTML |

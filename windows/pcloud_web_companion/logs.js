@@ -16,11 +16,14 @@ async function load() {
   render(restLogs);
 }
 
-document.getElementById("refresh").addEventListener("click", () => void load());
+document.getElementById("refresh").addEventListener("click", () => {
+  void load();
+});
 document.getElementById("clear").addEventListener("click", async () => {
   await chrome.storage.local.set({ restLogs: [] });
   render([]);
 });
+
 let openPBusy = false;
 document.getElementById("openP").addEventListener("click", async () => {
   if (openPBusy) return;

@@ -21,7 +21,7 @@ function Get-LoopSegmentsWindowsExamplePath {
 
 function Get-DefaultLoopSegmentsWindowsSettings {
     [ordered]@{
-        phoneLanHost            = ''
+        phoneLanHost            = '10.0.100.10'
         phoneLanHosts           = @()
         lanPort                 = 8765
         mountDriveLetter        = 'L'
@@ -32,6 +32,11 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         skipWinFspCheck         = $false
         # Below this measured LAN Mbps, companion/measure reboots other routers and re-checks (up to 2 retries).
         minLanThroughputMbps    = 40
+        # Super-config (before companion startup): "config" (default) = force saved phoneLanHost;
+        # "usb" = keep phone's current Wi-Fi IP (pcapd). Config phoneLanHost is never overwritten by USB path.
+        phoneLanHostSource      = 'config'
+        # Mirrored bool for older callers (kept in sync with phoneLanHostSource).
+        preferUsbPhoneLanHost   = $false
         dlnaFolder              = ''
         skyboxExe               = ''
         virtualDesktopStreamerExe = ''
@@ -40,6 +45,58 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         iCloudDownloads         = ''
         notes                   = ''
     }
+}
+
+function Resolve-LoopSegmentsPhoneLanHostSourceValue {
+    param(
+        $Source,
+        $PreferUsb
+    )
+    $raw = if ($null -eq $Source) { '' } else { ([string]$Source).Trim().ToLowerInvariant() }
+    if ($raw -eq 'usb' -or $raw -eq 'current' -or $raw -eq 'phone') { return 'usb' }
+    if ($raw -eq 'config' -or $raw -eq 'saved' -or $raw -eq 'json') { return 'config' }
+    if ($null -ne $PreferUsb) {
+        return $(if ([bool]$PreferUsb) { 'usb' } else { 'config' })
+    }
+    return 'config'
+}
+
+function Sync-LoopSegmentsPhoneLanHostSourceFields {
+    param([hashtable] $Settings)
+    if ($null -eq $Settings) { return $Settings }
+    $source = $null
+    $prefer = $null
+    if ($Settings -is [System.Collections.IDictionary]) {
+        if ($Settings.Contains('phoneLanHostSource')) { $source = $Settings['phoneLanHostSource'] }
+        if ($Settings.Contains('preferUsbPhoneLanHost')) { $prefer = $Settings['preferUsbPhoneLanHost'] }
+    }
+    $resolved = Resolve-LoopSegmentsPhoneLanHostSourceValue -Source $source -PreferUsb $prefer
+    $Settings['phoneLanHostSource'] = $resolved
+    $Settings['preferUsbPhoneLanHost'] = ($resolved -eq 'usb')
+    return $Settings
+}
+
+function Get-LoopSegmentsPhoneLanHostSource {
+    $settings = Get-LoopSegmentsWindowsSettings
+    return [string]$settings.phoneLanHostSource
+}
+
+function Test-LoopSegmentsPreferUsbPhoneLanHost {
+    return ((Get-LoopSegmentsPhoneLanHostSource) -eq 'usb')
+}
+
+function Set-LoopSegmentsPhoneLanHostSourcePreference {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('usb', 'config')]
+        [string] $Source,
+        [switch] $Quiet
+    )
+    $settings = Get-LoopSegmentsWindowsSettings
+    $settings.phoneLanHostSource = $Source.ToLowerInvariant()
+    $settings.preferUsbPhoneLanHost = ($settings.phoneLanHostSource -eq 'usb')
+    Save-LoopSegmentsWindowsSettings -Settings $settings -Quiet:$Quiet
+    return $settings
 }
 
 function Get-LoopSegmentsWebDAVCredentials {
@@ -90,24 +147,11 @@ function Merge-LoopSegmentsWindowsSettings {
     return $merged
 }
 
-function Import-LoopSegmentsLegacyLanHost {
-    param([hashtable] $Settings)
-    $legacy = Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-lan-host.txt'
-    if (-not [string]::IsNullOrWhiteSpace($Settings.phoneLanHost)) { return $Settings }
-    if (-not (Test-Path -LiteralPath $legacy)) { return $Settings }
-    $raw = Get-Content -LiteralPath $legacy -Raw -ErrorAction SilentlyContinue
-    $ip = ([string]$raw).Trim().Trim('"')
-    if (-not [string]::IsNullOrWhiteSpace($ip)) {
-        $Settings.phoneLanHost = $ip
-    }
-    return $Settings
-}
-
 function Get-LoopSegmentsWindowsSettings {
     $path = Get-LoopSegmentsWindowsConfigPath
     $fromFile = Read-LoopSegmentsWindowsConfigFile -Path $path
-    $settings = Merge-LoopSegmentsWindowsSettings -FromFile $fromFile
-    Import-LoopSegmentsLegacyLanHost -Settings $settings
+    $merged = Merge-LoopSegmentsWindowsSettings -FromFile $fromFile
+    Sync-LoopSegmentsPhoneLanHostSourceFields -Settings $merged
 }
 
 function Save-LoopSegmentsWindowsSettings {
@@ -115,6 +159,7 @@ function Save-LoopSegmentsWindowsSettings {
         [hashtable] $Settings,
         [switch] $Quiet
     )
+    $Settings = Sync-LoopSegmentsPhoneLanHostSourceFields -Settings $Settings
     $path = Get-LoopSegmentsWindowsConfigPath
     $ordered = [ordered]@{}
     foreach ($key in (Get-DefaultLoopSegmentsWindowsSettings).Keys) {
@@ -124,10 +169,6 @@ function Save-LoopSegmentsWindowsSettings {
     Set-Content -LiteralPath $path -Value $json -Encoding UTF8
     if (-not $Quiet) {
         Write-Host "Saved: $path"
-    }
-    $legacy = Join-Path $script:LoopSegmentsWindowsRoot 'loop-segments-lan-host.txt'
-    if (-not [string]::IsNullOrWhiteSpace([string]$Settings.phoneLanHost)) {
-        ([string]$Settings.phoneLanHost).Trim() | Set-Content -LiteralPath $legacy -Encoding UTF8 -NoNewline
     }
 }
 
@@ -1321,6 +1362,7 @@ function Show-LoopSegmentsWindowsDiagnostics {
     Write-Host 'Loop Segments Windows (this PC)'
     Write-Host "  Config file:     $(if (Test-Path $configPath) { $configPath } else { '(missing - copy .example.json)' })"
     Write-Host "  Phone LAN:       $($settings.phoneLanHost) : $(Get-LoopSegmentsLanPort)"
+    Write-Host ("  LAN host source: {0} (super-config phoneLanHostSource — usb=current Wi-Fi via pcapd; config=saved phoneLanHost)" -f $settings.phoneLanHostSource)
     try {
         $hosts = Get-LoopSegmentsPhoneHostEntries
         if ($hosts.Count -gt 1) {

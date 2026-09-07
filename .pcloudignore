@@ -6,4 +6,3 @@ windows/pcloud_web_companion/lan_config.json
 
 # Per-PC settings (regenerate with Setup-LoopSegmentsWindows.ps1 / Set-LoopSegmentsWindows.ps1)
 windows/loop-segments-windows.json
-windows/loop-segments-lan-host.txt

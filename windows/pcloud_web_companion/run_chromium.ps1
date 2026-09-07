@@ -338,27 +338,82 @@ function Sync-LanConfigFromLoopSegments {
         return
     }
 
-    # Prefer saved phoneLanHost when reachable; otherwise USB pcapd Wi-Fi IP → phoneLanHost.
-    if (Get-Command Update-LoopSegmentsLANHostFromDiscovery -ErrorAction SilentlyContinue) {
+    # phoneLanHostSource / preferUsbPhoneLanHost (super-config, set before startup):
+    # usb → companion lan_config uses USB pcapd IP (does not rewrite loop-segments-windows.json phoneLanHost).
+    # config → force saved phoneLanHost.
+    $preferUsb = $false
+    $configHost = ''
+    try {
+        if (Get-Command Test-LoopSegmentsPreferUsbPhoneLanHost -ErrorAction SilentlyContinue) {
+            $preferUsb = [bool](Test-LoopSegmentsPreferUsbPhoneLanHost)
+            $configHost = ([string](Get-LoopSegmentsWindowsSettings).phoneLanHost).Trim()
+        } elseif (Get-Command Get-LoopSegmentsWindowsSettings -ErrorAction SilentlyContinue) {
+            $ls = Get-LoopSegmentsWindowsSettings
+            $preferUsb = [bool]$ls.preferUsbPhoneLanHost
+            $configHost = ([string]$ls.phoneLanHost).Trim()
+        }
+    } catch {}
+    if ([string]::IsNullOrWhiteSpace($configHost)) {
         try {
-            [void](Update-LoopSegmentsLANHostFromDiscovery)
+            $peek = Get-Content -LiteralPath $sourcePath -Raw | ConvertFrom-Json
+            # StrictMode-safe: older json may omit these fields.
+            $peekSource = $peek.PSObject.Properties['phoneLanHostSource']
+            $peekPrefer = $peek.PSObject.Properties['preferUsbPhoneLanHost']
+            if ($null -ne $peekSource -or $null -ne $peekPrefer) {
+                $resolved = 'config'
+                if (Get-Command Resolve-LoopSegmentsPhoneLanHostSourceValue -ErrorAction SilentlyContinue) {
+                    $resolved = Resolve-LoopSegmentsPhoneLanHostSourceValue `
+                        -Source $(if ($null -ne $peekSource) { $peekSource.Value } else { $null }) `
+                        -PreferUsb $(if ($null -ne $peekPrefer) { $peekPrefer.Value } else { $null })
+                } elseif ($null -ne $peekPrefer) {
+                    $resolved = if ([bool]$peekPrefer.Value) { 'usb' } else { 'config' }
+                } elseif ($null -ne $peekSource) {
+                    $raw = ([string]$peekSource.Value).Trim().ToLowerInvariant()
+                    $resolved = if ($raw -eq 'usb') { 'usb' } else { 'config' }
+                }
+                $preferUsb = ($resolved -eq 'usb')
+            }
+            $configHost = ([string]$peek.phoneLanHost).Trim()
+        } catch {}
+    }
+
+    $hostName = $configHost
+    $sourceLabel = if ($preferUsb) { 'usb' } else { 'config' }
+    if ($preferUsb -and (Get-Command Get-LoopSegmentsIphoneLanIpv4ViaUsb -ErrorAction SilentlyContinue)) {
+        Write-Host "[lan] phoneLanHostSource=usb — companion target from USB pcapd (config phoneLanHost unchanged)"
+        try {
+            $usb = Get-LoopSegmentsIphoneLanIpv4ViaUsb
+            if ($usb.Ok -and -not [string]::IsNullOrWhiteSpace($usb.Ip)) {
+                $hostName = $usb.Ip.Trim()
+                Write-Host "[lan] USB phone IP $hostName (config remains $(if ($configHost) { $configHost } else { '(empty)' }))"
+            } elseif ([string]::IsNullOrWhiteSpace($hostName)) {
+                throw "USB pcapd found nothing and phoneLanHost is empty in $sourcePath"
+            } else {
+                Write-Warning "[lan] USB pcapd failed — falling back to config $hostName"
+            }
         } catch {
-            Write-Warning "[lan] Auto-discover phoneLanHost failed: $($_.Exception.Message)"
+            if ([string]::IsNullOrWhiteSpace($hostName)) { throw }
+            Write-Warning "[lan] USB pcapd failed: $($_.Exception.Message) — using config $hostName"
         }
-        # Discovery writes loop-segments-windows.json via the shared lib path.
-        $libConfig = $null
-        if (Get-Command Get-LoopSegmentsWindowsConfigPath -ErrorAction SilentlyContinue) {
-            try { $libConfig = Get-LoopSegmentsWindowsConfigPath } catch {}
-        }
-        if ($libConfig -and (Test-Path -LiteralPath $libConfig)) {
-            $sourcePath = $libConfig
-        }
+    } elseif ([string]::IsNullOrWhiteSpace($hostName)) {
+        throw "phoneLanHost is empty in $sourcePath (set it, or set phoneLanHostSource=usb with the phone on USB)"
+    } else {
+        Write-Host "[lan] phoneLanHostSource=config — using configured $hostName"
     }
 
     $settings = Get-Content -LiteralPath $sourcePath -Raw | ConvertFrom-Json
-    $hostName = [string]$settings.phoneLanHost
-    if ([string]::IsNullOrWhiteSpace($hostName)) {
-        throw "phoneLanHost is empty in $sourcePath (USB pcapd found nothing — plug in USB or run ..\setup\Set-LoopSegmentsLANHost.ps1 <ip>)"
+    # StrictMode-safe re-read of super-config from the same file used for WebDAV fields.
+    $preferProp = $settings.PSObject.Properties['preferUsbPhoneLanHost']
+    $sourceProp = $settings.PSObject.Properties['phoneLanHostSource']
+    if ($null -ne $sourceProp -or $null -ne $preferProp) {
+        if (Get-Command Resolve-LoopSegmentsPhoneLanHostSourceValue -ErrorAction SilentlyContinue) {
+            $sourceLabel = Resolve-LoopSegmentsPhoneLanHostSourceValue `
+                -Source $(if ($null -ne $sourceProp) { $sourceProp.Value } else { $null }) `
+                -PreferUsb $(if ($null -ne $preferProp) { $preferProp.Value } else { $null })
+        } elseif ($null -ne $preferProp) {
+            $sourceLabel = if ([bool]$preferProp.Value) { 'usb' } else { 'config' }
+        }
+        $preferUsb = ($sourceLabel -eq 'usb')
     }
 
     $port = 8765
@@ -377,10 +432,13 @@ function Sync-LanConfigFromLoopSegments {
     }
 
     $lanConfig = [ordered]@{
-        phoneLanHost   = $hostName.Trim()
-        lanPort        = $port
-        webdavUser     = $user
-        webdavPassword = $password
+        phoneLanHost          = $hostName.Trim()
+        lanPort               = $port
+        webdavUser            = $user
+        webdavPassword        = $password
+        phoneLanHostSource    = $(if ($preferUsb) { 'usb' } else { 'config' })
+        preferUsbPhoneLanHost = [bool]$preferUsb
+        configPhoneLanHost    = $configHost
     }
 
     $json = $lanConfig | ConvertTo-Json -Depth 3
@@ -957,14 +1015,16 @@ function Invoke-EnsureClashMdnsRoute {
 }
 
 function Invoke-GatewayWifiRebootIfNeeded {
-    # When the PC default gateway is not on the same subnet as phoneLanHost: inform,
-    # reboot current gateway Wi-Fi, wait for a new PC LAN IP, re-check - loop until matched.
+    # Align PC gateway with the *active* phone LAN host (lan_config after Sync),
+    # not the saved config phoneLanHost alone — otherwise USB-on-192.x + config 10.x
+    # wrongly reboots the PC onto 10.x while the phone stays on 192.x.
     $rebootPs1 = Join-Path $WindowsDir "lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1"
     if (-not (Test-Path -LiteralPath $rebootPs1)) {
         Write-Warning "[gateway] Missing $rebootPs1 - skip gateway Wi-Fi reboot check"
         return
     }
 
+    $activeHost = Get-LanConfigPhoneHost
     $psArgs = [System.Collections.Generic.List[string]]::new()
     [void]$psArgs.Add("-NoProfile")
     [void]$psArgs.Add("-ExecutionPolicy")
@@ -974,11 +1034,19 @@ function Invoke-GatewayWifiRebootIfNeeded {
     # Always -NoWaitEnter: companion owns the console Enter prompt (SkipGatewayReboot
     # used to omit it and left "Press Enter to close..." mid-startup).
     [void]$psArgs.Add("-NoWaitEnter")
+    if (-not [string]::IsNullOrWhiteSpace($activeHost)) {
+        [void]$psArgs.Add("-PhoneLanHost")
+        [void]$psArgs.Add($activeHost)
+    }
     if ($SkipGatewayReboot) {
         [void]$psArgs.Add("-SkipGatewayReboot")
     }
 
-    Write-Host "[gateway] Checking default gateway vs phone LAN page subnet..."
+    if (-not [string]::IsNullOrWhiteSpace($activeHost)) {
+        Write-Host "[gateway] Checking default gateway vs active phone LAN host $activeHost ..."
+    } else {
+        Write-Host "[gateway] Checking default gateway vs phone LAN page subnet..."
+    }
     Write-Host "[gateway] > pwsh $($psArgs -join ' ')"
     & (Get-LoopSegmentsPwshExe) @psArgs
     $code = $LASTEXITCODE
@@ -1118,13 +1186,19 @@ function Invoke-PhoneLanRecoverIfNeeded {
 
     Write-Host "[lan-recover] Ensuring phone LAN page is on the expected subnet..."
     Write-Host "[lan-recover] Running recover in-process (same window)..."
+    $activeHost = Get-LanConfigPhoneHost
+    $recoverArgs = @{ NoWaitEnter = $true }
+    if (-not [string]::IsNullOrWhiteSpace($activeHost)) {
+        $recoverArgs['PhoneLanHost'] = $activeHost
+        Write-Host "[lan-recover] Active phone LAN host from lan_config: $activeHost"
+    }
     $savedWait = ${function:Wait-PhoneLanPageReachable}
     $savedTest = ${function:Test-PhoneLanPageReachable}
     $savedTcp = ${function:Test-TcpPortOpen}
     $prevEap = $ErrorActionPreference
     $code = 0
     try {
-        & $recoverPs1 -NoWaitEnter
+        & $recoverPs1 @recoverArgs
         $code = 0
     } catch {
         $msg = [string]$_.Exception.Message
@@ -1682,6 +1756,11 @@ function Invoke-BouncePhoneLanAp {
     [void]$psArgs.Add($rebootPs1)
     [void]$psArgs.Add("-BouncePhoneLanAp")
     [void]$psArgs.Add("-NoWaitEnter")
+    $activeHost = Get-LanConfigPhoneHost
+    if (-not [string]::IsNullOrWhiteSpace($activeHost)) {
+        [void]$psArgs.Add("-PhoneLanHost")
+        [void]$psArgs.Add($activeHost)
+    }
 
     Write-Host "[wifi-www] Bouncing phone LAN AP (Wi-Fi->www probe failed)..."
     Write-Host "[wifi-www] > pwsh $($psArgs -join ' ')"

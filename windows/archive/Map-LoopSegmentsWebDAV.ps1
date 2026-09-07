@@ -40,7 +40,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\LoopSegments-Config.ps1"
 
 function Get-LoopSegmentsLANHostConfigPath {
-    Join-Path (Split-Path $PSScriptRoot -Parent) 'loop-segments-lan-host.txt'
+    Join-Path (Split-Path $PSScriptRoot -Parent) 'loop-segments-windows.json'
 }
 
 function Get-LoopSegmentsLANHost {
@@ -49,11 +49,17 @@ function Get-LoopSegmentsLANHost {
     if ([string]::IsNullOrWhiteSpace($resolved)) {
         $configFile = Get-LoopSegmentsLANHostConfigPath
         if (Test-Path -LiteralPath $configFile -PathType Leaf) {
-            $resolved = (Get-Content -LiteralPath $configFile -Raw).Trim().Trim('"')
+            try {
+                $json = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
+                $prop = $json.PSObject.Properties['phoneLanHost']
+                if ($null -ne $prop) {
+                    $resolved = ([string]$prop.Value).Trim().Trim('"')
+                }
+            } catch {}
         }
     }
     if ([string]::IsNullOrWhiteSpace($resolved)) {
-        throw "PhoneHost required. Run .\Set-LoopSegmentsLANHost.ps1 <ip> or pass -PhoneHost."
+        throw "PhoneHost required. Set phoneLanHost in loop-segments-windows.json or pass -PhoneHost."
     }
     return $resolved.Trim()
 }
