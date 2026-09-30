@@ -167,6 +167,8 @@ Use **iloader** over USB — it works even when on-device refresh is broken and 
 4. **Installers** → **SideStore (Nightly)** or **SideStore (Stable)** (LiveContainer users: the matching **LiveContainer + SideStore** entry).
 5. Phone: LocalDevVPN → Connect → SideStore → **Health Check**.
 
+**iloader Apple ID sign-in / signing keeps failing** (auth, provisioning, “incorrect format”): try another anisette server in iloader, then iloader Settings → **Reset Anisette State**. That deletes iloader’s saved Apple device identity (stored in the Windows credential store) so the next sign-in sets it up fresh — expect a **2FA code** again. It does not touch the phone, SideStore, apps, pairing files, or SideStore’s own anisette settings (those are in SideStore Settings: anisette server / reset adi.pb / On-Device Anisette).
+
 **Pairing file not found** (seen here after iloader **nightly**): iloader → **Delete Stored Pairing** → select device → Trust → **Manage Pairing File** → **Place** next to SideStore (expect green “placed successfully”). Restart phone + PC and retry if needed. **Resolved here by installing SideStore (Stable) via iloader** instead of nightly.
 
 **My Apps is empty after the reinstall** (only SideStore listed): SideStore’s installed-app list was reset; Loop Segments / Web Auto Parking are still on the phone with their data. Re-add each one through SideStore — **do not delete the apps first**:
