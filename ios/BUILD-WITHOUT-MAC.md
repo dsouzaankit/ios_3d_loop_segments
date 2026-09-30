@@ -149,7 +149,35 @@ Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, s
 4. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
 5. Refresh: tap the **7 DAYS** counter (LocalDevVPN still on). **No PC** for weekly refresh or after expiry — PC only if the pairing file dies (iloader). Optional: schedule Shortcuts automation below instead of remembering the tap.
 
-**incorrect data format on SideStore:** same two causes as AltStore — (1) partial iCloud IPA, (2) bad anisette. Fix IPA locality first; then SideStore Settings → change **Anisette** server / sign out+in / re-place pairing with iloader. If stable still fails, use **nightly**.
+**incorrect data format on SideStore:** same two causes as AltStore — (1) partial iCloud IPA, (2) bad anisette. Fix IPA locality first; then SideStore Settings → change **Anisette** server / sign out+in / re-place pairing with iloader. If stable still fails, use **nightly**. Apple ID login with this error: SideStore Settings → **User Customizations** → turn off **On-Device Anisette** (or switch anisette server).
+
+**Refresh fails: “Device Reachability (Ping): Unreachable”** (Settings → **Health Check**; LocalDevVPN shows Connected). LocalDevVPN **1.3.0** (Sep 2026) changed its tunnel addresses to `10.7.1.x`; SideStore builds older than about Sep 3, 2026 can't reach the device on them ([SideStore #1464](https://github.com/SideStore/SideStore/issues/1464)).
+
+1. **Fix:** [reinstall SideStore with iloader](#reinstall-or-update-sidestore-with-iloader) — nightly has the LocalDevVPN 1.3.0 fix; if nightly then shows **Pairing file not found**, install **stable** instead (what worked here, Sep 2026).
+2. **Stopgap** (can't reinstall yet, or ping still fails on stable): LocalDevVPN settings → **Tunnel IP** `10.7.0.2/30`, **Device IP** `10.7.0.1/32` → disconnect/reconnect. Restore the defaults once SideStore works with them.
+3. Still red: pairing not verified → re-place pairing with iloader; other VPN (Surfshark / Clash) connected on the phone → disconnect it; Wi‑Fi on.
+
+#### Reinstall or update SideStore with iloader
+
+Use **iloader** over USB — it works even when on-device refresh is broken and places a fresh pairing file. Check the installed version afterward: SideStore **Settings** tab → bottom of the page (or iOS **Settings → General → iPhone Storage → SideStore**).
+
+1. [iloader](https://github.com/nab138/iloader/releases) **2.1.0+** on the PC.
+2. USB + keep the phone **unlocked** (passcode must be set) → **Trust** on the phone; select the device in iloader (trust again if asked).
+3. Sign in with the **same Apple ID** SideStore uses.
+4. **Installers** → **SideStore (Nightly)** or **SideStore (Stable)** (LiveContainer users: the matching **LiveContainer + SideStore** entry).
+5. Phone: LocalDevVPN → Connect → SideStore → **Health Check**.
+
+**Pairing file not found** (seen here after iloader **nightly**): iloader → **Delete Stored Pairing** → select device → Trust → **Manage Pairing File** → **Place** next to SideStore (expect green “placed successfully”). Restart phone + PC and retry if needed. **Resolved here by installing SideStore (Stable) via iloader** instead of nightly.
+
+**My Apps is empty after the reinstall** (only SideStore listed): SideStore’s installed-app list was reset; Loop Segments / Web Auto Parking are still on the phone with their data. Re-add each one through SideStore — **do not delete the apps first**:
+
+1. Put a **fully local** IPA on the phone (Loop Segments: `.\copy-to-icloud.ps1` → iCloud Downloads; wait for full size in Files).
+2. LocalDevVPN on → **SideStore → My Apps → +** → pick the IPA.
+3. Same Apple ID ⇒ installs over the existing app (data kept) and the **7 DAYS** counter returns. A **second** icon means a different Apple ID/team signed it — delete the new copy, not the original.
+
+Also make sure only **one** SideStore icon remains (each copy uses one of the 3 free slots).
+
+**No PC:** apply the LocalDevVPN stopgap above first, then download the [nightly SideStore.ipa](https://github.com/SideStore/SideStore/releases/download/nightly/SideStore.ipa) in Safari (wait until fully saved) → **SideStore → My Apps → +** → pick it. If the self-update seems to hang near the end, go to the Home screen to let it finish ([SideStore troubleshooting](https://docs.sidestore.io/docs/troubleshooting)).
 
 #### SideStore Shortcuts auto-refresh (optional)
 
