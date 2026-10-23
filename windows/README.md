@@ -78,7 +78,7 @@ Or step by step: copy `loop-segments-windows.example.json` → `loop-segments-wi
 
 **`phoneLanHostSource` (super-config, before companion):** `"config"` (default) = force saved `phoneLanHost` (PC may be aligned to that subnet); `"usb"` = keep the phone’s **current** Wi‑Fi IPv4 via USB pcapd for `lan_config` + gateway/recover — **does not overwrite** saved `phoneLanHost`. Set with `.\setup\Set-LoopSegmentsPhoneLanHostSource.ps1` (bare run / double-click **toggles**; or `-Usb` / `-Config` / `-Show`) or edit json. **`phoneLanHost`** itself is the saved IP (`.\setup\Set-LoopSegmentsLANHost.ps1` / discover). **No TCP subnet scan**. Phone + PC same subnet: `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`.
 
-Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). Writable paths support **PUT** (≤ 2 MB), **MKCOL**, **DELETE**, and **MOVE** (build **282+**; Explorer rename stays on-phone). No server **COPY** yet. **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**.
+Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). Writable paths support **PUT** (≤ 2 MB), **MKCOL**, **DELETE**, and **MOVE** (build **282+**; Explorer rename stays on-phone). No server **COPY** yet. **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**. **If `L:\archive\` fails to play via Skybox AirScreen**, use **[3d_playlist_local](https://github.com/dsouzaankit/3d_playlist_local)** → output to the **`3d_fullsbs_trans`** AirScreen share and play from there instead.
 
 ## App LAN vs primary router
 

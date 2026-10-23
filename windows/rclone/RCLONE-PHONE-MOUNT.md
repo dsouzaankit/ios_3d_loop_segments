@@ -39,10 +39,12 @@ If Explorer instead shows **`L:\pcld_ios_media\`**, the mount is WebDAV root (fo
 
 Preferred **`mountDriveLetter`** in `loop-segments-windows.json` is tried first (default `L`). If that letter is already taken (Koofr, etc.), the mount script picks a **random free D–Z** and writes it back to json.
 
-## When to skip rclone on the PC
+## When to skip rclone on the PC / AirScreen playback
 
 - **Quest Skybox** with **WebDAV** to the phone — prefer if the goal is headset playback.
 - **PC DLNA** without a mapped drive: browser, **`Invoke-WebRequest`**, or **`../archive/Sync-FromPhoneLAN.ps1`** into a local folder.
+
+**If `L:\archive\` (rclone mount) media fails to play via Skybox AirScreen:** WinFsp/`L:` often lists but will not stream reliably through AirScreen. Use the **[3d_playlist_local](https://github.com/dsouzaankit/3d_playlist_local)** library instead — transcode/output to the **`3d_fullsbs_trans`** AirScreen share (mapped in `Skybox_vr_pc` / `skybox_vr_pc.config.json`) and play from that share on Quest.
 
 ## Scripts
 
