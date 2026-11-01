@@ -7,6 +7,8 @@ param(
     [switch]$UsbLaunchMount,
     # Do not open rclone WebDAV mount (default: attempt after USB launch when LAN is up).
     [switch]$SkipRcloneMount,
+    # Do not open rclone serve dlna for phone WebDAV (default: attempt after mount when LAN is up).
+    [switch]$SkipRcloneDlna,
     # Do not check/reboot the LAN gateway when it is off the phone LAN page subnet.
     [switch]$SkipGatewayReboot,
     # Do not time a media copy off L: after a successful rclone mount (default: up to 64 MB).
@@ -1288,24 +1290,106 @@ function Invoke-NotifyCompanionMountDriveInExplorer {
     Write-Host "[rclone] Refreshed Explorer for $root"
 }
 
-function Sync-CompanionSkyboxRcloneIfReady {
-    param([string] $DriveLetter)
+function Clear-CompanionSkyboxRcloneAirScreenMapping {
+    # Phone media for Quest is rclone serve dlna — do not map L:/pcld_ios_media into AirScreen.
+    if (-not (Get-Command Remove-LoopSegmentsSkyboxRcloneFolderMapping -ErrorAction SilentlyContinue)) { return }
     try {
-        $letter = ([string]$DriveLetter).Trim().ToUpperInvariant()
-        if ($letter.Length -lt 1) { return }
-        $letter = $letter.Substring(0, 1)
-        $root = "${letter}:\"
-        if (-not (Test-Path -LiteralPath $root -ErrorAction SilentlyContinue)) { return }
-        if (-not (Get-Command Sync-LoopSegmentsSkyboxRcloneFolder -ErrorAction SilentlyContinue)) { return }
-        $local = $root.TrimEnd('\')
-        if (Get-Command Resolve-LoopSegmentsSkyboxRcloneLocalPathFromDisk -ErrorAction SilentlyContinue) {
-            $local = Resolve-LoopSegmentsSkyboxRcloneLocalPathFromDisk -DriveRoot $root
-        }
-        if ([string]::IsNullOrWhiteSpace([string]$local)) { return }
-        Sync-LoopSegmentsSkyboxRcloneFolder -LocalPath $local
+        Remove-LoopSegmentsSkyboxRcloneFolderMapping
     } catch {
-        Write-Warning "[skybox] Could not sync rclone Add-folders mapping: $($_.Exception.Message)"
+        Write-Warning "[skybox] Could not clear stale rclone Add-folders mapping: $($_.Exception.Message)"
     }
+}
+
+function Test-RcloneDlnaProcessRunning {
+    if (Get-Command Test-LoopSegmentsRcloneCommandLineIsOurDlna -ErrorAction SilentlyContinue) {
+        $procs = @(Get-LoopSegmentsWin32Processes -Name 'rclone.exe' |
+            Where-Object { Test-LoopSegmentsRcloneCommandLineIsOurDlna -CommandLine ([string]$_.CommandLine) })
+        return ($procs.Count -gt 0)
+    }
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='rclone.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $cmd = [string]$_.CommandLine
+            $cmd -match '(?i)\bserve\b' -and $cmd -match '(?i)\bdlna\b' -and
+                ($cmd -match '(?i)loopsegments:' -or $cmd -match '(?i)Loop Segments')
+        })
+    return ($procs.Count -gt 0)
+}
+
+function Invoke-AttemptRcloneDlnaServe {
+    try {
+        return (Invoke-AttemptRcloneDlnaServeCore)
+    } catch {
+        Write-Warning "[rclone-dlna] $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Invoke-AttemptRcloneDlnaServeCore {
+    if ($SkipRcloneDlna) {
+        Write-Host '[rclone-dlna] Skipping phone DLNA serve (-SkipRcloneDlna)'
+        return $false
+    }
+
+    $servePs1 = Join-Path $WindowsDir 'rclone\Serve-LoopSegmentsRcloneDlna.ps1'
+    if (-not (Test-Path -LiteralPath $servePs1)) {
+        Write-Warning "[rclone-dlna] Missing $servePs1 - skip DLNA serve"
+        return $false
+    }
+
+    if (Test-RcloneDlnaProcessRunning) {
+        Write-Host '[rclone-dlna] rclone serve dlna already running for loopsegments - ok'
+        Clear-CompanionSkyboxRcloneAirScreenMapping
+        return $true
+    }
+
+    if (-not (Invoke-PhoneLanRecoverIfNeeded)) {
+        Write-Warning '[rclone-dlna] Phone LAN not reachable - skip DLNA serve'
+        return $false
+    }
+
+    try {
+        Write-Host "[rclone-dlna] Starting serve via $servePs1 -Quick -Hidden (no extra console)..."
+        $serveFile = ([System.IO.Path]::GetFullPath($servePs1) -replace '\\', '/')
+        $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Quick -Hidden -NoWaitEnter' -f $serveFile
+        $proc = Start-LoopSegmentsConsoleNoActivate -FilePath (Get-LoopSegmentsPwshExe) -ArgumentList $argLine `
+            -WorkingDirectory (Split-Path -Parent $servePs1) -Hidden
+        if ($proc -is [System.Array]) {
+            $proc = @($proc | Where-Object { $_ -is [System.Diagnostics.Process] } | Select-Object -Last 1)[0]
+        }
+        if ($null -eq $proc) {
+            Write-Warning '[rclone-dlna] Start-Process returned no process - continuing without DLNA'
+            return $false
+        }
+        Write-Host "[rclone-dlna] DLNA host started (hidden PID $($proc.Id))"
+    } catch {
+        Write-Warning "[rclone-dlna] Could not start DLNA host: $($_.Exception.Message)"
+        return $false
+    }
+
+    $deadline = [datetime]::UtcNow.AddSeconds(45)
+    while ([datetime]::UtcNow -lt $deadline) {
+        if (Test-RcloneDlnaProcessRunning) {
+            $addr = ':7879'
+            $name = 'Loop Segments'
+            try { $addr = Get-LoopSegmentsRcloneDlnaAddr } catch {}
+            try { $name = Get-LoopSegmentsRcloneDlnaName } catch {}
+            Write-Host ("[rclone-dlna] Serving phone WebDAV as DLNA '{0}' on {1} (Quest Network channel)." -f $name, $addr)
+            Clear-CompanionSkyboxRcloneAirScreenMapping
+            return $true
+        }
+        if ($proc -is [System.Diagnostics.Process] -and $proc.HasExited) {
+            Write-Warning ("[rclone-dlna] DLNA console exited early (code {0}) - check that console." -f $proc.ExitCode)
+            return $false
+        }
+        Start-Sleep -Milliseconds 400
+    }
+
+    if (Test-RcloneDlnaProcessRunning) {
+        Clear-CompanionSkyboxRcloneAirScreenMapping
+        return $true
+    }
+    Write-Warning '[rclone-dlna] DLNA console started but rclone serve not seen yet - check that console.'
+    return $false
 }
 
 function Invoke-AttemptRcloneMount {
@@ -1328,7 +1412,7 @@ function Invoke-AttemptRcloneMountCore {
         Write-Host "[rclone] Skipping phone mount (-SkipRcloneMount)"
         $letter = Get-CompanionMountDriveLetter
         $up = (Test-Path -LiteralPath "${letter}:\")
-        if ($up) { Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter }
+        Clear-CompanionSkyboxRcloneAirScreenMapping
         return $up
     }
 
@@ -1358,7 +1442,7 @@ function Invoke-AttemptRcloneMountCore {
         $ready = [bool](Test-Path -LiteralPath $driveRoot -ErrorAction SilentlyContinue)
         if ($ready) {
             Invoke-NotifyCompanionMountDriveInExplorer -DriveLetter $letter
-            Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter
+            Clear-CompanionSkyboxRcloneAirScreenMapping
         }
         return $ready
     }
@@ -1395,7 +1479,7 @@ function Invoke-AttemptRcloneMountCore {
         if (Test-Path -LiteralPath $driveRoot) {
             Write-Host "[rclone] ${driveRoot} is up"
             Invoke-NotifyCompanionMountDriveInExplorer -DriveLetter $letter
-            Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter
+            Clear-CompanionSkyboxRcloneAirScreenMapping
             return $true
         }
         if ($proc -is [System.Diagnostics.Process] -and $proc.HasExited) {
@@ -1434,7 +1518,7 @@ function Invoke-AttemptRcloneMountCore {
         $ready = [bool](Test-Path -LiteralPath $driveRoot)
         if ($ready) {
             Invoke-NotifyCompanionMountDriveInExplorer -DriveLetter $letter
-            Sync-CompanionSkyboxRcloneIfReady -DriveLetter $letter
+            Clear-CompanionSkyboxRcloneAirScreenMapping
         }
         return $ready
     }
@@ -1509,6 +1593,7 @@ if ($NoLaunch) {
     Invoke-EnsureClashMdnsRoute
     Invoke-LoopSegmentsUsbLaunch
     [void](Invoke-AttemptRcloneMount)
+    [void](Invoke-AttemptRcloneDlnaServe)
     Invoke-MeasureLanThroughputIfMounted
     Write-Host "[run] Setup complete (-NoLaunch). Extension: $ExtensionDir"
     try { Stop-CompanionConsoleTranscript } catch {}
@@ -2049,7 +2134,7 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): close Chromium, drop Skybox rclone folder, quit Skybox if we started it, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
 
     try {
         Stop-ProfileChromium -ProfileDir $UserDataDir
@@ -2107,7 +2192,7 @@ function Register-CompanionCancelHandler {
                 $eventArgs.Cancel = $true
                 $script:CompanionShutdownRequested = $true
                 Write-Host ""
-                Write-Host "[run] Ctrl+C received - will close Chromium, drop Skybox rclone folder, quit Skybox if we started it, and sync profile..." -ForegroundColor Yellow
+                Write-Host "[run] Ctrl+C received - will close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, and sync profile..." -ForegroundColor Yellow
                 try { [CompanionConsoleGuard]::KillTrackedChrome() } catch {}
             }
             [Console]::CancelKeyPress += $script:CancelKeyPressHandler
@@ -2419,6 +2504,13 @@ if (-not $script:CompanionShutdownRequested) {
         [void](Invoke-AttemptRcloneMount)
     } catch {
         Write-Warning "[rclone] $($_.Exception.Message)"
+    }
+}
+if (-not $script:CompanionShutdownRequested) {
+    try {
+        [void](Invoke-AttemptRcloneDlnaServe)
+    } catch {
+        Write-Warning "[rclone-dlna] $($_.Exception.Message)"
     }
 }
 if (-not $script:CompanionShutdownRequested) {

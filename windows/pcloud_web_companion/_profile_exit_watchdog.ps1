@@ -6,8 +6,8 @@
 .DESCRIPTION
   Started by run_chromium.ps1 while waiting on Chromium. When the parent PowerShell
   PID exits without writing the graceful-exit marker, this script force-closes the
-  profile Chromium, unmaps Skybox Add-folders (AirScreen + phone rclone), quits SKYBOX VR
-  if this companion session started it, uploads
+  profile Chromium, unmaps Skybox AirScreen Add-folders, quits SKYBOX VR
+  if this companion session started it, stops phone rclone mount+DLNA, uploads
   the profile zip to the repo path, and clears local AppData (same finish path as a
   normal companion exit).
 #>
@@ -121,16 +121,16 @@ if (Get-Command Remove-LoopSegmentsSkyboxRcloneFolderMapping -ErrorAction Silent
 if (Get-Command Stop-LoopSegmentsSkybox -ErrorAction SilentlyContinue) {
     try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
 }
+if (Get-Command Stop-LoopSegmentsPhoneRcloneMount -ErrorAction SilentlyContinue) {
+    try { [void](Stop-LoopSegmentsPhoneRcloneMount) } catch {}
+}
 Start-Sleep -Milliseconds 500
 Sync-Upload -Src $ProfileDir -Dst $RepoProfileDir
 Clear-Local -Dir $ProfileDir
 
 $homePs1 = Join-Path (Split-Path -Parent $PSScriptRoot) "usb\Go-IphoneHomeViaUsb.ps1"
 if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {
-    # Drop dead WinFsp letter before any further work; run Home in-process (no new pwsh).
-    if (Get-Command Stop-LoopSegmentsPhoneRcloneMount -ErrorAction SilentlyContinue) {
-        try { [void](Stop-LoopSegmentsPhoneRcloneMount) } catch {}
-    }
+    # Mount/DLNA already stopped above; run Home in-process (no new pwsh).
     Write-Host "[watchdog] USB Home if Loop Segments is still foreground..."
     try {
         & $homePs1 -NoWaitEnter

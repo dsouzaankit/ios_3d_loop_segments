@@ -6,7 +6,7 @@ Scripts work on **any Windows PC** after you copy or clone this repo (`git clone
 
 **PowerShell:** use **PowerShell 7** (`pwsh`) — install: https://aka.ms/powershell. Open a **pwsh** prompt (not the blue Windows PowerShell 5.1 console) before running `.ps1` files. If you do start one under 5.1, a helper **re-runs that same script under `pwsh`** and exits 5.1 with the child’s code. Prefer a 7 prompt; the bounce is a fallback (path spaces like `iOS apps` used to break it). `.cmd` launchers already call `pwsh`.
 
-Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mount-LoopSegmentsRclone.ps1` (or existing `Mount-PhoneL.cmd`).
+Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mount-LoopSegmentsRclone.ps1` (or `Mount-PhoneL.cmd`). Quest DLNA: `rclone\Serve-LoopSegmentsRcloneDlna.ps1` (or `Serve-PhoneDlna.cmd`).
 
 ## Layout
 
@@ -18,7 +18,7 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 | `usb/` | Force-open / Home over USB (`pymobiledevice3`) |
 | `sideload/` | AltServer logon task; Sideloadly fallback |
 | `lan/` | Multi-phone unified listing / PC index on `:8766`; gateway Wi‑Fi reboot (wrong-subnet / other-router / off-subnet); LAN throughput |
-| `rclone/` | Optional WinFsp drive-letter mount |
+| `rclone/` | Optional WinFsp `L:` mount + `rclone serve dlna` for Quest |
 | `pcloud_web_companion/` | Chromium MV3 companion + `Run-PCloudWebCompanion.ps1` |
 | `archive/` | Legacy `net use` / sync scripts |
 
@@ -41,7 +41,7 @@ cd <repo>\windows
 # 3) Day-to-day: pCloud companion (gateway check → LAN status; USB-foregrounds app unless -SkipUsbLaunch)
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
 #    Quit: close Chromium, Ctrl+C, or console X - kills Chromium, unmaps Skybox
-#    AirScreen + phone rclone folders, quits SKYBOX if this session started it, syncs profile,
+#    AirScreen shares, quits SKYBOX if this session started it, stops rclone mount+DLNA, syncs profile,
 #    then USB Home only if the app is still foreground (Keep Alive default on — see ../ios/README.md; -SkipGoHome to never press)
 
 # Optional helpers
@@ -51,6 +51,7 @@ cd <repo>\windows
 .\usb\Launch-LoopSegmentsViaUsb.ps1 -SkipMount    # open app over USB only
 .\rclone\Mount-LoopSegmentsRclone.ps1 -TestOnly   # probe phone LAN / WebDAV
 .\rclone\Mount-LoopSegmentsRclone.ps1             # mount L: (optional; WinFsp)
+.\rclone\Serve-LoopSegmentsRcloneDlna.ps1         # Quest DLNA over phone WebDAV
 ```
 
 If Loop Segments won’t open after ~7 days: **SideStore** (LocalDevVPN → Refresh; optional daily/weekly **Shortcuts → Refresh All Apps** Automation — caveats in [BUILD-WITHOUT-MAC.md](../ios/BUILD-WITHOUT-MAC.md#sidestore-shortcuts-auto-refresh-optional)) or start **AltServer** → USB + unlock → AltStore **Refresh All** (works even when phone and PC are on different gateways) → **Settings → General → VPN & Device Management → DEVELOPER APP → iPhone Developer: \<email\> → Trust** (entry may appear only after a failed open) → open app once → retry.
@@ -78,7 +79,7 @@ Or step by step: copy `loop-segments-windows.example.json` → `loop-segments-wi
 
 **`phoneLanHostSource` (super-config, before companion):** `"config"` (default) = force saved `phoneLanHost` (PC may be aligned to that subnet); `"usb"` = keep the phone’s **current** Wi‑Fi IPv4 via USB pcapd for `lan_config` + gateway/recover — **does not overwrite** saved `phoneLanHost`. Set with `.\setup\Set-LoopSegmentsPhoneLanHostSource.ps1` (bare run / double-click **toggles**; or `-Usb` / `-Config` / `-Show`) or edit json. **`phoneLanHost`** itself is the saved IP (`.\setup\Set-LoopSegmentsLANHost.ps1` / discover). **No TCP subnet scan**. Phone + PC same subnet: `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1`.
 
-Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). Writable paths support **PUT** (≤ 2 MB), **MKCOL**, **DELETE**, and **MOVE** (build **282+**; Explorer rename stays on-phone). No server **COPY** yet. **rclone mount** is optional; it can feel sluggish vs browser/Skybox direct WebDAV — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**. **If `L:\archive\` fails to play via Skybox AirScreen**, use **[3d_playlist_local](https://github.com/dsouzaankit/3d_playlist_local)** → output to the **`3d_fullsbs_trans`** AirScreen share and play from there instead.
+Phone LAN is **HTTP + WebDAV** on `:8765` (Basic auth **`admin` / `iosadmin`** — same as Skybox). Writable paths support **PUT** (≤ 2 MB), **MKCOL**, **DELETE**, and **MOVE** (build **282+**; Explorer rename stays on-phone). No server **COPY** yet. **rclone mount** (`L:`) is optional for Explorer; companion exposes phone WebDAV to Quest via **`rclone serve dlna`** (not AirScreen of `L:`) — see **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**. Local/playlist AirScreen shares remain `p_cld_media` / `3d_fullsbs_trans` from **`Skybox_vr_pc`**.
 
 ## App LAN vs primary router
 
@@ -107,6 +108,7 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. On start 
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only (still tries rclone if LAN up)
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -EnsureAltServer # AltStore path: start AltServer if idle (default skips)
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipRcloneMount # no drive-letter mount window
+# .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipRcloneDlna   # no rclone serve dlna for Quest
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLanThroughput # no media copy Mbps probe
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLowThroughputGatewayReboot # keep going even if below minLanThroughputMbps
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
@@ -224,7 +226,9 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `skipWinFspCheck` | `true` if Koofr mount already proves WinFsp works |
 | `webdavUser` / `webdavPassword` | Phone LAN WebDAV (defaults match app) |
 | `iCloudDownloads` | **Empty** = `%USERPROFILE%\iCloudDrive\Downloads` — target for repo-root **`copy-to-icloud.ps1`** (also used by **`deploy.ps1`**) |
-| `dlnaFolder` | Optional note for Skybox / junction target |
+| `dlnaFolder` | Optional legacy note / junction target (Explorer); Quest uses `rclone serve dlna` instead |
+| `rcloneDlnaAddr` | rclone serve dlna bind address (default `:7879`) |
+| `rcloneDlnaName` | DLNA friendly name advertised on LAN (default `Loop Segments`) |
 | `skyboxExe` | Optional full path to **SKYBOX.exe** if auto-detect misses (companion starts SKYBOX VR desktop when idle and hides it to the tray) |
 | `virtualDesktopStreamerExe` | Optional full path to **VirtualDesktop.Streamer.exe** if auto-detect misses (companion starts Streamer when idle, starts the service if stopped, and hides Streamer to the tray) |
 | `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
@@ -255,7 +259,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `lib\Get-LoopSegmentsPython.ps1` | Shared Python picker (dot-sourced; prefer 3.12, skip 3.14+) |
 | `lib\LoopSegments-Windows.ps1` | Shared config (dot-sourced; do not run alone) |
 | `lib\Get-LoopSegmentsAltServer.ps1` | Loop Segments wrapper around **`..\env_setup\altserver_refresh\lib\Get-AltServer.ps1`** (locate/start); 7-day / Trust copy stays here |
-| `lib\Get-LoopSegmentsSkybox.ps1` | Companion Skybox setup/teardown: dotsources repo-root **`Skybox_vr_pc`** submodule ([skybox-vr-pc](https://github.com/dsouzaankit/skybox-vr-pc); fallback `P:\all_scripts\Skybox_vr_pc`) for start/hide/quit + AirScreen `p_cld_media`, maps phone rclone `pcld_ios_media` (`-SkipSkybox` to skip) |
+| `lib\Get-LoopSegmentsSkybox.ps1` | Companion Skybox setup/teardown: dotsources repo-root **`Skybox_vr_pc`** submodule ([skybox-vr-pc](https://github.com/dsouzaankit/skybox-vr-pc); fallback `P:\all_scripts\Skybox_vr_pc`) for start/hide/quit + AirScreen `p_cld_media` (clears stale phone-rclone Add-folders; Quest phone media uses rclone DLNA) (`-SkipSkybox` to skip) |
 | `lib\Get-LoopSegmentsVirtualDesktop.ps1` | Locate/start **Virtual Desktop Streamer**, start the service if it is stopped, and hide the Streamer window to the **tray** (`-SkipVirtualDesktop` to skip). Companion finish does not quit Streamer |
 | `lib\Get-LoopSegmentsClash.ps1` | Optional: if Clash/mihomo is running, UAC-run **`env_setup\altserver_refresh\VpnMulticast\Remove-VpnMulticastRoute.ps1`** so TUN `224.0.0.0/4` does not steal `.local` mDNS. Phone-IP / `:8765` use numeric IPs and do not need this. |
 | `setup\Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
@@ -268,9 +272,12 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1` | In-process USB/`pcapd` via **`env_setup\lan`** (phone IP vs PC subnet), then wait for `:8765`. If already on-subnet, does not reboot just because the app is down. Idle phone (Wi‑Fi up, pcapd no host IP) → **soft exit 4**, no PC-gateway WifiRestart; recover waits on `:8765` (then off-subnet router reboot only if still down). `-NoWaitEnter` throws `LAN_RECOVER_EXIT:<code>` so companion/rclone are not killed. |
 | `lan\Measure-LoopSegmentsLanThroughput.ps1` | Time up to 64 MB via phone HTTP from a random `L:\archive\` (or `L:\pcld_ios_media\archive\`) media file → Mbps + recommended max segment bitrate sidecar for hybrid batch |
 | `rclone\Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
+| `rclone\Serve-PhoneDlna.cmd` | **Day-to-day** launcher → `Serve-LoopSegmentsRcloneDlna.ps1` (Quest Network) |
 | `rclone\Unstick-PhoneL.cmd` | Kill dead phone mount + restart Explorer |
 | `rclone\Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** / mount / **`-Remove`** / **`-Unstick`** / **`-Quick`** / LAN watch / **`-RemovePort80Proxy`** |
+| `rclone\Serve-LoopSegmentsRcloneDlna.ps1` | **`-TestOnly`** / `rclone serve dlna` / **`-Remove`** / **`-Quick`** / **`-Hidden`** (companion default) / LAN watch |
 | `%TEMP%\loopsegments-rclone-mount.log` | live rclone mount log (copied to `rclone\loopsegments-rclone-mount.log` on quit) |
+| `%TEMP%\loopsegments-rclone-dlna.log` | live rclone DLNA serve log |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: gateway subnet check/reboot, USB-launch Loop Segments, sync profile, start browser |
 | `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); DVT `--userspace --no-kill-existing` first; skips if already foreground; exit **3** if phone locked |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish if it is still foreground (skip when backgrounded or lock screen; DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); no USB → skip. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` (**in-process**, throws `HOME_USB_EXIT:<code>`) and companion pauses itself after a Home fail |

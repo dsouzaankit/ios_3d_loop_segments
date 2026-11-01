@@ -1,4 +1,4 @@
-# Entry may start under Windows PowerShell 5.1 (file association); re-launch with pwsh.
+﻿# Entry may start under Windows PowerShell 5.1 (file association); re-launch with pwsh.
 <#
 .SYNOPSIS
   Start integrated pcloud_web_companion Chromium helper (USB-launches Loop Segments first).
@@ -12,8 +12,10 @@
   Enter if still wrong); then
   prints phone LAN status, USB-launches Loop Segments to foreground the app
   (unless -SkipUsbLaunch), then attempts an rclone WebDAV mount (unless
-  -SkipRcloneMount) in a separate window when LAN is up, then probes LAN
-  throughput off the mount (unless -SkipLanThroughput). If throughput is below
+  -SkipRcloneMount) and rclone serve dlna for phone WebDAV (unless
+  -SkipRcloneDlna) in separate windows when LAN is up — Quest Skybox uses DLNA,
+  not AirScreen of L:. Then probes LAN throughput off the mount (unless
+  -SkipLanThroughput). If throughput is below
   minLanThroughputMbps (default 40), reboots Wi-Fi on other known routers (not the
   current gateway), waits to settle, and re-measures - up to 2 retries. Chromium
   stays open (this PC's AP is not bounced).
@@ -37,6 +39,9 @@
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -SkipRcloneMount
+
+.EXAMPLE
+  .\Run-PCloudWebCompanion.ps1 -SkipRcloneDlna
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -SkipGatewayReboot
@@ -79,6 +84,7 @@ param(
     [switch] $SkipUsbLaunch,
     [switch] $UsbLaunchMount,
     [switch] $SkipRcloneMount,
+    [switch] $SkipRcloneDlna,
     [switch] $SkipGatewayReboot,
     [switch] $SkipLanThroughput,
     [switch] $SkipLowThroughputGatewayReboot,
@@ -132,6 +138,7 @@ try {
         SkipUsbLaunch                   = $SkipUsbLaunch
         UsbLaunchMount                  = $UsbLaunchMount
         SkipRcloneMount                 = $SkipRcloneMount
+        SkipRcloneDlna                  = $SkipRcloneDlna
         SkipGatewayReboot               = $SkipGatewayReboot
         SkipLanThroughput               = $SkipLanThroughput
         SkipLowThroughputGatewayReboot  = $SkipLowThroughputGatewayReboot

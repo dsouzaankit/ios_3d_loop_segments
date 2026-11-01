@@ -2,7 +2,9 @@
 
 The phone’s LAN server (**`http://<ip>:8765/`**) implements **HTTP + WebDAV** (PROPFIND, PUT/MKCOL/DELETE/**MOVE** under writable `pcld_ios_media/` paths, Basic auth **`admin` / `iosadmin`**) so clients like **Quest Skybox** can add it as a **WebDAV** library directly — **no PC rclone step required**. Media files live in **Application Support** on the phone (hidden from the Files app); **rclone still maps `L:`** via WebDAV — not via USB. If `pcld_ios_media/` exists on the phone, the mount **starts there** (`L:\loop`, `L:\archive`); otherwise Explorer shows `L:\pcld_ios_media\`.
 
-On **Windows**, you can map the same URL with **`rclone mount`** (WinFsp + `type = webdav` in `rclone.conf`) to get a **drive letter** for Explorer / DLNA folder indexing. After the letter attaches, the mount script notifies Explorer so **This PC** shows it without F5; it notifies again when the letter is unmapped (Ctrl+C / console X / LAN-watch / `-Remove`). That path can feel **sluggish**, show **VFS/listing quirks**, or hang compared to **Skybox → phone WebDAV** or **plain HTTP** downloads.
+On **Windows**, you can map the same URL with **`rclone mount`** (WinFsp + `type = webdav` in `rclone.conf`) to get a **drive letter** for Explorer. After the letter attaches, the mount script notifies Explorer so **This PC** shows it without F5; it notifies again when the letter is unmapped (Ctrl+C / console X / LAN-watch / `-Remove`). That path can feel **sluggish**, show **VFS/listing quirks**, or hang compared to **Skybox → phone WebDAV** or **plain HTTP** downloads.
+
+For **Quest Skybox**, companion prefers **`rclone serve dlna`** (`Serve-LoopSegmentsRcloneDlna.ps1` / **`Serve-PhoneDlna.cmd`**) over mapping `L:` into Skybox AirScreen Add-folders. DLNA advertises the phone WebDAV tree on the LAN (`rcloneDlnaAddr` / `rcloneDlnaName` in `loop-segments-windows.json`, default `:7879` / `Loop Segments`). Discover it under Skybox **Network**.
 
 **If Explorer freezes after the phone LAN goes down:** the mount script **polls** `status.json` and **kills rclone + exits** after ~60s unreachable (override with `-LanDownSeconds` / `-LanPollSeconds`, or `-NoLanWatch`). rclone writes **`%TEMP%\loopsegments-rclone-mount.log`** (local disk — it cannot create the log on pCloud `P:`). On quit/abort/next start that file is copied to **`windows\rclone\loopsegments-rclone-mount.log`**. Manual escape: double-click **`Unstick-PhoneL.cmd`** (or `.\Mount-LoopSegmentsRclone.ps1 -Unstick`) to kill the mount and restart Explorer. If Explorer is already wedged, use **Task Manager → File → Run new task** and paste the full path to `Unstick-PhoneL.cmd`.
 
@@ -25,7 +27,7 @@ Or day-to-day: double-click **`Mount-PhoneL.cmd`** in this folder.
 
 The mount script writes/updates **`[loopsegments]`** in your **`rclone.conf`** (same file as Koofr if you use one). Settings: **`../loop-segments-windows.json`** — see **[../README.md](../README.md)**.
 
-**`L:` is read/write by default.** If the mount starts at `pcld_ios_media/`, copy a bootstrap **`.ps1`** to **`L:\`** (not `L:\pcld_ios_media\`). If the mount is WebDAV root, copy to **`L:\pcld_ios_media\`**. Run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per PUT. **MOVE** (Explorer rename) is supported on writable paths (local on phone — no re-download). Same-folder paste still downloads unless/until server **COPY** exists. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** = DLNA-only. Without a mount, see **`../archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
+**`L:` is read/write by default.** If the mount starts at `pcld_ios_media/`, copy a bootstrap **`.ps1`** to **`L:\`** (not `L:\pcld_ios_media\`). If the mount is WebDAV root, copy to **`L:\pcld_ios_media\`**. Run it on the PC so it can sync **`scripts\`** and other allowed subfolders via **`L:`**. The phone rejects writes to **`loop\`**, **`_working.mp4`**, and segment files. **≤ 2 MB** per PUT. **MOVE** (Explorer rename) is supported on writable paths (local on phone — no re-download). Same-folder paste still downloads unless/until server **COPY** exists. **`Mount-LoopSegmentsRclone.ps1 -ReadOnly`** for a read-only Explorer letter. For Quest DLNA without AirScreen of `L:`, use **`Serve-LoopSegmentsRcloneDlna.ps1`**. Without a mount, see **`../archive/Copy-ToLoopSegmentsPhoneLAN.ps1`** (HTTP PUT).
 
 Mounted paths (start directory `pcld_ios_media/`):
 
@@ -39,21 +41,25 @@ If Explorer instead shows **`L:\pcld_ios_media\`**, the mount is WebDAV root (fo
 
 Preferred **`mountDriveLetter`** in `loop-segments-windows.json` is tried first (default `L`). If that letter is already taken (Koofr, etc.), the mount script picks a **random free D–Z** and writes it back to json.
 
-## When to skip rclone on the PC / AirScreen playback
+## When to skip rclone mount / how Quest plays phone media
 
-- **Quest Skybox** with **WebDAV** to the phone — prefer if the goal is headset playback.
-- **PC DLNA** without a mapped drive: browser, **`Invoke-WebRequest`**, or **`../archive/Sync-FromPhoneLAN.ps1`** into a local folder.
+- **Quest Skybox + `rclone serve dlna`** (companion default) — phone WebDAV advertised as DLNA; no AirScreen of `L:`.
+- **Quest Skybox + WebDAV** direct to the phone (`http://<ip>:8765/`) — no PC rclone step.
+- **Explorer / scripts** — optional **`rclone mount`** to `L:` (still started by companion unless `-SkipRcloneMount`).
 
-**If `L:\archive\` (rclone mount) media fails to play via Skybox AirScreen:** WinFsp/`L:` often lists but will not stream reliably through AirScreen. Use the **[3d_playlist_local](https://github.com/dsouzaankit/3d_playlist_local)** library instead — transcode/output to the **`3d_fullsbs_trans`** AirScreen share (mapped in `Skybox_vr_pc` / `skybox_vr_pc.config.json`) and play from that share on Quest.
+**Do not map `L:` into Skybox AirScreen** for phone media — WinFsp/`L:` often lists but will not stream reliably. Local/playlist media can still use the **`3d_fullsbs_trans`** / **`p_cld_media`** AirScreen shares from `Skybox_vr_pc`.
 
 ## Scripts
 
 | Script | Role |
 |--------|------|
-| **`Mount-LoopSegmentsRclone.ps1`** | **Active** — test, mount, `-Remove`, `-Unstick`, `-Quick`, LAN watch, `-RemovePort80Proxy` |
+| **`Mount-LoopSegmentsRclone.ps1`** | Optional Explorer letter — test, mount, `-Remove`, `-Unstick`, `-Quick`, LAN watch |
 | **`Mount-PhoneL.cmd`** | Day-to-day launcher → mount script |
+| **`Serve-LoopSegmentsRcloneDlna.ps1`** | **Quest path** — `rclone serve dlna` over phone WebDAV (`-Remove`, `-TestOnly`, `-Quick`, `-Hidden`, LAN watch). Companion uses `-Hidden` (no console). |
+| **`Serve-PhoneDlna.cmd`** | Day-to-day launcher → DLNA serve script |
 | **`Unstick-PhoneL.cmd`** | Kill dead phone mount + restart Explorer |
 | **`%TEMP%\loopsegments-rclone-mount.log`** | live rclone mount log (Temp; copied to `windows\rclone\` on quit) |
+| **`%TEMP%\loopsegments-rclone-dlna.log`** | live rclone DLNA serve log |
 | **`../setup/Set-LoopSegmentsWindows.ps1`** | Per-PC json (IP, drive letter, rclone paths) |
 | **`../archive/Map-LoopSegmentsWebDAV.ps1`** | Legacy `net use` / port 80 proxy (not recommended) |
 

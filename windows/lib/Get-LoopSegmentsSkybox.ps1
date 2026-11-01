@@ -1,14 +1,15 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Companion Skybox start/stop plus Add-folders mapping (phone rclone + Skybox_vr_pc AirScreen share).
+  Companion Skybox start/stop plus AirScreen Add-folders (Skybox_vr_pc shares only).
 
 .DESCRIPTION
   Dot-source from pcloud_web_companion\run_chromium.ps1.
   Process start / hide-to-tray / quit and the AirScreen share (p_cld_media by default)
-  come from the Skybox_vr_pc submodule (SkyboxVrPc.UnmapPath.ps1). This file keeps the
-  companion-started marker, maps/unmaps phone rclone pcld_ios_media, and does not touch
-  3d_fullsbs_trans. Override with SKYBOX_VR_PC_ROOT; fallback is P:\all_scripts\Skybox_vr_pc.
+  come from the Skybox_vr_pc submodule (SkyboxVrPc.UnmapPath.ps1). Phone media for Quest
+  uses rclone serve dlna (not L:/pcld_ios_media Add-folders). On start/stop this still
+  removes any stale phone-rclone AirScreen mappings from older companion sessions.
+  Does not touch 3d_fullsbs_trans. Override with SKYBOX_VR_PC_ROOT; fallback is P:\all_scripts\Skybox_vr_pc.
 #>
 
 $script:LoopSegmentsSkyboxRcloneFolderName = 'pcld_ios_media'
@@ -212,34 +213,33 @@ function Resolve-LoopSegmentsSkyboxRcloneLocalPathFromDisk {
 
 function Sync-LoopSegmentsSkyboxRcloneFolder {
     <#
-      Point Skybox Add folders at the live phone rclone path (pcld_ios_media / loopsegments).
-      Does not change 3d_fullsbs_trans or the Skybox_vr_pc AirScreen share.
+      Legacy: phone rclone L: / pcld_ios_media is no longer added to AirScreen.
+      Only -Removed is honored (clears stale Add-folders entries). New maps are ignored.
     #>
     param(
         [Parameter(Mandatory = $true)][string] $LocalPath,
         [switch] $Removed
     )
+    if (-not $Removed) {
+        Write-Host '[skybox] Skipping phone rclone Add-folders map (use rclone serve dlna for Quest).' -ForegroundColor DarkYellow
+        return
+    }
     $expected = $LocalPath.Trim().TrimEnd('\')
     if (-not (Import-LoopSegmentsSkyboxVrPc) -or -not (Get-Command Sync-SkyboxVrPcShareMapping -ErrorAction SilentlyContinue)) {
-        if (-not $Removed) {
-            Write-Warning ("Skybox_vr_pc mapping helper missing. Could not map {0}." -f $expected)
-        }
         return
     }
-    if ($Removed) {
-        [void](Sync-SkyboxVrPcShareMapping -ExpectedRoot $expected -ShareName $script:LoopSegmentsSkyboxRcloneFolderName -Removed)
-        [void](Sync-SkyboxVrPcShareMapping -ExpectedRoot $expected -ShareName 'loopsegments' -Removed)
-        return
-    }
+    [void](Sync-SkyboxVrPcShareMapping -ExpectedRoot $expected -ShareName $script:LoopSegmentsSkyboxRcloneFolderName -Removed)
     [void](Sync-SkyboxVrPcShareMapping -ExpectedRoot $expected -ShareName 'loopsegments' -Removed)
-    [void](Sync-SkyboxVrPcShareMapping -ExpectedRoot $expected -ShareName $script:LoopSegmentsSkyboxRcloneFolderName)
+    [void](Sync-SkyboxVrPcShareMapping -ExpectedRoot 'L:' -ShareName 'L:' -Removed)
+    [void](Sync-SkyboxVrPcShareMapping -ExpectedRoot 'L:\' -ShareName 'L:' -Removed)
 }
 
 function Remove-LoopSegmentsSkyboxRcloneFolderMapping {
     try {
         Sync-LoopSegmentsSkyboxRcloneFolder -LocalPath 'pcld_ios_media' -Removed
+        Sync-LoopSegmentsSkyboxRcloneFolder -LocalPath 'L:' -Removed
     } catch {
-        Write-Warning ("[skybox] Could not remove rclone Add-folders mapping: {0}" -f $_.Exception.Message)
+        Write-Warning ("[skybox] Could not remove stale rclone Add-folders mapping: {0}" -f $_.Exception.Message)
     }
 }
 
@@ -260,7 +260,7 @@ function Stop-LoopSegmentsSkybox {
     if (Get-Command Stop-SkyboxPcClientMinimizeWatch -ErrorAction SilentlyContinue) {
         try { Stop-SkyboxPcClientMinimizeWatch } catch {}
     }
-    # Shares first while Skybox is still running (AirScreen + phone rclone).
+    # Shares first while Skybox is still running (AirScreen + clear any stale phone-rclone maps).
     Invoke-LoopSegmentsSkyboxVrPcUnmap
     Remove-LoopSegmentsSkyboxRcloneFolderMapping
 
@@ -305,6 +305,8 @@ function Start-LoopSegmentsSkybox {
         try { Set-LoopSegmentsSkyboxStartedMarker } catch {}
     }
     [void](Invoke-LoopSegmentsSkyboxVrPcMap)
+    # Drop leftover L:/pcld_ios_media Add-folders from older companion sessions (Quest uses DLNA now).
+    Remove-LoopSegmentsSkyboxRcloneFolderMapping
     $path = Get-LoopSegmentsSkyboxPath
     return [pscustomobject]@{
         Installed = [bool]$path -or $api -or (Test-LoopSegmentsSkyboxRunning)

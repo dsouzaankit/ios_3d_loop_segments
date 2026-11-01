@@ -24,9 +24,10 @@
   (and its mount PowerShell window), then restart Explorer. Does not need LAN up.
 
 .PARAMETER ReadOnly
-  Mount with rclone --read-only (safer for DLNA-only; blocks Explorer copy to L:).
+  Mount with rclone --read-only (blocks Explorer copy to L:).
   Default mount is read/write where the phone allows (pcld_ios_media/scripts/ and subfolders).
   loop/, _working.mp4, and export segments stay read-only on the phone even when L: is writable.
+  For Quest Skybox, prefer Serve-LoopSegmentsRcloneDlna.ps1 (not AirScreen of this mount).
 
 .PARAMETER Quick
   Skip the slow pre-mount "rclone ls" WebDAV listing (HTTP status.json + remote config only).

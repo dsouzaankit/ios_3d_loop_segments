@@ -38,6 +38,10 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         # Mirrored bool for older callers (kept in sync with phoneLanHostSource).
         preferUsbPhoneLanHost   = $false
         dlnaFolder              = ''
+        # rclone serve dlna (phone WebDAV → Quest/Skybox Network). Companion starts this instead of
+        # mapping the L: WinFsp mount into Skybox AirScreen Add-folders.
+        rcloneDlnaAddr          = ':7879'
+        rcloneDlnaName          = 'Loop Segments'
         skyboxExe               = ''
         virtualDesktopStreamerExe = ''
         webdavUser              = 'admin'
@@ -393,11 +397,25 @@ public static class LoopSegmentsRcloneLogGuard {
 
 function Start-LoopSegmentsConsoleNoActivate {
     # New console without stealing focus (SW_SHOWMINNOACTIVE). Minimized on the taskbar.
+    # -Hidden: no console window (background host; use for rclone serve dlna from companion).
     param(
         [Parameter(Mandatory = $true)][string] $FilePath,
         [string] $ArgumentList = '',
-        [string] $WorkingDirectory = ''
+        [string] $WorkingDirectory = '',
+        [switch] $Hidden
     )
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.Arguments = $ArgumentList
+    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+        $psi.WorkingDirectory = $WorkingDirectory
+    }
+    if ($Hidden) {
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        return [System.Diagnostics.Process]::Start($psi)
+    }
     if (-not ('LoopSegmentsShowWindow' -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
@@ -407,12 +425,6 @@ public static class LoopSegmentsShowWindow {
     public const int SW_SHOWMINNOACTIVE = 7;
 }
 '@ | Out-Null
-    }
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $FilePath
-    $psi.Arguments = $ArgumentList
-    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
-        $psi.WorkingDirectory = $WorkingDirectory
     }
     $psi.UseShellExecute = $true
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Minimized
@@ -787,6 +799,106 @@ function Test-LoopSegmentsRcloneCommandLineIsOurMount {
     return [bool]($cmd -match $remoteToken)
 }
 
+function Test-LoopSegmentsRcloneCommandLineIsOurDlna {
+    param(
+        [string] $CommandLine,
+        [string] $RemoteName = ''
+    )
+    $cmd = [string]$CommandLine
+    if ([string]::IsNullOrWhiteSpace($cmd)) { return $false }
+    if ($cmd -notmatch '(?i)\bserve\b' -or $cmd -notmatch '(?i)\bdlna\b') {
+        return $false
+    }
+    $remote = 'loopsegments'
+    if (-not [string]::IsNullOrWhiteSpace($RemoteName)) {
+        $remote = $RemoteName.Trim()
+    } elseif (Get-Command Get-LoopSegmentsRcloneRemoteName -ErrorAction SilentlyContinue) {
+        try {
+            $resolved = [string](Get-LoopSegmentsRcloneRemoteName)
+            if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+                $remote = $resolved.Trim()
+            }
+        } catch { }
+    }
+    $remoteToken = [regex]::Escape("${remote}:")
+    if ($cmd -match $remoteToken) { return $true }
+    if ($cmd -match '(?i)LoopSegments') { return $true }
+    if ($cmd -match '(?i)--name[= ]"?Loop Segments"?') { return $true }
+    return $false
+}
+
+function Get-LoopSegmentsRcloneDlnaAddr {
+    param([string] $Override = '')
+    if (-not [string]::IsNullOrWhiteSpace($Override)) { return $Override.Trim() }
+    $settings = Get-LoopSegmentsWindowsSettings
+    $raw = ''
+    try { $raw = [string]$settings.rcloneDlnaAddr } catch { $raw = '' }
+    if ([string]::IsNullOrWhiteSpace($raw)) { return ':7879' }
+    return $raw.Trim()
+}
+
+function Get-LoopSegmentsRcloneDlnaName {
+    param([string] $Override = '')
+    if (-not [string]::IsNullOrWhiteSpace($Override)) { return $Override.Trim() }
+    $settings = Get-LoopSegmentsWindowsSettings
+    $raw = ''
+    try { $raw = [string]$settings.rcloneDlnaName } catch { $raw = '' }
+    if ([string]::IsNullOrWhiteSpace($raw)) { return 'Loop Segments' }
+    return $raw.Trim()
+}
+
+function Stop-LoopSegmentsPhoneRcloneDlna {
+    <#
+    .SYNOPSIS
+      Kill phone rclone serve dlna + Serve-LoopSegmentsRcloneDlna.ps1 consoles in-process.
+    #>
+    param(
+        [string] $RemoteName = '',
+        [switch] $Quiet
+    )
+
+    $remote = if (-not [string]::IsNullOrWhiteSpace($RemoteName)) {
+        $RemoteName.Trim()
+    } else {
+        try { Get-LoopSegmentsRcloneRemoteName } catch { 'loopsegments' }
+    }
+    $stoppedRclone = 0
+    $stoppedPs = 0
+    $selfPid = $PID
+
+    Get-LoopSegmentsWin32Processes -Name 'rclone.exe' | ForEach-Object {
+        $cmd = [string]$_.CommandLine
+        if (-not (Test-LoopSegmentsRcloneCommandLineIsOurDlna -CommandLine $cmd -RemoteName $remote)) { return }
+        if (-not $Quiet) {
+            Write-Host "[rclone-dlna] Kill serve dlna rclone PID $($_.ProcessId)"
+        }
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        $stoppedRclone++
+    }
+
+    Get-LoopSegmentsWin32Processes | Where-Object {
+        $_.ProcessId -ne $selfPid -and
+        $_.Name -match '(?i)^(powershell|pwsh)(\.exe)?$' -and
+        [string]$_.CommandLine -match 'Serve-LoopSegmentsRcloneDlna\.ps1'
+    } | ForEach-Object {
+        if (-not $Quiet) {
+            Write-Host "[rclone-dlna] Kill DLNA console PID $($_.ProcessId)"
+        }
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        $stoppedPs++
+    }
+
+    if (($stoppedRclone -gt 0 -or $stoppedPs -gt 0) -and -not $Quiet) {
+        Write-Host "[rclone-dlna] Stopped phone DLNA serve (${stoppedRclone} rclone, ${stoppedPs} console)"
+        Start-Sleep -Milliseconds 400
+    }
+
+    return [pscustomobject]@{
+        Rclone     = $stoppedRclone
+        PowerShell = $stoppedPs
+    }
+}
+
 function Get-LoopSegmentsWin32Processes {
     param([string] $Name = '')
     # Get-CimInstance returns $null when nothing matches. @($null) is a 1-element
@@ -912,10 +1024,19 @@ function Stop-LoopSegmentsPhoneRcloneMount {
         Start-Sleep -Milliseconds 600
     }
 
+    $dlna = $null
+    try {
+        $dlna = Stop-LoopSegmentsPhoneRcloneDlna -Quiet:$Quiet
+    } catch {
+        $dlna = [pscustomobject]@{ Rclone = 0; PowerShell = 0 }
+    }
+
     return [pscustomobject]@{
         Rclone       = $stoppedRclone
         PowerShell   = $stoppedPs
         DriveLetters = @($letters)
+        DlnaRclone   = $(if ($null -ne $dlna) { [int]$dlna.Rclone } else { 0 })
+        DlnaPowerShell = $(if ($null -ne $dlna) { [int]$dlna.PowerShell } else { 0 })
     }
 }
 
@@ -1486,6 +1607,9 @@ function Show-LoopSegmentsWindowsDiagnostics {
     if (-not [string]::IsNullOrWhiteSpace($settings.dlnaFolder)) {
         Write-Host "  DLNA folder:     $($settings.dlnaFolder)"
     }
+    try {
+        Write-Host ("  rclone DLNA:     {0} ({1})" -f (Get-LoopSegmentsRcloneDlnaName), (Get-LoopSegmentsRcloneDlnaAddr))
+    } catch {}
     if (-not [string]::IsNullOrWhiteSpace($settings.skyboxExe)) {
         Write-Host "  Skybox exe:      $($settings.skyboxExe)"
     }
