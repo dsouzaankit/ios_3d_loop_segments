@@ -47,7 +47,17 @@ Preferred **`mountDriveLetter`** in `loop-segments-windows.json` is tried first 
 - **Quest Skybox + WebDAV** direct to the phone (`http://<ip>:8765/`) — no PC rclone step.
 - **Explorer / scripts** — optional **`rclone mount`** to `L:` (still started by companion unless `-SkipRcloneMount`).
 
-**Do not map `L:` into Skybox AirScreen** for phone media — WinFsp/`L:` often lists but will not stream reliably. Local/playlist media can still use the **`3d_fullsbs_trans`** / **`p_cld_media`** AirScreen shares from `Skybox_vr_pc`.
+**Do not map `L:` into Skybox AirScreen** for phone media — that path **never played** in Skybox VR (WinFsp/`L:` may list in Add-folders but does not stream). Companion no longer maps it.
+
+### If rclone DLNA playback stutters
+
+Phone WebDAV → PC `rclone serve dlna` → Quest is an extra hop. When that stutters or buffers:
+
+1. Prefer **[3d_playlist_local](https://github.com/dsouzaankit/3d_playlist_local)** — transcode/output to the **`3d_fullsbs_trans`** AirScreen share (mapped via `Skybox_vr_pc` / `skybox_vr_pc.config.json`) and play that share on Quest.
+2. Or add the phone as **WebDAV** directly in Skybox Network (`http://<phone>:8765/`, `admin` / `iosadmin`) — no PC rclone.
+3. Check LAN Mbps (`..\lan\Measure-LoopSegmentsLanThroughput.ps1` / companion probe) and keep segment bitrate under the recommended sidecar; avoid Virtual Desktop streaming during the probe or heavy play.
+
+`p_cld_media` AirScreen remains for local pCloud folder media; it is not a substitute for phone `L:` / DLNA.
 
 ## Scripts
 
