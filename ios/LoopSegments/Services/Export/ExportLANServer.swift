@@ -3245,14 +3245,13 @@ enum ExportLANServer {
             <button type="button" id="lan-loop-next" title="Next segment">Next</button>
             <label>Speed
               <select id="lan-loop-rate" aria-label="Playback speed">
-                <option value="0.25">0.25×</option>
-                <option value="0.5">0.5×</option>
-                <option value="0.75">0.75×</option>
+                <option value="0.7">0.7×</option>
+                <option value="0.8">0.8×</option>
+                <option value="0.9">0.9×</option>
                 <option value="1" selected>1×</option>
-                <option value="1.25">1.25×</option>
-                <option value="1.5">1.5×</option>
-                <option value="1.75">1.75×</option>
-                <option value="2">2×</option>
+                <option value="1.1">1.1×</option>
+                <option value="1.2">1.2×</option>
+                <option value="1.3">1.3×</option>
               </select>
             </label>
             <span id="lan-loop-label" class="muted" role="status">Hidden — tap Show loop player</span>
@@ -3270,7 +3269,7 @@ enum ExportLANServer {
         (function () {
           var LOOP_PREFIX = "\(prefixJS)";
           var RATE_KEY = "loopsegments.lan.loopPlayerRate.v1";
-          var RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+          var RATES = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3];
           var playlist = [];
           var index = 0;
           var visible = false;
@@ -3288,17 +3287,24 @@ enum ExportLANServer {
           function setLabel(msg) {
             if (label) label.textContent = msg || "";
           }
+          function snapRate(v) {
+            var r = Math.round(Number(v) * 10) / 10;
+            if (!isFinite(r)) return 1;
+            for (var i = 0; i < RATES.length; i++) {
+              if (Math.abs(RATES[i] - r) < 0.001) return RATES[i];
+            }
+            return 1;
+          }
           function readRate() {
             var v = 1;
             try {
               var raw = localStorage.getItem(RATE_KEY);
               if (raw != null) v = parseFloat(raw);
             } catch (e) {}
-            if (!isFinite(v) || RATES.indexOf(v) < 0) v = 1;
-            return v;
+            return snapRate(v);
           }
           function writeRate(v) {
-            try { localStorage.setItem(RATE_KEY, String(v)); } catch (e) {}
+            try { localStorage.setItem(RATE_KEY, String(snapRate(v))); } catch (e) {}
           }
           function applyRate() {
             var v = readRate();
@@ -3485,8 +3491,9 @@ enum ExportLANServer {
           video.addEventListener("ratechange", function () {
             // Keep select in sync if browser UI changes rate.
             if (!rateSel) return;
-            var v = video.playbackRate;
-            if (RATES.indexOf(v) >= 0) rateSel.value = String(v);
+            var v = snapRate(video.playbackRate);
+            rateSel.value = String(v);
+            writeRate(v);
           });
           video.addEventListener("play", function () {
             wantPlay = true;
