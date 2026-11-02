@@ -716,6 +716,10 @@ enum ExportLANServer {
             sendJSONPayload(WifiWwwProbe.currentSnapshot().statusJSON(), connection: connection, done: done, status: 200)
             return
         }
+        if normalized == "lan_throughput.json" {
+            sendLANThroughputGET(connection: connection, done: done)
+            return
+        }
         let (resourcePath, query) = splitPathAndQuery(normalized)
         if resourcePath == "pcloud_list.json" {
             guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
@@ -1418,11 +1422,21 @@ enum ExportLANServer {
             }
             return
         }
+        if normalized == "lan_throughput.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleLANThroughputPOST(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         sendResponse(
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, and /wifi_www_probe.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, and /lan_throughput.json".utf8),
             done: done
         )
     }
@@ -1895,7 +1909,7 @@ enum ExportLANServer {
               .replace(/"/g, "&quot;");
           }
           function setMediaMaintenanceEnabled(enabled) {
-            ["export-trim-media", "export-clear-media"].forEach(function (id) {
+            ["export-trim-media", "export-clear-media", "export-lan-speed-test", "lan-speed-test"].forEach(function (id) {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !enabled;
             });
@@ -2489,6 +2503,7 @@ enum ExportLANServer {
             #"<a href="export_latest.txt">export_latest.txt</a>"#,
             #"<a href="status.json">status.json</a>"#,
             #"<a href="wifi_www_probe.json">wifi_www_probe.json</a>"#,
+            #"<a href="lan_throughput.json">lan_throughput.json</a>"#,
             "<a href=\"\(LANExportTriggerControl.ackRelativePath)\">export_trigger.ack.json</a>",
             #"<a href="export_from_folder.json">export_from_folder.json</a>"#,
             #"<a href="export_queue.json">export_queue.json</a>"#,
@@ -2600,6 +2615,163 @@ enum ExportLANServer {
             : items.joined()
     }
 
+    /// Browser Range download → POST `/lan_throughput.json` (same sidecars as Measure HTTP leg).
+    /// Pass `buttonId` to auto-bind (monitor `/`); `/browse` calls `bindLANSpeedTestButton` from the export panel.
+    private static func htmlLANSpeedTestScript(
+        resultElementId: String? = nil,
+        buttonId: String? = nil
+    ) -> String {
+        let minBytes = LANThroughputSidecar.minCandidateBytes
+        let maxBytes = LANThroughputSidecar.maxTransferBytes
+        let user = lanWebDAVUsername
+        let pass = lanWebDAVPassword
+        let resultIdJS = resultElementId.map { "\"\($0)\"" } ?? "null"
+        let buttonIdJS = buttonId.map { "\"\($0)\"" } ?? "null"
+        return """
+        <script>
+        (function () {
+          var MIN_BYTES = \(minBytes);
+          var MAX_BYTES = \(maxBytes);
+          var DEFAULT_AUTH = "Basic " + btoa("\(user):\(pass)");
+          function isMediaName(name) {
+            return /\\.(mp4|m4v|mov|mkv|webm)$/i.test(String(name || ""));
+          }
+          function isArchivePath(name) {
+            var n = String(name || "").replace(/\\\\/g, "/");
+            return n.indexOf("/archive/") >= 0 || n.indexOf("archive/") === 0;
+          }
+          function pickSpeedTestFile(files) {
+            var list = Array.isArray(files) ? files : [];
+            var eligible = list.filter(function (f) {
+              var bytes = Number(f && f.bytes) || 0;
+              return isMediaName(f && f.name) && bytes >= MIN_BYTES;
+            });
+            var archive = eligible.filter(function (f) { return isArchivePath(f.name); });
+            var pool = archive.length ? archive : eligible;
+            if (!pool.length) return null;
+            return pool[Math.floor(Math.random() * pool.length)];
+          }
+          function reportLANSpeed(msg, isErr, opts) {
+            opts = opts || {};
+            if (typeof opts.setStatus === "function") {
+              opts.setStatus(msg, !!isErr);
+            }
+            var rid = opts.resultElementId;
+            if (rid) {
+              var el = document.getElementById(rid);
+              if (el) {
+                el.textContent = msg;
+                if (window.__lanStatusColor) {
+                  el.style.color = window.__lanStatusColor(!!isErr);
+                } else {
+                  el.style.color = isErr ? "#b00020" : "";
+                }
+              }
+            }
+          }
+          async function runLANSpeedTest(opts) {
+            opts = opts || {};
+            var auth = opts.authHeader || DEFAULT_AUTH;
+            var btn = opts.buttonId ? document.getElementById(opts.buttonId) : null;
+            if (btn) btn.disabled = true;
+            reportLANSpeed("LAN speed test: picking media (≥8 MB)…", false, opts);
+            try {
+              var listsRes = await fetch("status_lists.json", { cache: "no-store" });
+              if (!listsRes.ok) throw new Error("status_lists.json HTTP " + listsRes.status);
+              var lists = await listsRes.json();
+              var pick = pickSpeedTestFile(lists.files);
+              if (!pick) {
+                throw new Error("No media file ≥ 8 MB on phone (need archive/ or other playback media).");
+              }
+              var rel = String(pick.name || "").replace(/^\\/+/, "");
+              var url = "/" + rel;
+              var fileBytes = Number(pick.bytes) || 0;
+              var rangeEnd = Math.min(fileBytes, MAX_BYTES) - 1;
+              if (rangeEnd < 0) throw new Error("Selected file has no readable bytes");
+              var mbLabel = ((rangeEnd + 1) / (1024 * 1024)).toFixed(1);
+              reportLANSpeed("Downloading " + mbLabel + " MB from " + rel + "…", false, opts);
+              var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+              var resp = await fetch(url, {
+                headers: { "Range": "bytes=0-" + rangeEnd },
+                cache: "no-store"
+              });
+              if (!(resp.ok || resp.status === 206)) {
+                throw new Error("Range GET HTTP " + resp.status);
+              }
+              var buf = await resp.arrayBuffer();
+              var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+              var transferred = buf.byteLength;
+              var elapsed = Math.max((t1 - t0) / 1000, 0.001);
+              if (transferred < 1024 * 1024) {
+                throw new Error("Transfer too small (" + transferred + " bytes) — try a larger archive file");
+              }
+              var mbps = (transferred * 8) / (elapsed * 1e6);
+              reportLANSpeed(
+                "Measured " + mbps.toFixed(1) + " Mbps — writing lan_throughput.json…",
+                false,
+                opts
+              );
+              var post = await fetch("lan_throughput.json", {
+                method: "POST",
+                headers: {
+                  "Authorization": auth,
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                  measuredMbps: mbps,
+                  transferredBytes: transferred,
+                  elapsedSeconds: elapsed,
+                  sourceUrl: url,
+                  sourcePath: rel
+                }),
+                cache: "no-store"
+              });
+              var bodyText = await post.text();
+              var j = null;
+              try { j = JSON.parse(bodyText); } catch (e) {}
+              if (!post.ok) {
+                throw new Error((j && (j.error || j.message)) || bodyText || ("POST HTTP " + post.status));
+              }
+              var rec = j && j.recommendedMaxMediaBitrateMbps != null
+                ? j.recommendedMaxMediaBitrateMbps
+                : "?";
+              var measuredOut = j && j.measuredMbps != null ? j.measuredMbps : mbps.toFixed(2);
+              reportLANSpeed(
+                "LAN " + measuredOut + " Mbps → recommend " + rec + " Mbps segment bitrate (HTTP-only; no router reboot)",
+                false,
+                opts
+              );
+            } catch (e) {
+              reportLANSpeed((e && e.message) ? e.message : String(e), true, opts);
+            } finally {
+              if (btn && !window._exportSourcePending) btn.disabled = false;
+            }
+          }
+          window.runLANSpeedTest = runLANSpeedTest;
+          window.bindLANSpeedTestButton = function (opts) {
+            opts = opts || {};
+            var id = opts.buttonId;
+            if (!id) return;
+            var btn = document.getElementById(id);
+            if (!btn) return;
+            btn.onclick = function () {
+              runLANSpeedTest(opts);
+            };
+          };
+          var autoButtonId = \(buttonIdJS);
+          var autoResultId = \(resultIdJS);
+          if (autoButtonId) {
+            window.bindLANSpeedTestButton({
+              buttonId: autoButtonId,
+              resultElementId: autoResultId,
+              authHeader: DEFAULT_AUTH
+            });
+          }
+        })();
+        </script>
+        """
+    }
+
     private static func htmlMonitorManualRefreshScript() -> String {
         """
         <script>
@@ -2610,10 +2782,17 @@ enum ExportLANServer {
               .replace(/</g, "&lt;")
               .replace(/"/g, "&quot;");
           }
+          function setMediaMaintenanceEnabled(enabled) {
+            ["export-trim-media", "export-clear-media", "export-lan-speed-test", "lan-speed-test"].forEach(function (id) {
+              var btn = document.getElementById(id);
+              if (btn) btn.disabled = !enabled;
+            });
+          }
           function applyExportSource(src) {
             var wrap = document.getElementById("lan-export-source-wrap");
             if (!wrap || !src || !src.displayName) {
               if (wrap) wrap.style.display = "none";
+              setMediaMaintenanceEnabled(true);
               return;
             }
             wrap.style.display = "";
@@ -2625,6 +2804,7 @@ enum ExportLANServer {
             if (name) name.textContent = src.displayName;
             var actions = document.getElementById("lan-export-source-actions");
             if (actions) actions.style.display = src.phase === "paused" ? "" : "none";
+            setMediaMaintenanceEnabled(src.phase !== "running");
           }
           function applyLive(live) {
             if (!live) return;
@@ -2716,6 +2896,10 @@ enum ExportLANServer {
           }
           var probeBtn = document.getElementById("lan-wifi-www-probe");
           if (probeBtn) probeBtn.onclick = runWifiWwwProbe;
+          var exportWrap = document.getElementById("lan-export-source-wrap");
+          if (exportWrap && exportWrap.classList.contains("is-active")) {
+            setMediaMaintenanceEnabled(false);
+          }
           function uuid() {
             return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
               var r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
@@ -2988,8 +3172,11 @@ enum ExportLANServer {
                   <button type="button" id="lan-refresh-status">Refresh status</button>
                   <button type="button" id="lan-refresh-lists">Refresh file list</button>
                   <button type="button" id="lan-wifi-www-probe">Probe Phone Wi‑Fi → www</button>
+                  <button type="button" id="lan-speed-test">LAN speed test</button>
                 </p>
                 <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
+                <p id="lan-speed-test-result" class="muted" role="status"></p>
+                \(htmlLANSpeedTestScript(resultElementId: "lan-speed-test-result", buttonId: "lan-speed-test"))
                 <h2>On phone (playback)</h2>
                 <ul id="lan-playback-files">
                 \(htmlMonitorStaticPlaybackLinks())
@@ -3073,6 +3260,7 @@ enum ExportLANServer {
             </div>
             </div>
             </div>
+            \(htmlLANSpeedTestScript())
             \(htmlExportControlPanel())
             \(htmlURLDownloadPanel())
             \(exportActive
@@ -3133,6 +3321,156 @@ enum ExportLANServer {
         done: @escaping () -> Void
     ) {
         sendJSONPayload(FolderBookmarkStore.lanBookmarksPayload(), connection: connection, done: done)
+    }
+
+    private static func sendLANThroughputGET(connection: NWConnection, done: @escaping () -> Void) {
+        if let payload = LANThroughputSidecar.readPrimary() {
+            sendJSONPayload(payload, connection: connection, done: done, status: 200)
+            return
+        }
+        sendJSONPayload(
+            [
+                "endpoint": "/lan_throughput.json",
+                "methods": ["GET", "POST"],
+                "auth": "Basic \(lanWebDAVUsername):\(lanWebDAVPassword) (POST)",
+                "schema": LANThroughputSidecar.schema,
+                "notes": [
+                    "GET returns last recommendation sidecar (same JSON as Measure-LoopSegmentsLanThroughput.ps1).",
+                    "POST body: measuredMbps (or transferredBytes + elapsedSeconds), optional sourceUrl/sourcePath.",
+                    "Writes pcld_ios_media/scripts/lan_throughput.json and lan_recommended_segment_bitrate.json (+ archive/).",
+                    "HTTP-only (browser Range download). No rclone mount leg / no other-router reboot.",
+                ],
+                "sidecarPresent": false,
+            ] as [String: Any],
+            connection: connection,
+            done: done,
+            status: 404
+        )
+    }
+
+    private static func handleLANThroughputPOST(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 32_000
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain",
+                        body: Data("JSON object required".utf8),
+                        done: done
+                    )
+                    return
+                }
+                let parsed = parseLANThroughputPOSTBody(object)
+                switch parsed {
+                case .failure(let message):
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain; charset=utf-8",
+                        body: Data(message.utf8),
+                        done: done
+                    )
+                case .success(let measurement):
+                    do {
+                        let payload = try LANThroughputSidecar.write(measurement)
+                        sendJSONPayload(payload, connection: connection, done: done, status: 200)
+                    } catch {
+                        sendResponse(
+                            connection: connection,
+                            status: 500,
+                            contentType: "text/plain; charset=utf-8",
+                            body: Data("Could not write sidecars: \(error.localizedDescription)".utf8),
+                            done: done
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private static func parseLANThroughputPOSTBody(
+        _ object: [String: Any]
+    ) -> Result<LANThroughputSidecar.Measurement, String> {
+        let transferred = int64Value(object["transferredBytes"]) ?? int64Value(object["bytes"])
+        let elapsed = doubleValue(object["elapsedSeconds"]) ?? doubleValue(object["elapsedSec"])
+        var measured = doubleValue(object["measuredMbps"]) ?? doubleValue(object["mbps"])
+        if measured == nil, let transferred, let elapsed, elapsed > 0, transferred > 0 {
+            measured = (Double(transferred) * 8.0) / (elapsed * 1_000_000.0)
+        }
+        guard let measuredMbps = measured, measuredMbps > 0, measuredMbps.isFinite else {
+            return .failure("measuredMbps (or transferredBytes + elapsedSeconds) required")
+        }
+        let host = primaryLANIPv4Address()
+        let baseURL: String? = {
+            guard let host else { return nil }
+            return "http://\(host):\(Int(defaultPort))/"
+        }()
+        let sourceUrl = stringValue(object["sourceUrl"])
+        let sourcePath = stringValue(object["sourcePath"])
+            ?? stringValue(object["sourceRelativePath"])
+        let minLan = doubleValue(object["minLanThroughputMbps"])
+            ?? LANThroughputSidecar.defaultMinLanThroughputMbps
+        let note = stringValue(object["note"])
+            ?? "LAN page HTTP Range download (browser). Same sidecars as Measure-LoopSegmentsLanThroughput.ps1 HTTP leg; no mount copy / no other-router reboot."
+        return .success(
+            LANThroughputSidecar.Measurement(
+                measuredMbps: measuredMbps,
+                transferredBytes: transferred ?? 0,
+                elapsedSeconds: elapsed ?? 0,
+                sourceUrl: sourceUrl,
+                sourcePath: sourcePath,
+                phoneLanHost: host,
+                phoneLanBaseUrl: baseURL,
+                minLanThroughputMbps: minLan,
+                note: note
+            )
+        )
+    }
+
+    private static func stringValue(_ any: Any?) -> String? {
+        guard let any else { return nil }
+        if let s = any as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        return nil
+    }
+
+    private static func doubleValue(_ any: Any?) -> Double? {
+        guard let any else { return nil }
+        if let d = any as? Double { return d }
+        if let n = any as? NSNumber { return n.doubleValue }
+        if let s = any as? String, let d = Double(s) { return d }
+        return nil
+    }
+
+    private static func int64Value(_ any: Any?) -> Int64? {
+        guard let any else { return nil }
+        if let i = any as? Int64 { return i }
+        if let i = any as? Int { return Int64(i) }
+        if let n = any as? NSNumber { return n.int64Value }
+        if let s = any as? String, let i = Int64(s) { return i }
+        if let d = any as? Double { return Int64(d) }
+        return nil
     }
 
     private static func sendExportFromURLUsageJSON(connection: NWConnection, done: @escaping () -> Void) {
@@ -3731,7 +4069,9 @@ enum ExportLANServer {
         <div class="row">
           <button type="button" id="export-trim-media">Trim media (keep last 2)</button>
           <button type="button" id="export-clear-media">Clear media</button>
+          <button type="button" id="export-lan-speed-test">LAN speed test</button>
         </div>
+        <p class="muted" style="margin:0.25rem 0 0;font-size:0.85em">LAN speed test: browser downloads up to 64&nbsp;MB from phone media (same hop as PC Measure HTTP leg), then writes <code>lan_throughput.json</code> sidecars. No other-router reboot — use companion Measure for that.</p>
         <p id="trigger-status" class="muted"></p>
         <div class="row">
           <button type="button" id="pcloud-up" disabled>↑ Up</button>
@@ -3967,7 +4307,7 @@ enum ExportLANServer {
             var detailEl = document.getElementById("lan-export-pending-detail");
             if (titleEl && title) titleEl.textContent = title;
             if (detailEl && detail) detailEl.textContent = detail;
-            ["export-resume", "export-random", "export-trim-media", "export-clear-media"].forEach(function (id) {
+            ["export-resume", "export-random", "export-trim-media", "export-clear-media", "export-lan-speed-test"].forEach(function (id) {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !!active;
             });
@@ -4102,6 +4442,13 @@ enum ExportLANServer {
             putTrigger({ version: 1, command: "clear_media", id: uuid() })
               .catch(function (e) { setStatus(e.message || e, true); });
           };
+          if (window.bindLANSpeedTestButton) {
+            window.bindLANSpeedTestButton({
+              buttonId: "export-lan-speed-test",
+              setStatus: setStatus,
+              authHeader: AUTH
+            });
+          }
           document.getElementById("pcloud-sort").onchange = function (ev) {
             sortKey = ev.target.value || "name";
             renderPCloud();
