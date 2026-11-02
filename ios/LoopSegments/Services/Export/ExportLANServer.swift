@@ -2633,6 +2633,9 @@ enum ExportLANServer {
         (function () {
           var MIN_BYTES = \(minBytes);
           var MAX_BYTES = \(maxBytes);
+          /// 10×64 MB ≈ one ~640 MB dense VR window; median damps Wi‑Fi noise.
+          var RUN_COUNT = 10;
+          var MIN_OK_RUNS = 5;
           var DEFAULT_AUTH = "Basic " + btoa("\(user):\(pass)");
           function isMediaName(name) {
             return /\\.(mp4|m4v|mov|mkv|webm)$/i.test(String(name || ""));
@@ -2652,6 +2655,25 @@ enum ExportLANServer {
             if (!pool.length) return null;
             return pool[Math.floor(Math.random() * pool.length)];
           }
+          function medianMbps(samples) {
+            var vals = samples.map(function (s) { return s.mbps; }).sort(function (a, b) { return a - b; });
+            var mid = Math.floor(vals.length / 2);
+            if (vals.length % 2) return vals[mid];
+            return (vals[mid - 1] + vals[mid]) / 2;
+          }
+          function pickMedianSample(samples) {
+            var med = medianMbps(samples);
+            var best = samples[0];
+            var bestDiff = Math.abs(samples[0].mbps - med);
+            for (var i = 1; i < samples.length; i++) {
+              var d = Math.abs(samples[i].mbps - med);
+              if (d < bestDiff) {
+                best = samples[i];
+                bestDiff = d;
+              }
+            }
+            return { median: med, sample: best };
+          }
           function reportLANSpeed(msg, isErr, opts) {
             opts = opts || {};
             if (typeof opts.setStatus === "function") {
@@ -2669,6 +2691,39 @@ enum ExportLANServer {
                 }
               }
             }
+          }
+          async function oneRangeTransfer(url, rangeEnd) {
+            var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+            var resp = await fetch(url, {
+              headers: { "Range": "bytes=0-" + rangeEnd },
+              cache: "no-store"
+            });
+            if (!(resp.ok || resp.status === 206)) {
+              throw new Error("Range GET HTTP " + resp.status);
+            }
+            var transferred = 0;
+            if (resp.body && typeof resp.body.getReader === "function") {
+              var reader = resp.body.getReader();
+              while (true) {
+                var chunk = await reader.read();
+                if (chunk.done) break;
+                transferred += chunk.value ? chunk.value.byteLength : 0;
+              }
+            } else {
+              var buf = await resp.arrayBuffer();
+              transferred = buf.byteLength;
+              buf = null;
+            }
+            var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+            var elapsed = Math.max((t1 - t0) / 1000, 0.001);
+            if (transferred < 1024 * 1024) {
+              throw new Error("Transfer too small (" + transferred + " bytes)");
+            }
+            return {
+              mbps: (transferred * 8) / (elapsed * 1e6),
+              transferredBytes: transferred,
+              elapsedSeconds: elapsed
+            };
           }
           async function runLANSpeedTest(opts) {
             opts = opts || {};
@@ -2690,25 +2745,32 @@ enum ExportLANServer {
               var rangeEnd = Math.min(fileBytes, MAX_BYTES) - 1;
               if (rangeEnd < 0) throw new Error("Selected file has no readable bytes");
               var mbLabel = ((rangeEnd + 1) / (1024 * 1024)).toFixed(1);
-              reportLANSpeed("Downloading " + mbLabel + " MB from " + rel + "…", false, opts);
-              var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-              var resp = await fetch(url, {
-                headers: { "Range": "bytes=0-" + rangeEnd },
-                cache: "no-store"
-              });
-              if (!(resp.ok || resp.status === 206)) {
-                throw new Error("Range GET HTTP " + resp.status);
+              var samples = [];
+              var failures = [];
+              for (var i = 0; i < RUN_COUNT; i++) {
+                reportLANSpeed(
+                  "LAN speed test " + (i + 1) + "/" + RUN_COUNT + ": " + mbLabel + " MB from " + rel + "…",
+                  false,
+                  opts
+                );
+                try {
+                  samples.push(await oneRangeTransfer(url, rangeEnd));
+                } catch (runErr) {
+                  failures.push((runErr && runErr.message) ? runErr.message : String(runErr));
+                }
               }
-              var buf = await resp.arrayBuffer();
-              var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-              var transferred = buf.byteLength;
-              var elapsed = Math.max((t1 - t0) / 1000, 0.001);
-              if (transferred < 1024 * 1024) {
-                throw new Error("Transfer too small (" + transferred + " bytes) — try a larger archive file");
+              if (samples.length < MIN_OK_RUNS) {
+                throw new Error(
+                  "Need ≥" + MIN_OK_RUNS + " successful transfers (got " + samples.length + ")"
+                    + (failures.length ? (": " + failures[0]) : "")
+                );
               }
-              var mbps = (transferred * 8) / (elapsed * 1e6);
+              var picked = pickMedianSample(samples);
+              var mbps = picked.median;
+              var sample = picked.sample;
+              var listStr = samples.map(function (s) { return s.mbps.toFixed(1); }).join(", ");
               reportLANSpeed(
-                "Measured " + mbps.toFixed(1) + " Mbps — writing lan_throughput.json…",
+                "Median " + mbps.toFixed(1) + " Mbps of [" + listStr + "] — writing lan_throughput.json…",
                 false,
                 opts
               );
@@ -2720,10 +2782,13 @@ enum ExportLANServer {
                 },
                 body: JSON.stringify({
                   measuredMbps: mbps,
-                  transferredBytes: transferred,
-                  elapsedSeconds: elapsed,
+                  transferredBytes: sample.transferredBytes,
+                  elapsedSeconds: sample.elapsedSeconds,
                   sourceUrl: url,
-                  sourcePath: rel
+                  sourcePath: rel,
+                  note: "LAN page HTTP Range ×" + samples.length
+                    + " median (browser). Same sidecars as Measure HTTP leg; no mount / no other-router reboot. Samples Mbps: ["
+                    + listStr + "]"
                 }),
                 cache: "no-store"
               });
@@ -2738,7 +2803,8 @@ enum ExportLANServer {
                 : "?";
               var measuredOut = j && j.measuredMbps != null ? j.measuredMbps : mbps.toFixed(2);
               reportLANSpeed(
-                "LAN " + measuredOut + " Mbps → recommend " + rec + " Mbps segment bitrate (HTTP-only; no router reboot)",
+                "LAN median " + measuredOut + " Mbps [" + listStr + "] → recommend " + rec
+                  + " Mbps segment bitrate (HTTP-only; no router reboot)",
                 false,
                 opts
               );
@@ -4079,7 +4145,7 @@ enum ExportLANServer {
           <button type="button" id="export-clear-media">Clear media</button>
           <button type="button" id="export-lan-speed-test">LAN speed test</button>
         </div>
-        <p class="muted" style="margin:0.25rem 0 0;font-size:0.85em">LAN speed test: browser downloads up to 64&nbsp;MB from phone media (same hop as PC Measure HTTP leg), then writes <code>lan_throughput.json</code> sidecars. No other-router reboot — use companion Measure for that.</p>
+        <p class="muted" style="margin:0.25rem 0 0;font-size:0.85em">LAN speed test: <strong>10×</strong> browser Range downloads (up to 64&nbsp;MB each ≈ <strong>640&nbsp;MB</strong> total, same file) → <strong>median</strong> Mbps → <code>lan_throughput.json</code> sidecars. Available during export. No other-router reboot — use companion Measure for that.</p>
         <p id="trigger-status" class="muted"></p>
         <div class="row">
           <button type="button" id="pcloud-up" disabled>↑ Up</button>

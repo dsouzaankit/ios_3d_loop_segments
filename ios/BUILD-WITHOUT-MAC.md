@@ -149,6 +149,8 @@ Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, s
 4. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
 5. Refresh: tap the **7 DAYS** counter (LocalDevVPN still on). **No PC** for weekly refresh or after expiry — PC only if the pairing file dies (iloader). Optional: schedule Shortcuts automation below instead of remembering the tap.
 
+**Install hangs on an existing Loop Segments (update):** SideStore often stalls forever when installing a new IPA **over** the app already on the phone. **Delete** Loop Segments from the home screen first, then **My Apps → +** again (LocalDevVPN on; IPA fully local). Same Apple ID keeps the App ID slot; **on-device app data is wiped** (re-export / restore media from PC/`archive` if needed). This is different from [re-linking after a SideStore reinstall](#reinstall-or-update-sidestore-with-iloader) below — there, prefer install-over so data stays.
+
 **incorrect data format on SideStore:** same two causes as AltStore — (1) partial iCloud IPA, (2) bad anisette. Fix IPA locality first; then SideStore Settings → change **Anisette** server / sign out+in / re-place pairing with iloader. If stable still fails, use **nightly**. Apple ID login with this error: SideStore Settings → **User Customizations** → turn off **On-Device Anisette** (or switch anisette server).
 
 **Refresh fails: “Device Reachability (Ping): Unreachable”** (Settings → **Health Check**; LocalDevVPN shows Connected). LocalDevVPN **1.3.0** (Sep 2026) changed its tunnel addresses to `10.7.1.x`; SideStore builds older than about Sep 3, 2026 can't reach the device on them ([SideStore #1464](https://github.com/SideStore/SideStore/issues/1464)).
