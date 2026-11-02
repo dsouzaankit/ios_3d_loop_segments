@@ -1909,7 +1909,8 @@ enum ExportLANServer {
               .replace(/"/g, "&quot;");
           }
           function setMediaMaintenanceEnabled(enabled) {
-            ["export-trim-media", "export-clear-media", "export-lan-speed-test", "lan-speed-test"].forEach(function (id) {
+            // Trim/Clear only — LAN speed test stays available during export (cellular WAN vs Wi‑Fi LAN).
+            ["export-trim-media", "export-clear-media"].forEach(function (id) {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !enabled;
             });
@@ -2783,7 +2784,8 @@ enum ExportLANServer {
               .replace(/"/g, "&quot;");
           }
           function setMediaMaintenanceEnabled(enabled) {
-            ["export-trim-media", "export-clear-media", "export-lan-speed-test", "lan-speed-test"].forEach(function (id) {
+            // Trim/Clear only — LAN speed test stays available during export (cellular WAN vs Wi‑Fi LAN).
+            ["export-trim-media", "export-clear-media"].forEach(function (id) {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !enabled;
             });
@@ -4313,7 +4315,7 @@ enum ExportLANServer {
             var detailEl = document.getElementById("lan-export-pending-detail");
             if (titleEl && title) titleEl.textContent = title;
             if (detailEl && detail) detailEl.textContent = detail;
-            ["export-resume", "export-random", "export-trim-media", "export-clear-media", "export-lan-speed-test"].forEach(function (id) {
+            ["export-resume", "export-random", "export-trim-media", "export-clear-media"].forEach(function (id) {
               var btn = document.getElementById(id);
               if (btn) btn.disabled = !!active;
             });

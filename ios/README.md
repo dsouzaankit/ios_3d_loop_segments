@@ -283,7 +283,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | Area | Contents |
 |------|----------|
 | **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Start export** while paused (resume). Pause/stop are in-app only — not on the LAN page. |
-| **Pending banner** | Shown while a trigger is in flight (switching source, resume, random, trim, clear). Export buttons disabled until the phone acks. **Trim media** / **Clear media** / **LAN speed test** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects trim/clear until export stops). |
+| **Pending banner** | Shown while a trigger is in flight (switching source, resume, random, trim, clear). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those until export stops). **LAN speed test** stays available during export (pCloud fetch is cellular; the probe is Wi‑Fi LAN). |
 | **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
 | **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. Below that: **Export from URL** (HTTP(S) URL + save name → same vanilla → segments pipeline as browse Export). |
 
