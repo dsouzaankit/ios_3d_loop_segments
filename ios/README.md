@@ -304,6 +304,8 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **`/pcld_ios_media/scripts/export_trigger.json`** (PUT, Basic auth) | Export control command (see below). Parent `scripts/` folder is **auto-created**. |
 | **`/pcld_ios_media/scripts/export_trigger.ack.json`** (GET) | Last trigger result. |
 
+**Why run LAN speed test from Quest (phone → Quest HTTP)?** Hybrid / `3d_playlist_local` encode bitrate is meant for **headset play** (phone or PC → Quest), not for phone→PC sync. A **PC browser** probe measures the easier phone→PC hop and often **over-recommends** Mbps that Skybox/AirScreen still cannot sustain. Opening **`http://<phone-ip>:8765/`** in the **Quest browser** and tapping **LAN speed test** times **phone → Quest** Wi‑Fi (usually the stricter hop when both ends are wireless STAs). Use that Mbps (+ 80% headroom sidecar) as a **conservative encode ceiling** for Quest-bound segments. It is still a bulk Range download, not Skybox WebDAV/AirScreen streaming — treat it as capacity headroom, not a perfect playback mimic. Prefer a PC Measure run when you need mount timing or other-router reboot recovery.
+
 **`status.json` — notable fields:**
 
 - **`exportSource`** — `{ "phase": "running"|"paused"|"finished", "displayName", "label" }` (matches the top bar in the app and on the page).

@@ -3381,12 +3381,12 @@ enum ExportLANServer {
                 }
                 let parsed = parseLANThroughputPOSTBody(object)
                 switch parsed {
-                case .failure(let message):
+                case .failure(let err):
                     sendResponse(
                         connection: connection,
                         status: 400,
                         contentType: "text/plain; charset=utf-8",
-                        body: Data(message.utf8),
+                        body: Data(err.message.utf8),
                         done: done
                     )
                 case .success(let measurement):
@@ -3407,9 +3407,13 @@ enum ExportLANServer {
         }
     }
 
+    private struct LANThroughputPOSTParseError: Error {
+        let message: String
+    }
+
     private static func parseLANThroughputPOSTBody(
         _ object: [String: Any]
-    ) -> Result<LANThroughputSidecar.Measurement, String> {
+    ) -> Result<LANThroughputSidecar.Measurement, LANThroughputPOSTParseError> {
         let transferred = int64Value(object["transferredBytes"]) ?? int64Value(object["bytes"])
         let elapsed = doubleValue(object["elapsedSeconds"]) ?? doubleValue(object["elapsedSec"])
         var measured = doubleValue(object["measuredMbps"]) ?? doubleValue(object["mbps"])
@@ -3417,7 +3421,9 @@ enum ExportLANServer {
             measured = (Double(transferred) * 8.0) / (elapsed * 1_000_000.0)
         }
         guard let measuredMbps = measured, measuredMbps > 0, measuredMbps.isFinite else {
-            return .failure("measuredMbps (or transferredBytes + elapsedSeconds) required")
+            return .failure(LANThroughputPOSTParseError(
+                message: "measuredMbps (or transferredBytes + elapsedSeconds) required"
+            ))
         }
         let host = primaryLANIPv4Address()
         let baseURL: String? = {
