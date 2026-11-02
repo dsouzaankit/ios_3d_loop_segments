@@ -1982,6 +1982,9 @@ enum ExportLANServer {
               var logs = document.getElementById("lan-export-logs");
               if (logs) logs.innerHTML = j.exportLogsListHTML;
             }
+            if (typeof window.refreshLANLoopPlaylist === "function") {
+              window.refreshLANLoopPlaylist(j.files);
+            }
           }
           function pollLists() {
             fetch("status_lists.json", { cache: "no-store" })
@@ -2895,6 +2898,9 @@ enum ExportLANServer {
               var logs = document.getElementById("lan-export-logs");
               if (logs) logs.innerHTML = j.exportLogsListHTML;
             }
+            if (typeof window.refreshLANLoopPlaylist === "function") {
+              window.refreshLANLoopPlaylist(j.files);
+            }
           }
           function refreshStatus() {
             var btn = document.getElementById("lan-refresh-status");
@@ -3170,6 +3176,15 @@ enum ExportLANServer {
             #lan-pending-queue-actions,
             #lan-paused-actions { margin: 0.25rem 0 0.35rem; }
             .lan-paused-exports { margin: 0.75rem 0 1rem; }
+            .lan-loop-player { margin: 0.75rem 0 1rem; }
+            .lan-loop-player video {
+              display: block; width: 100%; max-width: 56rem; max-height: 50vh;
+              background: #000; border-radius: 6px;
+            }
+            .lan-loop-player .lan-loop-toolbar {
+              display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0 0;
+            }
+            .lan-loop-player #lan-loop-label { font-size: 0.9em; word-break: break-all; }
             </style>
             <script>
             (function () {
@@ -3211,6 +3226,289 @@ enum ExportLANServer {
         """
     }
 
+    /// Toggle + hidden-by-default HTML5 player for `pcld_ios_media/loop/op_*.mp4`.
+    private static func htmlLANLoopPlayerBlock() -> String {
+        let loopPrefix = "\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/"
+        return """
+        <p>
+          <button type="button" id="lan-loop-player-toggle">Show loop player</button>
+        </p>
+        <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
+          <div class="row" style="margin-top:0">
+            <strong>Loop folder player</strong>
+            <span class="muted">Cycles <code>\(htmlEscape(loopPrefix))op_*.mp4</code> · rate applies to every segment</span>
+          </div>
+          <video id="lan-loop-video" controls playsinline preload="metadata"></video>
+          <div class="lan-loop-toolbar">
+            <button type="button" id="lan-loop-prev" title="Previous segment">Prev</button>
+            <button type="button" id="lan-loop-play">Play</button>
+            <button type="button" id="lan-loop-next" title="Next segment">Next</button>
+            <label>Speed
+              <select id="lan-loop-rate" aria-label="Playback speed">
+                <option value="0.25">0.25×</option>
+                <option value="0.5">0.5×</option>
+                <option value="0.75">0.75×</option>
+                <option value="1" selected>1×</option>
+                <option value="1.25">1.25×</option>
+                <option value="1.5">1.5×</option>
+                <option value="1.75">1.75×</option>
+                <option value="2">2×</option>
+              </select>
+            </label>
+            <span id="lan-loop-label" class="muted" role="status">Hidden — tap Show loop player</span>
+          </div>
+        </div>
+        \(htmlLANLoopPlayerScript(loopPrefix: loopPrefix))
+        """
+    }
+
+    private static func htmlLANLoopPlayerScript(loopPrefix: String) -> String {
+        let prefixJS = loopPrefix.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return """
+        <script>
+        (function () {
+          var LOOP_PREFIX = "\(prefixJS)";
+          var RATE_KEY = "loopsegments.lan.loopPlayerRate.v1";
+          var RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+          var playlist = [];
+          var index = 0;
+          var visible = false;
+          var wantPlay = false;
+          var video = document.getElementById("lan-loop-video");
+          var panel = document.getElementById("lan-loop-player");
+          var toggleBtn = document.getElementById("lan-loop-player-toggle");
+          var playBtn = document.getElementById("lan-loop-play");
+          var prevBtn = document.getElementById("lan-loop-prev");
+          var nextBtn = document.getElementById("lan-loop-next");
+          var rateSel = document.getElementById("lan-loop-rate");
+          var label = document.getElementById("lan-loop-label");
+          if (!video || !panel || !toggleBtn) return;
+
+          function setLabel(msg) {
+            if (label) label.textContent = msg || "";
+          }
+          function readRate() {
+            var v = 1;
+            try {
+              var raw = localStorage.getItem(RATE_KEY);
+              if (raw != null) v = parseFloat(raw);
+            } catch (e) {}
+            if (!isFinite(v) || RATES.indexOf(v) < 0) v = 1;
+            return v;
+          }
+          function writeRate(v) {
+            try { localStorage.setItem(RATE_KEY, String(v)); } catch (e) {}
+          }
+          function applyRate() {
+            var v = readRate();
+            if (rateSel) rateSel.value = String(v);
+            try { video.playbackRate = v; } catch (e) {}
+          }
+          function isLoopSegmentName(name) {
+            var n = String(name || "").replace(/\\\\/g, "/");
+            if (n.indexOf(LOOP_PREFIX) !== 0) return false;
+            var base = n.slice(LOOP_PREFIX.length);
+            if (!base || base.indexOf("/") >= 0) return false;
+            if (/staging/i.test(base)) return false;
+            return /^op_\\d+\\.(mp4|m4v|mov)$/i.test(base);
+          }
+          function cacheBust(entry) {
+            var q = [];
+            if (entry.bytes) q.push("b=" + encodeURIComponent(String(entry.bytes)));
+            if (entry.modified) q.push("m=" + encodeURIComponent(String(entry.modified)));
+            return q.length ? ("?" + q.join("&")) : "";
+          }
+          function buildPlaylistFromFiles(files) {
+            var list = Array.isArray(files) ? files : [];
+            var out = [];
+            var seen = {};
+            list.forEach(function (f) {
+              var name = f && f.name;
+              if (!isLoopSegmentName(name)) return;
+              if (seen[name]) return;
+              seen[name] = true;
+              out.push({
+                name: name,
+                bytes: Number(f.bytes) || 0,
+                modified: f.modified || "",
+                url: "/" + String(name).replace(/^\\/+/, "") + cacheBust(f)
+              });
+            });
+            out.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
+            if (!out.length) {
+              ["op_00.mp4", "op_01.mp4"].forEach(function (base) {
+                var name = LOOP_PREFIX + base;
+                out.push({ name: name, bytes: 0, modified: "", url: "/" + name });
+              });
+            }
+            return out;
+          }
+          function stopPull() {
+            wantPlay = false;
+            try { video.pause(); } catch (e) {}
+            try {
+              video.removeAttribute("src");
+              video.load();
+            } catch (e) {}
+            if (playBtn) playBtn.textContent = "Play";
+          }
+          function loadIndex(i, autoplay) {
+            if (!playlist.length) {
+              setLabel("No loop/op_*.mp4 yet");
+              stopPull();
+              return;
+            }
+            index = ((i % playlist.length) + playlist.length) % playlist.length;
+            var item = playlist[index];
+            wantPlay = !!autoplay;
+            video.src = item.url;
+            applyRate();
+            setLabel((index + 1) + "/" + playlist.length + ": " + item.name);
+            if (wantPlay) {
+              var p = video.play();
+              if (p && typeof p.catch === "function") {
+                p.catch(function () { wantPlay = false; if (playBtn) playBtn.textContent = "Play"; });
+              }
+              if (playBtn) playBtn.textContent = "Pause";
+            } else if (playBtn) {
+              playBtn.textContent = "Play";
+            }
+          }
+          function refreshPlaylist(files, keepPosition) {
+            if (!visible) return;
+            var prevName = playlist[index] && playlist[index].name;
+            playlist = buildPlaylistFromFiles(files);
+            if (!playlist.length) {
+              setLabel("No loop/op_*.mp4 yet");
+              return;
+            }
+            var next = 0;
+            if (keepPosition && prevName) {
+              for (var i = 0; i < playlist.length; i++) {
+                if (playlist[i].name === prevName) { next = i; break; }
+              }
+            }
+            var curSrc = video.currentSrc || video.src || "";
+            var nextUrl = playlist[next].url;
+            var sameFile = prevName && playlist[next] && playlist[next].name === prevName;
+            var bustChanged = sameFile && curSrc && curSrc.indexOf(nextUrl) < 0 && nextUrl.indexOf("?") >= 0;
+            if (!curSrc || !sameFile || bustChanged) {
+              loadIndex(next, wantPlay && !video.paused);
+            } else {
+              index = next;
+              setLabel((index + 1) + "/" + playlist.length + ": " + playlist[index].name);
+              applyRate();
+            }
+          }
+          window.refreshLANLoopPlaylist = function (files) {
+            refreshPlaylist(files, true);
+          };
+          function showPlayer() {
+            visible = true;
+            panel.style.display = "";
+            panel.removeAttribute("hidden");
+            toggleBtn.textContent = "Hide loop player";
+            setLabel("Loading loop playlist…");
+            applyRate();
+            fetch("status_lists.json", { cache: "no-store" })
+              .then(function (r) { return r.json(); })
+              .then(function (j) {
+                refreshPlaylist(j && j.files, false);
+                if (playlist.length) loadIndex(0, false);
+              })
+              .catch(function () {
+                playlist = buildPlaylistFromFiles([]);
+                loadIndex(0, false);
+              });
+          }
+          function hidePlayer() {
+            visible = false;
+            stopPull();
+            panel.style.display = "none";
+            panel.setAttribute("hidden", "hidden");
+            toggleBtn.textContent = "Show loop player";
+            setLabel("Hidden — tap Show loop player");
+          }
+          toggleBtn.onclick = function () {
+            if (visible) hidePlayer();
+            else showPlayer();
+          };
+          if (playBtn) {
+            playBtn.onclick = function () {
+              if (!visible) return;
+              if (!playlist.length) {
+                setLabel("No loop/op_*.mp4 yet");
+                return;
+              }
+              if (!video.src) {
+                loadIndex(index, true);
+                return;
+              }
+              if (video.paused) {
+                wantPlay = true;
+                var p = video.play();
+                if (p && typeof p.catch === "function") p.catch(function () {});
+                playBtn.textContent = "Pause";
+              } else {
+                wantPlay = false;
+                video.pause();
+                playBtn.textContent = "Play";
+              }
+            };
+          }
+          if (prevBtn) {
+            prevBtn.onclick = function () {
+              if (!visible || !playlist.length) return;
+              loadIndex(index - 1, wantPlay || !video.paused);
+            };
+          }
+          if (nextBtn) {
+            nextBtn.onclick = function () {
+              if (!visible || !playlist.length) return;
+              loadIndex(index + 1, wantPlay || !video.paused);
+            };
+          }
+          if (rateSel) {
+            rateSel.value = String(readRate());
+            rateSel.onchange = function () {
+              var v = parseFloat(rateSel.value);
+              if (!isFinite(v)) v = 1;
+              writeRate(v);
+              applyRate();
+            };
+          }
+          video.addEventListener("ended", function () {
+            if (!visible || !playlist.length) return;
+            loadIndex(index + 1, true);
+          });
+          video.addEventListener("ratechange", function () {
+            // Keep select in sync if browser UI changes rate.
+            if (!rateSel) return;
+            var v = video.playbackRate;
+            if (RATES.indexOf(v) >= 0) rateSel.value = String(v);
+          });
+          video.addEventListener("play", function () {
+            wantPlay = true;
+            if (playBtn) playBtn.textContent = "Pause";
+            applyRate();
+          });
+          video.addEventListener("pause", function () {
+            if (playBtn && video.paused) playBtn.textContent = "Play";
+          });
+          video.addEventListener("error", function () {
+            if (!visible) return;
+            var item = playlist[index];
+            setLabel("Could not load " + (item && item.name ? item.name : "segment")
+              + (playlist.length > 1 ? " — try Next" : " (export segments first)"));
+            if (playBtn) playBtn.textContent = "Play";
+            wantPlay = false;
+          });
+        })();
+        </script>
+        """
+    }
+
     private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         autoreleasepool {
             let exportActive = ExportPlaybackState.shared.isLANExportActive
@@ -3245,6 +3543,7 @@ enum ExportLANServer {
                 <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
                 <p id="lan-speed-test-result" class="muted" role="status"></p>
                 \(htmlLANSpeedTestScript(resultElementId: "lan-speed-test-result", buttonId: "lan-speed-test"))
+                \(htmlLANLoopPlayerBlock())
                 <h2>On phone (playback)</h2>
                 <ul id="lan-playback-files">
                 \(htmlMonitorStaticPlaybackLinks())
@@ -3312,6 +3611,7 @@ enum ExportLANServer {
             </p>
             <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
             """ : "")
+            \(htmlLANLoopPlayerBlock())
             <h2>On phone (playback)</h2>
             <div class="lan-playback-section">
             <div id="lan-playback-media" class="lan-playback-media">

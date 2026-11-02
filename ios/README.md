@@ -275,8 +275,8 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 
 | Page | Contents |
 |------|----------|
-| **`/` (monitor)** | Export source + resume when paused, static playback/log links, **Refresh status** / **Refresh file list** / **LAN speed test** (no timers). Link to **`/browse`**. Browsers always get this HTML at **`GET /`** — not an in-page WebDAV folder tree. |
-| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, **Export from URL**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
+| **`/` (monitor)** | Export source + resume when paused, static playback/log links, **Refresh status** / **Refresh file list** / **LAN speed test** / **Show loop player** (no timers). Link to **`/browse`**. Browsers always get this HTML at **`GET /`** — not an in-page WebDAV folder tree. |
+| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, **Show loop player**, **Export from URL**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
 
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 
@@ -284,7 +284,8 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 |------|----------|
 | **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Start export** while paused (resume). Pause/stop are in-app only — not on the LAN page. |
 | **Pending banner** | Shown while a trigger is in flight (switching source, resume, random, trim, clear). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those until export stops). **LAN speed test** stays available during export (pCloud fetch is cellular; the probe is Wi‑Fi LAN). |
-| **Middle** | Playback status + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
+| **Middle** | Playback status + **Show loop player** (hidden by default) + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
+| **Loop player** | Toggle **Show / Hide loop player**. Single HTML5 `<video>` cycles `pcld_ios_media/loop/op_*.mp4` (skips `*.staging.*`; playlist from `status_lists.json`). **Speed** steps 0.25×–2× (browser-like) apply to every segment; stored in `localStorage`. No autoplay — Play starts pull; **Hide** pauses and clears `src` (stops LAN bandwidth). Brief gap between minutes (not dual-buffer gapless). |
 | **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. Below that: **Export from URL** (HTTP(S) URL + save name → same vanilla → segments pipeline as browse Export). |
 
 #### JSON APIs (GET unless noted)
