@@ -4210,7 +4210,7 @@ enum ExportLANServer {
               var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight, 1);
               var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var ch = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
-              var stamp = (video.currentTime || 0).toFixed(3) + "|" + cw + "x" + ch + "|" + (chroma ? "c" : "o");
+              var stamp = (video.currentTime || 0).toFixed(3) + "|" + cw + "x" + ch + "|" + (chroma ? ("c" + (chroma.keyColor || "")) : "o");
               if (bag.stamp === stamp && canvas.width === cw) return canvas;
               if (canvas.width !== cw || canvas.height !== ch) {
                 canvas.width = cw;
@@ -5191,6 +5191,9 @@ enum ExportLANServer {
                 <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" style="width:7rem" aria-label="Zoom">
               </label>
               <span id="xr-time">0:00 / 0:00</span>
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Key
+                <input type="color" id="xr-chroma-key-play" value="#00ff00" aria-label="Chroma key color">
+              </label>
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Vol
                 <input type="range" id="xr-volume" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
               </label>
@@ -5227,6 +5230,9 @@ enum ExportLANServer {
                 <input type="range" id="xr-volume-launch" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
               </label>
               <label><input type="checkbox" id="xr-chroma-toggle"> Chroma</label>
+              <label>Key
+                <input type="color" id="xr-chroma-key" value="#00ff00" aria-label="Chroma key color">
+              </label>
               <label><input type="checkbox" id="xr-sbs-toggle" checked> SBS 3D (VR180)</label>
             </div>
             <p class="muted" style="font-size:0.85rem;max-width:36rem">After Launch: <strong>180° hemisphere</strong> + SBS eye-split (left/right halves). PC: mouse look / WASD. Prefer <strong>Loop</strong> for tests — <code>_working.mp4</code> is often huge/sparse/6K HEVC. Enable <strong>Chroma</strong> for green-screen over passthrough.</p>
@@ -5235,8 +5241,7 @@ enum ExportLANServer {
               <button type="button" class="play-btn" id="xr-launch">Launch Engine</button>
             </p>
             <p class="muted" style="margin-top:1rem;font-size:0.85rem">
-              Chroma: <code>keyColor #00ff00</code> · <code>similarity 0.3</code> · <code>smoothness 0.08</code>
-              (raise similarity for green halos; raise smoothness for softer edges)
+              Chroma key color is the picker next to <strong>Chroma</strong>. Similarity 0.3, smoothness 0.08.
             </p>
             <a class="back" href="/">← LAN monitor</a>
             ·
@@ -5298,6 +5303,7 @@ enum ExportLANServer {
             var ARCHIVE_PREFIX = "\#(archiveJS)";
             var RATE_KEY = "loopsegments.lan.xrChromaRate.v1";
             var VOL_KEY = "loopsegments.lan.xrVolume.v1";
+            var KEY_KEY = "loopsegments.lan.xrChromaKey.v1";
             var MODE_KEY = "loopsegments.lan.xrChromaMode.v2";
             var RATES = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3];
             var loopPlaylist = [];
@@ -5328,6 +5334,8 @@ enum ExportLANServer {
             var seekFwdBtn = document.getElementById("xr-seek-fwd");
             var timeEl = document.getElementById("xr-time");
             var chromaToggle = document.getElementById("xr-chroma-toggle");
+            var chromaKeyEl = document.getElementById("xr-chroma-key");
+            var chromaKeyPlayEl = document.getElementById("xr-chroma-key-play");
             var sbsToggle = document.getElementById("xr-sbs-toggle");
             var seekDragging = false;
             if (!video || !overlay) return;
@@ -5355,15 +5363,31 @@ enum ExportLANServer {
                 if (comp) try { comp.applyShader(); } catch (e) {}
               });
             }
+            function chromaKeyColor() {
+              var raw = (chromaKeyEl && chromaKeyEl.value) || "#00ff00";
+              if (!/^#[0-9a-fA-F]{6}$/.test(raw)) return "#00ff00";
+              return raw.toLowerCase();
+            }
             function syncShaderToggles() {
               var chromaOn = !!(chromaToggle && chromaToggle.checked);
               var sbsOn = !sbsToggle || !!sbsToggle.checked;
+              var key = chromaKeyColor();
               sphereEls().forEach(function (el) {
                 try {
                   el.setAttribute("chroma-stereo-sbs", "chroma", chromaOn);
                   el.setAttribute("chroma-stereo-sbs", "sbs", sbsOn);
+                  el.setAttribute("chroma-stereo-sbs", "keyColor", key);
                 } catch (e) {}
               });
+            }
+            function applyChromaKey(hex) {
+              if (!/^#[0-9a-fA-F]{6}$/.test(hex || "")) hex = "#00ff00";
+              hex = hex.toLowerCase();
+              if (chromaKeyEl) chromaKeyEl.value = hex;
+              if (chromaKeyPlayEl) chromaKeyPlayEl.value = hex;
+              try { localStorage.setItem(KEY_KEY, hex); } catch (e) {}
+              syncShaderToggles();
+              refreshSphereShader();
             }
 
             function setLabel(msg) {
@@ -6014,6 +6038,12 @@ enum ExportLANServer {
               });
             }
             if (chromaToggle) chromaToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
+            if (chromaKeyEl) chromaKeyEl.oninput = function () { applyChromaKey(chromaKeyEl.value); };
+            if (chromaKeyPlayEl) chromaKeyPlayEl.oninput = function () { applyChromaKey(chromaKeyPlayEl.value); };
+            try {
+              var savedKey = localStorage.getItem(KEY_KEY);
+              if (savedKey && /^#[0-9a-fA-F]{6}$/.test(savedKey)) applyChromaKey(savedKey);
+            } catch (eKey) {}
             if (sbsToggle) sbsToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
             if (reopenBtn) {
               reopenBtn.onclick = function () {
