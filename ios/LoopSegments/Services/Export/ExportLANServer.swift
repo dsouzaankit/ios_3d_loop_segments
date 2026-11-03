@@ -4110,20 +4110,15 @@ enum ExportLANServer {
                 return this.data.role === "desktop" || this.data.eye === "both";
               },
               wantsShader: function () {
-                // PC black-video history: custom VideoTexture shader is flaky on desktop WebGL.
-                // Native A-Frame flat video material for desktop / non-immersive; shader for chroma
-                // or immersive SBS eye halves only.
-                if (this.data.chroma) return true;
-                if (this.isDesktopRole()) return false;
-                if (this.data.sbs && this.isImmersiveStereo()) return true;
-                return false;
+                // Custom VideoTexture fragment shader goes black on PC + Quest. Only use it for chroma key.
+                // SBS eye halves use native A-Frame video material + geometry UV crop instead.
+                return !!this.data.chroma;
               },
               eyeLayer: function () {
                 if (this.data.eye === "left") return 1;
                 if (this.data.eye === "right") return 2;
                 return 0;
               },
-              // Desktop / magic-window camera only sees layer 0. Eye layers 1/2 are immersive-only.
               isImmersiveStereo: function () {
                 var sceneEl = this.el.sceneEl;
                 if (!sceneEl) return false;
@@ -4135,6 +4130,33 @@ enum ExportLANServer {
                   if (xr && xr.isPresenting) return true;
                 } catch (e2) {}
                 return false;
+              },
+              // Crop mesh UVs to left/right SBS half (avoids black custom shader on Quest/PC).
+              applySbsUVs: function () {
+                var mesh = this.el.getObject3D("mesh");
+                if (!mesh) return;
+                var eye = this.data.eye;
+                var sbs = !!(this.data.sbs && !this.isDesktopRole());
+                mesh.traverse(function (node) {
+                  if (!node.isMesh || !node.geometry || !node.geometry.attributes || !node.geometry.attributes.uv) return;
+                  var geo = node.geometry;
+                  if (!geo.userData) geo.userData = {};
+                  var uv = geo.attributes.uv;
+                  if (!geo.userData._xrBaseUv) {
+                    geo.userData._xrBaseUv = Float32Array.from(uv.array);
+                  }
+                  var base = geo.userData._xrBaseUv;
+                  var arr = uv.array;
+                  for (var i = 0; i < arr.length; i += 2) {
+                    var u = base[i];
+                    var v = base[i + 1];
+                    if (sbs && eye === "left") arr[i] = u * 0.5;
+                    else if (sbs && eye === "right") arr[i] = u * 0.5 + 0.5;
+                    else arr[i] = u;
+                    arr[i + 1] = v;
+                  }
+                  uv.needsUpdate = true;
+                });
               },
               syncEyeLayers: function () {
                 var mesh = this.el.getObject3D("mesh");
@@ -4164,14 +4186,14 @@ enum ExportLANServer {
                   });
                 }
                 if (this.el.object3D) setNodeLayer(this.el.object3D, useEyeLayers ? layer : 0);
-                // Desktop flat screen: only outside immersive. Domes: immersive (left always if no stereo yet).
+                // Flat a-video: magic-window / PC only. Left dome: always on (Quest + PC fallback).
+                // Right dome: immersive SBS stereo cams only.
                 if (desktop) {
                   if (this.el.object3D) this.el.object3D.visible = !immersive;
                 } else if (this.data.eye === "right") {
                   this.el.object3D.visible = !!(sbs && immersive && hasStereoCams);
                 } else if (this.el.object3D) {
-                  // Left dome: show in immersive; hide on flat so desktop a-video is the only picture.
-                  this.el.object3D.visible = !!immersive;
+                  this.el.object3D.visible = true;
                 }
                 try {
                   if (sceneEl && sceneEl.camera) sceneEl.camera.layers.enable(0);
@@ -4214,6 +4236,7 @@ enum ExportLANServer {
               },
               applyNativeVideo: function () {
                 this._mode = "native";
+                this.applySbsUVs();
                 try {
                   this.el.setAttribute("material", {
                     shader: "flat",
@@ -4229,7 +4252,6 @@ enum ExportLANServer {
               applyShaderVideo: function (videoTex) {
                 var data = this.data;
                 var uvX = data.eye === "right" ? 0.5 : 0;
-                // Desktop flat screen: full frame (no SBS UV split).
                 if (this.isDesktopRole()) uvX = 0;
                 var sbsOn = !!(data.sbs && !this.isDesktopRole());
                 if (!this.shaderMaterial) {
@@ -4255,7 +4277,7 @@ enum ExportLANServer {
                   return;
                 }
                 this.syncEyeLayers();
-                if (this.el.object3D && !this.el.object3D.visible) return;
+                // Still bind materials even if temporarily hidden so Enter AR is ready.
                 if (!this.wantsShader()) {
                   this.applyNativeVideo();
                   return;
@@ -4646,7 +4668,6 @@ enum ExportLANServer {
               theta-length="100"
               position="0 1.5 0"
               rotation="0 -90 0"
-              visible="false"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left; role: dome">
             </a-videosphere>
             <a-videosphere
