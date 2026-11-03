@@ -76,9 +76,11 @@ enum ExportLANServer {
     private static var listenerIsReady = false
     private static var startInFlight = false
     private static var addressInUseRetryCount = 0
-    private static let maxAddressInUseRetries = 2
+    private static let maxAddressInUseRetries = 8
     private static var connections: [ObjectIdentifier: NWConnection] = [:]
     private static let queue = DispatchQueue(label: "com.loopsegments.lan-server")
+    /// Serializes cancel→rebind so a still-tearing-down NWListener cannot leave :8765 wedged (EADDRINUSE + nothing accepting).
+    private static var listenerCancelGeneration = 0
     /// Bonjour service name (`loopsegments._http._tcp.local` in browsers) — not a pingable hostname.
     static let bonjourServiceName = "loopsegments"
     /// Settings → General → About → Name (e.g. `John's iPhone` → `http://johns-iphone.local:8765/`, not `iphone.local` unless named "iPhone").
@@ -161,14 +163,69 @@ enum ExportLANServer {
         let stale = listener
         listener = nil
         listenerIsReady = false
+        let open = connections.values
+        connections.removeAll()
         lock.unlock()
-        stale?.cancel()
 
-            do {
-                let port = NWEndpoint.Port(rawValue: defaultPort)!
-                let params = NWParameters.tcp
-                params.allowLocalEndpointReuse = true
-                let nwListener = try NWListener(using: params, on: port)
+        for connection in open {
+            connection.cancel()
+        }
+
+        // Wait for the prior NWListener to leave the port before binding again.
+        lock.lock()
+        let skipBonjour = addressInUseRetryCount > 0
+        lock.unlock()
+        cancelListenerAndWait(stale) {
+            Self.bindNewListener(log: log, includeBonjour: !skipBonjour)
+        }
+    }
+
+    private static func cancelListenerAndWait(_ stale: NWListener?, then work: @escaping () -> Void) {
+        guard let stale else {
+            work()
+            return
+        }
+        listenerCancelGeneration += 1
+        let generation = listenerCancelGeneration
+        var finished = false
+        let finish: () -> Void = {
+            guard !finished else { return }
+            finished = true
+            work()
+        }
+        stale.stateUpdateHandler = { state in
+            switch state {
+            case .cancelled, .failed:
+                finish()
+            default:
+                break
+            }
+        }
+        stale.cancel()
+        // Bound wait — some iOS builds never deliver .cancelled after cancel().
+        queue.asyncAfter(deadline: .now() + 0.75) {
+            guard generation == listenerCancelGeneration else { return }
+            finish()
+        }
+    }
+
+    private static func bindNewListener(log: @escaping (String) -> Void, includeBonjour: Bool = true) {
+        guard isEnabled else { return }
+        lock.lock()
+        if listenerIsReady, listener != nil {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        do {
+            let port = NWEndpoint.Port(rawValue: defaultPort)!
+            let params = NWParameters.tcp
+            params.allowLocalEndpointReuse = true
+            // Prefer Wi‑Fi; avoids some cellular/VPN interface bind conflicts on :8765.
+            params.requiredInterfaceType = .wifi
+            let nwListener = try NWListener(using: params, on: port)
+            if includeBonjour {
                 let ipForTXT = Self.primaryLANIPv4Address()
                 var txtRecord: Data?
                 if let ipForTXT, !ipForTXT.isEmpty {
@@ -180,79 +237,88 @@ enum ExportLANServer {
                     type: "_http._tcp",
                     txtRecord: txtRecord
                 )
-                lock.lock()
-                listener = nwListener
-                lock.unlock()
+            } else {
+                log("LAN export: retrying :\(defaultPort) without Bonjour (port was busy)")
+            }
+            lock.lock()
+            listener = nwListener
+            lock.unlock()
 
-                nwListener.stateUpdateHandler = { state in
-                    switch state {
-                    case .ready:
-                        let ip = Self.primaryLANIPv4Address()
-                        let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
-                        let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
-                        lock.lock()
+            nwListener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    let ip = Self.primaryLANIPv4Address()
+                    let hostURL = "http://\(Self.deviceMDNSHostName):\(defaultPort)/"
+                    let ipURL = ip.map { "http://\($0):\(defaultPort)/" }
+                    lock.lock()
                     listenerIsReady = true
                     addressInUseRetryCount = 0
-                        advertisedBaseURL = hostURL
-                        advertisedIPAddressURL = ipURL
-                        lock.unlock()
+                    advertisedBaseURL = hostURL
+                    advertisedIPAddressURL = ipURL
+                    lock.unlock()
+                    if includeBonjour {
                         log(
                             "LAN export: \(hostURL)\(ip.map { " · IP \($0)" } ?? "") — Bonjour \(bonjourServiceName)._http._tcp"
                         )
+                    } else {
                         log(
-                            "LAN: Windows often cannot resolve .local — use IP above; ping may fail even when HTTP works"
+                            "LAN export: \(hostURL)\(ip.map { " · IP \($0)" } ?? "") — TCP only (no Bonjour)"
                         )
-                        log("LAN: HTTP + WebDAV — pcld_ios_media/ (read + auth PUT/MKCOL for scripts), loop/op_*, logs (not SMB)")
-                    case .failed(let error):
-                        log("LAN export server failed: \(error.localizedDescription)")
+                    }
+                    log(
+                        "LAN: Windows often cannot resolve .local — use IP above; ping may fail even when HTTP works"
+                    )
+                    log("LAN: HTTP + WebDAV — pcld_ios_media/ (read + auth PUT/MKCOL for scripts), loop/op_*, logs (not SMB)")
+                case .failed(let error):
+                    log("LAN export server failed: \(error.localizedDescription)")
                     lock.lock()
                     let retries = addressInUseRetryCount
                     lock.unlock()
                     stopOnQueue(log: nil, resetAddressInUseRetries: false)
                     scheduleListenRetryIfNeeded(log: log, error: error, priorRetries: retries)
-                    case .cancelled:
+                case .cancelled:
                     lock.lock()
                     listenerIsReady = false
                     lock.unlock()
+                default:
+                    break
+                }
+            }
+
+            nwListener.newConnectionHandler = { connection in
+                // Per-connection queue so one slow/hung request cannot wedge every LAN client
+                // (serial `queue` previously blocked all HTTP while TCP still accepted).
+                // Set stateUpdateHandler BEFORE start: ready is delivered on connQueue and can
+                // race ahead of work still on the listener queue (TCP up, 0 HTTP bytes).
+                let id = ObjectIdentifier(connection)
+                let connQueue = DispatchQueue(label: "com.loopsegments.lan-conn.\(id)")
+                lock.lock()
+                connections[id] = connection
+                lock.unlock()
+                let finished: () -> Void = {
+                    lock.lock()
+                    connections.removeValue(forKey: id)
+                    lock.unlock()
+                }
+                connection.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:
+                        connection.stateUpdateHandler = nil
+                        Self.receiveRequest(on: connection, done: finished)
+                    case .failed, .cancelled:
+                        connection.stateUpdateHandler = nil
+                        connection.cancel()
+                        finished()
                     default:
                         break
                     }
                 }
+                connection.start(queue: connQueue)
+            }
 
-                nwListener.newConnectionHandler = { connection in
-                    // Per-connection queue so one slow/hung request cannot wedge every LAN client
-                    // (serial `queue` previously blocked all HTTP while TCP still accepted).
-                    // Set stateUpdateHandler BEFORE start: ready is delivered on connQueue and can
-                    // race ahead of work still on the listener queue (TCP up, 0 HTTP bytes).
-                    let id = ObjectIdentifier(connection)
-                    let connQueue = DispatchQueue(label: "com.loopsegments.lan-conn.\(id)")
-                    lock.lock()
-                    connections[id] = connection
-                    lock.unlock()
-                    let finished: () -> Void = {
-                        lock.lock()
-                        connections.removeValue(forKey: id)
-                        lock.unlock()
-                    }
-                    connection.stateUpdateHandler = { state in
-                        switch state {
-                        case .ready:
-                            connection.stateUpdateHandler = nil
-                            Self.receiveRequest(on: connection, done: finished)
-                        case .failed, .cancelled:
-                            connection.stateUpdateHandler = nil
-                            connection.cancel()
-                            finished()
-                        default:
-                            break
-                        }
-                    }
-                    connection.start(queue: connQueue)
-                }
-
-                nwListener.start(queue: queue)
-            } catch {
-                log("LAN export server could not start: \(error.localizedDescription)")
+            nwListener.start(queue: queue)
+        } catch {
+            log("LAN export server could not start: \(error.localizedDescription)")
             lock.lock()
             let retries = addressInUseRetryCount
             lock.unlock()
@@ -270,10 +336,11 @@ enum ExportLANServer {
         addressInUseRetryCount = priorRetries + 1
         let attempt = addressInUseRetryCount
         lock.unlock()
+        let delay = min(2.0, 0.4 * Double(attempt))
         log(
-            "LAN export: port \(defaultPort) in use — retry \(attempt)/\(maxAddressInUseRetries) in 0.5s (close other app using :8765)"
+            "LAN export: port \(defaultPort) in use — retry \(attempt)/\(maxAddressInUseRetries) in \(String(format: "%.1f", delay))s (force-quit app if this persists)"
         )
-        beginListenAttempt(log: log, delaySeconds: 0.5)
+        beginListenAttempt(log: log, delaySeconds: delay)
     }
 
     private static func isAddressAlreadyInUse(_ error: Error) -> Bool {

@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 329 (1.2.93):** LAN bind harden — wait for `NWListener` cancel before rebind; more EADDRINUSE retries; Bonjour-off + Wi‑Fi-only fallback when `:8765` stays busy after a wedged listener.
+
 **Build 328 (1.2.92):** LAN HTTP fix — set `NWConnection` ready handler **before** `start` on per-connection queues (327 raced and left TCP up with no HTTP bytes).
 
 **Build 327 (1.2.91):** LAN HTTP harden — per-connection queues (one hung request no longer wedges all clients); sparse `_working` metrics refresh off the request path; smaller index-tail probe. Cloudflare tunnel script stops prior `cloudflared` processes.
