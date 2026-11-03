@@ -14,7 +14,9 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 348 (1.3.1):** XR — true VR180 hemisphere; hide Passthrough HUD in AR; Quest 8K canvas cap 2048 + flat PIP; PC flat `a-video` restored (domes defer video material until immersive so they no longer black out the shared stream).
+**Build 349 (1.3.1):** XR Quest — real THREE 180° hemisphere (stops 6K spherical stretch); shared canvas downscale capped ~1536/1024 so 8K shows in WebXR.
+
+**Build 348 (1.3.1):** XR — VR180 hemisphere attempt; hide Passthrough HUD in AR; Quest 8K canvas cap; PC flat `a-video` restored (domes defer video material until immersive).
 
 **Build 347 (1.3.1):** XR PC — hide 180° dome outside immersive so it no longer overlays the flat `a-video` (spherical noise); 8K canvas downscale unchanged.
 

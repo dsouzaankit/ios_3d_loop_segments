@@ -3999,6 +3999,55 @@ enum ExportLANServer {
               return __xrVideoTex;
             }
 
+            // One canvas downscale for all meshes (Quest OOMs / blanks if each dome drawImage's 8K).
+            var __xrDs = { canvas: null, ctx: null, tex: null, stamp: "", limit: 0, questCap: 1536 };
+            function xrSharedDownscaleTex(video, limit, onlyUpdate) {
+              if (!video || !video.videoWidth) return null;
+              if (video.videoWidth <= limit && video.videoHeight <= limit) return null;
+              var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight);
+              var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
+              var ch = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
+              var stamp = video.currentTime.toFixed(4) + "|" + cw + "x" + ch + "|" + video.videoWidth;
+              if (__xrDs.tex && __xrDs.stamp === stamp) {
+                return __xrDs.tex;
+              }
+              if (!__xrDs.canvas) {
+                __xrDs.canvas = document.createElement("canvas");
+                __xrDs.ctx = __xrDs.canvas.getContext("2d", { alpha: false, willReadFrequently: false });
+              }
+              if (__xrDs.canvas.width !== cw || __xrDs.canvas.height !== ch) {
+                __xrDs.canvas.width = cw;
+                __xrDs.canvas.height = ch;
+                if (__xrDs.tex) {
+                  try { __xrDs.tex.dispose(); } catch (e0) {}
+                  __xrDs.tex = null;
+                }
+              }
+              try {
+                __xrDs.ctx.drawImage(video, 0, 0, cw, ch);
+              } catch (e1) {
+                return null;
+              }
+              if (!__xrDs.tex) {
+                __xrDs.tex = new THREE.CanvasTexture(__xrDs.canvas);
+                __xrDs.tex.minFilter = THREE.LinearFilter;
+                __xrDs.tex.magFilter = THREE.LinearFilter;
+                __xrDs.tex.generateMipmaps = false;
+                __xrDs.tex.wrapS = THREE.ClampToEdgeWrapping;
+                __xrDs.tex.wrapT = THREE.ClampToEdgeWrapping;
+                if ("colorSpace" in __xrDs.tex && THREE.SRGBColorSpace) {
+                  __xrDs.tex.colorSpace = THREE.SRGBColorSpace;
+                } else if ("encoding" in __xrDs.tex && THREE.sRGBEncoding) {
+                  __xrDs.tex.encoding = THREE.sRGBEncoding;
+                }
+              } else {
+                __xrDs.tex.needsUpdate = true;
+              }
+              __xrDs.stamp = stamp;
+              __xrDs.limit = limit;
+              return __xrDs.tex;
+            }
+
             function xrMakeChromaMaterial(videoTex, data, uvOffsetX) {
               return new THREE.ShaderMaterial({
                 uniforms: {
@@ -4137,31 +4186,48 @@ enum ExportLANServer {
                 // SBS eye halves use native A-Frame video material + geometry UV crop instead.
                 return !!this.data.chroma;
               },
-              // a-videosphere ignores phi-length → full 360 sphere stretches VR180. Force a true hemisphere.
+              // A-Frame videosphere ignored phi-length → VR180 stretched to 360. Own the BufferGeometry.
               ensureDomeGeometry: function () {
-                if (this.isDesktopRole() || this._domeGeoReady) return;
+                if (this.isDesktopRole()) return;
+                var mesh = this.el.getObject3D("mesh");
+                if (!mesh) return;
+                var ready = mesh.geometry && mesh.geometry.userData && mesh.geometry.userData._xrHemi;
+                if (ready && this._domeGeoReady) return;
                 try {
-                  this.el.setAttribute("geometry", {
-                    primitive: "sphere",
-                    radius: 5,
-                    segmentsWidth: 64,
-                    segmentsHeight: 64,
-                    phiStart: 0,
-                    phiLength: 180,
-                    thetaStart: 0,
-                    thetaLength: 180
-                  });
-                  // Invert Z so the mesh faces inward (camera inside the dome).
-                  this.el.object3D.scale.set(1, 1, -1);
-                  this._domeGeoReady = true;
-                  var mesh = this.el.getObject3D("mesh");
-                  if (mesh) {
-                    mesh.traverse(function (node) {
-                      if (node.geometry && node.geometry.userData) {
-                        delete node.geometry.userData._xrBaseUv;
-                      }
-                    });
+                  var old = mesh.geometry;
+                  // phiStart=π/2, phiLength=π → front hemisphere toward -Z (default camera look).
+                  var geo = new THREE.SphereGeometry(5, 64, 64, Math.PI * 0.5, Math.PI, 0, Math.PI);
+                  geo.userData._xrHemi = true;
+                  mesh.geometry = geo;
+                  if (old && old !== geo) {
+                    try { old.dispose(); } catch (e0) {}
                   }
+                  // Keep A-Frame's geometry component in sync so it does not regenerate a 360° sphere.
+                  try {
+                    if (this.el.components.geometry) {
+                      this.el.components.geometry.geometry = geo;
+                      var gd = this.el.components.geometry.data;
+                      gd.phiStart = 90;
+                      gd.phiLength = 180;
+                      gd.thetaStart = 0;
+                      gd.thetaLength = 180;
+                      gd.radius = 5;
+                    }
+                  } catch (eSync) {}
+                  // Negative X = inward-facing + correct equirect UV orientation for VR180.
+                  this.el.object3D.scale.set(-1, 1, 1);
+                  this.el.object3D.rotation.set(0, 0, 0);
+                  try {
+                    this.el.setAttribute("scale", "-1 1 1");
+                    this.el.setAttribute("rotation", "0 0 0");
+                  } catch (eAttr) {}
+                  this._domeGeoReady = true;
+                  mesh.traverse(function (node) {
+                    if (node.geometry && node.geometry.userData) {
+                      delete node.geometry.userData._xrBaseUv;
+                    }
+                  });
+                  this.applySbsUVs();
                 } catch (e) {}
               },
               maxWebGLTextureSize: function () {
@@ -4174,8 +4240,11 @@ enum ExportLANServer {
                 } catch (e) {}
                 // Headroom — drivers often fail video uploads at the exact max.
                 var limit = Math.max(512, maxTex - 64);
-                // Quest WebGL is tighter in practice for video textures.
-                if (this.isQuestBrowser()) limit = Math.min(limit, 2048);
+                // Quest: CanvasTexture uploads fail near 2K–4K in WebXR; keep a conservative cap.
+                if (this.isQuestBrowser()) {
+                  var qCap = (__xrDs && __xrDs.questCap) || 1536;
+                  limit = Math.min(limit, qCap);
+                }
                 return limit;
               },
               setTexNote: function (msg) {
@@ -4190,7 +4259,7 @@ enum ExportLANServer {
                   el.textContent = "";
                 }
               },
-              // 8K SBS often exceeds WebGL MAX_TEXTURE_SIZE → black mesh. Downscale to canvas texture.
+              // Quest/PC: huge SBS exceeds reliable WebGL video tex size → shared canvas texture.
               refreshDownscaleCanvas: function (onlyUpdate) {
                 var video = this.video;
                 if (!video) return null;
@@ -4201,55 +4270,42 @@ enum ExportLANServer {
                   return null;
                 }
                 var limit = this.maxWebGLTextureSize();
-                if (video.videoWidth <= limit && video.videoHeight <= limit) {
+                var forceQuest = this.isQuestBrowser()
+                  && (video.videoWidth > 1920 || video.videoHeight > 1920);
+                if (!forceQuest && video.videoWidth <= limit && video.videoHeight <= limit) {
                   if (!onlyUpdate) this.setTexNote("");
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
                   return null;
                 }
-                if (!this._dsCanvas) {
-                  this._dsCanvas = document.createElement("canvas");
-                  this._dsCtx = this._dsCanvas.getContext("2d", { alpha: false, willReadFrequently: false });
+                // Quest 8K: try 1536 then drop to 1024 if drawImage/upload path returns null.
+                var caps = this.isQuestBrowser() ? [limit, 1024] : [limit];
+                var tex = null;
+                var used = limit;
+                for (var i = 0; i < caps.length; i++) {
+                  used = Math.min(limit, caps[i]);
+                  if (this.isQuestBrowser()) __xrDs.questCap = used;
+                  tex = xrSharedDownscaleTex(video, used, onlyUpdate);
+                  if (tex) break;
                 }
-                var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight);
-                var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
-                var ch = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
-                if (this._dsCanvas.width !== cw || this._dsCanvas.height !== ch) {
-                  this._dsCanvas.width = cw;
-                  this._dsCanvas.height = ch;
-                  if (this._dsTex) {
-                    try { this._dsTex.dispose(); } catch (e1) {}
-                    this._dsTex = null;
-                  }
-                }
-                try {
-                  this._dsCtx.drawImage(video, 0, 0, cw, ch);
-                } catch (e2) {
-                  // drawImage failed — HTML PIP for flat browser (not visible inside immersive).
-                  try { video.classList.add("xr-pip"); } catch (e3) {}
-                  this.setTexNote("8K WebGL downscale failed — HTML preview");
+                if (!tex) {
+                  try { video.classList.add("xr-pip"); } catch (e2) {}
+                  if (!onlyUpdate) this.setTexNote("8K WebGL downscale failed — HTML preview");
                   return null;
                 }
-                if (!this._dsTex) {
-                  this._dsTex = new THREE.CanvasTexture(this._dsCanvas);
-                  this._dsTex.minFilter = THREE.LinearFilter;
-                  this._dsTex.magFilter = THREE.LinearFilter;
-                  this._dsTex.generateMipmaps = false;
-                } else {
-                  this._dsTex.needsUpdate = true;
-                }
                 if (!onlyUpdate) {
-                  // Quest flat: keep a small PIP as proof-of-decode while 3D uses canvas.
                   if (this.isQuestBrowser() && !this.isImmersiveStereo()) {
                     try { video.classList.add("xr-pip"); } catch (e4) {}
                   } else {
                     try { video.classList.remove("xr-pip"); } catch (e5) {}
                   }
+                  var cw = __xrDs.canvas ? __xrDs.canvas.width : used;
+                  var ch = __xrDs.canvas ? __xrDs.canvas.height : used;
                   this.setTexNote(
                     "Downscaling " + video.videoWidth + "×" + video.videoHeight
                     + " → " + cw + "×" + ch + " (WebGL max texture)"
                   );
                 }
-                return this._dsTex;
+                return tex;
               },
               applyCanvasVideo: function (tex) {
                 this.ensureDomeGeometry();
@@ -4856,25 +4912,23 @@ enum ExportLANServer {
               material="shader: flat; src: #chroma-stream; side: double; npot: true"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: both; role: desktop">
             </a-video>
-            <!-- Immersive VR180: explicit hemisphere (a-videosphere phi-length was ignored → 360 stretch).
-                 Start hidden — visible before syncEyeLayers blacks out PC flat a-video (camera inside dome). -->
+            <!-- Immersive VR180: placeholder sphere; chroma-stereo-sbs replaces BufferGeometry with a true
+                 THREE hemisphere (A-Frame phiLength / a-videosphere still stretch 180→360). Hidden until XR. -->
             <a-entity
               id="chroma-sphere"
               visible="false"
-              geometry="primitive: sphere; radius: 5; phiLength: 180; thetaLength: 180; segmentsWidth: 64; segmentsHeight: 64"
-              scale="1 1 -1"
+              geometry="primitive: sphere; radius: 5; segmentsWidth: 64; segmentsHeight: 64; phiStart: 90; phiLength: 180; thetaLength: 180"
+              scale="-1 1 1"
               position="0 1.6 0"
-              rotation="0 -90 0"
               material="shader: flat; color: #000; side: double"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left; role: dome">
             </a-entity>
             <a-entity
               id="chroma-sphere-right"
-              geometry="primitive: sphere; radius: 5; phiLength: 180; thetaLength: 180; segmentsWidth: 64; segmentsHeight: 64"
-              scale="1 1 -1"
-              position="0 1.6 0"
-              rotation="0 -90 0"
               visible="false"
+              geometry="primitive: sphere; radius: 5; segmentsWidth: 64; segmentsHeight: 64; phiStart: 90; phiLength: 180; thetaLength: 180"
+              scale="-1 1 1"
+              position="0 1.6 0"
               material="shader: flat; color: #000; side: double"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: right; role: dome">
             </a-entity>
