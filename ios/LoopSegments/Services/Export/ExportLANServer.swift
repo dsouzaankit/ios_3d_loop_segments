@@ -704,6 +704,14 @@ enum ExportLANServer {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
         }
+        if normalized == "xr" || normalized == "chroma" {
+            if isBrowserLikeRequest(requestHeaders: requestHeaders) {
+                sendXRChromaPlayerHTML(connection, done: done)
+                return
+            }
+            sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
+            return
+        }
         if normalized == "status.json" {
             sendStatusJSON(connection, done: done)
             return
@@ -3232,6 +3240,8 @@ enum ExportLANServer {
         return """
         <p>
           <button type="button" id="lan-loop-player-toggle">Show loop player</button>
+          <a href="/xr" id="lan-xr-chroma-link">Open XR chroma (loop)</a>
+          <a href="/xr?mode=media" id="lan-xr-media-link">Open XR chroma (working / archive)</a>
         </p>
         <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
           <div class="row" style="margin-top:0">
@@ -3514,6 +3524,702 @@ enum ExportLANServer {
         })();
         </script>
         """
+    }
+
+    /// Quest Browser WebXR page: 180° SBS + green-screen chroma over loop / `_working` / `archive/` media.
+    private static func sendXRChromaPlayerHTML(_ connection: NWConnection, done: @escaping () -> Void) {
+        autoreleasepool {
+            let mediaRoot = "\(ExportPaths.mediaExportFolderName)/"
+            let loopPrefix = "\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/"
+            let archivePrefix = "\(ExportPaths.mediaExportFolderName)/archive/"
+            let html = xrChromaPlayerHTML(
+                mediaRoot: mediaRoot,
+                loopPrefix: loopPrefix,
+                archivePrefix: archivePrefix
+            )
+            sendResponse(
+                connection: connection,
+                status: 200,
+                contentType: "text/html; charset=utf-8",
+                body: Data(html.utf8),
+                done: done
+            )
+        }
+    }
+
+    private static func xrChromaPlayerHTML(
+        mediaRoot: String,
+        loopPrefix: String,
+        archivePrefix: String
+    ) -> String {
+        func jsEscape(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        let mediaRootJS = jsEscape(mediaRoot)
+        let prefixJS = jsEscape(loopPrefix)
+        let archiveJS = jsEscape(archivePrefix)
+        let mediaRootHTML = htmlEscape(mediaRoot)
+        return #"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Loop Segments — XR chroma player</title>
+          <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+          <script>
+          (function () {
+            var THREE = window.AFRAME && AFRAME.THREE ? AFRAME.THREE : window.THREE;
+            if (!THREE || !window.AFRAME) return;
+
+            AFRAME.registerComponent("chroma-stereo-sbs", {
+              schema: {
+                keyColor: { type: "color", default: "#00ff00" },
+                similarity: { type: "number", default: 0.3 },
+                smoothness: { type: "number", default: 0.08 }
+              },
+              init: function () {
+                this._applied = false;
+                this._onApply = this.applyShader.bind(this);
+                this.el.addEventListener("materialtextureloaded", this._onApply);
+                this.el.addEventListener("object3dset", this._onApply);
+                var video = document.querySelector("#chroma-stream");
+                if (video) {
+                  video.addEventListener("loadeddata", this._onApply);
+                  video.addEventListener("play", this._onApply);
+                }
+                this.applyShader();
+              },
+              remove: function () {
+                this.el.removeEventListener("materialtextureloaded", this._onApply);
+                this.el.removeEventListener("object3dset", this._onApply);
+              },
+              applyShader: function () {
+                var mesh = this.el.getObject3D("mesh");
+                if (!mesh) return;
+                var data = this.data;
+                var targetColor = new THREE.Color(data.keyColor);
+                var self = this;
+                mesh.traverse(function (node) {
+                  if (!node.isMesh || !node.material) return;
+                  var videoTexture = node.material.map;
+                  if (!videoTexture && node.material.uniforms && node.material.uniforms.textureMap) {
+                    videoTexture = node.material.uniforms.textureMap.value;
+                  }
+                  if (!videoTexture) return;
+
+                  // SBS crop only in the fragment shader (do not also set texture.repeat).
+                  if (videoTexture.repeat) videoTexture.repeat.set(1, 1);
+                  if (videoTexture.offset) videoTexture.offset.set(0, 0);
+
+                  if (self._applied && node.material.type === "ShaderMaterial" && node.material.uniforms) {
+                    node.material.uniforms.textureMap.value = videoTexture;
+                    node.material.uniforms.keyColor.value = targetColor;
+                    node.material.uniforms.similarity.value = data.similarity;
+                    node.material.uniforms.smoothness.value = data.smoothness;
+                    return;
+                  }
+
+                  var customMaterial = new THREE.ShaderMaterial({
+                    uniforms: {
+                      textureMap: { value: videoTexture },
+                      uvOffset: { value: new THREE.Vector2(0, 0) },
+                      keyColor: { value: targetColor },
+                      similarity: { value: data.similarity },
+                      smoothness: { value: data.smoothness }
+                    },
+                    vertexShader: [
+                      "varying vec2 vUv;",
+                      "void main() {",
+                      "  vUv = uv;",
+                      "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+                      "}"
+                    ].join("\n"),
+                    fragmentShader: [
+                      "uniform sampler2D textureMap;",
+                      "uniform vec2 uvOffset;",
+                      "uniform vec3 keyColor;",
+                      "uniform float similarity;",
+                      "uniform float smoothness;",
+                      "varying vec2 vUv;",
+                      "void main() {",
+                      "  vec2 eyeUv = vUv * vec2(0.5, 1.0) + uvOffset;",
+                      "  vec4 videoColor = texture2D(textureMap, eyeUv);",
+                      "  float chromaSCr = 0.5000 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
+                      "  float chromasCb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5000 * videoColor.b;",
+                      "  float keyCr = 0.5000 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
+                      "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5000 * keyColor.b;",
+                      "  float distance = sqrt(pow(chromaSCr - keyCr, 2.0) + pow(chromasCb - keyCb, 2.0));",
+                      "  float blend = smoothstep(similarity, similarity + smoothness, distance);",
+                      "  gl_FragColor = vec4(videoColor.rgb, videoColor.a * blend);",
+                      "}"
+                    ].join("\n"),
+                    transparent: true,
+                    depthWrite: false,
+                    side: THREE.BackSide
+                  });
+                  node.material = customMaterial;
+                  node.onBeforeRender = function (renderer, scene, camera) {
+                    var offset = 0;
+                    try {
+                      var xrCam = renderer.xr && renderer.xr.getCamera && renderer.xr.getCamera();
+                      if (xrCam && xrCam.cameras && xrCam.cameras.length > 1) {
+                        if (camera === xrCam.cameras[1]) offset = 0.5;
+                        else if (camera.cameras) return;
+                      } else if (camera.layers && camera.layers.isEnabled(1) && !camera.layers.isEnabled(0)) {
+                        offset = 0.5;
+                      }
+                    } catch (e) {}
+                    customMaterial.uniforms.uvOffset.value.set(offset, 0);
+                  };
+                  self._applied = true;
+                });
+              }
+            });
+
+            AFRAME.registerComponent("env-toggle", {
+              init: function () {
+                var sky = document.querySelector("#virtual-sky");
+                var sceneEl = this.el.sceneEl;
+                var isPassthrough = false;
+                this.el.addEventListener("click", function () {
+                  isPassthrough = !isPassthrough;
+                  if (isPassthrough) {
+                    if (sky) sky.setAttribute("visible", "false");
+                    if (sceneEl && sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 0);
+                    var t1 = document.querySelector("#btn-text");
+                    if (t1) t1.setAttribute("value", "Switch to VR Void");
+                  } else {
+                    if (sky) sky.setAttribute("visible", "true");
+                    if (sceneEl && sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 1);
+                    var t0 = document.querySelector("#btn-text");
+                    if (t0) t0.setAttribute("value", "Switch to Passthrough");
+                  }
+                });
+              }
+            });
+          })();
+          </script>
+          <style>
+            body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; }
+            .play-overlay {
+              position: fixed; inset: 0; background: #111; color: #fff;
+              display: flex; flex-direction: column; justify-content: center; align-items: center;
+              z-index: 9999; padding: 1.25rem; text-align: center; box-sizing: border-box;
+            }
+            .play-overlay h1 { margin: 0 0 0.35rem; font-size: 1.35rem; }
+            .play-overlay .muted { color: #aaa; margin: 0 0 0.75rem; max-width: 36rem; line-height: 1.4; }
+            .play-overlay .warn {
+              color: #fbbf24; max-width: 36rem; margin: 0 0 1rem; font-size: 0.92rem; line-height: 1.4;
+            }
+            .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: center; margin: 0.5rem 0 0.75rem; }
+            .play-btn {
+              padding: 0.9rem 1.6rem; font-size: 1.15rem; background: #22c55e; border: none;
+              border-radius: 999px; color: #fff; cursor: pointer; font-weight: 700;
+            }
+            .toolbar button, .toolbar select {
+              padding: 0.45rem 0.75rem; font-size: 0.95rem; border-radius: 6px; border: 1px solid #444;
+              background: #222; color: #eee;
+            }
+            #xr-label { font-size: 0.9rem; color: #9ca3af; word-break: break-all; max-width: 40rem; }
+            a.back { color: #93c5fd; margin-top: 0.75rem; }
+            .toolbar button.active { background: #166534; border-color: #22c55e; }
+            .xr-file-panel {
+              width: min(40rem, 100%); max-height: min(42vh, 22rem); overflow: auto;
+              text-align: left; border: 1px solid #333; border-radius: 8px; background: #1a1a1a;
+              margin: 0.25rem 0 0.75rem;
+            }
+            .xr-file-group {
+              padding: 0.45rem 0.75rem 0.2rem; font-size: 0.75rem; letter-spacing: 0.04em;
+              text-transform: uppercase; color: #9ca3af; position: sticky; top: 0; background: #1a1a1a;
+            }
+            .xr-file-item {
+              display: block; width: 100%; box-sizing: border-box; text-align: left;
+              padding: 0.55rem 0.75rem; border: 0; border-top: 1px solid #2a2a2a;
+              background: transparent; color: #eee; cursor: pointer; font-size: 0.9rem;
+            }
+            .xr-file-item:hover { background: #262626; }
+            .xr-file-item.selected { background: #14532d; }
+            .xr-file-item .xr-file-name { display: block; word-break: break-all; }
+            .xr-file-item .xr-file-meta { display: block; color: #9ca3af; font-size: 0.78rem; margin-top: 0.15rem; }
+            .xr-file-empty { padding: 0.85rem 0.75rem; color: #9ca3af; font-size: 0.9rem; }
+            #xr-reopen {
+              display: none; position: fixed; right: 1rem; bottom: 1rem; z-index: 10000;
+              padding: 0.7rem 1rem; border-radius: 999px; border: 1px solid #444;
+              background: #166534; color: #fff; font-weight: 700; cursor: pointer;
+            }
+          </style>
+        </head>
+        <body>
+          <button type="button" id="xr-reopen" aria-label="Show file list">Files</button>
+          <div id="overlay" class="play-overlay">
+            <h1>3D Chroma Key 180° Player</h1>
+            <p class="muted">Two playlists (kept separate): <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working / archive</strong> = list &amp; open <code>_working*.mp4</code> + <code>archive/</code></p>
+            <p class="warn">Quest WebXR usually needs <strong>HTTPS</strong>. Plain <code>http://phone:8765/xr</code> often cannot enter immersive mode — use a TLS tunnel when testing on headset. A-Frame loads from CDN (headset needs internet once).</p>
+            <div class="toolbar" role="group" aria-label="Playlist">
+              <button type="button" id="xr-mode-loop" class="active">Loop playlist</button>
+              <button type="button" id="xr-mode-media">Working / archive</button>
+              <button type="button" id="xr-refresh-list">Refresh list</button>
+            </div>
+            <div id="xr-file-list" class="xr-file-panel" role="listbox" aria-label="Media files"></div>
+            <div class="toolbar">
+              <button type="button" id="xr-prev">Prev</button>
+              <button type="button" id="xr-next">Next</button>
+              <label>Speed
+                <select id="xr-rate" aria-label="Playback speed">
+                  <option value="0.7">0.7×</option>
+                  <option value="0.8">0.8×</option>
+                  <option value="0.9">0.9×</option>
+                  <option value="1" selected>1×</option>
+                  <option value="1.1">1.1×</option>
+                  <option value="1.2">1.2×</option>
+                  <option value="1.3">1.3×</option>
+                </select>
+              </label>
+            </div>
+            <p id="xr-label" role="status">Loading playlists…</p>
+            <p style="margin: 1rem 0 0">
+              <button type="button" class="play-btn" id="xr-launch">Launch Engine</button>
+            </p>
+            <p class="muted" style="margin-top:1rem;font-size:0.85rem">
+              Chroma: <code>keyColor #00ff00</code> · <code>similarity 0.3</code> · <code>smoothness 0.08</code>
+              (raise similarity for green halos; raise smoothness for softer edges)
+            </p>
+            <a class="back" href="/">← LAN monitor</a>
+            ·
+            <a class="back" href="/browse">LAN browse</a>
+          </div>
+
+          <a-scene
+            webxr="optionalFeatures: local-floor"
+            xr-mode-ui="enabled: true"
+            cursor="rayOrigin: mouse"
+            raycaster="objects: .raycastable">
+            <a-assets>
+              <video id="chroma-stream" playsinline webkit-playsinline></video>
+            </a-assets>
+
+            <a-videosphere
+              id="chroma-sphere"
+              src="#chroma-stream"
+              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08"
+              radius="5"
+              phi-length="180"
+              theta-length="100"
+              position="0 1.5 0"
+              rotation="0 -90 0">
+            </a-videosphere>
+
+            <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
+
+            <a-entity id="xr-hud" position="0 1.15 -1.9">
+              <a-plane width="1.8" height="0.4" color="#222" opacity="0.9" class="raycastable"></a-plane>
+              <a-box env-toggle
+                     position="0 0 0.02"
+                     width="1.6" height="0.25" depth="0.02"
+                     color="#22c55e"
+                     class="raycastable"
+                     animation__mouseenter="property: scale; to: 1.03 1.03 1.03; startEvents: mouseenter; dur: 150"
+                     animation__mouseleave="property: scale; to: 1 1 1; startEvents: mouseleave; dur: 150">
+                <a-text id="btn-text"
+                        value="Switch to Passthrough"
+                        align="center"
+                        color="#fff"
+                        width="4"
+                        position="0 0 0.02">
+                </a-text>
+              </a-box>
+            </a-entity>
+
+            <a-entity laser-controls="hand: left" raycaster="objects: .raycastable"></a-entity>
+            <a-entity laser-controls="hand: right" raycaster="objects: .raycastable"></a-entity>
+            <a-entity camera look-controls wasd-controls position="0 1.6 0">
+              <a-cursor raycaster="objects: .raycastable" material="color: #fff; shader: flat"></a-cursor>
+            </a-entity>
+          </a-scene>
+
+          <script>
+          (function () {
+            var MEDIA_ROOT = "\#(mediaRootJS)";
+            var LOOP_PREFIX = "\#(prefixJS)";
+            var ARCHIVE_PREFIX = "\#(archiveJS)";
+            var RATE_KEY = "loopsegments.lan.xrChromaRate.v1";
+            var MODE_KEY = "loopsegments.lan.xrChromaMode.v1";
+            var RATES = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3];
+            var loopPlaylist = [];
+            var mediaPlaylist = [];
+            var mode = "loop";
+            var index = 0;
+            var wantPlay = false;
+            var video = document.getElementById("chroma-stream");
+            var overlay = document.getElementById("overlay");
+            var label = document.getElementById("xr-label");
+            var rateSel = document.getElementById("xr-rate");
+            var launchBtn = document.getElementById("xr-launch");
+            var prevBtn = document.getElementById("xr-prev");
+            var nextBtn = document.getElementById("xr-next");
+            var modeLoopBtn = document.getElementById("xr-mode-loop");
+            var modeMediaBtn = document.getElementById("xr-mode-media");
+            var fileListEl = document.getElementById("xr-file-list");
+            var refreshBtn = document.getElementById("xr-refresh-list");
+            var reopenBtn = document.getElementById("xr-reopen");
+            if (!video || !overlay) return;
+
+            function setLabel(msg) {
+              if (label) label.textContent = msg || "";
+            }
+            function activePlaylist() {
+              return mode === "media" ? mediaPlaylist : loopPlaylist;
+            }
+            function emptyLabel() {
+              return mode === "media"
+                ? "No _working / archive media yet — export on the phone, then Refresh list"
+                : "No loop/op_*.mp4 yet";
+            }
+            function leafName(path) {
+              var n = normPath(path);
+              var i = n.lastIndexOf("/");
+              return i >= 0 ? n.slice(i + 1) : n;
+            }
+            function formatBytes(n) {
+              var b = Number(n) || 0;
+              if (b <= 0) return "";
+              if (b < 1024) return b + " B";
+              if (b < 1024 * 1024) return Math.round(b / 1024) + " KB";
+              return (b / (1024 * 1024)).toFixed(1) + " MB";
+            }
+            function showOverlay(show) {
+              overlay.style.display = show ? "flex" : "none";
+              if (reopenBtn) reopenBtn.style.display = show ? "none" : "block";
+            }
+            function renderFileList() {
+              if (!fileListEl) return;
+              fileListEl.innerHTML = "";
+              var playlist = activePlaylist();
+              if (!playlist.length) {
+                var empty = document.createElement("div");
+                empty.className = "xr-file-empty";
+                empty.textContent = emptyLabel();
+                fileListEl.appendChild(empty);
+                return;
+              }
+              function addGroup(title) {
+                var g = document.createElement("div");
+                g.className = "xr-file-group";
+                g.textContent = title;
+                fileListEl.appendChild(g);
+              }
+              function addItem(item, idx, groupHint) {
+                var btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "xr-file-item" + (idx === index ? " selected" : "");
+                btn.setAttribute("role", "option");
+                btn.setAttribute("aria-selected", idx === index ? "true" : "false");
+                btn.dataset.index = String(idx);
+                var nameEl = document.createElement("span");
+                nameEl.className = "xr-file-name";
+                nameEl.textContent = leafName(item.name);
+                var meta = document.createElement("span");
+                meta.className = "xr-file-meta";
+                var bits = [];
+                if (groupHint) bits.push(groupHint);
+                var sz = formatBytes(item.bytes);
+                if (sz) bits.push(sz);
+                bits.push(item.name);
+                meta.textContent = bits.join(" · ");
+                btn.appendChild(nameEl);
+                btn.appendChild(meta);
+                btn.onclick = function () {
+                  loadIndex(idx, wantPlay && !video.paused);
+                };
+                fileListEl.appendChild(btn);
+              }
+              if (mode === "media") {
+                var wi = [];
+                var ai = [];
+                playlist.forEach(function (item, idx) {
+                  if (isWorkingMediaName(item.name)) wi.push({ item: item, idx: idx });
+                  else ai.push({ item: item, idx: idx });
+                });
+                if (wi.length) {
+                  addGroup("Working");
+                  wi.forEach(function (row) { addItem(row.item, row.idx, "working"); });
+                }
+                if (ai.length) {
+                  addGroup("Archive");
+                  ai.forEach(function (row) { addItem(row.item, row.idx, "archive"); });
+                }
+              } else {
+                addGroup("Loop segments");
+                playlist.forEach(function (item, idx) { addItem(item, idx, "loop"); });
+              }
+            }
+            function snapRate(v) {
+              var r = Math.round(Number(v) * 10) / 10;
+              if (!isFinite(r)) return 1;
+              for (var i = 0; i < RATES.length; i++) {
+                if (Math.abs(RATES[i] - r) < 0.001) return RATES[i];
+              }
+              return 1;
+            }
+            function readRate() {
+              var v = 1;
+              try {
+                var raw = localStorage.getItem(RATE_KEY);
+                if (raw != null) v = parseFloat(raw);
+              } catch (e) {}
+              return snapRate(v);
+            }
+            function writeRate(v) {
+              try { localStorage.setItem(RATE_KEY, String(snapRate(v))); } catch (e) {}
+            }
+            function readMode() {
+              try {
+                var raw = localStorage.getItem(MODE_KEY);
+                if (raw === "media" || raw === "loop") return raw;
+              } catch (e) {}
+              return "loop";
+            }
+            function writeMode(m) {
+              try { localStorage.setItem(MODE_KEY, m); } catch (e) {}
+            }
+            function applyRate() {
+              var v = readRate();
+              if (rateSel) rateSel.value = String(v);
+              try { video.playbackRate = v; } catch (e) {}
+            }
+            function syncModeButtons() {
+              if (modeLoopBtn) modeLoopBtn.classList.toggle("active", mode === "loop");
+              if (modeMediaBtn) modeMediaBtn.classList.toggle("active", mode === "media");
+            }
+            function normPath(name) {
+              return String(name || "").replace(/\\/g, "/");
+            }
+            function isVideoExt(name) {
+              return /\.(mp4|m4v|mov|webm|mkv)$/i.test(name);
+            }
+            function isLoopSegmentName(name) {
+              var n = normPath(name);
+              if (n.indexOf(LOOP_PREFIX) !== 0) return false;
+              var base = n.slice(LOOP_PREFIX.length);
+              if (!base || base.indexOf("/") >= 0) return false;
+              if (/staging/i.test(base)) return false;
+              return /^op_\d+\.(mp4|m4v|mov)$/i.test(base);
+            }
+            function isWorkingMediaName(name) {
+              var n = normPath(name);
+              if (n.indexOf(MEDIA_ROOT) !== 0) return false;
+              var leaf = n.slice(MEDIA_ROOT.length);
+              if (!leaf || leaf.indexOf("/") >= 0) return false;
+              return /^_working/i.test(leaf) && isVideoExt(leaf);
+            }
+            function isArchiveMediaName(name) {
+              var n = normPath(name);
+              if (n.indexOf(ARCHIVE_PREFIX) !== 0) return false;
+              var rest = n.slice(ARCHIVE_PREFIX.length);
+              if (!rest || rest.indexOf("/") >= 0) return false;
+              if (/staging/i.test(rest)) return false;
+              return isVideoExt(rest);
+            }
+            function cacheBust(entry) {
+              var q = [];
+              if (entry.bytes) q.push("b=" + encodeURIComponent(String(entry.bytes)));
+              if (entry.modified) q.push("m=" + encodeURIComponent(String(entry.modified)));
+              return q.length ? ("?" + q.join("&")) : "";
+            }
+            function entryFromFile(f) {
+              var name = f && f.name;
+              return {
+                name: name,
+                bytes: Number(f.bytes) || 0,
+                modified: f.modified || "",
+                url: "/" + String(name).replace(/^\/+/, "") + cacheBust(f)
+              };
+            }
+            function buildLoopPlaylist(files) {
+              var list = Array.isArray(files) ? files : [];
+              var out = [];
+              var seen = {};
+              list.forEach(function (f) {
+                var name = f && f.name;
+                if (!isLoopSegmentName(name) || seen[name]) return;
+                seen[name] = true;
+                out.push(entryFromFile(f));
+              });
+              out.sort(function (a, b) {
+                return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+              });
+              if (!out.length) {
+                ["op_00.mp4", "op_01.mp4"].forEach(function (base) {
+                  var name = LOOP_PREFIX + base;
+                  out.push({ name: name, bytes: 0, modified: "", url: "/" + name });
+                });
+              }
+              return out;
+            }
+            function buildMediaPlaylist(files) {
+              var list = Array.isArray(files) ? files : [];
+              var working = [];
+              var archive = [];
+              var seen = {};
+              list.forEach(function (f) {
+                var name = f && f.name;
+                if (!name || seen[name]) return;
+                if (isWorkingMediaName(name)) {
+                  seen[name] = true;
+                  working.push(entryFromFile(f));
+                } else if (isArchiveMediaName(name)) {
+                  seen[name] = true;
+                  archive.push(entryFromFile(f));
+                }
+              });
+              working.sort(function (a, b) {
+                var aw = /_working\.mp4$/i.test(a.name) ? 0 : 1;
+                var bw = /_working\.mp4$/i.test(b.name) ? 0 : 1;
+                if (aw !== bw) return aw - bw;
+                return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+              });
+              archive.sort(function (a, b) {
+                if (a.modified && b.modified && a.modified !== b.modified) {
+                  return a.modified > b.modified ? -1 : 1;
+                }
+                return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+              });
+              return working.concat(archive);
+            }
+            function loadIndex(i, autoplay) {
+              var playlist = activePlaylist();
+              if (!playlist.length) {
+                setLabel(emptyLabel());
+                renderFileList();
+                return;
+              }
+              index = ((i % playlist.length) + playlist.length) % playlist.length;
+              var item = playlist[index];
+              wantPlay = !!autoplay;
+              video.src = item.url;
+              applyRate();
+              var tag = mode === "media" ? "working/archive" : "loop";
+              setLabel("[" + tag + "] " + (index + 1) + "/" + playlist.length + ": " + item.name);
+              renderFileList();
+              var sphere = document.getElementById("chroma-sphere");
+              if (sphere && sphere.components && sphere.components["chroma-stereo-sbs"]) {
+                try { sphere.components["chroma-stereo-sbs"].applyShader(); } catch (e) {}
+              }
+              if (wantPlay) {
+                var p = video.play();
+                if (p && typeof p.catch === "function") {
+                  p.catch(function () { wantPlay = false; setLabel("Play blocked — tap Launch Engine"); });
+                }
+              }
+            }
+            function setMode(next, keepPlay) {
+              mode = next === "media" ? "media" : "loop";
+              writeMode(mode);
+              syncModeButtons();
+              index = 0;
+              if (activePlaylist().length) loadIndex(0, !!(keepPlay && wantPlay));
+              else {
+                try {
+                  video.removeAttribute("src");
+                  video.load();
+                } catch (e) {}
+                setLabel(emptyLabel());
+                renderFileList();
+              }
+            }
+            function applyFiles(files) {
+              loopPlaylist = buildLoopPlaylist(files);
+              mediaPlaylist = buildMediaPlaylist(files);
+              applyRate();
+              if (activePlaylist().length) loadIndex(Math.min(index, activePlaylist().length - 1), false);
+              else {
+                setLabel(emptyLabel());
+                renderFileList();
+              }
+            }
+            function refreshPlaylists() {
+              setLabel("Refreshing file list…");
+              return fetch("status_lists.json", { cache: "no-store" })
+                .then(function (r) { return r.json(); })
+                .then(function (j) { applyFiles(j && j.files); })
+                .catch(function () {
+                  applyFiles([]);
+                  setLabel("Could not refresh status_lists.json");
+                });
+            }
+            function initializePlayer() {
+              var playlist = activePlaylist();
+              if (!playlist.length) {
+                setLabel(emptyLabel());
+                return;
+              }
+              wantPlay = true;
+              if (!video.src) loadIndex(index, true);
+              else {
+                applyRate();
+                var p = video.play();
+                if (p && typeof p.catch === "function") p.catch(function () {});
+              }
+              showOverlay(false);
+            }
+            if (launchBtn) launchBtn.onclick = initializePlayer;
+            if (modeLoopBtn) modeLoopBtn.onclick = function () { setMode("loop", false); };
+            if (modeMediaBtn) modeMediaBtn.onclick = function () { setMode("media", false); };
+            if (refreshBtn) refreshBtn.onclick = function () { refreshPlaylists(); };
+            if (reopenBtn) {
+              reopenBtn.onclick = function () {
+                showOverlay(true);
+                renderFileList();
+              };
+            }
+            if (prevBtn) prevBtn.onclick = function () {
+              if (!activePlaylist().length) return;
+              loadIndex(index - 1, wantPlay && !video.paused);
+            };
+            if (nextBtn) nextBtn.onclick = function () {
+              if (!activePlaylist().length) return;
+              loadIndex(index + 1, wantPlay && !video.paused);
+            };
+            if (rateSel) {
+              rateSel.value = String(readRate());
+              rateSel.onchange = function () {
+                var v = parseFloat(rateSel.value);
+                if (!isFinite(v)) v = 1;
+                writeRate(v);
+                applyRate();
+              };
+            }
+            video.addEventListener("ended", function () {
+              if (!activePlaylist().length) return;
+              loadIndex(index + 1, true);
+            });
+            video.addEventListener("error", function () {
+              var playlist = activePlaylist();
+              var item = playlist[index];
+              setLabel("Could not load " + (item && item.name ? item.name : "media")
+                + (playlist.length > 1 ? " — pick another from the list" : " (export on phone first)"));
+              wantPlay = false;
+              showOverlay(true);
+              renderFileList();
+            });
+            mode = readMode();
+            syncModeButtons();
+            showOverlay(true);
+            try {
+              var params = new URLSearchParams(window.location.search || "");
+              if (params.get("mode") === "media") mode = "media";
+              else if (params.get("mode") === "loop") mode = "loop";
+              writeMode(mode);
+              syncModeButtons();
+            } catch (e) {}
+            refreshPlaylists();
+          })();
+          </script>
+        </body>
+        </html>
+        """#
     }
 
     private static func sendMinimalIndexHTML(_ connection: NWConnection, done: @escaping () -> Void) {

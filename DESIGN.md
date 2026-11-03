@@ -176,6 +176,7 @@ Basic auth for WebDAV and sensitive JSON: **`admin` / `iosadmin`** (same as Ques
 | Endpoint | Role |
 |----------|------|
 | `GET /`, `GET /browse` | Monitor / full browse UI (+ PROPFIND for WebDAV clients on `/`) |
+| `GET /xr` (alias `/chroma`) | WebXR 180° SBS + chroma-key player; Loop vs Working/archive playlists (`?mode=media` lists `_working*` + `archive/` for tap-open; usually needs HTTPS) |
 | `GET /status.json` | Live export + pending queue summary |
 | `PUT`/`POST /export_from_folder.json` | Queue by `folderPath` + `displayName` (or filename-only walk) → **202** |
 | `PUT`/`POST /export_queue.json` | Pending FIFO (`append` / `prepend` / `replace`, `startFirst`, remove/clear) |

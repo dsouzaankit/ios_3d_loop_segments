@@ -14,6 +14,14 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 312 (1.2.76):** LAN **`/xr`** **Working / archive** mode lists files (grouped Working + Archive) for tap-to-open; **Refresh list**; **Files** button reopens the picker after Launch. Links: **`/xr`** (loop) and **`/xr?mode=media`**.
+
+**Build 311 (1.2.75):** LAN **`/xr`** keeps **Loop** and **Working / archive** as separate playlists (toggle on the overlay; choice stored in `localStorage`).
+
+**Build 310 (1.2.74):** LAN **`/xr`** also lists **`_working*.mp4`** and top-level **`archive/`** videos (later split into a separate playlist in **311**).
+
+**Build 309 (1.2.73):** LAN **`/xr`** (alias **`/chroma`**) — Quest Browser WebXR 180° SBS + green-screen chroma player; link **Open XR chroma player** next to **Show loop player** on `/` + `/browse`. WebXR usually needs HTTPS (plain `:8765` HTTP often cannot enter immersive mode).
+
 **Build 308 (1.2.72):** LAN probe notice/button say **Phone Wi‑Fi → www** (was bare Wi‑Fi → www).
 
 **Build 307 (1.2.71):** LAN **Phone Wi‑Fi → www** probe (`POST /wifi_www_probe.json`, `allowsCellularAccess = false`) + monitor button; `status.json` includes `wifiWwwProbe`. Companion quit runs the probe before USB Home and bounces the phone LAN AP on fail.
@@ -275,8 +283,9 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 
 | Page | Contents |
 |------|----------|
-| **`/` (monitor)** | Export source + resume when paused, static playback/log links, **Refresh status** / **Refresh file list** / **LAN speed test** / **Show loop player** (no timers). Link to **`/browse`**. Browsers always get this HTML at **`GET /`** — not an in-page WebDAV folder tree. |
-| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, **Show loop player**, **Export from URL**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
+| **`/` (monitor)** | Export source + resume when paused, static playback/log links, **Refresh status** / **Refresh file list** / **LAN speed test** / **Show loop player** / **Open XR chroma player** (no timers). Link to **`/browse`**. Browsers always get this HTML at **`GET /`** — not an in-page WebDAV folder tree. |
+| **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, **Show loop player**, **Open XR chroma player**, **Export from URL**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
+| **`/xr`** (alias **`/chroma`**) | Separate **WebXR / A-Frame** page: 180° hemisphere + SBS eye split + YUV green-screen chroma (`chroma-stereo-sbs`). **Two playlists** (toggle): **Loop** = `loop/op_*.mp4` only; **Working / archive** = scrollable list of `_working*.mp4` + top-level `archive/` (tap to open, Refresh list; `?mode=media` opens that playlist). Passthrough toggle clears the sky / canvas alpha. **Does not** replace the 2D loop player. Quest immersive mode typically needs **HTTPS** (not plain `http://phone:8765`). A-Frame CDN load needs internet on the headset once. |
 
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 
@@ -285,7 +294,8 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **Top** | Export source bar — *Exporting* / *Paused export* / *Last export* + filename. **Start export** while paused (resume). Pause/stop are in-app only — not on the LAN page. |
 | **Pending banner** | Shown while a trigger is in flight (switching source, resume, random, trim, clear). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those until export stops). **LAN speed test** stays available during export (pCloud fetch is cellular; the probe is Wi‑Fi LAN). |
 | **Middle** | Playback status + **Show loop player** (hidden by default) + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
-| **Loop player** | Toggle **Show / Hide loop player**. Single HTML5 `<video>` cycles `pcld_ios_media/loop/op_*.mp4` (skips `*.staging.*`; playlist from `status_lists.json`). **Speed** steps **0.7×–1.3×** in **0.1** increments apply to every segment; stored in `localStorage`. No autoplay — Play starts pull; **Hide** pauses and clears `src` (stops LAN bandwidth). Brief gap between minutes (not dual-buffer gapless). |
+| **Loop player** | Toggle **Show / Hide loop player**. Single HTML5 `<video>` cycles `pcld_ios_media/loop/op_*.mp4` (skips `*.staging.*`; playlist from `status_lists.json`). **Speed** steps **0.7×–1.3×** in **0.1** increments apply to every segment; stored in `localStorage`. No autoplay — Play starts pull; **Hide** pauses and clears `src` (stops LAN bandwidth). Brief gap between minutes (not dual-buffer gapless). Separate link **Open XR chroma player** → **`/xr`**. |
+| **XR chroma player** | **`/xr`**: WebXR theater for green-screen VR180 SBS. **Loop playlist** stays separate from **Working / archive**. Tune `similarity` / `smoothness` / `keyColor` on the videosphere component in the served HTML if needed. |
 | **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. Below that: **Export from URL** (HTTP(S) URL + save name → same vanilla → segments pipeline as browse Export). |
 
 #### JSON APIs (GET unless noted)
