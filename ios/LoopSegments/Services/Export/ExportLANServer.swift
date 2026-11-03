@@ -4709,69 +4709,92 @@ enum ExportLANServer {
               }
             });
 
-            // Headset zoom. HTML range is off-screen in AR, so − / + steps live on the camera.
+            // Headset zoom. Hidden unless you look down, point a controller at it, or just stepped.
             AFRAME.registerComponent("xr-zoom-steps", {
               init: function () {
                 var root = this.el;
-                var sceneEl = this.el.sceneEl;
-                var lastMs = 0;
-                function steps() {
-                  return (window.__xrZoomSteps && window.__xrZoomSteps.length) ? window.__xrZoomSteps : [0.5, 0.6, 0.7, 0.8, 0.9, 1];
-                }
-                function nearest(z) {
-                  var list = steps();
-                  var best = 0;
-                  var bestD = 99;
-                  for (var i = 0; i < list.length; i++) {
-                    var d = Math.abs(list[i] - z);
-                    if (d < bestD) { bestD = d; best = i; }
-                  }
-                  return best;
-                }
+                this.sceneEl = this.el.sceneEl;
+                this._lastMs = 0;
+                this._aimed = false;
+                this._holdUntil = 0;
+                this._dir = new THREE.Vector3();
+                var self = this;
                 function paint(z) {
                   var lab = document.getElementById("xr-zoom-label");
                   if (lab) lab.setAttribute("value", Math.round(z * 100) + "%");
                 }
-                function syncVis() {
-                  var on = false;
-                  try {
-                    on = !!(sceneEl && sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode")));
-                  } catch (e) {}
-                  try { root.setAttribute("visible", on ? "true" : "false"); } catch (e2) {}
-                  if (root.object3D) root.object3D.visible = on;
-                }
-                function step(dir) {
-                  var list = steps();
-                  var i = nearest(Number(window.__xrZoom) || 0.6) + dir;
-                  if (i < 0) i = 0;
-                  if (i > list.length - 1) i = list.length - 1;
-                  var z = list[i];
-                  window.__xrZoom = z;
-                  var zoomEl = document.getElementById("xr-zoom");
-                  if (zoomEl) zoomEl.value = String(z);
-                  paint(z);
-                  ["chroma-screen", "chroma-sphere", "chroma-sphere-right"].forEach(function (id) {
-                    var el = document.getElementById(id);
-                    var comp = el && el.components && el.components["chroma-stereo-sbs"];
-                    if (!comp) return;
-                    comp._domeGeoReady = false;
-                    try { comp.ensureDomeGeometry(); comp.syncEyeLayers(); } catch (e3) {}
-                  });
-                }
+                this._paint = paint;
+                root.addEventListener("raycaster-intersected", function () { self._aimed = true; });
+                root.addEventListener("raycaster-intersected-cleared", function () {
+                  self._aimed = false;
+                  self._holdUntil = Date.now() + 1200;
+                });
                 root.addEventListener("click", function (ev) {
                   var now = Date.now();
-                  if (now - lastMs < 280) return;
+                  if (now - self._lastMs < 280) return;
                   var id = ev.target && ev.target.id;
                   if (id !== "xr-zoom-out" && id !== "xr-zoom-in") return;
-                  lastMs = now;
-                  step(id === "xr-zoom-in" ? 1 : -1);
+                  self._lastMs = now;
+                  self._holdUntil = now + 1800;
+                  self.step(id === "xr-zoom-in" ? 1 : -1);
                 });
-                if (sceneEl) {
-                  sceneEl.addEventListener("enter-vr", syncVis);
-                  sceneEl.addEventListener("exit-vr", syncVis);
+                if (this.sceneEl) {
+                  this.sceneEl.addEventListener("enter-vr", function () {
+                    self._holdUntil = Date.now() + 3200;
+                  });
+                  this.sceneEl.addEventListener("exit-vr", function () {
+                    self._aimed = false;
+                    self._holdUntil = 0;
+                    if (root.object3D) root.object3D.visible = false;
+                  });
                 }
-                syncVis();
+                if (root.object3D) root.object3D.visible = false;
                 paint(Number(window.__xrZoom) || 0.6);
+              },
+              step: function (dir) {
+                var list = (window.__xrZoomSteps && window.__xrZoomSteps.length) ? window.__xrZoomSteps : [0.5, 0.6, 0.7, 0.8, 0.9, 1];
+                var z0 = Number(window.__xrZoom) || 0.6;
+                var best = 0;
+                var bestD = 99;
+                for (var i = 0; i < list.length; i++) {
+                  var d = Math.abs(list[i] - z0);
+                  if (d < bestD) { bestD = d; best = i; }
+                }
+                best += dir;
+                if (best < 0) best = 0;
+                if (best > list.length - 1) best = list.length - 1;
+                var z = list[best];
+                window.__xrZoom = z;
+                var zoomEl = document.getElementById("xr-zoom");
+                if (zoomEl) zoomEl.value = String(z);
+                this._paint(z);
+                ["chroma-screen", "chroma-sphere", "chroma-sphere-right"].forEach(function (id) {
+                  var el = document.getElementById(id);
+                  var comp = el && el.components && el.components["chroma-stereo-sbs"];
+                  if (!comp) return;
+                  comp._domeGeoReady = false;
+                  try { comp.ensureDomeGeometry(); comp.syncEyeLayers(); } catch (e3) {}
+                });
+              },
+              tick: function () {
+                var sceneEl = this.sceneEl;
+                var immersive = false;
+                try {
+                  immersive = !!(sceneEl && sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode")));
+                } catch (e) {}
+                var show = false;
+                if (immersive) {
+                  var down = false;
+                  try {
+                    var cam = sceneEl.camera;
+                    if (cam) {
+                      cam.getWorldDirection(this._dir);
+                      down = this._dir.y < -0.22;
+                    }
+                  } catch (e2) {}
+                  show = this._aimed || down || Date.now() < this._holdUntil;
+                }
+                if (this.el.object3D) this.el.object3D.visible = show;
               }
             });
           })();
