@@ -418,13 +418,17 @@ enum WorkingSourceSparseCatalog {
     }
 
     private static func probeIndexTailOnDisk(fileURL: URL, totalLength: Int64) -> Bool {
-        let tailLen = WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalLength)
+        // Cap probe read — full indexTailFetchBytes (up to 48 MB) via readDataToEndOfFile can stall LAN.
+        let tailLen = min(
+            WebDAVTempFileDownload.indexTailFetchBytes(totalLength: totalLength),
+            2 * 1024 * 1024
+        )
         let tailStart = max(0, totalLength - tailLen)
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
         defer { try? handle.close() }
         do {
             try handle.seek(toOffset: UInt64(tailStart))
-            let data = handle.readDataToEndOfFile()
+            let data = try handle.read(upToCount: Int(tailLen)) ?? Data()
             return data.range(of: Data("moov".utf8)) != nil
         } catch {
             return false

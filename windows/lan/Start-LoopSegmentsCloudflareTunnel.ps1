@@ -151,6 +151,13 @@ if (-not $SkipLanProbe) {
     Write-Host '[cf-tunnel] LAN TCP OK' -ForegroundColor Green
 }
 
+# Prior quick tunnels leave cloudflared running and can flood phone :8765 until LAN HTTP wedges.
+Get-Process -Name cloudflared -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host ("[cf-tunnel] Stopping prior cloudflared pid {0}" -f $_.Id) -ForegroundColor DarkYellow
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Milliseconds 400
+
 Write-Host '[cf-tunnel] Starting quick tunnel (leave this window open; Ctrl+C to stop)...' -ForegroundColor Yellow
 Write-Host ''
 

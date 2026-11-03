@@ -220,8 +220,11 @@ enum ExportLANServer {
                 }
 
                 nwListener.newConnectionHandler = { connection in
-                    connection.start(queue: queue)
+                    // Per-connection queue so one slow/hung request cannot wedge every LAN client
+                    // (serial `queue` previously blocked all HTTP while TCP still accepted).
                     let id = ObjectIdentifier(connection)
+                    let connQueue = DispatchQueue(label: "com.loopsegments.lan-conn.\(id)")
+                    connection.start(queue: connQueue)
                     lock.lock()
                     connections[id] = connection
                     lock.unlock()
@@ -2059,20 +2062,23 @@ enum ExportLANServer {
             return
         }
         lastLANMetricsRefresh = now
-        if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
-            return
-        }
-        if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
-            let url = ExportPaths.workingTranscodedURL
-            guard FileManager.default.fileExists(atPath: url.path),
-                  let sizeNum = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber else {
+        // Never block the LAN connection queue on sparse/_working probes (can stall HTTP for all clients).
+        DispatchQueue.global(qos: .utility).async {
+            if ExportPlaybackState.shared.usesVanillaDownloadForLAN() {
                 return
             }
-            ExportPlaybackState.shared.updateTranscodedWorkingFileBytes(sizeNum.int64Value)
-            return
-        }
-        if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
-            WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
+            if ExportPlaybackState.shared.usesPCloudTranscodedWorkingForLAN() {
+                let url = ExportPaths.workingTranscodedURL
+                guard FileManager.default.fileExists(atPath: url.path),
+                      let sizeNum = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber else {
+                    return
+                }
+                ExportPlaybackState.shared.updateTranscodedWorkingFileBytes(sizeNum.int64Value)
+                return
+            }
+            if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
+                WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
+            }
         }
     }
 
