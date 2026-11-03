@@ -4735,11 +4735,35 @@ enum ExportLANServer {
               else transport.setAttribute("hidden", "");
               if (show) syncTransportUI();
             }
+            function exitImmersiveIfNeeded() {
+              try {
+                var scene = document.querySelector("a-scene");
+                if (scene && scene.is && (scene.is("vr-mode") || scene.is("ar-mode")) && scene.exitVR) {
+                  scene.exitVR();
+                }
+              } catch (e) {}
+            }
+            function stopPlaybackForHome() {
+              // Pause alone can leave Quest WebXR decoding / audio running under the overlay.
+              wantPlay = false;
+              try { video.pause(); } catch (e) {}
+              try {
+                video.removeAttribute("src");
+                video.load();
+              } catch (e) {}
+              try { syncPlayPauseLabel(); } catch (e) {}
+              try { refreshSphereShader(); } catch (e) {}
+              exitImmersiveIfNeeded();
+            }
             function showOverlay(show) {
               overlay.style.display = show ? "flex" : "none";
               if (reopenBtn) reopenBtn.style.display = show ? "none" : "block";
               showTransport(!show);
-              if (!show) closeArchiveDropdown();
+              if (show) {
+                stopPlaybackForHome();
+              } else {
+                closeArchiveDropdown();
+              }
               syncArchiveFloat();
             }
             function seekBy(delta) {
@@ -5192,6 +5216,7 @@ enum ExportLANServer {
             if (reopenBtn) {
               reopenBtn.onclick = function () {
                 showOverlay(true);
+                setLabel("Stopped — pick a file, then Launch Engine");
                 renderFileList();
               };
             }

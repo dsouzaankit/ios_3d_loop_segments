@@ -14,6 +14,10 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 336 (1.3.0):** LAN **`/xr`** — **Files** hard-stops playback (clear `src` + `load`, exit VR/AR); pause alone left Quest decoding/audio under the overlay.
+
+**Build 335 (1.2.99):** LAN **`/xr`** — **Files** (reopen home) pauses video/audio so streaming does not keep playing under the overlay.
+
 **Build 334 (1.2.98):** LAN page — collapse **Quest Browser — LAN HTTP as secure** behind a `<details>` summary (same pattern as Cloudflare Advanced).
 
 **Build 333 (1.2.97):** LAN **`/xr`** archive mode — current file is a chip; tap opens a centered top dropdown (stays usable after Launch via a top float chip).
