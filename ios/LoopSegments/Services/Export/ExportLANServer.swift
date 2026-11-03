@@ -4037,7 +4037,8 @@ enum ExportLANServer {
                 ].join("\n"),
                 transparent: !!data.chroma,
                 depthWrite: !data.chroma,
-                side: THREE.DoubleSide
+                side: THREE.DoubleSide,
+                toneMapped: false
               });
             }
 
@@ -4119,28 +4120,38 @@ enum ExportLANServer {
                 var immersive = this.isImmersiveStereo();
                 var sceneEl = this.el.sceneEl;
                 var xrCam = null;
+                var presenting = false;
                 var hasStereoCams = false;
                 if (sceneEl && sceneEl.renderer && sceneEl.renderer.xr) {
                   try {
+                    presenting = !!sceneEl.renderer.xr.isPresenting;
                     xrCam = sceneEl.renderer.xr.getCamera();
-                    hasStereoCams = !!(xrCam && xrCam.cameras && xrCam.cameras.length >= 2);
+                    // Three.js always exposes cameras[2] even when not presenting — require isPresenting.
+                    hasStereoCams = !!(presenting && xrCam && xrCam.cameras && xrCam.cameras.length >= 2);
                   } catch (e0) {}
                 }
-                // Eye layers only when stereo cams exist — otherwise AR Enter can park video on
-                // layer 1/2 while cameras still only see 0 (blank hemisphere until cams appear).
+                // Eye layers only while actually presenting stereo — else left stays on layer 0 (PC/Quest flat).
                 var useEyeLayers = sbs && immersive && layer > 0 && hasStereoCams;
+                function setNodeLayer(node, layerBit) {
+                  if (!node || (!node.isMesh && !node.isObject3D)) return;
+                  node.layers.set(layerBit);
+                }
                 if (mesh) {
                   mesh.traverse(function (node) {
-                    if (!node.isMesh && !node.isObject3D) return;
-                    node.layers.set(useEyeLayers ? layer : 0);
+                    setNodeLayer(node, useEyeLayers ? layer : 0);
                   });
                 }
-                // PC / pre-stereo: left dome on layer 0. Right dome only with real stereo cams.
+                if (this.el.object3D) setNodeLayer(this.el.object3D, useEyeLayers ? layer : 0);
+                // PC / flat / pre-stereo: left dome on layer 0. Right dome only with real stereo cams.
                 if (this.data.eye === "right") {
                   this.el.object3D.visible = !!(sbs && immersive && hasStereoCams);
                 } else if (this.el.object3D) {
                   this.el.object3D.visible = true;
                 }
+                // Keep desktop/magic-window camera on layer 0 so left dome stays visible outside XR.
+                try {
+                  if (sceneEl && sceneEl.camera) sceneEl.camera.layers.enable(0);
+                } catch (eCam) {}
                 if (!xrCam || !hasStereoCams) return;
                 try {
                   xrCam.layers.enable(0);
@@ -4464,10 +4475,10 @@ enum ExportLANServer {
               font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #cbd5e1;
               min-width: 7.5rem; text-align: right;
             }
-            /* Texture source only — keep in DOM/layout so WebGL can sample; never cover a-scene. */
+            /* Texture source — must stay in layout with tiny opacity (opacity:0 / display:none → black VideoTexture on Quest/PC). */
             #chroma-stream {
-              position: fixed; left: -2px; top: -2px; width: 2px; height: 2px;
-              opacity: 0; pointer-events: none; z-index: 0; overflow: hidden;
+              position: fixed; left: 0; top: 0; width: 16px; height: 16px;
+              opacity: 0.01; pointer-events: none; z-index: 0; overflow: hidden;
             }
             a-scene { z-index: 1; }
             /* Hide gaze fuse reticle (center donut) if A-Frame / Quest re-injects it. */
@@ -4585,8 +4596,8 @@ enum ExportLANServer {
             <a class="back" href="/browse">LAN browse</a>
           </div>
 
-          <!-- Outside a-assets; tiny/invisible — feeds a-video / VideoTexture (avoid display:none). -->
-          <video id="chroma-stream" playsinline webkit-playsinline preload="metadata"></video>
+          <!-- Outside a-assets; tiny opacity — feeds VideoTexture (avoid display:none / opacity:0). -->
+          <video id="chroma-stream" playsinline webkit-playsinline preload="auto"></video>
 
           <a-scene
             background="color: #0a0a0a"
@@ -4986,8 +4997,9 @@ enum ExportLANServer {
             }
             function syncArchiveFloat() {
               if (!archiveFloat) return;
+              // Floater belongs on the Launch Engine picker page — not over playback.
               var overlayOpen = overlay && overlay.style.display !== "none";
-              var show = mode === "archive" && !overlayOpen;
+              var show = mode === "archive" && overlayOpen;
               archiveFloat.style.display = show ? "block" : "none";
               if (show) {
                 archiveFloat.removeAttribute("hidden");
@@ -5323,24 +5335,37 @@ enum ExportLANServer {
                 renderFileList();
               };
             }
-            if (playPauseBtn) {
-              playPauseBtn.onclick = function () {
-                if (video.paused) {
-                  wantPlay = true;
-                  var p = video.play();
-                  if (p && typeof p.then === "function") {
-                    p.then(function () { refreshSphereShader(); syncPlayPauseLabel(); }).catch(function () {});
-                  } else {
-                    refreshSphereShader();
-                    syncPlayPauseLabel();
-                  }
+            function togglePlayPause() {
+              if (!video || !video.src) return;
+              if (video.paused) {
+                wantPlay = true;
+                var p = video.play();
+                if (p && typeof p.then === "function") {
+                  p.then(function () { refreshSphereShader(); syncPlayPauseLabel(); }).catch(function () {});
                 } else {
-                  video.pause();
-                  wantPlay = false;
+                  refreshSphereShader();
                   syncPlayPauseLabel();
                 }
-              };
+              } else {
+                video.pause();
+                wantPlay = false;
+                syncPlayPauseLabel();
+              }
             }
+            function isXrChromeTarget(el) {
+              if (!el || !el.closest) return false;
+              return !!el.closest(
+                "#xr-transport, #xr-reopen, #overlay, #xr-archive-float, #xr-archive-dd,"
+                + " .a-enter-vr, .a-enter-ar, .a-dialog, .a-modal, button, input, select, a, label"
+              );
+            }
+            if (playPauseBtn) playPauseBtn.onclick = function () { togglePlayPause(); };
+            // Click / tap the scene (not chrome) toggles play/pause during playback.
+            document.addEventListener("click", function (e) {
+              if (overlay && overlay.style.display !== "none") return;
+              if (isXrChromeTarget(e.target)) return;
+              togglePlayPause();
+            });
             if (seekBackBtn) seekBackBtn.onclick = function () { seekBy(-10); };
             if (seekFwdBtn) seekFwdBtn.onclick = function () { seekBy(10); };
             if (seekEl) {
