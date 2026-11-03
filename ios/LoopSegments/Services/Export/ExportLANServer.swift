@@ -519,7 +519,9 @@ enum ExportLANServer {
     }
 
     private static func normalizedGETPath(_ path: String) -> String {
-        path.hasPrefix("/") ? String(path.dropFirst()) : path
+        let trimmed = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        // Strip ?query so `/xr?mode=working` matches the same route as `/xr`.
+        return splitPathAndQuery(trimmed).path
     }
 
     /// Auth on OPTIONS/PROPFIND/LOCK, WebDAV writes, and WebDAV `GET /`. Media GET stays open (Skybox often omits Authorization on play).
@@ -679,7 +681,9 @@ enum ExportLANServer {
         connection: NWConnection,
         done: @escaping () -> Void
     ) {
-        let normalized = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        let raw = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        // Drop ?query before route matching (`/xr?mode=working` must hit /xr, not 404).
+        let (normalized, query) = splitPathAndQuery(raw)
         if normalized.isEmpty {
             if shouldServeMinimalMonitorHTML(requestHeaders: requestHeaders) {
                 sendMinimalIndexHTML(connection, done: done)
@@ -728,7 +732,7 @@ enum ExportLANServer {
             sendLANThroughputGET(connection: connection, done: done)
             return
         }
-        let (resourcePath, query) = splitPathAndQuery(normalized)
+        let resourcePath = normalized
         if resourcePath == "pcloud_list.json" {
             guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
             sendPCloudListJSON(folderPath: query["path"] ?? "/", connection: connection, done: done)
