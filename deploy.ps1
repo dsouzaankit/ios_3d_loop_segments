@@ -210,16 +210,23 @@ if (-not $resolvedRunId) {
         Write-Step 'Triggering ios-build (workflow_dispatch)'
         Push-Location $ProjectRoot
         try {
-            & gh workflow run ios-build.yml
+            $triggerOut = & gh workflow run ios-build.yml 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) {
-                throw 'gh workflow run ios-build.yml failed'
+                throw "gh workflow run ios-build.yml failed: $triggerOut"
             }
-            Start-Sleep -Seconds 4
-            $json = & gh run list --workflow=ios-build.yml --event=workflow_dispatch --limit 1 --json databaseId,status
-            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
-                throw 'Could not resolve the new ios-build run id'
+            Write-Host $triggerOut
+            $resolvedRunId = $null
+            if ($triggerOut -match 'actions/runs/(\d+)') {
+                $resolvedRunId = $Matches[1]
             }
-            $resolvedRunId = [string](($json | ConvertFrom-Json)[0].databaseId)
+            if (-not $resolvedRunId) {
+                Start-Sleep -Seconds 4
+                $json = & gh run list --workflow=ios-build.yml --event=workflow_dispatch --limit 1 --json databaseId,status,headSha
+                if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
+                    throw 'Could not resolve the new ios-build run id'
+                }
+                $resolvedRunId = [string](($json | ConvertFrom-Json)[0].databaseId)
+            }
         } finally {
             Pop-Location
         }

@@ -4369,7 +4369,8 @@ enum ExportLANServer {
                   this.applyAv1Resolve(__xrDs.resolved);
                 } else if (this._mode === "canvas" && this.drawsSharedFrame()) {
                   var now = (window.performance && performance.now) ? performance.now() : Date.now();
-                  var gap = (quest && this.data.chroma) ? 50 : 0;
+                  var gap = 0;
+                  if (quest && this.data.chroma) gap = this.isDesktopRole() ? 150 : 120;
                   if (!gap || !__xrDs.nextDraw || now >= __xrDs.nextDraw) {
                     if (gap) __xrDs.nextDraw = now + gap;
                     this.refreshDownscaleCanvas(true);
@@ -4554,7 +4555,13 @@ enum ExportLANServer {
                   return this._dsCanvas || null;
                 }
                 var target = this.downscaleTarget();
-                if (keyHere) target = Math.min(target, 3840);
+                if (keyHere) {
+                  // A 3840 readback on Quest blocks the video thread. Keep the key above the
+                  // old 1600 preview, on this surface's own canvas.
+                  var keyCap = 3840;
+                  if (this.isQuestBrowser()) keyCap = slot === "ar" ? 2560 : 2048;
+                  target = Math.min(target, keyCap);
+                }
                 var canvas = xrDrawDownscale(video, target, keyHere ? {
                   keyColor: this.data.keyColor,
                   similarity: this.data.similarity,
@@ -4935,42 +4942,25 @@ enum ExportLANServer {
                 }
                 function applyPassthrough(on) {
                   isPassthrough = !!on;
-                  if (isPassthrough) {
-                    if (sky) sky.setAttribute("visible", "false");
-                    if (sceneEl) {
-                      try { sceneEl.setAttribute("background", "transparent: true"); } catch (e) {}
-                      if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 0);
-                    }
-                    var t1 = document.querySelector("#btn-text");
-                    if (t1) t1.setAttribute("value", "VR Void");
-                  } else {
-                    if (sky) sky.setAttribute("visible", "true");
-                    if (sceneEl) {
-                      try { sceneEl.setAttribute("background", "color: #0a0a0a; transparent: false"); } catch (e) {}
-                      if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 1);
-                    }
-                    var t0 = document.querySelector("#btn-text");
-                    if (t0) t0.setAttribute("value", "Passthrough");
+                  if (!on) return;
+                  if (sky) sky.setAttribute("visible", "false");
+                  if (sceneEl) {
+                    try { sceneEl.setAttribute("background", "transparent: true"); } catch (e) {}
+                    if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 0);
                   }
                 }
-                var lastToggleMs = 0;
-                function toggle() {
-                  if (!immersiveNow()) return;
-                  var now = Date.now();
-                  if (now - lastToggleMs < 280) return;
-                  lastToggleMs = now;
-                  applyPassthrough(!isPassthrough);
-                }
-                this.el.addEventListener("click", toggle);
-                this.el.addEventListener("triggerdown", toggle);
                 if (sceneEl) {
                   sceneEl.addEventListener("enter-vr", function () {
                     syncHudVisible();
                     var ar = !!(sceneEl.is && sceneEl.is("ar-mode"));
-                    applyPassthrough(ar);
+                    if (ar) applyPassthrough(true);
+                    else if (sky) sky.setAttribute("visible", "false");
                   });
                   sceneEl.addEventListener("exit-vr", function () {
-                    applyPassthrough(false);
+                    isPassthrough = false;
+                    if (sky) sky.setAttribute("visible", "true");
+                    try { sceneEl.setAttribute("background", "color: #0a0a0a; transparent: false"); } catch (e) {}
+                    if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 1);
                     syncHudVisible();
                   });
                 }
