@@ -4173,39 +4173,59 @@ enum ExportLANServer {
               }
               ctx.putImageData(img, 0, 0);
             }
-            function xrDrawDownscale(video, limit, chroma) {
+            function xrSlotBag(slot) {
+              var key = slot === "ar" ? "ar" : "flat";
+              if (!__xrDs.bags) __xrDs.bags = {};
+              if (!__xrDs.bags[key]) {
+                __xrDs.bags[key] = { canvas: null, ctx: null, stamp: "", readFreq: false, pendingUpload: false };
+              }
+              return __xrDs.bags[key];
+            }
+            function xrDrawDownscale(video, limit, chroma, slot) {
               if (!video || !video.videoWidth) return null;
-              var canvas = __xrDs.canvas || document.getElementById("xr-ds-canvas");
+              var bag = xrSlotBag(slot);
+              var canvasId = slot === "ar" ? "xr-ds-ar" : "xr-ds-canvas";
+              var canvas = bag.canvas || document.getElementById(canvasId);
               if (!canvas) {
                 canvas = document.createElement("canvas");
-                canvas.id = "xr-ds-canvas";
+                canvas.id = canvasId;
+                canvas.width = 16;
+                canvas.height = 16;
                 document.body.appendChild(canvas);
               }
-              __xrDs.canvas = canvas;
-              if (!__xrDs.ctx) {
-                // CPU-backed canvas (willReadFrequently) only when punching chroma.
-                // An 8K minute-segment blit through a CPU canvas stalls Quest AR decode.
-                __xrDs.ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: !!chroma });
+              var wantRead = !!chroma;
+              if (!bag.ctx || (wantRead && !bag.readFreq)) {
+                if (bag.ctx && wantRead && !bag.readFreq) {
+                  var fresh = document.createElement("canvas");
+                  fresh.id = canvasId;
+                  if (canvas.parentNode) canvas.parentNode.replaceChild(fresh, canvas);
+                  else document.body.appendChild(fresh);
+                  canvas = fresh;
+                  bag.ctx = null;
+                }
+                bag.ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: wantRead });
+                bag.readFreq = wantRead;
               }
+              bag.canvas = canvas;
               var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight, 1);
               var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var ch = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
               var stamp = (video.currentTime || 0).toFixed(3) + "|" + cw + "x" + ch + "|" + (chroma ? "c" : "o");
-              if (__xrDs.stamp === stamp && canvas.width === cw) return canvas;
+              if (bag.stamp === stamp && canvas.width === cw) return canvas;
               if (canvas.width !== cw || canvas.height !== ch) {
                 canvas.width = cw;
                 canvas.height = ch;
               }
               try {
-                __xrDs.ctx.drawImage(video, 0, 0, cw, ch);
+                bag.ctx.drawImage(video, 0, 0, cw, ch);
               } catch (e1) {
                 return null;
               }
               if (chroma) {
-                xrApplyChromaKey(__xrDs.ctx, cw, ch, chroma.keyColor, chroma.similarity, chroma.smoothness);
+                xrApplyChromaKey(bag.ctx, cw, ch, chroma.keyColor, chroma.similarity, chroma.smoothness);
               }
-              __xrDs.stamp = stamp;
-              __xrDs.pendingUpload = true;
+              bag.stamp = stamp;
+              bag.pendingUpload = true;
               return canvas;
             }
 
@@ -4357,10 +4377,11 @@ enum ExportLANServer {
                 }
                 try {
                   var mesh = this.el.getObject3D("mesh");
-                  var upload = this._mode === "canvas" ? !!__xrDs.pendingUpload : this._mode !== "av1rt";
+                  var frameBag = xrSlotBag(this.isDesktopRole() ? "flat" : "ar");
+                  var upload = this._mode === "canvas" ? !!frameBag.pendingUpload : this._mode !== "av1rt";
                   if (upload && mesh && mesh.material && mesh.material.map) {
                     mesh.material.map.needsUpdate = true;
-                    if (this._mode === "canvas") __xrDs.pendingUpload = false;
+                    if (this._mode === "canvas") frameBag.pendingUpload = false;
                   }
                   if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
                     this.el.object3D.visible = true;
@@ -4517,24 +4538,30 @@ enum ExportLANServer {
                   return null;
                 }
                 var chromaOn = !!this.data.chroma;
+                var slot = this.isDesktopRole() ? "flat" : "ar";
                 var limit = this.maxWebGLTextureSize();
                 var needsScale = video.videoWidth > limit || video.videoHeight > limit;
-                if (!chromaOn && !needsScale) {
+                // The flat player must not key into a small canvas. That canvas was the
+                // texture AR reused, so a 1600 preview locked the headset picture.
+                var keyHere = chromaOn && slot === "ar";
+                if (!keyHere && !needsScale) {
                   if (!onlyUpdate) this.setTexNote("");
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
                   return null;
                 }
-                if (!this.drawsSharedFrame()) return __xrDs.canvas || null;
+                if (!this.drawsSharedFrame()) {
+                  var existing = xrSlotBag(slot).canvas;
+                  this._dsCanvas = existing || this._dsCanvas;
+                  return this._dsCanvas || null;
+                }
                 var target = this.downscaleTarget();
-                // Quest VR keeps a smaller key so the readback does not stall decode.
-                // AR uses the same 3840-wide key as the PC so passthrough is not stuck at 1600×800.
-                if (chromaOn && this.isQuestBrowser() && !this.isArMode()) target = Math.min(target, 1600);
-                else if (chromaOn) target = Math.min(target, 3840);
-                var canvas = xrDrawDownscale(video, target, chromaOn ? {
+                if (keyHere) target = Math.min(target, 3840);
+                var canvas = xrDrawDownscale(video, target, keyHere ? {
                   keyColor: this.data.keyColor,
                   similarity: this.data.similarity,
                   smoothness: this.data.smoothness
-                } : null);
+                } : null, slot);
+                this._dsCanvas = canvas || this._dsCanvas;
                 if (!canvas) {
                   try { video.classList.add("xr-pip"); } catch (e2) {}
                   if (!onlyUpdate) this.setTexNote("8K WebGL downscale failed — HTML preview");
@@ -4543,7 +4570,7 @@ enum ExportLANServer {
                 if (!onlyUpdate) {
                   try { video.classList.remove("xr-pip"); } catch (e5) {}
                   this.setTexNote(
-                    (chromaOn ? "Chroma " : "Downscaling ")
+                    (keyHere ? "Chroma " : "Downscaling ")
                     + video.videoWidth + "×" + video.videoHeight
                     + " → " + canvas.width + "×" + canvas.height
                   );
@@ -4553,13 +4580,19 @@ enum ExportLANServer {
               applyCanvasVideo: function () {
                 this.ensureDomeGeometry();
                 this.applySbsUVs();
+                var canvas = this._dsCanvas;
+                var src = (canvas && canvas.id) ? ("#" + canvas.id) : (this.isDesktopRole() ? "#xr-ds-canvas" : "#xr-ds-ar");
+                var sizeKey = canvas ? (canvas.width + "x" + canvas.height) : "";
+                var chromaOn = !!this.data.chroma && !this.isDesktopRole();
+                if (this._mode === "canvas" && this._canvasSrc === src && this._canvasSize === sizeKey) return true;
                 this._mode = "canvas";
-                var chromaOn = !!this.data.chroma;
+                this._canvasSrc = src;
+                this._canvasSize = sizeKey;
                 // A-Frame canvas material. Chroma alpha is punched in the canvas (the VideoTexture shader stays black on Quest).
                 try {
                   this.el.setAttribute("material", {
                     shader: "flat",
-                    src: "#xr-ds-canvas",
+                    src: src,
                     color: "#ffffff",
                     side: "double",
                     transparent: chromaOn,
@@ -5076,7 +5109,7 @@ enum ExportLANServer {
               opacity: 0.01; pointer-events: none; z-index: 0; overflow: hidden;
             }
             /* Last-resort PC preview when even canvas downscale fails (rare). */
-            #xr-ds-canvas {
+            #xr-ds-canvas, #xr-ds-ar {
               position: fixed; left: 0; top: 0; width: 16px; height: 16px;
               opacity: 0.01; pointer-events: none; z-index: 0;
             }
