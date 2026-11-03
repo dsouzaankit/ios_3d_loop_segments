@@ -149,7 +149,12 @@ Rent MacinCloud / MacStadium for an hour, run `xcodegen generate`, open Xcode, s
 4. [Trust developer](#trust-the-developer-on-iphone-required-once-not-weekly) if prompted.
 5. Refresh: tap the **7 DAYS** counter (LocalDevVPN still on). **No PC** for weekly refresh or after expiry — PC only if the pairing file dies (iloader). Optional: schedule Shortcuts automation below instead of remembering the tap.
 
-**Install hangs on an existing Loop Segments (update):** SideStore often stalls forever when installing a new IPA **over** the app already on the phone. **Delete** Loop Segments from the home screen first, then **My Apps → +** again (LocalDevVPN on; IPA fully local). Same Apple ID keeps the App ID slot; **on-device app data is wiped** (re-export / restore media from PC/`archive` if needed). This is different from [re-linking after a SideStore reinstall](#reinstall-or-update-sidestore-with-iloader) below — there, prefer install-over so data stays.
+**Install hangs on an existing Loop Segments (update):** SideStore often stalls forever when installing a new IPA **over** the app already on the phone. Try this order (LocalDevVPN on; IPA fully local):
+
+1. **Force-quit Loop Segments** (App Switcher → swipe away) — often unblocks **My Apps → +** without wiping data.
+2. If it still hangs: **Delete** Loop Segments from the home screen, then **My Apps → +** again. Same Apple ID keeps the App ID slot; **on-device app data is wiped** (re-export / restore media from PC/`archive` if needed).
+
+This is different from [re-linking after a SideStore reinstall](#reinstall-or-update-sidestore-with-iloader) below — there, prefer install-over so data stays.
 
 **incorrect data format on SideStore:** same two causes as AltStore — (1) partial iCloud IPA, (2) bad anisette. Fix IPA locality first; then SideStore Settings → change **Anisette** server / sign out+in / re-place pairing with iloader. If stable still fails, use **nightly**. Apple ID login with this error: SideStore Settings → **User Customizations** → turn off **On-Device Anisette** (or switch anisette server).
 

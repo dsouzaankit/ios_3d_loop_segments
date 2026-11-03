@@ -3858,13 +3858,11 @@ enum ExportLANServer {
               padding: 0.7rem 1rem; border-radius: 999px; border: 1px solid #444;
               background: #166534; color: #fff; font-weight: 700; cursor: pointer;
             }
-            /* Primary PC player (HTML5). A-Frame WebGL is secondary — 6K HEVC often has audio but black WebGL. */
+            /* Texture source only — keep in DOM/layout so WebGL can sample; never cover a-scene. */
             #chroma-stream {
-              display: none; position: fixed; left: 50%; top: 48%; transform: translate(-50%, -50%);
-              width: min(1100px, 94vw); max-height: 72vh; z-index: 20; background: #000;
-              border: 2px solid #22c55e; border-radius: 8px;
+              position: fixed; left: -2px; top: -2px; width: 2px; height: 2px;
+              opacity: 0; pointer-events: none; z-index: 0; overflow: hidden;
             }
-            #chroma-stream.xr-main { display: block !important; }
             a-scene { z-index: 1; }
           </style>
         </head>
@@ -3898,7 +3896,7 @@ enum ExportLANServer {
               <label><input type="checkbox" id="xr-chroma-toggle"> Chroma</label>
               <label><input type="checkbox" id="xr-sbs-toggle"> SBS 3D</label>
             </div>
-            <p class="muted" style="font-size:0.85rem;max-width:36rem">After Launch a green-bordered HTML5 player appears (main picture). Prefer <strong>Loop</strong> for PC tests — <code>_working.mp4</code> is often huge/sparse/6K HEVC (audio without frames). Enable Chroma/SBS only for green-screen SBS.</p>
+            <p class="muted" style="font-size:0.85rem;max-width:36rem">After Launch, video plays on the A-Frame plane (PC: mouse look / WASD). Prefer <strong>Loop</strong> for PC tests — <code>_working.mp4</code> is often huge/sparse/6K HEVC. Enable Chroma/SBS only for green-screen SBS.</p>
             <p id="xr-label" role="status">Loading playlists…</p>
             <p style="margin: 1rem 0 0">
               <button type="button" class="play-btn" id="xr-launch">Launch Engine</button>
@@ -3912,8 +3910,8 @@ enum ExportLANServer {
             <a class="back" href="/browse">LAN browse</a>
           </div>
 
-          <!-- Outside a-assets so the element can be a real on-screen player (not display:none). -->
-          <video id="chroma-stream" controls playsinline webkit-playsinline preload="metadata"></video>
+          <!-- Outside a-assets; tiny/invisible — feeds a-video / VideoTexture (avoid display:none). -->
+          <video id="chroma-stream" playsinline webkit-playsinline preload="metadata"></video>
 
           <a-scene
             webxr="optionalFeatures: local-floor"
@@ -4062,10 +4060,6 @@ enum ExportLANServer {
             function showOverlay(show) {
               overlay.style.display = show ? "flex" : "none";
               if (reopenBtn) reopenBtn.style.display = show ? "none" : "block";
-              try {
-                if (show) video.classList.remove("xr-main");
-                else video.classList.add("xr-main");
-              } catch (e) {}
             }
             var workingSeekSec = 0;
             function refreshWorkingSeek() {
@@ -4376,7 +4370,6 @@ enum ExportLANServer {
                 }
               }
               showOverlay(false);
-              try { video.classList.add("xr-main"); } catch (e) {}
               // Give the mesh a moment after overlay hide / first paint.
               setTimeout(refreshSphereShader, 200);
               setTimeout(refreshSphereShader, 800);
