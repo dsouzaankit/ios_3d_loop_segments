@@ -4003,7 +4003,42 @@ enum ExportLANServer {
             // drops MeshBasicMaterial maps, which blanked both clips after the 1536 downscale.
             window.__xrZoom = 0.6;
             window.__xrZoomSteps = [0.5, 0.6, 0.7, 0.8, 0.9, 1];
-            var __xrDs = { canvas: null, ctx: null, stamp: "" };
+            var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false };
+            // Quest WebXR uploads an AV1 video texture in tiles around the gaze, so the dome
+            // edges fill in only after you turn. A 2D canvas copy resolves the whole frame first.
+            function xrWatchAv1(video) {
+              var src = (video && (video.currentSrc || video.src)) || "";
+              if (!src) return false;
+              if (__xrDs.codecSrc === src) return __xrDs.av1 === true;
+              __xrDs.codecSrc = src;
+              __xrDs.av1 = false;
+              function hasAv01(buf) {
+                var u8 = new Uint8Array(buf);
+                for (var i = 0; i < u8.length - 3; i++) {
+                  if (u8[i] === 97 && u8[i + 1] === 118 && u8[i + 2] === 48 && u8[i + 3] === 49) return true;
+                }
+                return false;
+              }
+              fetch(src, { headers: { Range: "bytes=0-524287" } }).then(function (r) {
+                var total = 0;
+                var cr = r.headers.get("Content-Range") || "";
+                var m = /\/(\d+)\s*$/.exec(cr);
+                if (m) total = parseInt(m[1], 10) || 0;
+                return r.arrayBuffer().then(function (buf) { return { buf: buf, total: total }; });
+              }).then(function (pack) {
+                if (__xrDs.codecSrc !== src) return;
+                if (hasAv01(pack.buf)) { __xrDs.av1 = true; return; }
+                if (pack.total > 524288) {
+                  var start = pack.total - 524288;
+                  return fetch(src, { headers: { Range: "bytes=" + start + "-" + (pack.total - 1) } }).then(function (r2) {
+                    return r2.arrayBuffer();
+                  }).then(function (tail) {
+                    if (__xrDs.codecSrc === src && hasAv01(tail)) __xrDs.av1 = true;
+                  });
+                }
+              }).catch(function () {});
+              return false;
+            }
             function xrApplyChromaKey(ctx, cw, ch, keyHex, similarity, smoothness) {
               var img = ctx.getImageData(0, 0, cw, ch);
               var d = img.data;
@@ -4182,10 +4217,14 @@ enum ExportLANServer {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
                 var quest = this.isQuestBrowser();
                 // Quest canvas readback every frame stalls AR decode. PC must update every frame or the flat screen stays black.
+                if (quest && this.isImmersiveStereo() && !this.isDesktopRole() && this._mode !== "canvas" && xrWatchAv1(this.video)) {
+                  this.applyMaterial();
+                }
                 if (this._mode === "canvas") {
                   var now = (window.performance && performance.now) ? performance.now() : Date.now();
-                  if (!quest || !this._nextDraw || now >= this._nextDraw) {
-                    if (quest) this._nextDraw = now + 50;
+                  var heavy = !!this.data.chroma;
+                  if (!quest || !heavy || !this._nextDraw || now >= this._nextDraw) {
+                    if (quest && heavy) this._nextDraw = now + 50;
                     this.refreshDownscaleCanvas(true);
                   }
                 }
@@ -4321,7 +4360,8 @@ enum ExportLANServer {
                 var chromaOn = !!this.data.chroma;
                 var limit = this.maxWebGLTextureSize();
                 var needsScale = video.videoWidth > limit || video.videoHeight > limit;
-                if (!chromaOn && !needsScale) {
+                var av1Quest = this.isQuestBrowser() && this.isImmersiveStereo() && xrWatchAv1(video);
+                if (!chromaOn && !needsScale && !av1Quest) {
                   if (!onlyUpdate) this.setTexNote("");
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
                   return null;
@@ -4332,8 +4372,10 @@ enum ExportLANServer {
                 }
                 var target = this.downscaleTarget();
                 // 1600 is a Quest budget for per-frame green key. PC keeps a 4K-wide key.
+                // AV1 in Quest AR is copied whole at 2048 so gaze-tiled video textures cannot leave empty edges.
                 if (chromaOn && this.isQuestBrowser()) target = Math.min(target, 1600);
                 else if (chromaOn) target = Math.min(target, 3840);
+                else if (av1Quest) target = Math.min(target, 2048);
                 var canvas = xrDrawDownscale(video, target, chromaOn ? {
                   keyColor: this.data.keyColor,
                   similarity: this.data.similarity,
@@ -4347,7 +4389,7 @@ enum ExportLANServer {
                 if (!onlyUpdate) {
                   try { video.classList.remove("xr-pip"); } catch (e5) {}
                   this.setTexNote(
-                    (chromaOn ? "Chroma " : "Downscaling ")
+                    (chromaOn ? "Chroma " : (av1Quest ? "AV1 full frame " : "Downscaling "))
                     + video.videoWidth + "×" + video.videoHeight
                     + " → " + canvas.width + "×" + canvas.height
                   );

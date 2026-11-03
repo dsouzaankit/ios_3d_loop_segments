@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 360 (1.3.1):** Quest AR AV1 is copied to a full-frame canvas before display, so the dome edges are not filled in only after you turn your head.
+
 **Build 359 (1.3.1):** PC flat screen updates its video texture every frame again. The Quest-only canvas throttle had left the desktop picture black.
 
 **Build 358 (1.3.1):** Removed the in-headset zoom bar. Vertical range stays on the page Zoom slider (90°–180°). Canvas upload throttle from 357 remains.
