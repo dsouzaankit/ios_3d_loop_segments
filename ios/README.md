@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 346 (1.3.1):** XR HUD — short **Passthrough** / **VR Void** labels (long “Switch to Passthrough” clipped to “Switchthrough” in Enter VR).
+
 **Build 345 (1.3.1):** Quest AR — keep video on WebGL layer 0 (eye layers 1/2 were blanking both clips); SBS eye-split layers only in VR; re-bind materials after Enter AR.
 
 **Build 344 (1.3.1):** XR 8K on PC — when frame exceeds WebGL `MAX_TEXTURE_SIZE`, downscale via canvas texture (yellow note in transport); HTML PIP if drawImage fails.

@@ -4482,7 +4482,7 @@ enum ExportLANServer {
                       if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 0);
                     }
                     var t1 = document.querySelector("#btn-text");
-                    if (t1) t1.setAttribute("value", "Switch to VR Void");
+                    if (t1) t1.setAttribute("value", "VR Void");
                   } else {
                     if (sky) sky.setAttribute("visible", "true");
                     if (sceneEl) {
@@ -4490,7 +4490,7 @@ enum ExportLANServer {
                       if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 1);
                     }
                     var t0 = document.querySelector("#btn-text");
-                    if (t0) t0.setAttribute("value", "Switch to Passthrough");
+                    if (t0) t0.setAttribute("value", "Passthrough");
                   }
                 }
                 var lastToggleMs = 0;
@@ -4817,18 +4817,20 @@ enum ExportLANServer {
             <a-entity laser-controls="hand: left" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity laser-controls="hand: right" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity camera look-controls wasd-controls position="0 1.6 0">
-              <!-- Quest immersive only — hidden on PC desktop / magic-window. -->
+              <!-- Quest immersive only — hidden on PC desktop / magic-window. Short labels (long text clipped to "Switchthrough"). -->
               <a-entity id="xr-hud" visible="false" position="0 -0.42 -1.35" env-toggle class="raycastable">
-                <a-plane width="1.5" height="0.32" color="#166534" opacity="0.92"
+                <a-plane width="1.15" height="0.36" color="#166534" opacity="0.92"
                          class="raycastable"
                          animation__enter="property: scale; to: 1.04 1.04 1.04; startEvents: mouseenter, raycaster-intersected; dur: 120"
                          animation__leave="property: scale; to: 1 1 1; startEvents: mouseleave, raycaster-intersected-cleared; dur: 120">
                 </a-plane>
                 <a-text id="btn-text"
-                        value="Switch to Passthrough"
+                        value="Passthrough"
                         align="center"
+                        baseline="center"
                         color="#fff"
-                        width="3.2"
+                        width="1.05"
+                        wrap-count="14"
                         position="0 0 0.02">
                 </a-text>
               </a-entity>
