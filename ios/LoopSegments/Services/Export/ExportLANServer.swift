@@ -3382,7 +3382,7 @@ enum ExportLANServer {
         return """
         <div class="lan-quest-flags" id="lan-quest-flags">
           <h3>Quest Browser — LAN HTTP as secure (optional)</h3>
-          <p class="muted">Prefer this for fast on-Wi‑Fi WebXR (no Cloudflare www hop). HTTPS tunnel still works if the flag is awkward.</p>
+          <p class="muted">Preferred path for Quest WebXR on LAN HTTP (no www hop). Cloudflare tunnel is optional — collapsed at the bottom of this page.</p>
           <div class="lan-flag-row">
             <a class="btn" id="lan-flags-open" href="\(flagsEscaped)" target="_blank" rel="noopener">Open chrome://flags (new tab)</a>
             <button type="button" id="lan-flags-copy-url" title="Copy chrome://flags URL">Copy flags URL</button>
@@ -3622,21 +3622,12 @@ enum ExportLANServer {
         <p>
           <button type="button" id="lan-loop-player-toggle">Show loop player</button>
         </p>
-        <p class="lan-tunnel-row">
-          <label for="lan-tunnel-domain">Cloudflare tunnel
-            <input type="text" id="lan-tunnel-domain" placeholder="xxxx.trycloudflare.com or full https://… URL" spellcheck="false" autocomplete="off" inputmode="url" aria-describedby="lan-tunnel-status">
-          </label>
-          <button type="button" id="lan-tunnel-apply">Update links</button>
-          <button type="button" id="lan-tunnel-clear">Clear</button>
-          <span id="lan-tunnel-status" class="muted" role="status"></span>
-        </p>
         <p class="lan-xr-links">
           <a class="btn" href="/xr#loop" id="lan-xr-chroma-link" data-lan-tunnel-path="/xr#loop">Open XR chroma (loop)</a>
           <a class="btn" href="/xr#working" id="lan-xr-working-link" data-lan-tunnel-path="/xr#working">Open XR chroma (working)</a>
           <a class="btn" href="/xr#archive" id="lan-xr-archive-link" data-lan-tunnel-path="/xr#archive">Open XR chroma (archive)</a>
         </p>
         \(htmlLANQuestFlagsBlock())
-        \(htmlLANTunnelDomainScript())
         \(htmlLANQuestFlagsScript())
         <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
           <div class="row" style="margin-top:0">
@@ -3663,6 +3654,19 @@ enum ExportLANServer {
           </div>
         </div>
         \(htmlLANLoopPlayerScript(loopPrefix: loopPrefix))
+        <details class="lan-cf-tunnel-advanced panel" id="lan-cf-tunnel-advanced" style="margin-top:1.25rem">
+          <summary><strong>Advanced — Cloudflare HTTPS tunnel</strong> <span class="muted">(optional / slow www hop; prefer Quest flags + LAN HTTP above)</span></summary>
+          <p class="muted" style="margin-top:0.5rem">Only if the insecure-origin flag is unavailable. Paste a quick-tunnel host from <code>Start-LoopSegmentsCloudflareTunnel.ps1</code>, then <strong>Update links</strong> so XR buttons open <code>https://…/xr</code> (stored on phone as <code>xr_tunnel.json</code>).</p>
+          <p class="lan-tunnel-row">
+            <label for="lan-tunnel-domain">Tunnel host
+              <input type="text" id="lan-tunnel-domain" placeholder="xxxx.trycloudflare.com or full https://… URL" spellcheck="false" autocomplete="off" inputmode="url" aria-describedby="lan-tunnel-status">
+            </label>
+            <button type="button" id="lan-tunnel-apply">Update links</button>
+            <button type="button" id="lan-tunnel-clear">Clear</button>
+            <span id="lan-tunnel-status" class="muted" role="status"></span>
+          </p>
+        </details>
+        \(htmlLANTunnelDomainScript())
         """
     }
 
@@ -4390,7 +4394,7 @@ enum ExportLANServer {
           <div id="overlay" class="play-overlay">
             <h1>3D Chroma Key 180° Player</h1>
             <p class="muted">Three playlists: <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working</strong> = root <code>_working*.mp4</code> (outside archive) · <strong>Archive</strong> = <code>\#(mediaRootHTML)archive/</code> folder</p>
-            <p class="warn">Quest WebXR needs <strong>HTTPS</strong> (Cloudflare tunnel → Update links). Passthrough / mixed reality = tap <strong>Enter AR</strong> (not Enter VR). Enter VR is an opaque void; the in-scene Passthrough toggle only helps inside an AR session. A-Frame loads from CDN (headset needs internet once).</p>
+            <p class="warn">Quest WebXR needs a <strong>secure context</strong>: prefer Quest <code>chrome://flags</code> insecure-origin + LAN <code>http://</code> (see LAN page). Cloudflare tunnel is optional (slow). Passthrough = <strong>Enter AR</strong> (not Enter VR). A-Frame CDN needs internet on the headset once.</p>
             <p id="xr-webxr-status" class="muted" style="font-size:0.85rem;max-width:36rem" role="status">Checking WebXR…</p>
             <div class="toolbar" role="group" aria-label="Playlist">
               <button type="button" id="xr-mode-loop" class="active">Loop</button>
@@ -4437,7 +4441,7 @@ enum ExportLANServer {
             background="color: #0a0a0a"
             webxr="requiredFeatures: local-floor; optionalFeatures: bounded-floor, hand-tracking, layers, anchors, plane-detection"
             xr-mode-ui="enabled: true; XRMode: xr; enterVREnabled: true; enterAREnabled: true"
-            device-orientation-permission-ui="enabled: true; httpsMessage: Use HTTPS via Cloudflare tunnel — on the LAN page paste the tunnel host, tap Update links, then Open XR chroma; cancelButtonText: OK">
+            device-orientation-permission-ui="enabled: true; httpsMessage: Use Quest chrome://flags insecure-origin for this LAN http:// origin (see LAN page), or optional Cloudflare tunnel at page bottom; cancelButtonText: OK">
             <!-- Dual 180° domes: left=layer1 / right=layer2 for real SBS (Quest AR ignores onBeforeRender eye hacks). -->
             <a-videosphere
               id="chroma-sphere"
