@@ -3380,9 +3380,9 @@ enum ExportLANServer {
         let flagsUrl = "chrome://flags/#\(flagHash)"
         let flagsEscaped = htmlEscape(flagsUrl)
         return """
-        <div class="lan-quest-flags" id="lan-quest-flags">
-          <h3>Quest Browser — LAN HTTP as secure (optional)</h3>
-          <p class="muted">Preferred path for Quest WebXR on LAN HTTP (no www hop). Cloudflare tunnel is optional — collapsed at the bottom of this page.</p>
+        <details class="lan-quest-flags panel" id="lan-quest-flags" style="margin:0.75rem 0 1rem">
+          <summary><strong>Quest Browser — LAN HTTP as secure</strong> <span class="muted">(optional · preferred over Cloudflare)</span></summary>
+          <p class="muted" style="margin-top:0.5rem">Preferred path for Quest WebXR on LAN HTTP (no www hop). Cloudflare tunnel is optional — collapsed at the bottom of this page.</p>
           <div class="lan-flag-row">
             <a class="btn" id="lan-flags-open" href="\(flagsEscaped)" target="_blank" rel="noopener">Open chrome://flags (new tab)</a>
             <button type="button" id="lan-flags-copy-url" title="Copy chrome://flags URL">Copy flags URL</button>
@@ -3406,7 +3406,7 @@ enum ExportLANServer {
             <li>Set Enabled → Relaunch → open this LAN page again → <strong>Open XR chroma</strong> over <strong>http://</strong> → <strong>Enter AR</strong>.</li>
           </ol>
           <p id="lan-flags-status" class="muted" role="status"></p>
-        </div>
+        </details>
         """
     }
 

@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 334 (1.2.98):** LAN page — collapse **Quest Browser — LAN HTTP as secure** behind a `<details>` summary (same pattern as Cloudflare Advanced).
+
 **Build 333 (1.2.97):** LAN **`/xr`** archive mode — current file is a chip; tap opens a centered top dropdown (stays usable after Launch via a top float chip).
 
 **Build 332 (1.2.96):** LAN **`/xr`** — aggressively strip gaze **cursor** reticle (center donut); drop hand-tracking/anchors from WebXR optional features that re-inject it.
