@@ -4299,14 +4299,14 @@ enum ExportLANServer {
                   });
                 }
                 if (this.el.object3D) setNodeLayer(this.el.object3D, useEyeLayers ? layer : 0);
-                // Flat a-video: magic-window / PC only. Left dome: always on.
-                // Right dome: VR SBS stereo only (hidden in AR so layer-0 left dome stays visible).
+                // Flat a-video: PC / magic-window only. Domes: immersive only
+                // (left dome always-on caused spherical overlay noise on top of the flat screen).
                 if (desktop) {
                   if (this.el.object3D) this.el.object3D.visible = !immersive;
                 } else if (this.data.eye === "right") {
                   this.el.object3D.visible = !!(sbs && immersive && hasStereoCams && !isAR);
                 } else if (this.el.object3D) {
-                  this.el.object3D.visible = true;
+                  this.el.object3D.visible = !!immersive;
                 }
                 try {
                   if (sceneEl && sceneEl.camera) sceneEl.camera.layers.enable(0);
