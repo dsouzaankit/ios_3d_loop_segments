@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 332 (1.2.96):** LAN **`/xr`** — aggressively strip gaze **cursor** reticle (center donut); drop hand-tracking/anchors from WebXR optional features that re-inject it.
+
 **Build 331 (1.2.95):** LAN page — Cloudflare tunnel UI moved to a collapsed **Advanced** section at the bottom (Quest flags + local XR links stay primary).
 
 **Build 330 (1.2.94):** LAN **`/xr`** — restore VR180 **dual hemisphere** + WebXR **eye layers** for real SBS (no more mono stretch); remove center gaze **cursor** halo; passthrough control on camera HUD with working laser click.

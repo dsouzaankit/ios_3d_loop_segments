@@ -4211,12 +4211,51 @@ enum ExportLANServer {
               }
             });
 
+            // Quest often re-injects a gaze fuse ring (center donut). Strip it on load / enter-VR.
+            AFRAME.registerComponent("no-gaze-cursor", {
+              init: function () {
+                var sceneEl = this.el;
+                function kill() {
+                  try {
+                    sceneEl.querySelectorAll("a-cursor, [cursor]").forEach(function (el) {
+                      if (el.parentNode) el.parentNode.removeChild(el);
+                    });
+                    var camEl = sceneEl.camera && sceneEl.camera.el;
+                    if (camEl) {
+                      camEl.querySelectorAll("a-cursor, [cursor]").forEach(function (el) {
+                        if (el.parentNode) el.parentNode.removeChild(el);
+                      });
+                      if (camEl.components && camEl.components.cursor) {
+                        try { camEl.removeAttribute("cursor"); } catch (e) {}
+                      }
+                    }
+                  } catch (e) {}
+                }
+                this._kill = kill;
+                sceneEl.addEventListener("loaded", kill);
+                sceneEl.addEventListener("enter-vr", kill);
+                sceneEl.addEventListener("exit-vr", kill);
+                setTimeout(kill, 0);
+                setTimeout(kill, 500);
+              },
+              tick: function () {
+                // Cheap: only act if a cursor node crept back in.
+                if (this.el.querySelector("a-cursor, [cursor]")) this._kill();
+              },
+              remove: function () {
+                var sceneEl = this.el;
+                if (!this._kill) return;
+                sceneEl.removeEventListener("loaded", this._kill);
+                sceneEl.removeEventListener("enter-vr", this._kill);
+                sceneEl.removeEventListener("exit-vr", this._kill);
+              }
+            });
+
             AFRAME.registerComponent("env-toggle", {
               init: function () {
                 var sky = document.querySelector("#virtual-sky");
                 var sceneEl = this.el.sceneEl;
                 var isPassthrough = false;
-                var self = this;
                 function applyPassthrough(on) {
                   isPassthrough = !!on;
                   if (isPassthrough) {
@@ -4336,6 +4375,13 @@ enum ExportLANServer {
               opacity: 0; pointer-events: none; z-index: 0; overflow: hidden;
             }
             a-scene { z-index: 1; }
+            /* Hide gaze fuse reticle (center donut) if A-Frame / Quest re-injects it. */
+            a-cursor, .a-cursor, [cursor] {
+              display: none !important;
+              visibility: hidden !important;
+              opacity: 0 !important;
+              pointer-events: none !important;
+            }
             /* A-Frame HTTPS / sensor gate — default white-on-light is unreadable on Quest. */
             .a-dialog,
             .a-modal,
@@ -4439,7 +4485,8 @@ enum ExportLANServer {
 
           <a-scene
             background="color: #0a0a0a"
-            webxr="requiredFeatures: local-floor; optionalFeatures: bounded-floor, hand-tracking, layers, anchors, plane-detection"
+            no-gaze-cursor
+            webxr="requiredFeatures: local-floor; optionalFeatures: bounded-floor, layers"
             xr-mode-ui="enabled: true; XRMode: xr; enterVREnabled: true; enterAREnabled: true"
             device-orientation-permission-ui="enabled: true; httpsMessage: Use Quest chrome://flags insecure-origin for this LAN http:// origin (see LAN page), or optional Cloudflare tunnel at page bottom; cancelButtonText: OK">
             <!-- Dual 180° domes: left=layer1 / right=layer2 for real SBS (Quest AR ignores onBeforeRender eye hacks). -->
@@ -4466,9 +4513,8 @@ enum ExportLANServer {
 
             <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
 
-            <a-entity laser-controls="hand: left" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.65"></a-entity>
-            <a-entity laser-controls="hand: right" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.65"></a-entity>
-            <!-- No a-cursor: the fuse reticle is the center halo/donut that tracks the eye. -->
+            <a-entity laser-controls="hand: left" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
+            <a-entity laser-controls="hand: right" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity camera look-controls wasd-controls position="0 1.6 0">
               <a-entity id="xr-hud" position="0 -0.42 -1.35" env-toggle class="raycastable">
                 <a-plane width="1.5" height="0.32" color="#166534" opacity="0.92"
