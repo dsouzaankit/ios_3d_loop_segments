@@ -4151,13 +4151,14 @@ enum ExportLANServer {
               },
               tick: function () {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
-                if (this._mode === "canvas") {
-                  this.refreshDownscaleCanvas(true);
-                  try {
-                    var mesh = this.el.getObject3D("mesh");
-                    if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
-                  } catch (eTick) {}
-                }
+                if (this._mode === "canvas") this.refreshDownscaleCanvas(true);
+                try {
+                  var mesh = this.el.getObject3D("mesh");
+                  if (mesh && mesh.material) {
+                    if (mesh.material.color) mesh.material.color.setRGB(1, 1, 1);
+                    if (mesh.material.map) mesh.material.map.needsUpdate = true;
+                  }
+                } catch (eTick) {}
                 this.syncEyeLayers();
               },
               isDesktopRole: function () {
@@ -4184,8 +4185,9 @@ enum ExportLANServer {
                 if (ready && this._domeGeoReady) return;
                 try {
                   var old = mesh.geometry;
-                  // phiStart=π/2, phiLength=π → front hemisphere toward -Z (default camera look).
-                  var geo = new THREE.SphereGeometry(20, 64, 40, Math.PI * 0.5, Math.PI, 0, Math.PI);
+                  // phiStart=π, phiLength=π centers the 180 on -Z (camera forward).
+                  // π/2 centered it on +X, so after the X mirror the user saw left=mesh and right=passthrough.
+                  var geo = new THREE.SphereGeometry(20, 64, 40, Math.PI, Math.PI, 0, Math.PI);
                   geo.userData._xrHemi = true;
                   mesh.geometry = geo;
                   if (old && old !== geo) {
@@ -4196,7 +4198,7 @@ enum ExportLANServer {
                     if (this.el.components.geometry) {
                       this.el.components.geometry.geometry = geo;
                       var gd = this.el.components.geometry.data;
-                      gd.phiStart = 90;
+                      gd.phiStart = 180;
                       gd.phiLength = 180;
                       gd.thetaStart = 0;
                       gd.thetaLength = 180;
@@ -4298,6 +4300,7 @@ enum ExportLANServer {
                   this.el.setAttribute("material", {
                     shader: "flat",
                     src: "#xr-ds-canvas",
+                    color: "#ffffff",
                     side: "double",
                     transparent: false,
                     npot: true
@@ -4473,6 +4476,7 @@ enum ExportLANServer {
                   this.el.setAttribute("material", {
                     shader: "flat",
                     src: "#chroma-stream",
+                    color: "#ffffff",
                     side: "double",
                     transparent: false,
                     npot: true
@@ -4930,19 +4934,19 @@ enum ExportLANServer {
             <a-entity
               id="chroma-sphere"
               visible="false"
-              geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 40; phiStart: 90; phiLength: 180; thetaLength: 180"
+              geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 40; phiStart: 180; phiLength: 180; thetaLength: 180"
               scale="-1 1 1"
               position="0 1.6 0"
-              material="shader: flat; color: #000; side: double"
+              material="shader: flat; color: #ffffff; side: double"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left; role: dome">
             </a-entity>
             <a-entity
               id="chroma-sphere-right"
               visible="false"
-              geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 40; phiStart: 90; phiLength: 180; thetaLength: 180"
+              geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 40; phiStart: 180; phiLength: 180; thetaLength: 180"
               scale="-1 1 1"
               position="0 1.6 0"
-              material="shader: flat; color: #000; side: double"
+              material="shader: flat; color: #ffffff; side: double"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: right; role: dome">
             </a-entity>
 
