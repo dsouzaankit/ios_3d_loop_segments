@@ -4180,21 +4180,27 @@ enum ExportLANServer {
               },
               tick: function () {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
-                // Canvas readback (chroma / 8K) every frame stalls Quest AR decode. Cap the upload rate.
+                var quest = this.isQuestBrowser();
+                // Quest canvas readback every frame stalls AR decode. PC must update every frame or the flat screen stays black.
                 if (this._mode === "canvas") {
                   var now = (window.performance && performance.now) ? performance.now() : Date.now();
-                  var gap = this.isQuestBrowser() ? 50 : 32;
-                  if (!this._nextDraw || now >= this._nextDraw) {
-                    this._nextDraw = now + gap;
+                  if (!quest || !this._nextDraw || now >= this._nextDraw) {
+                    if (quest) this._nextDraw = now + 50;
                     this.refreshDownscaleCanvas(true);
-                    try {
-                      var mesh = this.el.getObject3D("mesh");
-                      if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
-                    } catch (eTick) {}
                   }
                 }
-                this._layerTick = (this._layerTick || 0) + 1;
-                if (this._layerTick === 1 || this._layerTick % 8 === 0) this.syncEyeLayers();
+                try {
+                  var mesh = this.el.getObject3D("mesh");
+                  if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
+                  if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
+                    this.el.object3D.visible = true;
+                  }
+                } catch (eTick) {}
+                if (!quest || this.isDesktopRole()) this.syncEyeLayers();
+                else {
+                  this._layerTick = (this._layerTick || 0) + 1;
+                  if (this._layerTick === 1 || this._layerTick % 8 === 0) this.syncEyeLayers();
+                }
               },
               isDesktopRole: function () {
                 return this.data.role === "desktop" || this.data.eye === "both";
