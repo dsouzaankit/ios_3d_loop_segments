@@ -3248,9 +3248,9 @@ enum ExportLANServer {
           <button type="button" id="lan-loop-player-toggle">Show loop player</button>
         </p>
         <p class="lan-xr-links">
-          <a class="btn" href="/xr" id="lan-xr-chroma-link">Open XR chroma (loop)</a>
-          <a class="btn" href="/xr?mode=working" id="lan-xr-working-link">Open XR chroma (working)</a>
-          <a class="btn" href="/xr?mode=archive" id="lan-xr-archive-link">Open XR chroma (archive)</a>
+          <a class="btn" href="/xr#loop" id="lan-xr-chroma-link">Open XR chroma (loop)</a>
+          <a class="btn" href="/xr#working" id="lan-xr-working-link">Open XR chroma (working)</a>
+          <a class="btn" href="/xr#archive" id="lan-xr-archive-link">Open XR chroma (archive)</a>
         </p>
         <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
           <div class="row" style="margin-top:0">
@@ -3858,12 +3858,14 @@ enum ExportLANServer {
               padding: 0.7rem 1rem; border-radius: 999px; border: 1px solid #444;
               background: #166534; color: #fff; font-weight: 700; cursor: pointer;
             }
-            /* Same decoded frames as the 3D mesh — proves audio≠black if this PIP shows picture. */
-            #chroma-stream.xr-pip {
-              position: fixed !important; right: 1rem; bottom: 4.5rem; z-index: 9998;
-              width: min(360px, 42vw); max-height: 30vh; background: #000;
-              border: 2px solid #22c55e; border-radius: 8px; display: block !important;
+            /* Primary PC player (HTML5). A-Frame WebGL is secondary — 6K HEVC often has audio but black WebGL. */
+            #chroma-stream {
+              display: none; position: fixed; left: 50%; top: 48%; transform: translate(-50%, -50%);
+              width: min(1100px, 94vw); max-height: 72vh; z-index: 20; background: #000;
+              border: 2px solid #22c55e; border-radius: 8px;
             }
+            #chroma-stream.xr-main { display: block !important; }
+            a-scene { z-index: 1; }
           </style>
         </head>
         <body>
@@ -3896,7 +3898,7 @@ enum ExportLANServer {
               <label><input type="checkbox" id="xr-chroma-toggle"> Chroma</label>
               <label><input type="checkbox" id="xr-sbs-toggle"> SBS 3D</label>
             </div>
-            <p class="muted" style="font-size:0.85rem;max-width:36rem">PC tip: after Launch, look for the green-bordered preview (bottom-right). If that shows picture but the 3D screen does not, leave Chroma/SBS off.</p>
+            <p class="muted" style="font-size:0.85rem;max-width:36rem">After Launch a green-bordered HTML5 player appears (main picture). Prefer <strong>Loop</strong> for PC tests — <code>_working.mp4</code> is often huge/sparse/6K HEVC (audio without frames). Enable Chroma/SBS only for green-screen SBS.</p>
             <p id="xr-label" role="status">Loading playlists…</p>
             <p style="margin: 1rem 0 0">
               <button type="button" class="play-btn" id="xr-launch">Launch Engine</button>
@@ -3910,17 +3912,15 @@ enum ExportLANServer {
             <a class="back" href="/browse">LAN browse</a>
           </div>
 
+          <!-- Outside a-assets so the element can be a real on-screen player (not display:none). -->
+          <video id="chroma-stream" controls playsinline webkit-playsinline preload="metadata"></video>
+
           <a-scene
             webxr="optionalFeatures: local-floor"
             xr-mode-ui="enabled: true"
             cursor="rayOrigin: mouse"
             raycaster="objects: .raycastable">
-            <a-assets>
-              <!-- No crossorigin: same-origin LAN MP4s; anonymous + missing CORS = black WebGL texture + audio-only. -->
-              <video id="chroma-stream" playsinline webkit-playsinline></video>
-            </a-assets>
-
-            <!-- Flat screen in front of the camera — reliable on PC WebGL; shader only when Chroma/SBS enabled. -->
+            <!-- Flat screen for Enter VR; shader only when Chroma/SBS enabled. -->
             <a-video
               id="chroma-sphere"
               src="#chroma-stream"
@@ -4063,9 +4063,37 @@ enum ExportLANServer {
               overlay.style.display = show ? "flex" : "none";
               if (reopenBtn) reopenBtn.style.display = show ? "none" : "block";
               try {
-                if (show) video.classList.remove("xr-pip");
-                else video.classList.add("xr-pip");
+                if (show) video.classList.remove("xr-main");
+                else video.classList.add("xr-main");
               } catch (e) {}
+            }
+            var workingSeekSec = 0;
+            function refreshWorkingSeek() {
+              return fetch("status.json", { cache: "no-store" })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                  var w = j && j.workingSourcePlayback;
+                  var s = w && Number(w.playbackStartSeconds);
+                  workingSeekSec = isFinite(s) && s > 0 ? s : 0;
+                })
+                .catch(function () { workingSeekSec = 0; });
+            }
+            function applyWorkingSeekIfNeeded(item) {
+              if (!item || !isWorkingMediaName(item.name) || !(workingSeekSec > 0)) return;
+              var target = workingSeekSec;
+              var apply = function () {
+                try {
+                  if (Math.abs((video.currentTime || 0) - target) > 0.5) video.currentTime = target;
+                } catch (e) {}
+              };
+              if (video.readyState >= 1) apply();
+              else {
+                var onMeta = function () {
+                  video.removeEventListener("loadedmetadata", onMeta);
+                  apply();
+                };
+                video.addEventListener("loadedmetadata", onMeta);
+              }
             }
             function renderFileList() {
               if (!fileListEl) return;
@@ -4266,7 +4294,11 @@ enum ExportLANServer {
               setLabel("[" + modeTag() + "] " + (index + 1) + "/" + playlist.length + ": " + item.name);
               renderFileList();
               syncShaderToggles();
-              var onReady = function () { refreshSphereShader(); };
+              applyWorkingSeekIfNeeded(item);
+              var onReady = function () {
+                applyWorkingSeekIfNeeded(item);
+                refreshSphereShader();
+              };
               var onLoaded = function () {
                 video.removeEventListener("loadeddata", onLoaded);
                 onReady();
@@ -4276,7 +4308,10 @@ enum ExportLANServer {
               if (wantPlay) {
                 var p = video.play();
                 if (p && typeof p.then === "function") {
-                  p.then(function () { refreshSphereShader(); }).catch(function () {
+                  p.then(function () {
+                    applyWorkingSeekIfNeeded(item);
+                    refreshSphereShader();
+                  }).catch(function () {
                     wantPlay = false;
                     setLabel("Play blocked — tap Launch Engine");
                   });
@@ -4341,7 +4376,7 @@ enum ExportLANServer {
                 }
               }
               showOverlay(false);
-              try { video.classList.add("xr-pip"); } catch (e) {}
+              try { video.classList.add("xr-main"); } catch (e) {}
               // Give the mesh a moment after overlay hide / first paint.
               setTimeout(refreshSphereShader, 200);
               setTimeout(refreshSphereShader, 800);
@@ -4395,13 +4430,15 @@ enum ExportLANServer {
             try {
               var params = new URLSearchParams(window.location.search || "");
               var qMode = params.get("mode");
-              if (qMode) {
-                mode = normalizeMode(qMode);
-                writeMode(mode);
-                syncModeButtons();
-              }
+              var hashMode = String(window.location.hash || "").replace(/^#/, "");
+              if (qMode) mode = normalizeMode(qMode);
+              else if (hashMode) mode = normalizeMode(hashMode);
+              writeMode(mode);
+              syncModeButtons();
             } catch (e) {}
-            refreshPlaylists();
+            refreshWorkingSeek().finally(function () {
+              refreshPlaylists();
+            });
           })();
           </script>
         </body>

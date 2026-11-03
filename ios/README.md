@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 319 (1.2.83):** LAN **`/xr`** shows a large HTML5 video after Launch (not tiny PIP); XR links use `#working` / `#archive` (no query 404); Working mode seeks to export start (sparse `_working.mp4` from 0:00 is often black).
+
 **Build 318 (1.2.82):** LAN **`/xr?mode=…`** no longer 404s — strip query before route match (`/xr?mode=working` works).
 
 **Build 317 (1.2.81):** LAN monitor XR chroma controls are button-styled on a row under **Show loop player**.
