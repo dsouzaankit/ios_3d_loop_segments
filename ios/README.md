@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 355 (1.3.1):** PC chroma key stays up to 3840 wide. The 1600×800 cap is Quest-only.
+
 **Build 354 (1.3.1):** AR zoom bar hides unless you look down, point a controller at it, or just changed a step. It shows for a few seconds when you enter AR.
 
 **Build 353 (1.3.1):** Quest AR zoom steps — − / + on the headset (50–100% in 10% steps). Page slider uses the same steps.

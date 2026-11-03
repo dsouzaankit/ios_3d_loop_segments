@@ -4319,8 +4319,9 @@ enum ExportLANServer {
                   return __xrDs.canvas || null;
                 }
                 var target = this.downscaleTarget();
-                if (chromaOn) target = Math.min(target, 1600);
-                else if (!needsScale) target = limit;
+                // 1600 is a Quest budget for per-frame green key. PC keeps a 4K-wide key.
+                if (chromaOn && this.isQuestBrowser()) target = Math.min(target, 1600);
+                else if (chromaOn) target = Math.min(target, 3840);
                 var canvas = xrDrawDownscale(video, target, chromaOn ? {
                   keyColor: this.data.keyColor,
                   similarity: this.data.similarity,
