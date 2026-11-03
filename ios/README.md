@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 321 (1.2.85):** LAN **`/`** + **`/browse`** — Cloudflare tunnel textbox + **Update links** rewrites the XR chroma buttons to `https://&lt;host&gt;/xr…` (stored in `localStorage`).
+
 **Build 320 (1.2.84):** LAN **`/xr`** hides the HTML5 `<video>` (texture source only) so the A-Frame plane is the only foreground picture on PC.
 
 **Build 319 (1.2.83):** LAN **`/xr`** XR links use `#working` / `#archive` (no query 404); Working mode seeks to export start (sparse `_working.mp4` from 0:00 is often black).
@@ -311,7 +313,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 | **Pending banner** | Shown while a trigger is in flight (switching source, resume, random, trim, clear). Export buttons disabled until the phone acks. **Trim media** / **Clear media** disabled while `exportSource.phase` is **running** (same as in-app; phone rejects those until export stops). **LAN speed test** stays available during export (pCloud fetch is cellular; the probe is Wi‑Fi LAN). |
 | **Middle** | Playback status + **Show loop player** (hidden by default) + **On phone (playback)** — **media links first** (`pcld_ios_media/…`, `loop/`, capped `archive/`), then **Export logs (newest first)** in a scroll panel (~5 rows). Lists come from **`status_lists.json`** (manual on `/`, auto on idle `/browse`). Legacy URLs `/export_latest.txt` and `/logs/export_*.txt` still work. |
 | **Loop player** | Toggle **Show / Hide loop player**. Single HTML5 `<video>` cycles `pcld_ios_media/loop/op_*.mp4` (skips `*.staging.*`; playlist from `status_lists.json`). **Speed** steps **0.7×–1.3×** in **0.1** increments apply to every segment; stored in `localStorage`. No autoplay — Play starts pull; **Hide** pauses and clears `src` (stops LAN bandwidth). Brief gap between minutes (not dual-buffer gapless). Separate link **Open XR chroma player** → **`/xr`**. |
-| **XR chroma player** | **`/xr`**: WebXR theater for green-screen VR180 SBS. **Loop**, **Working** (root clip), and **Archive folder** are separate lists. Tune `similarity` / `smoothness` / `keyColor` on the videosphere component in the served HTML if needed. |
+| **XR chroma player** | **`/xr`**: WebXR theater for green-screen VR180 SBS. **Loop**, **Working** (root clip), and **Archive folder** are separate lists. On **`/`** / **`/browse`**, paste a Cloudflare quick-tunnel host → **Update links** so the three XR buttons open `https://…/xr` (Quest immersive). Tune `similarity` / `smoothness` / `keyColor` on the videosphere component in the served HTML if needed. |
 | **Bottom** (`/browse` only) | **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, trigger status — then **↑ Up** / path / **Refresh** / bookmark; bookmarked folders, folder grid, file list, sort by **name / size / date**. Below that: **Export from URL** (HTTP(S) URL + save name → same vanilla → segments pipeline as browse Export). |
 
 #### JSON APIs (GET unless noted)

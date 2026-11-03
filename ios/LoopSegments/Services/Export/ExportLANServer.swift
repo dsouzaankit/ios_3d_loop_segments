@@ -3138,6 +3138,14 @@ enum ExportLANServer {
             button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; background: var(--btn-bg); color: var(--fg); border: 1px solid var(--btn-border); border-radius: 6px; }
             a.btn { display: inline-block; text-decoration: none; color: var(--fg); }
             .lan-xr-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.35rem 0 0.75rem; }
+            .lan-tunnel-row {
+              display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+              margin: 0.35rem 0 0.75rem; max-width: 56rem;
+            }
+            .lan-tunnel-row label { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; flex: 1 1 16rem; }
+            .lan-tunnel-row #lan-tunnel-domain { flex: 1 1 14rem; min-width: 12rem; font-family: ui-monospace, monospace; font-size: 0.9em; }
+            .lan-tunnel-row #lan-tunnel-status { flex: 1 1 100%; }
+            a.btn[data-lan-tunnel-active="1"] { border-color: #166534; }
             button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
             input[type="text"], input[type="url"], input[type="search"], select, textarea {
               background: var(--input-bg); color: var(--fg); border: 1px solid var(--input-border); border-radius: 6px; padding: 0.35rem 0.5rem;
@@ -3240,6 +3248,99 @@ enum ExportLANServer {
         """
     }
 
+    /// Paste Cloudflare quick-tunnel host; rewrite `[data-lan-tunnel-path]` links to `https://host…`.
+    private static func htmlLANTunnelDomainScript() -> String {
+        """
+        <script>
+        (function () {
+          var KEY = "loopsegments.lan.cfTunnelHost.v1";
+          var input = document.getElementById("lan-tunnel-domain");
+          var applyBtn = document.getElementById("lan-tunnel-apply");
+          var clearBtn = document.getElementById("lan-tunnel-clear");
+          var status = document.getElementById("lan-tunnel-status");
+          if (!input || !applyBtn) return;
+
+          function setStatus(msg) {
+            if (status) status.textContent = msg || "";
+          }
+          function tunnelLinks() {
+            return document.querySelectorAll("a[data-lan-tunnel-path]");
+          }
+          function parseHost(raw) {
+            var s = String(raw || "").trim();
+            if (!s) return "";
+            s = s.replace(/\\s+/g, "");
+            if (!/^https?:\\/\\//i.test(s)) s = "https://" + s;
+            try {
+              var u = new URL(s);
+              if (!u.hostname) return "";
+              return u.host;
+            } catch (e) {
+              return "";
+            }
+          }
+          function applyHost(host, persist) {
+            host = String(host || "").trim();
+            tunnelLinks().forEach(function (a) {
+              var path = a.getAttribute("data-lan-tunnel-path") || "/xr";
+              if (path.charAt(0) !== "/") path = "/" + path;
+              if (host) {
+                a.href = "https://" + host + path;
+                a.setAttribute("data-lan-tunnel-active", "1");
+                a.setAttribute("title", a.href);
+              } else {
+                a.href = path;
+                a.removeAttribute("data-lan-tunnel-active");
+                a.setAttribute("title", path);
+              }
+            });
+            if (persist) {
+              try {
+                if (host) localStorage.setItem(KEY, host);
+                else localStorage.removeItem(KEY);
+              } catch (e) {}
+            }
+            if (host) {
+              setStatus("XR links → https://" + host + "/xr… (stored on this browser)");
+            } else {
+              setStatus("XR links use this LAN origin (http)");
+            }
+          }
+          function applyFromInput() {
+            var host = parseHost(input.value);
+            if (input.value.trim() && !host) {
+              setStatus("Could not parse domain — paste xxxx.trycloudflare.com or https://…");
+              return;
+            }
+            input.value = host;
+            applyHost(host, true);
+          }
+          applyBtn.addEventListener("click", applyFromInput);
+          input.addEventListener("keydown", function (ev) {
+            if (ev.key === "Enter") {
+              ev.preventDefault();
+              applyFromInput();
+            }
+          });
+          if (clearBtn) {
+            clearBtn.addEventListener("click", function () {
+              input.value = "";
+              applyHost("", true);
+            });
+          }
+          var stored = "";
+          try { stored = localStorage.getItem(KEY) || ""; } catch (e) {}
+          if (stored) {
+            input.value = stored;
+            applyHost(stored, false);
+          } else {
+            applyHost("", false);
+          }
+        })();
+        </script>
+        """
+    }
+
     /// Toggle + hidden-by-default HTML5 player for `pcld_ios_media/loop/op_*.mp4`.
     private static func htmlLANLoopPlayerBlock() -> String {
         let loopPrefix = "\(ExportPaths.mediaExportFolderName)/\(ExportPaths.segmentLoopFolderName)/"
@@ -3247,11 +3348,20 @@ enum ExportLANServer {
         <p>
           <button type="button" id="lan-loop-player-toggle">Show loop player</button>
         </p>
-        <p class="lan-xr-links">
-          <a class="btn" href="/xr#loop" id="lan-xr-chroma-link">Open XR chroma (loop)</a>
-          <a class="btn" href="/xr#working" id="lan-xr-working-link">Open XR chroma (working)</a>
-          <a class="btn" href="/xr#archive" id="lan-xr-archive-link">Open XR chroma (archive)</a>
+        <p class="lan-tunnel-row">
+          <label for="lan-tunnel-domain">Cloudflare tunnel
+            <input type="text" id="lan-tunnel-domain" placeholder="xxxx.trycloudflare.com or full https://… URL" spellcheck="false" autocomplete="off" inputmode="url" aria-describedby="lan-tunnel-status">
+          </label>
+          <button type="button" id="lan-tunnel-apply">Update links</button>
+          <button type="button" id="lan-tunnel-clear">Clear</button>
+          <span id="lan-tunnel-status" class="muted" role="status"></span>
         </p>
+        <p class="lan-xr-links">
+          <a class="btn" href="/xr#loop" id="lan-xr-chroma-link" data-lan-tunnel-path="/xr#loop">Open XR chroma (loop)</a>
+          <a class="btn" href="/xr#working" id="lan-xr-working-link" data-lan-tunnel-path="/xr#working">Open XR chroma (working)</a>
+          <a class="btn" href="/xr#archive" id="lan-xr-archive-link" data-lan-tunnel-path="/xr#archive">Open XR chroma (archive)</a>
+        </p>
+        \(htmlLANTunnelDomainScript())
         <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
           <div class="row" style="margin-top:0">
             <strong>Loop folder player</strong>
