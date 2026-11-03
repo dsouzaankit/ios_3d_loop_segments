@@ -4059,15 +4059,23 @@ enum ExportLANServer {
                 smoothness: { type: "number", default: 0.08 },
                 chroma: { type: "boolean", default: false },
                 sbs: { type: "boolean", default: true },
-                eye: { type: "string", default: "both" }
+                eye: { type: "string", default: "both" },
+                // desktop = flat a-video for PC/magic-window; dome = immersive 180° hemisphere
+                role: { type: "string", default: "dome" }
               },
               init: function () {
                 this.video = document.querySelector("#chroma-stream");
                 this.shaderMaterial = null;
                 this._retries = 0;
                 this._onApply = this.applyMaterial.bind(this);
-                this._onEnterVr = this.syncEyeLayers.bind(this);
-                this._onExitVr = this.syncEyeLayers.bind(this);
+                this._onEnterVr = function () {
+                  this.applyMaterial();
+                  this.syncEyeLayers();
+                }.bind(this);
+                this._onExitVr = function () {
+                  this.applyMaterial();
+                  this.syncEyeLayers();
+                }.bind(this);
                 this.el.addEventListener("object3dset", this._onApply);
                 this.el.addEventListener("materialtextureloaded", this._onApply);
                 if (this.el.sceneEl) {
@@ -4098,8 +4106,17 @@ enum ExportLANServer {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
                 this.syncEyeLayers();
               },
+              isDesktopRole: function () {
+                return this.data.role === "desktop" || this.data.eye === "both";
+              },
               wantsShader: function () {
-                return !!(this.data.chroma || this.data.sbs);
+                // PC black-video history: custom VideoTexture shader is flaky on desktop WebGL.
+                // Native A-Frame flat video material for desktop / non-immersive; shader for chroma
+                // or immersive SBS eye halves only.
+                if (this.data.chroma) return true;
+                if (this.isDesktopRole()) return false;
+                if (this.data.sbs && this.isImmersiveStereo()) return true;
+                return false;
               },
               eyeLayer: function () {
                 if (this.data.eye === "left") return 1;
@@ -4124,6 +4141,7 @@ enum ExportLANServer {
                 var layer = this.eyeLayer();
                 var sbs = !!this.data.sbs;
                 var immersive = this.isImmersiveStereo();
+                var desktop = this.isDesktopRole();
                 var sceneEl = this.el.sceneEl;
                 var xrCam = null;
                 var presenting = false;
@@ -4132,12 +4150,10 @@ enum ExportLANServer {
                   try {
                     presenting = !!sceneEl.renderer.xr.isPresenting;
                     xrCam = sceneEl.renderer.xr.getCamera();
-                    // Three.js always exposes cameras[2] even when not presenting — require isPresenting.
                     hasStereoCams = !!(presenting && xrCam && xrCam.cameras && xrCam.cameras.length >= 2);
                   } catch (e0) {}
                 }
-                // Eye layers only while actually presenting stereo — else left stays on layer 0 (PC/Quest flat).
-                var useEyeLayers = sbs && immersive && layer > 0 && hasStereoCams;
+                var useEyeLayers = !desktop && sbs && immersive && layer > 0 && hasStereoCams;
                 function setNodeLayer(node, layerBit) {
                   if (!node || (!node.isMesh && !node.isObject3D)) return;
                   node.layers.set(layerBit);
@@ -4148,13 +4164,15 @@ enum ExportLANServer {
                   });
                 }
                 if (this.el.object3D) setNodeLayer(this.el.object3D, useEyeLayers ? layer : 0);
-                // PC / flat / pre-stereo: left dome on layer 0. Right dome only with real stereo cams.
-                if (this.data.eye === "right") {
+                // Desktop flat screen: only outside immersive. Domes: immersive (left always if no stereo yet).
+                if (desktop) {
+                  if (this.el.object3D) this.el.object3D.visible = !immersive;
+                } else if (this.data.eye === "right") {
                   this.el.object3D.visible = !!(sbs && immersive && hasStereoCams);
                 } else if (this.el.object3D) {
-                  this.el.object3D.visible = true;
+                  // Left dome: show in immersive; hide on flat so desktop a-video is the only picture.
+                  this.el.object3D.visible = !!immersive;
                 }
-                // Keep desktop/magic-window camera on layer 0 so left dome stays visible outside XR.
                 try {
                   if (sceneEl && sceneEl.camera) sceneEl.camera.layers.enable(0);
                 } catch (eCam) {}
@@ -4210,8 +4228,10 @@ enum ExportLANServer {
               },
               applyShaderVideo: function (videoTex) {
                 var data = this.data;
-                // Desktop mono preview uses left half when SBS is on.
                 var uvX = data.eye === "right" ? 0.5 : 0;
+                // Desktop flat screen: full frame (no SBS UV split).
+                if (this.isDesktopRole()) uvX = 0;
+                var sbsOn = !!(data.sbs && !this.isDesktopRole());
                 if (!this.shaderMaterial) {
                   this.shaderMaterial = xrMakeChromaMaterial(videoTex, data, uvX);
                 } else {
@@ -4221,7 +4241,7 @@ enum ExportLANServer {
                   this.shaderMaterial.uniforms.similarity.value = data.similarity;
                   this.shaderMaterial.uniforms.smoothness.value = data.smoothness;
                   this.shaderMaterial.uniforms.chromaEnabled.value = data.chroma ? 1.0 : 0.0;
-                  this.shaderMaterial.uniforms.sbsEnabled.value = data.sbs ? 1.0 : 0.0;
+                  this.shaderMaterial.uniforms.sbsEnabled.value = sbsOn ? 1.0 : 0.0;
                   this.shaderMaterial.transparent = !!data.chroma;
                   this.shaderMaterial.depthWrite = !data.chroma;
                 }
@@ -4234,12 +4254,8 @@ enum ExportLANServer {
                   if (this._retries++ < 100) setTimeout(this._onApply, 50);
                   return;
                 }
-                if (this.data.eye === "right") {
-                  // Visibility decided in syncEyeLayers (needs stereo cams for SBS).
-                  this.syncEyeLayers();
-                  if (!this.el.object3D.visible) return;
-                }
-                this.el.object3D.visible = true;
+                this.syncEyeLayers();
+                if (this.el.object3D && !this.el.object3D.visible) return;
                 if (!this.wantsShader()) {
                   this.applyNativeVideo();
                   return;
@@ -4611,7 +4627,17 @@ enum ExportLANServer {
             webxr="requiredFeatures: local-floor; optionalFeatures: bounded-floor, layers"
             xr-mode-ui="enabled: true; XRMode: xr; enterVREnabled: true; enterAREnabled: true"
             device-orientation-permission-ui="enabled: true; httpsMessage: Use Quest chrome://flags insecure-origin for this LAN http:// origin (see LAN page), or optional Cloudflare tunnel at page bottom; cancelButtonText: OK">
-            <!-- Dual 180° domes: left=layer1 / right=layer2 for real SBS (Quest AR ignores onBeforeRender eye hacks). -->
+            <!-- PC / magic-window: native flat a-video (custom VideoTexture shader was black on desktop). -->
+            <a-video
+              id="chroma-screen"
+              src="#chroma-stream"
+              width="16"
+              height="9"
+              position="0 1.6 -4"
+              material="shader: flat; src: #chroma-stream; side: double; npot: true"
+              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: both; role: desktop">
+            </a-video>
+            <!-- Immersive: dual 180° domes on WebXR layers 1/2 for SBS. -->
             <a-videosphere
               id="chroma-sphere"
               src="#chroma-stream"
@@ -4620,7 +4646,8 @@ enum ExportLANServer {
               theta-length="100"
               position="0 1.5 0"
               rotation="0 -90 0"
-              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left">
+              visible="false"
+              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left; role: dome">
             </a-videosphere>
             <a-videosphere
               id="chroma-sphere-right"
@@ -4630,7 +4657,8 @@ enum ExportLANServer {
               theta-length="100"
               position="0 1.5 0"
               rotation="0 -90 0"
-              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: right">
+              visible="false"
+              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: right; role: dome">
             </a-videosphere>
 
             <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
@@ -4701,12 +4729,14 @@ enum ExportLANServer {
 
             function sphereEls() {
               return [
+                document.getElementById("chroma-screen"),
                 document.getElementById("chroma-sphere"),
                 document.getElementById("chroma-sphere-right")
               ].filter(Boolean);
             }
             function sphereComponent() {
-              var sphere = document.getElementById("chroma-sphere");
+              var sphere = document.getElementById("chroma-screen")
+                || document.getElementById("chroma-sphere");
               return sphere && sphere.components && sphere.components["chroma-stereo-sbs"];
             }
             function refreshSphereShader() {
@@ -4716,7 +4746,7 @@ enum ExportLANServer {
               });
             }
             function syncShaderToggles() {
-              var chromaOn = !chromaToggle || !!chromaToggle.checked;
+              var chromaOn = !!(chromaToggle && chromaToggle.checked);
               var sbsOn = !sbsToggle || !!sbsToggle.checked;
               sphereEls().forEach(function (el) {
                 try {

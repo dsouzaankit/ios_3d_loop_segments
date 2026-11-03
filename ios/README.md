@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 342 (1.3.1):** XR PC playback — native flat `a-video` outside immersive (fixes black custom VideoTexture); dual 180° domes only in VR/AR.
+
 **Build 341 (1.3.1):** LAN page — Quest flags labeled required for WebXR over LAN HTTP; Cloudflare Advanced tunnel moved to true page bottom (monitor + browse).
 
 **Build 340 (1.3.1):** XR video decode fix (tiny opacity, not 0); SBS eye-layers only while `isPresenting`; archive floater on Launch Engine page only; click scene to play/pause.
