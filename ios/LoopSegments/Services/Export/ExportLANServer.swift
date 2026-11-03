@@ -4071,7 +4071,9 @@ enum ExportLANServer {
               }
               __xrDs.canvas = canvas;
               if (!__xrDs.ctx) {
-                __xrDs.ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
+                // CPU-backed canvas (willReadFrequently) only when punching chroma.
+                // An 8K minute-segment blit through a CPU canvas stalls Quest AR decode.
+                __xrDs.ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: !!chroma });
               }
               var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight, 1);
               var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
@@ -4091,6 +4093,7 @@ enum ExportLANServer {
                 xrApplyChromaKey(__xrDs.ctx, cw, ch, chroma.keyColor, chroma.similarity, chroma.smoothness);
               }
               __xrDs.stamp = stamp;
+              __xrDs.pendingUpload = true;
               return canvas;
             }
 
@@ -4222,15 +4225,21 @@ enum ExportLANServer {
                 }
                 if (this._mode === "canvas") {
                   var now = (window.performance && performance.now) ? performance.now() : Date.now();
-                  var heavy = !!this.data.chroma;
-                  if (!quest || !heavy || !this._nextDraw || now >= this._nextDraw) {
-                    if (quest && heavy) this._nextDraw = now + 50;
+                  // Chroma readback is the expensive path. Other Quest canvas blits (8K minute
+                  // segments, AV1 full frame) stay at ~30 fps so the decoder is not stalled.
+                  var gap = this.data.chroma ? 50 : ((quest && this.isImmersiveStereo()) ? 33 : 0);
+                  if (!gap || !__xrDs.nextDraw || now >= __xrDs.nextDraw) {
+                    if (gap) __xrDs.nextDraw = now + gap;
                     this.refreshDownscaleCanvas(true);
                   }
                 }
                 try {
                   var mesh = this.el.getObject3D("mesh");
-                  if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
+                  var upload = this._mode !== "canvas" || __xrDs.pendingUpload;
+                  if (upload && mesh && mesh.material && mesh.material.map) {
+                    mesh.material.map.needsUpdate = true;
+                    __xrDs.pendingUpload = false;
+                  }
                   if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
                     this.el.object3D.visible = true;
                   }
