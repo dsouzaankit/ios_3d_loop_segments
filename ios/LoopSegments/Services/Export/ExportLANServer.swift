@@ -4219,11 +4219,11 @@ enum ExportLANServer {
                 if (ready && this._domeGeoReady && this._domeZoom === zoom) return;
                 try {
                   var old = mesh.geometry;
-                  // Zoom < 1 shrinks the arc so the picture takes less of the AR view (radius does not).
+                  // Horizontal stays a full 180. Zoom only shortens the vertical arc (too-tall fix).
                   // Center stays on -Z (phi 3π/2) and the horizon (theta π/2).
-                  var phiLen = Math.PI * zoom;
+                  var phiLen = Math.PI;
                   var thetaLen = Math.PI * zoom;
-                  var phiStart = Math.PI * 1.5 - phiLen / 2;
+                  var phiStart = Math.PI;
                   var thetaStart = (Math.PI - thetaLen) / 2;
                   var geo = new THREE.SphereGeometry(20, 48, 32, phiStart, phiLen, thetaStart, thetaLen);
                   geo.userData._xrHemi = true;
@@ -4722,7 +4722,7 @@ enum ExportLANServer {
                 var self = this;
                 function paint(z) {
                   var lab = document.getElementById("xr-zoom-label");
-                  if (lab) lab.setAttribute("value", Math.round(z * 100) + "%");
+                  if (lab) lab.setAttribute("value", Math.round(z * 180) + "°");
                 }
                 this._paint = paint;
                 root.addEventListener("raycaster-intersected", function () { self._aimed = true; });
@@ -5123,7 +5123,7 @@ enum ExportLANServer {
               <a-entity id="xr-zoom-hud" visible="false" position="0 -0.68 -1.25" xr-zoom-steps>
                 <a-plane id="xr-zoom-out" class="raycastable" width="0.32" height="0.24" color="#14532d" position="-0.46 0 0"></a-plane>
                 <a-text value="-" align="center" baseline="center" color="#fff" width="0.8" position="-0.46 0 0.02"></a-text>
-                <a-text id="xr-zoom-label" value="60%" align="center" baseline="center" color="#fff" width="1.1" position="0 0 0.02"></a-text>
+                <a-text id="xr-zoom-label" value="108°" align="center" baseline="center" color="#fff" width="1.1" position="0 0 0.02"></a-text>
                 <a-plane id="xr-zoom-in" class="raycastable" width="0.32" height="0.24" color="#14532d" position="0.46 0 0"></a-plane>
                 <a-text value="+" align="center" baseline="center" color="#fff" width="0.8" position="0.46 0 0.02"></a-text>
               </a-entity>
@@ -5814,7 +5814,7 @@ enum ExportLANServer {
               zoomEl.addEventListener("input", function () {
                 window.__xrZoom = Number(zoomEl.value) || 0.6;
                 var lab = document.getElementById("xr-zoom-label");
-                if (lab) lab.setAttribute("value", Math.round(window.__xrZoom * 100) + "%");
+                if (lab) lab.setAttribute("value", Math.round(window.__xrZoom * 180) + "°");
                 sphereEls().forEach(function (el) {
                   var comp = el.components && el.components["chroma-stereo-sbs"];
                   if (!comp) return;
