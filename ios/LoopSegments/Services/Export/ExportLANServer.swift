@@ -4279,6 +4279,57 @@ enum ExportLANServer {
             }
 
             /**
+             * GPU chroma key. A-Frame owns the video texture (a hand-made VideoTexture shader stays black on Quest).
+             * No canvas readback — that read was stalling AR playback and Enter VR.
+             */
+            AFRAME.registerShader("xr-chroma", {
+              schema: {
+                src: { type: "map", is: "uniform" },
+                keyColor: { type: "color", is: "uniform", default: "#00ff00" },
+                similarity: { type: "number", is: "uniform", default: 0.3 },
+                smoothness: { type: "number", is: "uniform", default: 0.08 }
+              },
+              vertexShader: [
+                "varying vec2 vUv;",
+                "void main() {",
+                "  vUv = uv;",
+                "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+                "}"
+              ].join("\n"),
+              fragmentShader: [
+                "uniform sampler2D src;",
+                "uniform vec3 keyColor;",
+                "uniform float similarity;",
+                "uniform float smoothness;",
+                "varying vec2 vUv;",
+                "void main() {",
+                "  vec4 videoColor = texture2D(src, vUv);",
+                "  float cr = 0.5 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
+                "  float cb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5 * videoColor.b;",
+                "  float keyCr = 0.5 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
+                "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5 * keyColor.b;",
+                "  float dist = sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));",
+                "  float blend = smoothstep(similarity, similarity + smoothness, dist);",
+                "  gl_FragColor = vec4(videoColor.rgb, blend);",
+                "}"
+              ].join("\n")
+            });
+            (function () {
+              var shader = AFRAME.shaders && AFRAME.shaders["xr-chroma"];
+              if (!shader || !shader.prototype || !shader.prototype.init) return;
+              var baseInit = shader.prototype.init;
+              shader.prototype.init = function (data) {
+                baseInit.call(this, data);
+                if (!this.material) return;
+                this.material.transparent = true;
+                this.material.depthWrite = false;
+                this.material.toneMapped = false;
+                this.material.side = THREE.DoubleSide;
+                this.material.alphaTest = 0.08;
+              };
+            })();
+
+            /**
              * eye: "left" | "right" | "both"
              * SBS on Quest: two hemispheres on WebXR layers 1/2 (onBeforeRender eye detect is unreliable in AR).
              */
@@ -4368,20 +4419,17 @@ enum ExportLANServer {
                 } else if (av1Immersive && this.data.eye === "right" && __xrDs.resolved) {
                   this.applyAv1Resolve(__xrDs.resolved);
                 } else if (this._mode === "canvas" && this.drawsSharedFrame()) {
-                  var now = (window.performance && performance.now) ? performance.now() : Date.now();
-                  var gap = 0;
-                  if (quest && this.data.chroma) gap = this.isDesktopRole() ? 150 : 120;
-                  if (!gap || !__xrDs.nextDraw || now >= __xrDs.nextDraw) {
-                    if (gap) __xrDs.nextDraw = now + gap;
-                    this.refreshDownscaleCanvas(true);
-                  }
+                  this.refreshDownscaleCanvas(true);
                 }
                 try {
                   var mesh = this.el.getObject3D("mesh");
                   var frameBag = xrSlotBag(this.isDesktopRole() ? "flat" : "ar");
-                  var upload = this._mode === "canvas" ? !!frameBag.pendingUpload : this._mode !== "av1rt";
-                  if (upload && mesh && mesh.material && mesh.material.map) {
-                    mesh.material.map.needsUpdate = true;
+                  var mat = mesh && mesh.material;
+                  var tex = (mat && mat.uniforms && mat.uniforms.src && mat.uniforms.src.value) || (mat && mat.map);
+                  var upload = this._mode === "canvas" ? !!frameBag.pendingUpload : (this._mode !== "av1rt" && this._mode !== "gpu");
+                  if (this._mode === "gpu" && tex) upload = true;
+                  if (upload && tex) {
+                    tex.needsUpdate = true;
                     if (this._mode === "canvas") frameBag.pendingUpload = false;
                   }
                   if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
@@ -4538,13 +4586,11 @@ enum ExportLANServer {
                   }
                   return null;
                 }
-                var chromaOn = !!this.data.chroma;
                 var slot = this.isDesktopRole() ? "flat" : "ar";
                 var limit = this.maxWebGLTextureSize();
                 var needsScale = video.videoWidth > limit || video.videoHeight > limit;
-                // Each surface keys its own canvas. The flat preview must not become the AR texture.
-                var keyHere = chromaOn;
-                if (!keyHere && !needsScale) {
+                // Chroma is a GPU key. This canvas is only a size shrink, never a pixel readback.
+                if (!needsScale) {
                   if (!onlyUpdate) this.setTexNote("");
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
                   return null;
@@ -4555,18 +4601,7 @@ enum ExportLANServer {
                   return this._dsCanvas || null;
                 }
                 var target = this.downscaleTarget();
-                if (keyHere) {
-                  // A 3840 readback on Quest blocks the video thread. Keep the key above the
-                  // old 1600 preview, on this surface's own canvas.
-                  var keyCap = 3840;
-                  if (this.isQuestBrowser()) keyCap = slot === "ar" ? 2560 : 2048;
-                  target = Math.min(target, keyCap);
-                }
-                var canvas = xrDrawDownscale(video, target, keyHere ? {
-                  keyColor: this.data.keyColor,
-                  similarity: this.data.similarity,
-                  smoothness: this.data.smoothness
-                } : null, slot);
+                var canvas = xrDrawDownscale(video, target, null, slot);
                 this._dsCanvas = canvas || this._dsCanvas;
                 if (!canvas) {
                   try { video.classList.add("xr-pip"); } catch (e2) {}
@@ -4576,7 +4611,7 @@ enum ExportLANServer {
                 if (!onlyUpdate) {
                   try { video.classList.remove("xr-pip"); } catch (e5) {}
                   this.setTexNote(
-                    (keyHere ? "Chroma " : "Downscaling ")
+                    "Downscaling "
                     + video.videoWidth + "×" + video.videoHeight
                     + " → " + canvas.width + "×" + canvas.height
                   );
@@ -4793,6 +4828,7 @@ enum ExportLANServer {
               },
               applyNativeVideo: function () {
                 this._mode = "native";
+                this._gpuSig = "";
                 this.ensureDomeGeometry();
                 this.applySbsUVs();
                 // Desktop: keep A-Frame's own video material (VideoTexture MeshBasic was black on PC).
@@ -4808,6 +4844,51 @@ enum ExportLANServer {
                   });
                 } catch (e) {}
                 // Ensure flat screen is on after material bind (dome thrash used to leave it hidden/black).
+                if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
+                  this.el.object3D.visible = true;
+                }
+                this.syncEyeLayers();
+                return true;
+              },
+              applyGpuChroma: function (canvas) {
+                this.ensureDomeGeometry();
+                this.applySbsUVs();
+                var src = (canvas && canvas.id) ? ("#" + canvas.id) : "#chroma-stream";
+                var sizeKey = canvas ? (canvas.width + "x" + canvas.height) : "video";
+                var key = "#00ff00";
+                try { key = "#" + new THREE.Color(this.data.keyColor).getHexString(); } catch (eK) {}
+                var sig = src + "|" + sizeKey + "|" + key + "|" + this.data.similarity + "|" + this.data.smoothness;
+                if (this._gpuSig === sig && (this._mode === "gpu" || (canvas && this._mode === "canvas"))) return true;
+                this._gpuSig = sig;
+                this._dsCanvas = canvas || null;
+                this._mode = canvas ? "canvas" : "gpu";
+                this._canvasSrc = src;
+                this._canvasSize = sizeKey;
+                try {
+                  this.el.setAttribute("material", {
+                    shader: "xr-chroma",
+                    src: src,
+                    keyColor: key,
+                    similarity: this.data.similarity,
+                    smoothness: this.data.smoothness,
+                    side: "double",
+                    transparent: true,
+                    opacity: 1,
+                    depthWrite: false,
+                    alphaTest: 0.08,
+                    npot: true
+                  });
+                } catch (e) {}
+                try {
+                  var mesh = this.el.getObject3D("mesh");
+                  if (mesh && mesh.material) {
+                    mesh.material.transparent = true;
+                    mesh.material.depthWrite = false;
+                    mesh.material.toneMapped = false;
+                    if ("alphaTest" in mesh.material) mesh.material.alphaTest = 0.08;
+                  }
+                } catch (e2) {}
+                if (!canvas) this.setTexNote("");
                 if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
                   this.el.object3D.visible = true;
                 }
@@ -4856,6 +4937,18 @@ enum ExportLANServer {
                   return;
                 }
                 if (questAv1) return;
+                if (this.data.chroma) {
+                  var scaled = null;
+                  var video = this.video;
+                  if (video && video.videoWidth) {
+                    var limit = this.maxWebGLTextureSize();
+                    if (video.videoWidth > limit || video.videoHeight > limit) {
+                      scaled = this.refreshDownscaleCanvas(false);
+                    }
+                  }
+                  this.applyGpuChroma(scaled);
+                  return;
+                }
                 // 8K / huge SBS: downscale into canvas so WebGL can upload (native video tex → black).
                 var dsTex = this.refreshDownscaleCanvas(false);
                 if (dsTex) {
@@ -4942,25 +5035,42 @@ enum ExportLANServer {
                 }
                 function applyPassthrough(on) {
                   isPassthrough = !!on;
-                  if (!on) return;
-                  if (sky) sky.setAttribute("visible", "false");
-                  if (sceneEl) {
-                    try { sceneEl.setAttribute("background", "transparent: true"); } catch (e) {}
-                    if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 0);
+                  if (isPassthrough) {
+                    if (sky) sky.setAttribute("visible", "false");
+                    if (sceneEl) {
+                      try { sceneEl.setAttribute("background", "transparent: true"); } catch (e) {}
+                      if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 0);
+                    }
+                    var t1 = document.querySelector("#btn-text");
+                    if (t1) t1.setAttribute("value", "VR Void");
+                  } else {
+                    if (sky) sky.setAttribute("visible", "true");
+                    if (sceneEl) {
+                      try { sceneEl.setAttribute("background", "color: #0a0a0a; transparent: false"); } catch (e) {}
+                      if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 1);
+                    }
+                    var t0 = document.querySelector("#btn-text");
+                    if (t0) t0.setAttribute("value", "Passthrough");
                   }
                 }
+                var lastToggleMs = 0;
+                function toggle() {
+                  if (!immersiveNow()) return;
+                  var now = Date.now();
+                  if (now - lastToggleMs < 280) return;
+                  lastToggleMs = now;
+                  applyPassthrough(!isPassthrough);
+                }
+                this.el.addEventListener("click", toggle);
+                this.el.addEventListener("triggerdown", toggle);
                 if (sceneEl) {
                   sceneEl.addEventListener("enter-vr", function () {
                     syncHudVisible();
                     var ar = !!(sceneEl.is && sceneEl.is("ar-mode"));
-                    if (ar) applyPassthrough(true);
-                    else if (sky) sky.setAttribute("visible", "false");
+                    applyPassthrough(ar);
                   });
                   sceneEl.addEventListener("exit-vr", function () {
-                    isPassthrough = false;
-                    if (sky) sky.setAttribute("visible", "true");
-                    try { sceneEl.setAttribute("background", "color: #0a0a0a; transparent: false"); } catch (e) {}
-                    if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 1);
+                    applyPassthrough(false);
                     syncHudVisible();
                   });
                 }
