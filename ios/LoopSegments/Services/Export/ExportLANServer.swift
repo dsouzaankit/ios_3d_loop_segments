@@ -4588,28 +4588,6 @@ enum ExportLANServer {
                   }
                   uv.needsUpdate = true;
                 });
-                if (!eyeOverride && this.data.eye === "left" && !this.isDesktopRole()) {
-                  this.installEyeUv(mesh);
-                }
-              },
-              installEyeUv: function (mesh) {
-                var comp = this;
-                mesh.traverse(function (node) {
-                  if (!node.isMesh) return;
-                  node.onBeforeRender = function (renderer, scene, camera) {
-                    var eye = "left";
-                    try {
-                      var xr = renderer.xr;
-                      var cams = xr && xr.isPresenting && xr.getCamera && xr.getCamera().cameras;
-                      if (cams && cams.length >= 2 && comp.data.sbs) {
-                        eye = (cams.indexOf(camera) === 1) ? "right" : "left";
-                      }
-                    } catch (eEye) {}
-                    if (eye === comp._uvEye) return;
-                    comp._uvEye = eye;
-                    comp.applySbsUVs(eye);
-                  };
-                });
               },
               isArMode: function () {
                 try {
@@ -4711,7 +4689,6 @@ enum ExportLANServer {
                   node.material = mat;
                   node.onBeforeRender = null;
                 });
-                if (this.data.eye === "left" && !this.isDesktopRole()) this.installEyeUv(mesh);
                 if (this.el.components.material) {
                   this.el.components.material.material = mat;
                 }
