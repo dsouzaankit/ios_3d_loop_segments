@@ -4073,8 +4073,16 @@ enum ExportLANServer {
                 this._retries = 0;
                 this._onApply = this.applyMaterial.bind(this);
                 this._onEnterVr = function () {
-                  this.applyMaterial();
-                  this.syncEyeLayers();
+                  var self = this;
+                  function kick() {
+                    self.applyMaterial();
+                    self.syncEyeLayers();
+                  }
+                  // Quest AR session startup often resets layers/materials — re-bind a few times.
+                  kick();
+                  setTimeout(kick, 50);
+                  setTimeout(kick, 250);
+                  setTimeout(kick, 800);
                 }.bind(this);
                 this._onExitVr = function () {
                   this.applyMaterial();
@@ -4252,12 +4260,21 @@ enum ExportLANServer {
                   uv.needsUpdate = true;
                 });
               },
+              isArMode: function () {
+                try {
+                  var sceneEl = this.el.sceneEl;
+                  return !!(sceneEl && sceneEl.is && sceneEl.is("ar-mode"));
+                } catch (e) {
+                  return false;
+                }
+              },
               syncEyeLayers: function () {
                 var mesh = this.el.getObject3D("mesh");
                 var layer = this.eyeLayer();
                 var sbs = !!this.data.sbs;
                 var immersive = this.isImmersiveStereo();
                 var desktop = this.isDesktopRole();
+                var isAR = this.isArMode();
                 var sceneEl = this.el.sceneEl;
                 var xrCam = null;
                 var presenting = false;
@@ -4269,7 +4286,9 @@ enum ExportLANServer {
                     hasStereoCams = !!(presenting && xrCam && xrCam.cameras && xrCam.cameras.length >= 2);
                   } catch (e0) {}
                 }
-                var useEyeLayers = !desktop && sbs && immersive && layer > 0 && hasStereoCams;
+                // Quest AR: eye layers 1/2 go blank (cams effectively only see layer 0). Keep AR on layer 0.
+                // VR can still use per-eye layers for SBS.
+                var useEyeLayers = !desktop && !isAR && sbs && immersive && layer > 0 && hasStereoCams;
                 function setNodeLayer(node, layerBit) {
                   if (!node || (!node.isMesh && !node.isObject3D)) return;
                   node.layers.set(layerBit);
@@ -4280,12 +4299,12 @@ enum ExportLANServer {
                   });
                 }
                 if (this.el.object3D) setNodeLayer(this.el.object3D, useEyeLayers ? layer : 0);
-                // Flat a-video: magic-window / PC only. Left dome: always on (Quest + PC fallback).
-                // Right dome: immersive SBS stereo cams only.
+                // Flat a-video: magic-window / PC only. Left dome: always on.
+                // Right dome: VR SBS stereo only (hidden in AR so layer-0 left dome stays visible).
                 if (desktop) {
                   if (this.el.object3D) this.el.object3D.visible = !immersive;
                 } else if (this.data.eye === "right") {
-                  this.el.object3D.visible = !!(sbs && immersive && hasStereoCams);
+                  this.el.object3D.visible = !!(sbs && immersive && hasStereoCams && !isAR);
                 } else if (this.el.object3D) {
                   this.el.object3D.visible = true;
                 }
@@ -4294,10 +4313,11 @@ enum ExportLANServer {
                 } catch (eCam) {}
                 if (!xrCam || !hasStereoCams) return;
                 try {
+                  // Always keep layer 0 on XR cams — required for Quest AR video.
                   xrCam.layers.enable(0);
                   xrCam.cameras[0].layers.enable(0);
                   xrCam.cameras[1].layers.enable(0);
-                  if (sbs && immersive) {
+                  if (useEyeLayers) {
                     xrCam.layers.enable(1);
                     xrCam.layers.enable(2);
                     xrCam.cameras[0].layers.enable(1);
