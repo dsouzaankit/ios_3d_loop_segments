@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 376 (1.3.1):** Zoom scales the whole frame onto a smaller hemisphere. The slider no longer crops the edges and leaves the center the same size. Zoom 1 is still 180° wide and tall.
+
 **Build 375 (1.3.1):** Zooming out pulls the vertical arc in by an extra 14°, matching the headset’s shorter view. Width stays 180° at zoom 1. Build 374 was cancelled; its GPU chroma and forward-facing VR hemisphere are in this build.
 
 **Build 374 (1.3.1):** Cancelled before an IPA was copied. Chroma keys on the GPU, and Enter VR keeps the hemisphere facing session forward. Those changes shipped in 375.

@@ -4482,23 +4482,16 @@ enum ExportLANServer {
                 if (!(z > 0)) z = 1;
                 return Math.max(0.4, Math.min(1, z));
               },
-              // Quest’s forward view is about 110° wide and 96° tall. Equal degree
-              // cuts leave the top and bottom outside the lenses after the sides
-              // have already come in. Keep that 14° difference so the margins match.
+              // Zoom scales the whole frame onto a shorter arc. Cropping the UVs
+              // kept the center the same size and only cut the edges off.
               domeAngles: function () {
                 var zoom = this.isDesktopRole() ? 1 : this.domeZoom();
-                var phiDeg = 180 * zoom;
-                var thetaDeg = Math.max(40, phiDeg - 14);
-                if (thetaDeg > phiDeg) thetaDeg = phiDeg;
-                var phiLen = phiDeg * Math.PI / 180;
-                var thetaLen = thetaDeg * Math.PI / 180;
+                var span = Math.PI * zoom;
                 return {
-                  phiLen: phiLen,
-                  thetaLen: thetaLen,
-                  phiStart: (Math.PI * 1.5) - phiLen / 2,
-                  thetaStart: (Math.PI - thetaLen) / 2,
-                  hZoom: phiDeg / 180,
-                  vZoom: thetaDeg / 180
+                  phiLen: span,
+                  thetaLen: span,
+                  phiStart: (Math.PI * 1.5) - span / 2,
+                  thetaStart: (Math.PI - span) / 2
                 };
               },
               // A-Frame videosphere ignored phi-length → VR180 stretched to 360. Own the BufferGeometry.
@@ -4511,8 +4504,7 @@ enum ExportLANServer {
                 if (ready && this._domeGeoReady && this._domeZoom === zoom) return;
                 try {
                   var old = mesh.geometry;
-                  // Full width stays 180° at zoom 1. Height is 14° shorter so it matches
-                  // the headset's shorter vertical view; zooming out keeps that gap.
+                  // Zoom 1 is a 180° hemisphere. Lower values pack the full frame into a smaller arc.
                   var ang = this.domeAngles();
                   var phiLen = ang.phiLen;
                   var thetaLen = ang.thetaLen;
@@ -4726,11 +4718,6 @@ enum ExportLANServer {
                 if (!mesh) return;
                 var eye = eyeOverride || this.data.eye;
                 var sbs = !!(this.data.sbs && !this.isDesktopRole());
-                var ang = this.isDesktopRole() ? null : this.domeAngles();
-                var hZoom = ang ? ang.hZoom : 1;
-                var vZoom = ang ? ang.vZoom : 1;
-                var insetU = (1 - hZoom) / 2;
-                var insetV = (1 - vZoom) / 2;
                 mesh.traverse(function (node) {
                   if (!node.isMesh || !node.geometry || !node.geometry.attributes || !node.geometry.attributes.uv) return;
                   var geo = node.geometry;
@@ -4748,8 +4735,8 @@ enum ExportLANServer {
                   for (var i = 0; i < arr.length; i += 2) {
                     var u = base[i];
                     var v = base[i + 1];
-                    arr[i] = u0 + uSpan * (insetU + u * hZoom);
-                    arr[i + 1] = insetV + v * vZoom;
+                    arr[i] = u0 + uSpan * u;
+                    arr[i + 1] = v;
                   }
                   uv.needsUpdate = true;
                 });
