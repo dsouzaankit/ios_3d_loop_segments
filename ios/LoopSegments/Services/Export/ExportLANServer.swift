@@ -4044,7 +4044,7 @@ enum ExportLANServer {
               if (!renderer || !video || !video.videoWidth) return null;
               var tex = xrEnsureVideoTexture(video);
               if (!tex) return null;
-              var maxW = 2048;
+              var maxW = 6144;
               var scale = Math.min(maxW / video.videoWidth, maxW / video.videoHeight, 1);
               var w = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var h = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
@@ -4057,21 +4057,42 @@ enum ExportLANServer {
                   stencilBuffer: false
                 });
                 __xrDs.rt.texture.generateMipmaps = false;
+                if (THREE.LinearSRGBColorSpace && "colorSpace" in __xrDs.rt.texture) {
+                  __xrDs.rt.texture.colorSpace = THREE.LinearSRGBColorSpace;
+                }
                 __xrDs.rtW = w;
                 __xrDs.rtH = h;
               }
               if (!__xrDs.blitCam) {
                 __xrDs.blitCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
                 __xrDs.blitScene = new THREE.Scene();
-                __xrDs.blitMat = new THREE.MeshBasicMaterial({
-                  map: tex,
+                // Copy the video texels unchanged. A color convert here, plus another on the
+                // dome, was shifting brightness and contrast. Flip V the way VideoTexture does.
+                __xrDs.blitMat = new THREE.RawShaderMaterial({
+                  uniforms: { tex: { value: tex } },
+                  vertexShader: [
+                    "attribute vec3 position;",
+                    "attribute vec2 uv;",
+                    "uniform mat4 projectionMatrix;",
+                    "uniform mat4 modelViewMatrix;",
+                    "varying vec2 vUv;",
+                    "void main(){",
+                    "  vUv = vec2(uv.x, 1.0 - uv.y);",
+                    "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+                    "}"
+                  ].join("\n"),
+                  fragmentShader: [
+                    "precision highp float;",
+                    "uniform sampler2D tex;",
+                    "varying vec2 vUv;",
+                    "void main(){ gl_FragColor = texture2D(tex, vUv); }"
+                  ].join("\n"),
                   depthTest: false,
-                  depthWrite: false,
-                  toneMapped: false
+                  depthWrite: false
                 });
                 __xrDs.blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), __xrDs.blitMat));
               }
-              __xrDs.blitMat.map = tex;
+              __xrDs.blitMat.uniforms.tex.value = tex;
               tex.needsUpdate = true;
               var xr = renderer.xr;
               var wasEnabled = xr && xr.enabled;
@@ -4340,11 +4361,10 @@ enum ExportLANServer {
                 if (ready && this._domeGeoReady && this._domeZoom === zoom) return;
                 try {
                   var old = mesh.geometry;
-                  // Horizontal stays a full 180. Zoom only shortens the vertical arc (too-tall fix).
-                  // Center stays on -Z (phi 3π/2) and the horizon (theta π/2).
-                  var phiLen = Math.PI;
+                  // Same factor on both arcs. Center stays on -Z (phi 3π/2) and the horizon.
+                  var phiLen = Math.PI * zoom;
                   var thetaLen = Math.PI * zoom;
-                  var phiStart = Math.PI;
+                  var phiStart = (Math.PI * 1.5) - phiLen / 2;
                   var thetaStart = (Math.PI - thetaLen) / 2;
                   var geo = new THREE.SphereGeometry(20, 48, 32, phiStart, phiLen, thetaStart, thetaLen);
                   geo.userData._xrHemi = true;
