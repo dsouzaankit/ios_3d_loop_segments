@@ -3743,7 +3743,7 @@ enum ExportLANServer {
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Loop Segments — XR chroma player</title>
-          <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+          <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
           <script>
           (function () {
             var THREE = window.AFRAME && AFRAME.THREE ? AFRAME.THREE : window.THREE;
@@ -3959,20 +3959,40 @@ enum ExportLANServer {
                 var sky = document.querySelector("#virtual-sky");
                 var sceneEl = this.el.sceneEl;
                 var isPassthrough = false;
-                this.el.addEventListener("click", function () {
-                  isPassthrough = !isPassthrough;
+                function applyPassthrough(on) {
+                  isPassthrough = !!on;
                   if (isPassthrough) {
                     if (sky) sky.setAttribute("visible", "false");
-                    if (sceneEl && sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 0);
+                    if (sceneEl) {
+                      try { sceneEl.setAttribute("background", "transparent: true"); } catch (e) {}
+                      if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 0);
+                    }
                     var t1 = document.querySelector("#btn-text");
                     if (t1) t1.setAttribute("value", "Switch to VR Void");
                   } else {
                     if (sky) sky.setAttribute("visible", "true");
-                    if (sceneEl && sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 1);
+                    if (sceneEl) {
+                      try { sceneEl.setAttribute("background", "color: #0a0a0a; transparent: false"); } catch (e) {}
+                      if (sceneEl.renderer) sceneEl.renderer.setClearColor("#000", 1);
+                    }
                     var t0 = document.querySelector("#btn-text");
                     if (t0) t0.setAttribute("value", "Switch to Passthrough");
                   }
+                }
+                this.el.addEventListener("click", function () {
+                  applyPassthrough(!isPassthrough);
                 });
+                if (sceneEl) {
+                  sceneEl.addEventListener("enter-vr", function () {
+                    // Quest passthrough is immersive-ar only; VR stays opaque void unless toggled.
+                    var ar = !!(sceneEl.is && sceneEl.is("ar-mode"));
+                    applyPassthrough(ar);
+                  });
+                  sceneEl.addEventListener("exit-vr", function () {
+                    applyPassthrough(false);
+                  });
+                }
+                window.__xrSetPassthrough = applyPassthrough;
               }
             });
           })();
@@ -4110,7 +4130,8 @@ enum ExportLANServer {
           <div id="overlay" class="play-overlay">
             <h1>3D Chroma Key 180° Player</h1>
             <p class="muted">Three playlists: <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working</strong> = root <code>_working*.mp4</code> (outside archive) · <strong>Archive</strong> = <code>\#(mediaRootHTML)archive/</code> folder</p>
-            <p class="warn">Quest WebXR usually needs <strong>HTTPS</strong>. Plain <code>http://phone:8765/xr</code> often cannot enter immersive mode — use a TLS tunnel when testing on headset. A-Frame loads from CDN (headset needs internet once).</p>
+            <p class="warn">Quest WebXR needs <strong>HTTPS</strong> (Cloudflare tunnel → Update links). Passthrough / mixed reality = tap <strong>Enter AR</strong> (not Enter VR). Enter VR is an opaque void; the in-scene Passthrough toggle only helps inside an AR session. A-Frame loads from CDN (headset needs internet once).</p>
+            <p id="xr-webxr-status" class="muted" style="font-size:0.85rem;max-width:36rem" role="status">Checking WebXR…</p>
             <div class="toolbar" role="group" aria-label="Playlist">
               <button type="button" id="xr-mode-loop" class="active">Loop</button>
               <button type="button" id="xr-mode-working">Working</button>
@@ -4153,8 +4174,9 @@ enum ExportLANServer {
           <video id="chroma-stream" playsinline webkit-playsinline preload="metadata"></video>
 
           <a-scene
-            webxr="optionalFeatures: local-floor"
-            xr-mode-ui="enabled: true"
+            background="color: #0a0a0a"
+            webxr="requiredFeatures: local-floor; optionalFeatures: bounded-floor, hand-tracking, layers, anchors, plane-detection"
+            xr-mode-ui="enabled: true; XRMode: xr; enterVREnabled: true; enterAREnabled: true"
             device-orientation-permission-ui="enabled: true; httpsMessage: Use HTTPS via Cloudflare tunnel — on the LAN page paste the tunnel host, tap Update links, then Open XR chroma; cancelButtonText: OK"
             cursor="rayOrigin: mouse"
             raycaster="objects: .raycastable">
@@ -4766,6 +4788,28 @@ enum ExportLANServer {
               writeMode(mode);
               syncModeButtons();
             } catch (e) {}
+            (function probeWebXR() {
+              var el = document.getElementById("xr-webxr-status");
+              if (!el) return;
+              var secure = !!(window.isSecureContext);
+              var origin = String(location.origin || "");
+              if (!navigator.xr) {
+                el.textContent = "WebXR API missing — origin " + origin
+                  + (secure ? " (secure context OK)" : " (NOT a secure context — need https:// tunnel)");
+                return;
+              }
+              Promise.all([
+                navigator.xr.isSessionSupported("immersive-vr").catch(function () { return false; }),
+                navigator.xr.isSessionSupported("immersive-ar").catch(function () { return false; })
+              ]).then(function (bits) {
+                var vr = !!bits[0];
+                var ar = !!bits[1];
+                el.textContent = "WebXR @ " + origin
+                  + " — immersive-vr: " + (vr ? "yes" : "no")
+                  + ", immersive-ar (passthrough): " + (ar ? "yes — use Enter AR" : "no")
+                  + (secure ? "" : " — insecure context");
+              });
+            })();
             refreshWorkingSeek().finally(function () {
               refreshPlaylists();
             });
