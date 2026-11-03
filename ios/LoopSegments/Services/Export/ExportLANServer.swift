@@ -3622,13 +3622,6 @@ enum ExportLANServer {
         <p>
           <button type="button" id="lan-loop-player-toggle">Show loop player</button>
         </p>
-        <p class="lan-xr-links">
-          <a class="btn" href="/xr#loop" id="lan-xr-chroma-link" data-lan-tunnel-path="/xr#loop">Open XR chroma (loop)</a>
-          <a class="btn" href="/xr#working" id="lan-xr-working-link" data-lan-tunnel-path="/xr#working">Open XR chroma (working)</a>
-          <a class="btn" href="/xr#archive" id="lan-xr-archive-link" data-lan-tunnel-path="/xr#archive">Open XR chroma (archive)</a>
-        </p>
-        \(htmlLANQuestFlagsBlock())
-        \(htmlLANQuestFlagsScript())
         <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
           <div class="row" style="margin-top:0">
             <strong>Loop folder player</strong>
@@ -3653,6 +3646,13 @@ enum ExportLANServer {
             <span id="lan-loop-label" class="muted" role="status">Hidden — tap Show loop player</span>
           </div>
         </div>
+        <p class="lan-xr-links">
+          <a class="btn" href="/xr#loop" id="lan-xr-chroma-link" data-lan-tunnel-path="/xr#loop">Open XR chroma (loop)</a>
+          <a class="btn" href="/xr#working" id="lan-xr-working-link" data-lan-tunnel-path="/xr#working">Open XR chroma (working)</a>
+          <a class="btn" href="/xr#archive" id="lan-xr-archive-link" data-lan-tunnel-path="/xr#archive">Open XR chroma (archive)</a>
+        </p>
+        \(htmlLANQuestFlagsBlock())
+        \(htmlLANQuestFlagsScript())
         \(htmlLANLoopPlayerScript(loopPrefix: loopPrefix))
         <details class="lan-cf-tunnel-advanced panel" id="lan-cf-tunnel-advanced" style="margin-top:1.25rem">
           <summary><strong>Advanced — Cloudflare HTTPS tunnel</strong> <span class="muted">(optional / slow www hop; prefer Quest flags + LAN HTTP above)</span></summary>
@@ -4117,32 +4117,45 @@ enum ExportLANServer {
                 var layer = this.eyeLayer();
                 var sbs = !!this.data.sbs;
                 var immersive = this.isImmersiveStereo();
-                var useEyeLayers = sbs && immersive && layer > 0;
+                var sceneEl = this.el.sceneEl;
+                var xrCam = null;
+                var hasStereoCams = false;
+                if (sceneEl && sceneEl.renderer && sceneEl.renderer.xr) {
+                  try {
+                    xrCam = sceneEl.renderer.xr.getCamera();
+                    hasStereoCams = !!(xrCam && xrCam.cameras && xrCam.cameras.length >= 2);
+                  } catch (e0) {}
+                }
+                // Eye layers only when stereo cams exist — otherwise AR Enter can park video on
+                // layer 1/2 while cameras still only see 0 (blank hemisphere until cams appear).
+                var useEyeLayers = sbs && immersive && layer > 0 && hasStereoCams;
                 if (mesh) {
                   mesh.traverse(function (node) {
                     if (!node.isMesh && !node.isObject3D) return;
                     node.layers.set(useEyeLayers ? layer : 0);
                   });
                 }
-                // PC preview: only left dome on layer 0 (left SBS half). Right dome is immersive-only.
+                // PC / pre-stereo: left dome on layer 0. Right dome only with real stereo cams.
                 if (this.data.eye === "right") {
-                  this.el.object3D.visible = !!(sbs && immersive);
+                  this.el.object3D.visible = !!(sbs && immersive && hasStereoCams);
                 } else if (this.el.object3D) {
                   this.el.object3D.visible = true;
                 }
-                var sceneEl = this.el.sceneEl;
-                if (!sceneEl || !sceneEl.renderer || !sceneEl.renderer.xr) return;
+                if (!xrCam || !hasStereoCams) return;
                 try {
-                  var xrCam = sceneEl.renderer.xr.getCamera();
-                  if (!xrCam || !xrCam.cameras || xrCam.cameras.length < 2) return;
+                  xrCam.layers.enable(0);
                   xrCam.cameras[0].layers.enable(0);
                   xrCam.cameras[1].layers.enable(0);
                   if (sbs && immersive) {
+                    xrCam.layers.enable(1);
+                    xrCam.layers.enable(2);
                     xrCam.cameras[0].layers.enable(1);
                     xrCam.cameras[0].layers.disable(2);
                     xrCam.cameras[1].layers.enable(2);
                     xrCam.cameras[1].layers.disable(1);
                   } else {
+                    xrCam.layers.disable(1);
+                    xrCam.layers.disable(2);
                     xrCam.cameras[0].layers.disable(1);
                     xrCam.cameras[0].layers.disable(2);
                     xrCam.cameras[1].layers.disable(1);
@@ -4204,10 +4217,10 @@ enum ExportLANServer {
                   if (this._retries++ < 100) setTimeout(this._onApply, 50);
                   return;
                 }
-                if (this.data.eye === "right" && (!this.data.sbs || !this.isImmersiveStereo())) {
-                  this.el.object3D.visible = false;
+                if (this.data.eye === "right") {
+                  // Visibility decided in syncEyeLayers (needs stereo cams for SBS).
                   this.syncEyeLayers();
-                  return;
+                  if (!this.el.object3D.visible) return;
                 }
                 this.el.object3D.visible = true;
                 if (!this.wantsShader()) {
