@@ -4442,10 +4442,11 @@ enum ExportLANServer {
             }
             #xr-transport {
               display: none; position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%);
-              z-index: 10000; width: min(42rem, calc(100vw - 7rem));
+              z-index: 10050; width: min(42rem, calc(100vw - 7rem));
               padding: 0.55rem 0.75rem; border-radius: 12px; border: 1px solid #333;
               background: rgba(15, 23, 42, 0.92); color: #f8fafc;
               box-shadow: 0 8px 28px rgba(0,0,0,0.45); backdrop-filter: blur(6px);
+              pointer-events: auto;
             }
             #xr-transport .xr-transport-row {
               display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
@@ -4453,9 +4454,11 @@ enum ExportLANServer {
             #xr-transport button {
               padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid #444;
               background: #1e293b; color: #f8fafc; cursor: pointer; font: inherit;
+              pointer-events: auto;
             }
             #xr-transport #xr-seek {
-              flex: 1 1 10rem; min-width: 8rem; accent-color: #22c55e;
+              flex: 1 1 10rem; min-width: 8rem; height: 1.65rem;
+              accent-color: #22c55e; touch-action: none; pointer-events: auto; cursor: pointer;
             }
             #xr-transport #xr-time {
               font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #cbd5e1;
@@ -4774,27 +4777,66 @@ enum ExportLANServer {
               } catch (e) {}
               return 0;
             }
-            function applySeekTime(t) {
+            function clampSeekTime(t) {
               t = Number(t);
-              if (!isFinite(t)) return;
+              if (!isFinite(t) || t < 0) t = 0;
               var dur = mediaDuration();
-              if (dur > 0) t = Math.max(0, Math.min(dur, t));
-              else t = Math.max(0, t);
+              if (dur > 0) t = Math.min(dur, t);
               try {
-                video.currentTime = t;
+                if (video.seekable && video.seekable.length > 0) {
+                  for (var i = 0; i < video.seekable.length; i++) {
+                    var a = video.seekable.start(i);
+                    var b = video.seekable.end(i);
+                    if (t >= a && t <= b) return t;
+                  }
+                  // Snap to nearest seekable edge (sparse _working holes, partial buffers).
+                  var best = video.seekable.start(0);
+                  var bestDist = Math.abs(t - best);
+                  for (var j = 0; j < video.seekable.length; j++) {
+                    var s = video.seekable.start(j);
+                    var e = video.seekable.end(j);
+                    if (Math.abs(t - s) < bestDist) { best = s; bestDist = Math.abs(t - s); }
+                    if (Math.abs(t - e) < bestDist) { best = e; bestDist = Math.abs(t - e); }
+                  }
+                  return best;
+                }
               } catch (e) {}
-              try { refreshSphereShader(); } catch (e2) {}
+              return t;
+            }
+            function applySeekTime(t) {
+              t = clampSeekTime(t);
+              if (!isFinite(t)) return;
+              try {
+                if (typeof video.fastSeek === "function") video.fastSeek(t);
+                else video.currentTime = t;
+              } catch (e) {
+                try { video.currentTime = t; } catch (e2) {}
+              }
+              try {
+                if (typeof __xrVideoTex !== "undefined" && __xrVideoTex) __xrVideoTex.needsUpdate = true;
+              } catch (e3) {}
+              try { refreshSphereShader(); } catch (e4) {}
               syncTransportUI();
+            }
+            function endSeekDrag() {
+              if (!seekDragging) return;
+              seekDragging = false;
+              if (seekEl) applySeekTime(parseFloat(seekEl.value));
+              else syncTransportUI();
             }
             function syncTransportUI() {
               if (!seekEl || !timeEl) return;
               var dur = mediaDuration();
               var cur = Number(video.currentTime) || 0;
+              var max = dur > 0 ? dur : Math.max(cur, 1);
+              // Keep max current even while dragging so the thumb can travel the full bar.
+              seekEl.min = "0";
+              seekEl.max = String(max);
               if (!seekDragging) {
-                seekEl.max = String(dur > 0 ? dur : Math.max(cur, 1));
-                seekEl.value = String(Math.min(cur, dur > 0 ? dur : cur));
+                seekEl.value = String(Math.min(cur, max));
               }
-              timeEl.textContent = formatClock(cur) + " / " + formatClock(dur);
+              timeEl.textContent = formatClock(seekDragging ? (parseFloat(seekEl.value) || cur) : cur)
+                + " / " + formatClock(dur);
               syncPlayPauseLabel();
             }
             function showTransport(show) {
@@ -5302,24 +5344,24 @@ enum ExportLANServer {
             if (seekBackBtn) seekBackBtn.onclick = function () { seekBy(-10); };
             if (seekFwdBtn) seekFwdBtn.onclick = function () { seekBy(10); };
             if (seekEl) {
-              seekEl.addEventListener("pointerdown", function () { seekDragging = true; });
-              seekEl.addEventListener("pointerup", function () {
-                seekDragging = false;
+              function beginSeekDrag() { seekDragging = true; }
+              // Always seek on input — do not require pointerdown (Quest/PC often skip it on range).
+              seekEl.addEventListener("pointerdown", beginSeekDrag);
+              seekEl.addEventListener("mousedown", beginSeekDrag);
+              seekEl.addEventListener("touchstart", beginSeekDrag, { passive: true });
+              seekEl.addEventListener("input", function () {
+                seekDragging = true;
                 applySeekTime(parseFloat(seekEl.value));
               });
               seekEl.addEventListener("change", function () {
-                seekDragging = false;
                 applySeekTime(parseFloat(seekEl.value));
+                seekDragging = false;
               });
-              // Live scrub on PC — `change` alone often feels dead while dragging.
-              seekEl.addEventListener("input", function () {
-                var t = parseFloat(seekEl.value);
-                if (timeEl) {
-                  var dur = mediaDuration();
-                  timeEl.textContent = formatClock(t || 0) + " / " + formatClock(dur);
-                }
-                if (seekDragging) applySeekTime(t);
-              });
+              window.addEventListener("pointerup", endSeekDrag);
+              window.addEventListener("pointercancel", endSeekDrag);
+              window.addEventListener("mouseup", endSeekDrag);
+              window.addEventListener("touchend", endSeekDrag);
+              window.addEventListener("blur", endSeekDrag);
             }
             if (prevBtn) prevBtn.onclick = function () {
               if (!activePlaylist().length) return;
@@ -5341,6 +5383,14 @@ enum ExportLANServer {
             video.addEventListener("timeupdate", syncTransportUI);
             video.addEventListener("durationchange", syncTransportUI);
             video.addEventListener("loadedmetadata", syncTransportUI);
+            video.addEventListener("seeked", function () {
+              try {
+                if (typeof __xrVideoTex !== "undefined" && __xrVideoTex) __xrVideoTex.needsUpdate = true;
+              } catch (e) {}
+              try { refreshSphereShader(); } catch (e2) {}
+              syncTransportUI();
+            });
+            video.addEventListener("progress", syncTransportUI);
             video.addEventListener("play", syncPlayPauseLabel);
             video.addEventListener("pause", syncPlayPauseLabel);
             video.addEventListener("ended", function () {

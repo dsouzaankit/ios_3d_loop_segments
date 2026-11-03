@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 339 (1.3.1):** XR seek bar always scrubs on `input` (PC + Quest); clamp to `seekable`; end-drag on window pointerup so the thumb no longer snaps back.
+
 **Build 338 (1.3.1):** LAN loop player opens directly under **Show loop player**; Quest AR keeps video visible until stereo eye cams are ready (SBS layers).
 
 **Build 337 (1.3.1):** LAN **`/xr`** — hide passthrough HUD on PC (immersive-only); desktop seek uses live scrub + `seekable` duration; SBS eye-layers only while immersive so PC keeps video.
