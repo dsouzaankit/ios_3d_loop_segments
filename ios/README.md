@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 362 (1.3.1):** Quest AR AV1 is resolved with a full-frame GPU pass. Copying that video into a 2D canvas was showing the decoder’s tile atlas (one block on top, two splitting the bottom). Minute-segment canvas updates run on every new frame again. Volume is on the page and on a − / + control in the headset.
+
 **Build 361 (1.3.1):** Quest AR no longer re-uploads the downscale canvas every headset frame. High-bitrate minute segments stay on a GPU canvas at about 30 fps so decode does not stall.
 
 **Build 360 (1.3.1):** Quest AR AV1 is copied to a full-frame canvas before display, so the dome edges are not filled in only after you turn your head.

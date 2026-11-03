@@ -4004,8 +4004,9 @@ enum ExportLANServer {
             window.__xrZoom = 0.6;
             window.__xrZoomSteps = [0.5, 0.6, 0.7, 0.8, 0.9, 1];
             var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false };
-            // Quest WebXR uploads an AV1 video texture in tiles around the gaze, so the dome
-            // edges fill in only after you turn. A 2D canvas copy resolves the whole frame first.
+            // Quest's 2D canvas draw of an AV1 <video> copies the decoder tile atlas
+            // (one wide tile on top, two tiles splitting the bottom), not the picture.
+            // A GPU pass that samples the whole video texture forces every tile to update.
             function xrWatchAv1(video) {
               var src = (video && (video.currentSrc || video.src)) || "";
               if (!src) return false;
@@ -4038,6 +4039,56 @@ enum ExportLANServer {
                 }
               }).catch(function () {});
               return false;
+            }
+            function xrBlitFullVideo(renderer, video) {
+              if (!renderer || !video || !video.videoWidth) return null;
+              var tex = xrEnsureVideoTexture(video);
+              if (!tex) return null;
+              var maxW = 2048;
+              var scale = Math.min(maxW / video.videoWidth, maxW / video.videoHeight, 1);
+              var w = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
+              var h = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
+              if (!__xrDs.rt || __xrDs.rtW !== w || __xrDs.rtH !== h) {
+                try { if (__xrDs.rt) __xrDs.rt.dispose(); } catch (eRt) {}
+                __xrDs.rt = new THREE.WebGLRenderTarget(w, h, {
+                  minFilter: THREE.LinearFilter,
+                  magFilter: THREE.LinearFilter,
+                  depthBuffer: false,
+                  stencilBuffer: false
+                });
+                __xrDs.rt.texture.generateMipmaps = false;
+                __xrDs.rtW = w;
+                __xrDs.rtH = h;
+              }
+              if (!__xrDs.blitCam) {
+                __xrDs.blitCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+                __xrDs.blitScene = new THREE.Scene();
+                __xrDs.blitMat = new THREE.MeshBasicMaterial({
+                  map: tex,
+                  depthTest: false,
+                  depthWrite: false,
+                  toneMapped: false
+                });
+                __xrDs.blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), __xrDs.blitMat));
+              }
+              __xrDs.blitMat.map = tex;
+              tex.needsUpdate = true;
+              var xr = renderer.xr;
+              var wasEnabled = xr && xr.enabled;
+              if (xr) xr.enabled = false;
+              var prev = renderer.getRenderTarget();
+              var prevClear = renderer.autoClear;
+              try {
+                renderer.autoClear = true;
+                renderer.setRenderTarget(__xrDs.rt);
+                renderer.render(__xrDs.blitScene, __xrDs.blitCam);
+                renderer.setRenderTarget(prev);
+              } catch (eBlit) {
+                try { renderer.setRenderTarget(prev); } catch (eSet) {}
+              }
+              renderer.autoClear = prevClear;
+              if (xr) xr.enabled = !!wasEnabled;
+              return __xrDs.rt.texture;
             }
             function xrApplyChromaKey(ctx, cw, ch, keyHex, similarity, smoothness) {
               var img = ctx.getImageData(0, 0, cw, ch);
@@ -4219,15 +4270,19 @@ enum ExportLANServer {
               tick: function () {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
                 var quest = this.isQuestBrowser();
-                // Quest canvas readback every frame stalls AR decode. PC must update every frame or the flat screen stays black.
-                if (quest && this.isImmersiveStereo() && !this.isDesktopRole() && this._mode !== "canvas" && xrWatchAv1(this.video)) {
-                  this.applyMaterial();
-                }
-                if (this._mode === "canvas") {
+                var av1Immersive = quest && this.isImmersiveStereo() && !this.data.chroma && xrWatchAv1(this.video);
+                if (av1Immersive && this.drawsSharedFrame()) {
+                  var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
+                  var resolved = xrBlitFullVideo(renderer, this.video);
+                  if (resolved) {
+                    __xrDs.resolved = resolved;
+                    this.applyAv1Resolve(resolved);
+                  }
+                } else if (av1Immersive && this.data.eye === "right" && __xrDs.resolved) {
+                  this.applyAv1Resolve(__xrDs.resolved);
+                } else if (this._mode === "canvas" && this.drawsSharedFrame()) {
                   var now = (window.performance && performance.now) ? performance.now() : Date.now();
-                  // Chroma readback is the expensive path. Other Quest canvas blits (8K minute
-                  // segments, AV1 full frame) stay at ~30 fps so the decoder is not stalled.
-                  var gap = this.data.chroma ? 50 : ((quest && this.isImmersiveStereo()) ? 33 : 0);
+                  var gap = (quest && this.data.chroma) ? 50 : 0;
                   if (!gap || !__xrDs.nextDraw || now >= __xrDs.nextDraw) {
                     if (gap) __xrDs.nextDraw = now + gap;
                     this.refreshDownscaleCanvas(true);
@@ -4235,10 +4290,10 @@ enum ExportLANServer {
                 }
                 try {
                   var mesh = this.el.getObject3D("mesh");
-                  var upload = this._mode !== "canvas" || __xrDs.pendingUpload;
+                  var upload = this._mode === "canvas" ? !!__xrDs.pendingUpload : this._mode !== "av1rt";
                   if (upload && mesh && mesh.material && mesh.material.map) {
                     mesh.material.map.needsUpdate = true;
-                    __xrDs.pendingUpload = false;
+                    if (this._mode === "canvas") __xrDs.pendingUpload = false;
                   }
                   if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
                     this.el.object3D.visible = true;
@@ -4252,6 +4307,12 @@ enum ExportLANServer {
               },
               isDesktopRole: function () {
                 return this.data.role === "desktop" || this.data.eye === "both";
+              },
+              drawsSharedFrame: function () {
+                if (this.data.eye === "right") return false;
+                if (this.isImmersiveStereo() && this.isDesktopRole()) return false;
+                if (!this.isImmersiveStereo() && !this.isDesktopRole()) return false;
+                return true;
               },
               isQuestBrowser: function () {
                 try {
@@ -4369,22 +4430,16 @@ enum ExportLANServer {
                 var chromaOn = !!this.data.chroma;
                 var limit = this.maxWebGLTextureSize();
                 var needsScale = video.videoWidth > limit || video.videoHeight > limit;
-                var av1Quest = this.isQuestBrowser() && this.isImmersiveStereo() && xrWatchAv1(video);
-                if (!chromaOn && !needsScale && !av1Quest) {
+                if (!chromaOn && !needsScale) {
                   if (!onlyUpdate) this.setTexNote("");
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
                   return null;
                 }
-                // One draw per frame. Right eye and the hidden flat screen reuse it.
-                if (this.data.eye === "right" || (this.isImmersiveStereo() && this.isDesktopRole()) || (!this.isImmersiveStereo() && !this.isDesktopRole())) {
-                  return __xrDs.canvas || null;
-                }
+                if (!this.drawsSharedFrame()) return __xrDs.canvas || null;
                 var target = this.downscaleTarget();
                 // 1600 is a Quest budget for per-frame green key. PC keeps a 4K-wide key.
-                // AV1 in Quest AR is copied whole at 2048 so gaze-tiled video textures cannot leave empty edges.
                 if (chromaOn && this.isQuestBrowser()) target = Math.min(target, 1600);
                 else if (chromaOn) target = Math.min(target, 3840);
-                else if (av1Quest) target = Math.min(target, 2048);
                 var canvas = xrDrawDownscale(video, target, chromaOn ? {
                   keyColor: this.data.keyColor,
                   similarity: this.data.similarity,
@@ -4398,7 +4453,7 @@ enum ExportLANServer {
                 if (!onlyUpdate) {
                   try { video.classList.remove("xr-pip"); } catch (e5) {}
                   this.setTexNote(
-                    (chromaOn ? "Chroma " : (av1Quest ? "AV1 full frame " : "Downscaling "))
+                    (chromaOn ? "Chroma " : "Downscaling ")
                     + video.videoWidth + "×" + video.videoHeight
                     + " → " + canvas.width + "×" + canvas.height
                   );
@@ -4433,6 +4488,37 @@ enum ExportLANServer {
                 }
                 this.syncEyeLayers();
                 return true;
+              },
+              applyAv1Resolve: function (tex) {
+                this.ensureDomeGeometry();
+                this.applySbsUVs();
+                var mesh = this.el.getObject3D("mesh");
+                if (!mesh || !tex) return;
+                if (!this._av1Mat) {
+                  this._av1Mat = new THREE.ShaderMaterial({
+                    uniforms: { tex: { value: tex } },
+                    vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+                    fragmentShader: "uniform sampler2D tex; varying vec2 vUv; void main(){ gl_FragColor = texture2D(tex, vUv); }",
+                    side: THREE.DoubleSide,
+                    toneMapped: false
+                  });
+                } else {
+                  this._av1Mat.uniforms.tex.value = tex;
+                }
+                var mat = this._av1Mat;
+                mesh.traverse(function (node) {
+                  if (!node.isMesh) return;
+                  node.material = mat;
+                });
+                if (this._mode !== "av1rt") {
+                  var video = this.video;
+                  this.setTexNote("AV1 full frame " + (video && video.videoWidth ? video.videoWidth : "?")
+                    + "×" + (video && video.videoHeight ? video.videoHeight : "?"));
+                  this._mode = "av1rt";
+                  this.syncEyeLayers();
+                } else {
+                  this._mode = "av1rt";
+                }
               },
               eyeLayer: function () {
                 if (this.data.eye === "left") return 1;
@@ -4772,6 +4858,34 @@ enum ExportLANServer {
                 window.__xrSyncPassthroughHud = syncHudVisible;
               }
             });
+
+            AFRAME.registerComponent("xr-volume", {
+              init: function () {
+                var root = this.el;
+                var sceneEl = this.el.sceneEl;
+                function sync() {
+                  var on = false;
+                  try {
+                    on = !!(sceneEl && sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode")));
+                  } catch (e) {}
+                  try { root.setAttribute("visible", on ? "true" : "false"); } catch (e2) {}
+                  if (root.object3D) root.object3D.visible = on;
+                }
+                var down = document.getElementById("xr-vol-down");
+                var up = document.getElementById("xr-vol-up");
+                function bump(delta, evt) {
+                  if (evt && evt.stopPropagation) evt.stopPropagation();
+                  if (window.__xrStepVolume) window.__xrStepVolume(delta);
+                }
+                if (down) down.addEventListener("click", function (evt) { bump(-0.1, evt); });
+                if (up) up.addEventListener("click", function (evt) { bump(0.1, evt); });
+                if (sceneEl) {
+                  sceneEl.addEventListener("enter-vr", sync);
+                  sceneEl.addEventListener("exit-vr", sync);
+                }
+                sync();
+              }
+            });
           })();
           </script>
           <style>
@@ -4984,6 +5098,9 @@ enum ExportLANServer {
                 <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="0.6" style="width:7rem" aria-label="Zoom">
               </label>
               <span id="xr-time">0:00 / 0:00</span>
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Vol
+                <input type="range" id="xr-volume" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
+              </label>
               <p id="xr-tex-note" hidden></p>
             </div>
           </div>
@@ -5012,6 +5129,9 @@ enum ExportLANServer {
                   <option value="1.2">1.2×</option>
                   <option value="1.3">1.3×</option>
                 </select>
+              </label>
+              <label>Vol
+                <input type="range" id="xr-volume-launch" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
               </label>
               <label><input type="checkbox" id="xr-chroma-toggle"> Chroma</label>
               <label><input type="checkbox" id="xr-sbs-toggle" checked> SBS 3D (VR180)</label>
@@ -5076,6 +5196,13 @@ enum ExportLANServer {
             <a-entity laser-controls="hand: left" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity laser-controls="hand: right" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity camera look-controls wasd-controls position="0 1.6 0">
+              <a-entity id="xr-vol" visible="false" position="0.62 -0.42 -1.2" xr-volume class="raycastable">
+                <a-plane id="xr-vol-down" class="raycastable" width="0.18" height="0.14" color="#1e293b" position="-0.24 0 0"></a-plane>
+                <a-text value="-" align="center" baseline="center" color="#fff" width="0.8" position="-0.24 0 0.02"></a-text>
+                <a-text id="xr-vol-label" value="100%" align="center" baseline="center" color="#fff" width="1.2" position="0 0 0.02"></a-text>
+                <a-plane id="xr-vol-up" class="raycastable" width="0.18" height="0.14" color="#1e293b" position="0.24 0 0"></a-plane>
+                <a-text value="+" align="center" baseline="center" color="#fff" width="0.8" position="0.24 0 0.02"></a-text>
+              </a-entity>
               <!-- Quest immersive only — hidden on PC desktop / magic-window. Short labels (long text clipped to "Switchthrough"). -->
               <a-entity id="xr-hud" visible="false" position="0 -0.42 -1.35" env-toggle class="raycastable">
                 <a-plane width="1.15" height="0.36" color="#166534" opacity="0.92"
@@ -5102,6 +5229,7 @@ enum ExportLANServer {
             var LOOP_PREFIX = "\#(prefixJS)";
             var ARCHIVE_PREFIX = "\#(archiveJS)";
             var RATE_KEY = "loopsegments.lan.xrChromaRate.v1";
+            var VOL_KEY = "loopsegments.lan.xrVolume.v1";
             var MODE_KEY = "loopsegments.lan.xrChromaMode.v2";
             var RATES = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3];
             var loopPlaylist = [];
@@ -5114,6 +5242,8 @@ enum ExportLANServer {
             var overlay = document.getElementById("overlay");
             var label = document.getElementById("xr-label");
             var rateSel = document.getElementById("xr-rate");
+            var volumeEl = document.getElementById("xr-volume");
+            var volumeLaunchEl = document.getElementById("xr-volume-launch");
             var launchBtn = document.getElementById("xr-launch");
             var prevBtn = document.getElementById("xr-prev");
             var nextBtn = document.getElementById("xr-next");
@@ -5562,6 +5692,32 @@ enum ExportLANServer {
               if (rateSel) rateSel.value = String(v);
               try { video.playbackRate = v; } catch (e) {}
             }
+            function readVolume() {
+              var v = 1;
+              try {
+                var raw = localStorage.getItem(VOL_KEY);
+                if (raw != null) v = parseFloat(raw);
+              } catch (e) {}
+              if (!isFinite(v)) v = 1;
+              return Math.max(0, Math.min(1, Math.round(v * 10) / 10));
+            }
+            function applyVolume(v) {
+              v = Math.max(0, Math.min(1, Math.round(Number(v) * 10) / 10));
+              if (!isFinite(v)) v = 1;
+              try { localStorage.setItem(VOL_KEY, String(v)); } catch (e) {}
+              try {
+                video.volume = v;
+                video.muted = v <= 0;
+              } catch (e2) {}
+              if (volumeEl) volumeEl.value = String(v);
+              if (volumeLaunchEl) volumeLaunchEl.value = String(v);
+              var label = document.getElementById("xr-vol-label");
+              if (label) label.setAttribute("value", Math.round(v * 100) + "%");
+              window.__xrVolume = v;
+            }
+            window.__xrStepVolume = function (delta) {
+              applyVolume(readVolume() + Number(delta || 0));
+            };
             function syncModeButtons() {
               if (modeLoopBtn) modeLoopBtn.classList.toggle("active", mode === "loop");
               if (modeWorkingBtn) modeWorkingBtn.classList.toggle("active", mode === "working");
@@ -5868,6 +6024,19 @@ enum ExportLANServer {
                 applyRate();
               };
             }
+            function onVolumeInput(e) {
+              applyVolume(e && e.target ? e.target.value : readVolume());
+            }
+            if (volumeEl) {
+              volumeEl.value = String(readVolume());
+              volumeEl.addEventListener("input", onVolumeInput);
+            }
+            if (volumeLaunchEl) {
+              volumeLaunchEl.value = String(readVolume());
+              volumeLaunchEl.addEventListener("input", onVolumeInput);
+            }
+            applyVolume(readVolume());
+            video.addEventListener("loadedmetadata", function () { applyVolume(readVolume()); });
             video.addEventListener("timeupdate", syncTransportUI);
             video.addEventListener("durationchange", syncTransportUI);
             video.addEventListener("loadedmetadata", syncTransportUI);
