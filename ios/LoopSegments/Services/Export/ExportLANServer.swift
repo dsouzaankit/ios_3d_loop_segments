@@ -4610,9 +4610,9 @@ enum ExportLANServer {
                     hasStereoCams = !!(presenting && xrCam && xrCam.cameras && xrCam.cameras.length >= 2);
                   } catch (e0) {}
                 }
-                // Quest AR: eye layers 1/2 go blank (cams effectively only see layer 0). Keep AR on layer 0.
-                // VR can still use per-eye layers for SBS.
-                var useEyeLayers = !desktop && !isAR && sbs && immersive && layer > 0 && hasStereoCams;
+                // Quest never shows WebGL layers 1/2 (AR or VR), so a per-eye layer is a black screen.
+                // Keep the dome on layer 0. The right eye mesh stays hidden here; both eyes see the left half.
+                var useEyeLayers = !this.isQuestBrowser() && !desktop && !isAR && sbs && immersive && layer > 0 && hasStereoCams;
                 function setNodeLayer(node, layerBit) {
                   if (!node || (!node.isMesh && !node.isObject3D)) return;
                   node.layers.set(layerBit);
@@ -4628,7 +4628,7 @@ enum ExportLANServer {
                 if (desktop) {
                   if (this.el.object3D) this.el.object3D.visible = !immersive;
                 } else if (this.data.eye === "right") {
-                  this.el.object3D.visible = !!(sbs && immersive && hasStereoCams && !isAR);
+                  this.el.object3D.visible = !!useEyeLayers;
                 } else if (this.el.object3D) {
                   this.el.object3D.visible = !!immersive;
                 }

@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 365 (1.3.1):** Enter VR keeps the video on the same layer as Enter AR. Quest was drawing the VR domes on eye layers it never shows, so playback was a black sky.
+
 **Build 364 (1.3.1):** Zoom slider stays on the file page only. It is no longer drawn on the playback bar over the AR view.
 
 **Build 363 (1.3.1):** Zoom scales the horizontal and vertical arcs by the same amount. The AV1 resolve keeps the frame up to 6144 wide and copies the video colors unchanged.
