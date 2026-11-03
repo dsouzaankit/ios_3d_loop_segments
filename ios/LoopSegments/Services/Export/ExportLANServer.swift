@@ -4010,9 +4010,15 @@ enum ExportLANServer {
             function xrWatchAv1(video) {
               var src = (video && (video.currentSrc || video.src)) || "";
               if (!src) return false;
-              if (__xrDs.codecSrc === src) return __xrDs.av1 === true;
+              if (__xrDs.av1Known && __xrDs.codecSrc === src) return __xrDs.av1 === true;
+              var nowMs = Date.now();
+              if (__xrDs.codecPending === src) return __xrDs.av1 === true;
+              if (__xrDs.codecRetrySrc === src && __xrDs.codecRetryAfter && nowMs < __xrDs.codecRetryAfter) {
+                return __xrDs.av1 === true;
+              }
+              __xrDs.codecPending = src;
               __xrDs.codecSrc = src;
-              __xrDs.av1 = false;
+              __xrDs.av1Known = false;
               function hasAv01(buf) {
                 var u8 = new Uint8Array(buf);
                 for (var i = 0; i < u8.length - 3; i++) {
@@ -4020,25 +4026,46 @@ enum ExportLANServer {
                 }
                 return false;
               }
+              function finish(isAv1) {
+                if (__xrDs.codecSrc !== src && __xrDs.codecPending !== src) return;
+                __xrDs.codecSrc = src;
+                __xrDs.av1 = !!isAv1;
+                __xrDs.av1Known = true;
+                __xrDs.codecPending = "";
+              }
+              function fail() {
+                if (__xrDs.codecSrc !== src && __xrDs.codecPending !== src) return;
+                __xrDs.av1 = false;
+                __xrDs.av1Known = false;
+                __xrDs.codecPending = "";
+                __xrDs.codecSrc = "";
+                __xrDs.codecRetrySrc = src;
+                __xrDs.codecRetryAfter = Date.now() + 1200;
+              }
               fetch(src, { headers: { Range: "bytes=0-524287" } }).then(function (r) {
+                if (!r.ok && r.status !== 206) throw new Error("range");
                 var total = 0;
                 var cr = r.headers.get("Content-Range") || "";
                 var m = /\/(\d+)\s*$/.exec(cr);
                 if (m) total = parseInt(m[1], 10) || 0;
                 return r.arrayBuffer().then(function (buf) { return { buf: buf, total: total }; });
               }).then(function (pack) {
-                if (__xrDs.codecSrc !== src) return;
-                if (hasAv01(pack.buf)) { __xrDs.av1 = true; return; }
+                if (__xrDs.codecSrc !== src && __xrDs.codecPending !== src) return;
+                if (hasAv01(pack.buf)) { finish(true); return; }
+                var tailReq = null;
                 if (pack.total > 524288) {
                   var start = pack.total - 524288;
-                  return fetch(src, { headers: { Range: "bytes=" + start + "-" + (pack.total - 1) } }).then(function (r2) {
-                    return r2.arrayBuffer();
-                  }).then(function (tail) {
-                    if (__xrDs.codecSrc === src && hasAv01(tail)) __xrDs.av1 = true;
-                  });
+                  tailReq = fetch(src, { headers: { Range: "bytes=" + start + "-" + (pack.total - 1) } });
+                } else if (!pack.total) {
+                  tailReq = fetch(src, { headers: { Range: "bytes=-524288" } });
                 }
-              }).catch(function () {});
-              return false;
+                if (!tailReq) { finish(false); return; }
+                return tailReq.then(function (r2) {
+                  if (!r2.ok && r2.status !== 206) throw new Error("tail");
+                  return r2.arrayBuffer();
+                }).then(function (tail) { finish(hasAv01(tail)); });
+              }).catch(function () { fail(); });
+              return __xrDs.av1 === true;
             }
             function xrBlitFullVideo(renderer, video) {
               if (!renderer || !video || !video.videoWidth) return null;
@@ -4098,16 +4125,30 @@ enum ExportLANServer {
               if (xr) xr.enabled = false;
               var prev = renderer.getRenderTarget();
               var prevClear = renderer.autoClear;
+              if (!__xrDs.viewport) __xrDs.viewport = new THREE.Vector4();
+              if (!__xrDs.scissor) __xrDs.scissor = new THREE.Vector4();
+              var prevScissorTest = false;
+              try { renderer.getViewport(__xrDs.viewport); } catch (eVp) {}
+              try { renderer.getScissor(__xrDs.scissor); } catch (eSc) {}
+              try { prevScissorTest = !!renderer.getScissorTest(); } catch (eSt) {}
+              function restoreBlit() {
+                try { renderer.setRenderTarget(prev); } catch (eSet) {}
+                try {
+                  renderer.setViewport(__xrDs.viewport.x, __xrDs.viewport.y, __xrDs.viewport.z, __xrDs.viewport.w);
+                } catch (eVp2) {}
+                try {
+                  renderer.setScissor(__xrDs.scissor.x, __xrDs.scissor.y, __xrDs.scissor.z, __xrDs.scissor.w);
+                } catch (eSc2) {}
+                try { renderer.setScissorTest(prevScissorTest); } catch (eSt2) {}
+                renderer.autoClear = prevClear;
+                if (xr) xr.enabled = !!wasEnabled;
+              }
               try {
                 renderer.autoClear = true;
                 renderer.setRenderTarget(__xrDs.rt);
                 renderer.render(__xrDs.blitScene, __xrDs.blitCam);
-                renderer.setRenderTarget(prev);
-              } catch (eBlit) {
-                try { renderer.setRenderTarget(prev); } catch (eSet) {}
-              }
-              renderer.autoClear = prevClear;
-              if (xr) xr.enabled = !!wasEnabled;
+              } catch (eBlit) {}
+              restoreBlit();
               return __xrDs.rt.texture;
             }
             function xrApplyChromaKey(ctx, cw, ch, keyHex, similarity, smoothness) {
@@ -4243,6 +4284,8 @@ enum ExportLANServer {
                 this._onApply = this.applyMaterial.bind(this);
                 this._onEnterVr = function () {
                   var self = this;
+                  self._yawLocked = false;
+                  self._poseFrames = 0;
                   function kick() {
                     self.applyMaterial();
                     self.syncEyeLayers();
@@ -4255,6 +4298,8 @@ enum ExportLANServer {
                 }.bind(this);
                 this._onExitVr = function () {
                   this._seated = false;
+                  this._yawLocked = false;
+                  this._poseFrames = 0;
                   this.applyMaterial();
                   this.syncEyeLayers();
                 }.bind(this);
@@ -4290,7 +4335,9 @@ enum ExportLANServer {
               tick: function () {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
                 var quest = this.isQuestBrowser();
-                var av1Immersive = quest && this.isImmersiveStereo() && !this.data.chroma && xrWatchAv1(this.video);
+                if (quest && !this.data.chroma && this.video) xrWatchAv1(this.video);
+                this.followHead();
+                var av1Immersive = quest && this.isImmersiveStereo() && !this.data.chroma && __xrDs.av1 === true;
                 if (av1Immersive && this.drawsSharedFrame()) {
                   var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
                   var resolved = xrBlitFullVideo(renderer, this.video);
@@ -4324,6 +4371,27 @@ enum ExportLANServer {
                   this._layerTick = (this._layerTick || 0) + 1;
                   if (this._layerTick === 1 || this._layerTick % 8 === 0) this.syncEyeLayers();
                 }
+              },
+              followHead: function () {
+                if (this.isDesktopRole() || !this.isImmersiveStereo()) return;
+                var sceneEl = this.el.sceneEl;
+                var cam = sceneEl && sceneEl.camera;
+                var obj = this.el.object3D;
+                if (!cam || !obj) return;
+                try {
+                  if (!this._seatPos) this._seatPos = new THREE.Vector3();
+                  cam.getWorldPosition(this._seatPos);
+                  obj.position.copy(this._seatPos);
+                  if (this._yawLocked) return;
+                  this._poseFrames = (this._poseFrames || 0) + 1;
+                  if (this._poseFrames < 15) return;
+                  if (!this._seatQuat) this._seatQuat = new THREE.Quaternion();
+                  if (!this._seatEuler) this._seatEuler = new THREE.Euler(0, 0, 0, "YXZ");
+                  cam.getWorldQuaternion(this._seatQuat);
+                  this._seatEuler.setFromQuaternion(this._seatQuat, "YXZ");
+                  obj.rotation.set(0, this._seatEuler.y, 0);
+                  this._yawLocked = true;
+                } catch (eFollow) {}
               },
               isDesktopRole: function () {
                 return this.data.role === "desktop" || this.data.eye === "both";
@@ -4513,7 +4581,12 @@ enum ExportLANServer {
               },
               applyAv1Resolve: function (tex) {
                 this.ensureDomeGeometry();
-                this.applySbsUVs();
+                var zoom = this.isDesktopRole() ? 1 : this.domeZoom();
+                if (this._uvZoom !== zoom || this._uvEyeApplied !== this.data.eye) {
+                  this.applySbsUVs();
+                  this._uvZoom = zoom;
+                  this._uvEyeApplied = this.data.eye;
+                }
                 var mesh = this.el.getObject3D("mesh");
                 if (!mesh || !tex) return;
                 if (!this._av1Mat) {
@@ -4528,10 +4601,12 @@ enum ExportLANServer {
                   this._av1Mat.uniforms.tex.value = tex;
                 }
                 var mat = this._av1Mat;
-                mesh.traverse(function (node) {
-                  if (!node.isMesh) return;
-                  node.material = mat;
-                });
+                if (this._mode !== "av1rt" || mesh.material !== mat) {
+                  mesh.traverse(function (node) {
+                    if (!node.isMesh) return;
+                    node.material = mat;
+                  });
+                }
                 if (this._mode !== "av1rt") {
                   var video = this.video;
                   this.setTexNote("AV1 full frame " + (video && video.videoWidth ? video.videoWidth : "?")
@@ -4637,24 +4712,6 @@ enum ExportLANServer {
                 } else if (this.el.object3D) {
                   this.el.object3D.visible = !!immersive;
                 }
-                // Quest 3 AR camera is not at the scene origin. Seat the 180 dome on the head
-                // once (and again if the user walks out) so the hemisphere is actually in view.
-                if (!desktop && immersive && this.el.object3D && sceneEl && sceneEl.camera) {
-                  try {
-                    if (!this._seatPos) this._seatPos = new THREE.Vector3();
-                    if (!this._seatQuat) this._seatQuat = new THREE.Quaternion();
-                    if (!this._seatEuler) this._seatEuler = new THREE.Euler(0, 0, 0, "YXZ");
-                    sceneEl.camera.getWorldPosition(this._seatPos);
-                    var dist = this.el.object3D.position.distanceTo(this._seatPos);
-                    if (!this._seated || dist > 8) {
-                      this.el.object3D.position.copy(this._seatPos);
-                      sceneEl.camera.getWorldQuaternion(this._seatQuat);
-                      this._seatEuler.setFromQuaternion(this._seatQuat, "YXZ");
-                      this.el.object3D.rotation.set(0, this._seatEuler.y, 0);
-                      this._seated = true;
-                    }
-                  } catch (eSeat) {}
-                }
                 try {
                   if (sceneEl && sceneEl.camera) sceneEl.camera.layers.enable(0);
                 } catch (eCam) {}
@@ -4753,6 +4810,13 @@ enum ExportLANServer {
                   return;
                 }
                 this.syncEyeLayers();
+                var questAv1 = this.isQuestBrowser() && !this.isDesktopRole() && !this.data.chroma
+                  && __xrDs.av1Known && __xrDs.av1 === true;
+                if (questAv1 && __xrDs.resolved) {
+                  this.applyAv1Resolve(__xrDs.resolved);
+                  return;
+                }
+                if (questAv1) return;
                 // 8K / huge SBS: downscale into canvas so WebGL can upload (native video tex → black).
                 var dsTex = this.refreshDownscaleCanvas(false);
                 if (dsTex) {
@@ -5190,27 +5254,7 @@ enum ExportLANServer {
 
             <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
 
-            <a-entity laser-controls="hand: left" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
-            <a-entity laser-controls="hand: right" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
-            <a-entity camera look-controls wasd-controls position="0 1.6 0">
-              <!-- Quest immersive only — hidden on PC desktop / magic-window. Short labels (long text clipped to "Switchthrough"). -->
-              <a-entity id="xr-hud" visible="false" position="0 -0.42 -1.35" env-toggle class="raycastable">
-                <a-plane width="1.15" height="0.36" color="#166534" opacity="0.92"
-                         class="raycastable"
-                         animation__enter="property: scale; to: 1.04 1.04 1.04; startEvents: mouseenter, raycaster-intersected; dur: 120"
-                         animation__leave="property: scale; to: 1 1 1; startEvents: mouseleave, raycaster-intersected-cleared; dur: 120">
-                </a-plane>
-                <a-text id="btn-text"
-                        value="Passthrough"
-                        align="center"
-                        baseline="center"
-                        color="#fff"
-                        width="1.05"
-                        wrap-count="14"
-                        position="0 0 0.02">
-                </a-text>
-              </a-entity>
-            </a-entity>
+            <a-entity camera look-controls wasd-controls position="0 1.6 0"></a-entity>
           </a-scene>
 
           <script>

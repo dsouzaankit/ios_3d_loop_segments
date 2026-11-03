@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 369 (1.3.1):** Enter VR no longer pins a green Passthrough button to the gaze. The hemisphere stays centered on the head. AV1 detection retries instead of sticking on the tiled picture until a new tab.
+
 **Build 368 (1.3.1):** Enter VR no longer rewrites the dome coordinates while each eye draws. That swap was tearing the picture.
 
 **Build 367 (1.3.1):** Quest AR chroma key stays up to 3840 wide. The 1600×800 cap is only used outside AR.
