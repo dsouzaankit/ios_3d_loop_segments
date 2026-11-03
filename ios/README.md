@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 322 (1.2.86):** LAN **`/xr`** HTTPS / Enter VR gate dialog — high-contrast text + clearer tunnel hint (was near-invisible white-on-light).
+
 **Build 321 (1.2.85):** LAN **`/`** + **`/browse`** — Cloudflare tunnel textbox + **Update links** rewrites the XR chroma buttons to `https://&lt;host&gt;/xr…` (stored in `localStorage`).
 
 **Build 320 (1.2.84):** LAN **`/xr`** hides the HTML5 `<video>` (texture source only) so the A-Frame plane is the only foreground picture on PC.

@@ -3974,6 +3974,48 @@ enum ExportLANServer {
               opacity: 0; pointer-events: none; z-index: 0; overflow: hidden;
             }
             a-scene { z-index: 1; }
+            /* A-Frame HTTPS / sensor gate — default white-on-light is unreadable on Quest. */
+            .a-dialog,
+            .a-modal,
+            .a-enter-vr-modal {
+              background: #0f172a !important;
+              border: 2px solid #fbbf24 !important;
+              border-radius: 12px !important;
+              color: #f8fafc !important;
+              box-shadow: 0 12px 40px rgba(0,0,0,0.75) !important;
+              max-width: min(92vw, 28rem) !important;
+              padding: 1.25rem 1.35rem !important;
+              z-index: 10050 !important;
+            }
+            .a-dialog-text-container,
+            .a-dialog-text,
+            .a-dialog p,
+            .a-modal p,
+            .a-enter-vr-modal p {
+              color: #f8fafc !important;
+              font-size: 1.2rem !important;
+              line-height: 1.45 !important;
+              font-weight: 600 !important;
+              text-shadow: 0 1px 2px #000 !important;
+            }
+            .a-dialog-ok-button,
+            .a-dialog-allow-button,
+            .a-dialog-deny-button,
+            .a-dialog button,
+            .a-modal button {
+              background: #22c55e !important;
+              color: #052e16 !important;
+              border: none !important;
+              border-radius: 8px !important;
+              font-weight: 700 !important;
+              font-size: 1.05rem !important;
+              padding: 0.55rem 1.1rem !important;
+              margin: 0.35rem !important;
+            }
+            .a-dialog-deny-button {
+              background: #334155 !important;
+              color: #f8fafc !important;
+            }
           </style>
         </head>
         <body>
@@ -4026,6 +4068,7 @@ enum ExportLANServer {
           <a-scene
             webxr="optionalFeatures: local-floor"
             xr-mode-ui="enabled: true"
+            device-orientation-permission-ui="enabled: true; httpsMessage: Use HTTPS via Cloudflare tunnel — on the LAN page paste the tunnel host, tap Update links, then Open XR chroma; cancelButtonText: OK"
             cursor="rayOrigin: mouse"
             raycaster="objects: .raycastable">
             <!-- Flat screen for Enter VR; shader only when Chroma/SBS enabled. -->
