@@ -3381,8 +3381,8 @@ enum ExportLANServer {
         let flagsEscaped = htmlEscape(flagsUrl)
         return """
         <details class="lan-quest-flags panel" id="lan-quest-flags" style="margin:0.75rem 0 1rem">
-          <summary><strong>Quest Browser — LAN HTTP as secure</strong> <span class="muted">(optional · preferred over Cloudflare)</span></summary>
-          <p class="muted" style="margin-top:0.5rem">Preferred path for Quest WebXR on LAN HTTP (no www hop). Cloudflare tunnel is optional — collapsed at the bottom of this page.</p>
+          <summary><strong>Quest Browser — LAN HTTP as secure</strong> <span class="muted">(required for Quest WebXR over LAN HTTP)</span></summary>
+          <p class="muted" style="margin-top:0.5rem">Quest WebXR needs a secure context. Use this flag so LAN <code>http://</code> counts as secure (no www hop). Skip only if you use the Cloudflare HTTPS tunnel at the bottom instead.</p>
           <div class="lan-flag-row">
             <a class="btn" id="lan-flags-open" href="\(flagsEscaped)" target="_blank" rel="noopener">Open chrome://flags (new tab)</a>
             <button type="button" id="lan-flags-copy-url" title="Copy chrome://flags URL">Copy flags URL</button>
@@ -3487,6 +3487,25 @@ enum ExportLANServer {
           }
         })();
         </script>
+        """
+    }
+
+    /// Optional Cloudflare HTTPS tunnel — keep at page bottom (after playback/logs).
+    private static func htmlLANCloudflareTunnelBlock() -> String {
+        """
+        <details class="lan-cf-tunnel-advanced panel" id="lan-cf-tunnel-advanced" style="margin-top:1.5rem">
+          <summary><strong>Advanced — Cloudflare HTTPS tunnel</strong> <span class="muted">(optional / slow www hop; prefer Quest flags + LAN HTTP above)</span></summary>
+          <p class="muted" style="margin-top:0.5rem">Only if the insecure-origin flag is unavailable. Paste a quick-tunnel host from <code>Start-LoopSegmentsCloudflareTunnel.ps1</code>, then <strong>Update links</strong> so XR buttons open <code>https://…/xr</code> (stored on phone as <code>xr_tunnel.json</code>).</p>
+          <p class="lan-tunnel-row">
+            <label for="lan-tunnel-domain">Tunnel host
+              <input type="text" id="lan-tunnel-domain" placeholder="xxxx.trycloudflare.com or full https://… URL" spellcheck="false" autocomplete="off" inputmode="url" aria-describedby="lan-tunnel-status">
+            </label>
+            <button type="button" id="lan-tunnel-apply">Update links</button>
+            <button type="button" id="lan-tunnel-clear">Clear</button>
+            <span id="lan-tunnel-status" class="muted" role="status"></span>
+          </p>
+        </details>
+        \(htmlLANTunnelDomainScript())
         """
     }
 
@@ -3654,19 +3673,6 @@ enum ExportLANServer {
         \(htmlLANQuestFlagsBlock())
         \(htmlLANQuestFlagsScript())
         \(htmlLANLoopPlayerScript(loopPrefix: loopPrefix))
-        <details class="lan-cf-tunnel-advanced panel" id="lan-cf-tunnel-advanced" style="margin-top:1.25rem">
-          <summary><strong>Advanced — Cloudflare HTTPS tunnel</strong> <span class="muted">(optional / slow www hop; prefer Quest flags + LAN HTTP above)</span></summary>
-          <p class="muted" style="margin-top:0.5rem">Only if the insecure-origin flag is unavailable. Paste a quick-tunnel host from <code>Start-LoopSegmentsCloudflareTunnel.ps1</code>, then <strong>Update links</strong> so XR buttons open <code>https://…/xr</code> (stored on phone as <code>xr_tunnel.json</code>).</p>
-          <p class="lan-tunnel-row">
-            <label for="lan-tunnel-domain">Tunnel host
-              <input type="text" id="lan-tunnel-domain" placeholder="xxxx.trycloudflare.com or full https://… URL" spellcheck="false" autocomplete="off" inputmode="url" aria-describedby="lan-tunnel-status">
-            </label>
-            <button type="button" id="lan-tunnel-apply">Update links</button>
-            <button type="button" id="lan-tunnel-clear">Clear</button>
-            <span id="lan-tunnel-status" class="muted" role="status"></span>
-          </p>
-        </details>
-        \(htmlLANTunnelDomainScript())
         """
     }
 
@@ -5518,6 +5524,7 @@ enum ExportLANServer {
                 <div class="lan-playback-logs-scroll"><ul id="lan-export-logs">
                 \(exportActive ? htmlLANMinimalExportLogLinks() : exportLogsFileListHTML())
                 </ul></div>
+                \(htmlLANCloudflareTunnelBlock())
                 \(htmlMonitorManualRefreshScript())
                 </body></html>
                 """
@@ -5597,6 +5604,7 @@ enum ExportLANServer {
             \(htmlLANSpeedTestScript())
             \(htmlExportControlPanel())
             \(htmlURLDownloadPanel())
+            \(htmlLANCloudflareTunnelBlock())
             \(exportActive
                 ? htmlMonitorManualRefreshScript()
                 : htmlLANLiveRefreshScript(monitorOnly: false, deferAutoPoll: false))
