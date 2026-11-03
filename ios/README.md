@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 371 (1.3.1):** Chroma keys the flat preview and AR on separate frames, both up to 3840 wide. Enter AR clears the sky again so the keyed area shows the room.
+
 **Build 370 (1.3.1):** A flat-player downscale no longer becomes the AR picture. Chroma on the page keeps the full video there. AR keys its own frame, up to 3840 wide.
 
 **Build 369 (1.3.1):** Enter VR no longer pins a green Passthrough button to the gaze. The hemisphere stays centered on the head. AV1 detection retries instead of sticking on the tiled picture until a new tab.

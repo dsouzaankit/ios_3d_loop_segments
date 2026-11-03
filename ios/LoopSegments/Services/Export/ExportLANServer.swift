@@ -4541,9 +4541,8 @@ enum ExportLANServer {
                 var slot = this.isDesktopRole() ? "flat" : "ar";
                 var limit = this.maxWebGLTextureSize();
                 var needsScale = video.videoWidth > limit || video.videoHeight > limit;
-                // The flat player must not key into a small canvas. That canvas was the
-                // texture AR reused, so a 1600 preview locked the headset picture.
-                var keyHere = chromaOn && slot === "ar";
+                // Each surface keys its own canvas. The flat preview must not become the AR texture.
+                var keyHere = chromaOn;
                 if (!keyHere && !needsScale) {
                   if (!onlyUpdate) this.setTexNote("");
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
@@ -4583,7 +4582,7 @@ enum ExportLANServer {
                 var canvas = this._dsCanvas;
                 var src = (canvas && canvas.id) ? ("#" + canvas.id) : (this.isDesktopRole() ? "#xr-ds-canvas" : "#xr-ds-ar");
                 var sizeKey = canvas ? (canvas.width + "x" + canvas.height) : "";
-                var chromaOn = !!this.data.chroma && !this.isDesktopRole();
+                var chromaOn = !!this.data.chroma;
                 if (this._mode === "canvas" && this._canvasSrc === src && this._canvasSize === sizeKey) return true;
                 this._mode = "canvas";
                 this._canvasSrc = src;
@@ -5286,6 +5285,8 @@ enum ExportLANServer {
             </a-entity>
 
             <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
+            <!-- No gaze button. Enter AR still clears the sky so keyed pixels show the room. -->
+            <a-entity env-toggle visible="false"></a-entity>
 
             <a-entity camera look-controls wasd-controls position="0 1.6 0"></a-entity>
           </a-scene>
