@@ -14,6 +14,10 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 316 (1.2.80):** LAN **`/xr`** uses a front **`a-video`** plane + native material when Chroma/SBS off (PC-visible); green PIP preview after Launch; Chroma and SBS both off by default.
+
+**Build 315 (1.2.79):** LAN **`/xr`** **Chroma** off by default (enable for green-screen); SBS still on.
+
 **Build 314 (1.2.78):** LAN **`/xr`** video fix — own `THREE.VideoTexture` + per-frame update (was audio-only / black sphere); Chroma / SBS toggles on the overlay.
 
 **Build 313 (1.2.77):** LAN **`/xr`** splits **Working** (root `_working*.mp4`, outside archive) and **Archive folder** into separate playlists/modes (`?mode=working` / `?mode=archive`).

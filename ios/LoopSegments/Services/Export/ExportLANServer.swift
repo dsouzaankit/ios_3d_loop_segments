@@ -3579,16 +3579,19 @@ enum ExportLANServer {
                 keyColor: { type: "color", default: "#00ff00" },
                 similarity: { type: "number", default: 0.3 },
                 smoothness: { type: "number", default: 0.08 },
-                chroma: { type: "boolean", default: true },
-                sbs: { type: "boolean", default: true }
+                chroma: { type: "boolean", default: false },
+                sbs: { type: "boolean", default: false }
               },
               init: function () {
                 this.video = document.querySelector("#chroma-stream");
                 this.videoTexture = null;
                 this.shaderMaterial = null;
+                this.basicMaterial = null;
+                this._mode = "";
                 this._retries = 0;
-                this._onApply = this.applyShader.bind(this);
+                this._onApply = this.applyMaterial.bind(this);
                 this.el.addEventListener("object3dset", this._onApply);
+                this.el.addEventListener("materialtextureloaded", this._onApply);
                 if (this.el.sceneEl) {
                   this.el.sceneEl.addEventListener("loaded", this._onApply);
                 }
@@ -3597,33 +3600,24 @@ enum ExportLANServer {
                   this.video.addEventListener("loadedmetadata", this._onApply);
                   this.video.addEventListener("play", this._onApply);
                 }
-                this.applyShader();
+                this.applyMaterial();
               },
               update: function () {
-                this.syncUniforms();
+                this.applyMaterial();
               },
               remove: function () {
                 this.el.removeEventListener("object3dset", this._onApply);
+                this.el.removeEventListener("materialtextureloaded", this._onApply);
                 if (this.videoTexture) {
                   this.videoTexture.dispose();
                   this.videoTexture = null;
                 }
               },
               tick: function () {
-                // Video frames only upload when needsUpdate is set each frame.
                 if (this.videoTexture) this.videoTexture.needsUpdate = true;
               },
-              syncUniforms: function () {
-                var mat = this.shaderMaterial;
-                if (!mat || !mat.uniforms) return;
-                var data = this.data;
-                mat.uniforms.keyColor.value.set(data.keyColor);
-                mat.uniforms.similarity.value = data.similarity;
-                mat.uniforms.smoothness.value = data.smoothness;
-                mat.uniforms.chromaEnabled.value = data.chroma ? 1.0 : 0.0;
-                mat.uniforms.sbsEnabled.value = data.sbs ? 1.0 : 0.0;
-                mat.transparent = !!data.chroma;
-                mat.depthWrite = !data.chroma;
+              wantsShader: function () {
+                return !!(this.data.chroma || this.data.sbs);
               },
               ensureVideoTexture: function () {
                 var video = this.video;
@@ -3644,18 +3638,61 @@ enum ExportLANServer {
                 this.videoTexture.needsUpdate = true;
                 return this.videoTexture;
               },
-              applyShader: function () {
+              bindMaterial: function (mat) {
                 var mesh = this.el.getObject3D("mesh");
-                var videoTex = this.ensureVideoTexture();
-                if (!mesh) {
-                  if (this._retries++ < 80) setTimeout(this._onApply, 50);
-                  return;
-                }
-                if (!videoTex) {
-                  if (this._retries++ < 80) setTimeout(this._onApply, 100);
-                  return;
-                }
+                if (!mesh || !mat) return false;
                 var self = this;
+                mesh.traverse(function (node) {
+                  if (!node.isMesh) return;
+                  node.material = mat;
+                  node.onBeforeRender = function (renderer, scene, camera) {
+                    if (!self.data.sbs || !self.shaderMaterial || mat !== self.shaderMaterial) return;
+                    var offset = 0;
+                    try {
+                      var xrCam = renderer.xr && renderer.xr.getCamera && renderer.xr.getCamera();
+                      if (xrCam && xrCam.cameras && xrCam.cameras.length > 1) {
+                        if (camera === xrCam.cameras[1]) offset = 0.5;
+                        else if (camera.cameras) return;
+                      }
+                    } catch (e) {}
+                    self.shaderMaterial.uniforms.uvOffset.value.set(offset, 0);
+                  };
+                });
+                if (this.el.components.material) {
+                  this.el.components.material.material = mat;
+                }
+                this.el.object3D.visible = true;
+                return true;
+              },
+              applyNativeVideo: function () {
+                // Let A-Frame's built-in video material drive the mesh (most reliable on PC).
+                this._mode = "native";
+                try {
+                  this.el.setAttribute("material", {
+                    shader: "flat",
+                    src: "#chroma-stream",
+                    side: "double",
+                    transparent: false,
+                    npot: true
+                  });
+                } catch (e) {}
+                return true;
+              },
+              applyBasicVideo: function (videoTex) {
+                if (!this.basicMaterial) {
+                  this.basicMaterial = new THREE.MeshBasicMaterial({
+                    map: videoTex,
+                    side: THREE.DoubleSide,
+                    toneMapped: false
+                  });
+                } else {
+                  this.basicMaterial.map = videoTex;
+                  this.basicMaterial.needsUpdate = true;
+                }
+                this._mode = "basic";
+                return this.bindMaterial(this.basicMaterial);
+              },
+              applyShaderVideo: function (videoTex) {
                 var data = this.data;
                 if (!this.shaderMaterial) {
                   this.shaderMaterial = new THREE.ShaderMaterial({
@@ -3699,37 +3736,46 @@ enum ExportLANServer {
                       "  gl_FragColor = vec4(videoColor.rgb, videoColor.a * blend);",
                       "}"
                     ].join("\n"),
-                    transparent: true,
-                    depthWrite: false,
+                    transparent: !!data.chroma,
+                    depthWrite: !data.chroma,
                     side: THREE.DoubleSide
                   });
                 } else {
                   this.shaderMaterial.uniforms.textureMap.value = videoTex;
+                  this.shaderMaterial.uniforms.keyColor.value.set(data.keyColor);
+                  this.shaderMaterial.uniforms.similarity.value = data.similarity;
+                  this.shaderMaterial.uniforms.smoothness.value = data.smoothness;
+                  this.shaderMaterial.uniforms.chromaEnabled.value = data.chroma ? 1.0 : 0.0;
+                  this.shaderMaterial.uniforms.sbsEnabled.value = data.sbs ? 1.0 : 0.0;
+                  this.shaderMaterial.transparent = !!data.chroma;
+                  this.shaderMaterial.depthWrite = !data.chroma;
                 }
-                this.syncUniforms();
-                mesh.traverse(function (node) {
-                  if (!node.isMesh) return;
-                  node.material = self.shaderMaterial;
-                  node.onBeforeRender = function (renderer, scene, camera) {
-                    if (!self.data.sbs || !self.shaderMaterial) return;
-                    var offset = 0;
-                    try {
-                      var xrCam = renderer.xr && renderer.xr.getCamera && renderer.xr.getCamera();
-                      if (xrCam && xrCam.cameras && xrCam.cameras.length > 1) {
-                        if (camera === xrCam.cameras[1]) offset = 0.5;
-                        else if (camera.cameras) return;
-                      } else if (camera.layers && camera.layers.isEnabled(1) && !camera.layers.isEnabled(0)) {
-                        offset = 0.5;
-                      }
-                    } catch (e) {}
-                    self.shaderMaterial.uniforms.uvOffset.value.set(offset, 0);
-                  };
-                });
-                // Stop A-Frame's material component from fighting the custom shader.
-                if (this.el.components.material) {
-                  this.el.components.material.material = this.shaderMaterial;
+                this._mode = "shader";
+                return this.bindMaterial(this.shaderMaterial);
+              },
+              applyMaterial: function () {
+                var mesh = this.el.getObject3D("mesh");
+                if (!mesh) {
+                  if (this._retries++ < 100) setTimeout(this._onApply, 50);
+                  return;
                 }
-                this.el.object3D.visible = true;
+                // Default path: native A-Frame video material (no custom shader).
+                if (!this.wantsShader()) {
+                  this.applyNativeVideo();
+                  return;
+                }
+                var videoTex = this.ensureVideoTexture();
+                if (!videoTex) {
+                  // Fall back to native until the element has dimensions.
+                  this.applyNativeVideo();
+                  if (this._retries++ < 100) setTimeout(this._onApply, 100);
+                  return;
+                }
+                this.applyShaderVideo(videoTex);
+              },
+              // Back-compat for playlist JS that still calls applyShader().
+              applyShader: function () {
+                this.applyMaterial();
               }
             });
 
@@ -3804,6 +3850,12 @@ enum ExportLANServer {
               padding: 0.7rem 1rem; border-radius: 999px; border: 1px solid #444;
               background: #166534; color: #fff; font-weight: 700; cursor: pointer;
             }
+            /* Same decoded frames as the 3D mesh — proves audio≠black if this PIP shows picture. */
+            #chroma-stream.xr-pip {
+              position: fixed !important; right: 1rem; bottom: 4.5rem; z-index: 9998;
+              width: min(360px, 42vw); max-height: 30vh; background: #000;
+              border: 2px solid #22c55e; border-radius: 8px; display: block !important;
+            }
           </style>
         </head>
         <body>
@@ -3833,9 +3885,10 @@ enum ExportLANServer {
                   <option value="1.3">1.3×</option>
                 </select>
               </label>
-              <label><input type="checkbox" id="xr-chroma-toggle" checked> Chroma</label>
-              <label><input type="checkbox" id="xr-sbs-toggle" checked> SBS 3D</label>
+              <label><input type="checkbox" id="xr-chroma-toggle"> Chroma</label>
+              <label><input type="checkbox" id="xr-sbs-toggle"> SBS 3D</label>
             </div>
+            <p class="muted" style="font-size:0.85rem;max-width:36rem">PC tip: after Launch, look for the green-bordered preview (bottom-right). If that shows picture but the 3D screen does not, leave Chroma/SBS off.</p>
             <p id="xr-label" role="status">Loading playlists…</p>
             <p style="margin: 1rem 0 0">
               <button type="button" class="play-btn" id="xr-launch">Launch Engine</button>
@@ -3855,20 +3908,20 @@ enum ExportLANServer {
             cursor="rayOrigin: mouse"
             raycaster="objects: .raycastable">
             <a-assets>
+              <!-- No crossorigin: same-origin LAN MP4s; anonymous + missing CORS = black WebGL texture + audio-only. -->
               <video id="chroma-stream" playsinline webkit-playsinline></video>
             </a-assets>
 
-            <!-- No src here: chroma-stereo-sbs owns a THREE.VideoTexture from #chroma-stream (avoids audio-only / black mesh). -->
-            <a-videosphere
+            <!-- Flat screen in front of the camera — reliable on PC WebGL; shader only when Chroma/SBS enabled. -->
+            <a-video
               id="chroma-sphere"
-              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: true; sbs: true"
-              material="shader: flat; color: #111; side: back"
-              radius="20"
-              phi-length="180"
-              theta-length="100"
-              position="0 1.6 0"
-              rotation="0 -90 0">
-            </a-videosphere>
+              src="#chroma-stream"
+              width="16"
+              height="9"
+              position="0 1.6 -4"
+              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: false"
+              material="shader: flat; src: #chroma-stream; side: double; npot: true">
+            </a-video>
 
             <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
 
@@ -3928,6 +3981,11 @@ enum ExportLANServer {
             var chromaToggle = document.getElementById("xr-chroma-toggle");
             var sbsToggle = document.getElementById("xr-sbs-toggle");
             if (!video || !overlay) return;
+            // Same-origin LAN files must not use crossOrigin=anonymous (no CORS headers → black WebGL + audio OK).
+            try {
+              video.crossOrigin = null;
+              video.removeAttribute("crossorigin");
+            } catch (e) {}
 
             function sphereComponent() {
               var sphere = document.getElementById("chroma-sphere");
@@ -3996,6 +4054,10 @@ enum ExportLANServer {
             function showOverlay(show) {
               overlay.style.display = show ? "flex" : "none";
               if (reopenBtn) reopenBtn.style.display = show ? "none" : "block";
+              try {
+                if (show) video.classList.remove("xr-pip");
+                else video.classList.add("xr-pip");
+              } catch (e) {}
             }
             function renderFileList() {
               if (!fileListEl) return;
@@ -4271,6 +4333,7 @@ enum ExportLANServer {
                 }
               }
               showOverlay(false);
+              try { video.classList.add("xr-pip"); } catch (e) {}
               // Give the mesh a moment after overlay hide / first paint.
               setTimeout(refreshSphereShader, 200);
               setTimeout(refreshSphereShader, 800);
