@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 367 (1.3.1):** Quest AR chroma key stays up to 3840 wide. The 1600×800 cap is only used outside AR.
+
 **Build 366 (1.3.1):** Removed the in-headset +/− marks. The zoom slider stays on the bar under the flat player. AV1 is no longer flipped. VR180 uses Quest’s hemisphere: a full 180° maps the frame to the poles, and a lower zoom crops the center instead of stretching the top and bottom.
 
 **Build 365 (1.3.1):** Enter VR keeps the video on the same layer as Enter AR. Quest was drawing the VR domes on eye layers it never shows, so playback was a black sky.

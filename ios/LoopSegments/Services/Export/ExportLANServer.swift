@@ -4458,8 +4458,9 @@ enum ExportLANServer {
                 }
                 if (!this.drawsSharedFrame()) return __xrDs.canvas || null;
                 var target = this.downscaleTarget();
-                // 1600 is a Quest budget for per-frame green key. PC keeps a 4K-wide key.
-                if (chromaOn && this.isQuestBrowser()) target = Math.min(target, 1600);
+                // Quest VR keeps a smaller key so the readback does not stall decode.
+                // AR uses the same 3840-wide key as the PC so passthrough is not stuck at 1600×800.
+                if (chromaOn && this.isQuestBrowser() && !this.isArMode()) target = Math.min(target, 1600);
                 else if (chromaOn) target = Math.min(target, 3840);
                 var canvas = xrDrawDownscale(video, target, chromaOn ? {
                   keyColor: this.data.keyColor,
