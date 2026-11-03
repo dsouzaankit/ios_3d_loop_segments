@@ -14,7 +14,7 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 316 (1.2.80):** LAN **`/xr`** uses a front **`a-video`** plane + native material when Chroma/SBS off (PC-visible); green PIP preview after Launch; Chroma and SBS both off by default.
+**Build 317 (1.2.81):** LAN monitor XR chroma controls are button-styled on a row under **Show loop player**.`n`n**Build 316 (1.2.80):** LAN **`/xr`** uses a front **`a-video`** plane + native material when Chroma/SBS off (PC-visible); green PIP preview after Launch; Chroma and SBS both off by default.
 
 **Build 315 (1.2.79):** LAN **`/xr`** **Chroma** off by default (enable for green-screen); SBS still on.
 

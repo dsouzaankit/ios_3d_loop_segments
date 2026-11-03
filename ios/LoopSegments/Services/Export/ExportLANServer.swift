@@ -3132,6 +3132,8 @@ enum ExportLANServer {
             .panel { border: 1px solid var(--panel-border); border-radius: 8px; padding: 1rem; margin: 1rem 0; background: var(--panel-bg); }
             .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
             button, .btn { font: inherit; padding: 0.35rem 0.65rem; cursor: pointer; background: var(--btn-bg); color: var(--fg); border: 1px solid var(--btn-border); border-radius: 6px; }
+            a.btn { display: inline-block; text-decoration: none; color: var(--fg); }
+            .lan-xr-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.35rem 0 0.75rem; }
             button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
             input[type="text"], input[type="url"], input[type="search"], select, textarea {
               background: var(--input-bg); color: var(--fg); border: 1px solid var(--input-border); border-radius: 6px; padding: 0.35rem 0.5rem;
@@ -3240,9 +3242,11 @@ enum ExportLANServer {
         return """
         <p>
           <button type="button" id="lan-loop-player-toggle">Show loop player</button>
-          <a href="/xr" id="lan-xr-chroma-link">Open XR chroma (loop)</a>
-          <a href="/xr?mode=working" id="lan-xr-working-link">Open XR chroma (working)</a>
-          <a href="/xr?mode=archive" id="lan-xr-archive-link">Open XR chroma (archive)</a>
+        </p>
+        <p class="lan-xr-links">
+          <a class="btn" href="/xr" id="lan-xr-chroma-link">Open XR chroma (loop)</a>
+          <a class="btn" href="/xr?mode=working" id="lan-xr-working-link">Open XR chroma (working)</a>
+          <a class="btn" href="/xr?mode=archive" id="lan-xr-archive-link">Open XR chroma (archive)</a>
         </p>
         <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
           <div class="row" style="margin-top:0">
