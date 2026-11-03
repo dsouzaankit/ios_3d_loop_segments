@@ -4452,15 +4452,9 @@ enum ExportLANServer {
                   if (!this._seatPos) this._seatPos = new THREE.Vector3();
                   cam.getWorldPosition(this._seatPos);
                   obj.position.copy(this._seatPos);
-                  if (this._yawLocked) return;
-                  this._poseFrames = (this._poseFrames || 0) + 1;
-                  if (this._poseFrames < 15) return;
-                  if (!this._seatQuat) this._seatQuat = new THREE.Quaternion();
-                  if (!this._seatEuler) this._seatEuler = new THREE.Euler(0, 0, 0, "YXZ");
-                  cam.getWorldQuaternion(this._seatQuat);
-                  this._seatEuler.setFromQuaternion(this._seatQuat, "YXZ");
-                  obj.rotation.set(0, this._seatEuler.y, 0);
-                  this._yawLocked = true;
+                  // Keep the authored facing. Copying headset yaw aimed the 180 opening
+                  // away from the session forward, so Enter VR showed the empty sky.
+                  obj.rotation.set(0, 0, 0);
                 } catch (eFollow) {}
               },
               isDesktopRole: function () {
