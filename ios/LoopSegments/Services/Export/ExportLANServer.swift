@@ -4001,7 +4001,7 @@ enum ExportLANServer {
 
             // Shared DOM canvas. A-Frame material src (not a raw CanvasTexture) — Quest 3 AR
             // drops MeshBasicMaterial maps, which blanked both clips after the 1536 downscale.
-            window.__xrZoom = 0.6;
+            window.__xrZoom = 1;
             window.__xrZoomSteps = [0.5, 0.6, 0.7, 0.8, 0.9, 1];
             var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false };
             // Quest's 2D canvas draw of an AV1 <video> copies the decoder tile atlas
@@ -4066,8 +4066,7 @@ enum ExportLANServer {
               if (!__xrDs.blitCam) {
                 __xrDs.blitCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
                 __xrDs.blitScene = new THREE.Scene();
-                // Copy the video texels unchanged. A color convert here, plus another on the
-                // dome, was shifting brightness and contrast. Flip V the way VideoTexture does.
+                // Copy the video texels unchanged. Do not flip V — that inverted AV1 in AR.
                 __xrDs.blitMat = new THREE.RawShaderMaterial({
                   uniforms: { tex: { value: tex } },
                   vertexShader: [
@@ -4077,7 +4076,7 @@ enum ExportLANServer {
                     "uniform mat4 modelViewMatrix;",
                     "varying vec2 vUv;",
                     "void main(){",
-                    "  vUv = vec2(uv.x, 1.0 - uv.y);",
+                    "  vUv = uv;",
                     "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
                     "}"
                   ].join("\n"),
@@ -4348,7 +4347,7 @@ enum ExportLANServer {
               },
               domeZoom: function () {
                 var z = Number(window.__xrZoom);
-                if (!(z > 0)) z = 0.6;
+                if (!(z > 0)) z = 1;
                 return Math.max(0.4, Math.min(1, z));
               },
               // A-Frame videosphere ignored phi-length → VR180 stretched to 360. Own the BufferGeometry.
@@ -4361,12 +4360,14 @@ enum ExportLANServer {
                 if (ready && this._domeGeoReady && this._domeZoom === zoom) return;
                 try {
                   var old = mesh.geometry;
-                  // Same factor on both arcs. Center stays on -Z (phi 3π/2) and the horizon.
+                  // Quest VR180 is a full hemisphere: the frame's top and bottom sit at the
+                  // poles, not stretched across the view. Zoom crops the center instead of
+                  // squeezing the whole frame onto a shorter arc.
                   var phiLen = Math.PI * zoom;
                   var thetaLen = Math.PI * zoom;
                   var phiStart = (Math.PI * 1.5) - phiLen / 2;
                   var thetaStart = (Math.PI - thetaLen) / 2;
-                  var geo = new THREE.SphereGeometry(20, 48, 32, phiStart, phiLen, thetaStart, thetaLen);
+                  var geo = new THREE.SphereGeometry(20, 80, 60, phiStart, phiLen, thetaStart, thetaLen);
                   geo.userData._xrHemi = true;
                   mesh.geometry = geo;
                   if (old && old !== geo) {
@@ -4557,12 +4558,13 @@ enum ExportLANServer {
                 } catch (e2) {}
                 return false;
               },
-              // Crop mesh UVs to left/right SBS half (avoids black custom shader on Quest/PC).
-              applySbsUVs: function () {
+              applySbsUVs: function (eyeOverride) {
                 var mesh = this.el.getObject3D("mesh");
                 if (!mesh) return;
-                var eye = this.data.eye;
+                var eye = eyeOverride || this.data.eye;
                 var sbs = !!(this.data.sbs && !this.isDesktopRole());
+                var zoom = this.isDesktopRole() ? 1 : this.domeZoom();
+                var inset = (1 - zoom) / 2;
                 mesh.traverse(function (node) {
                   if (!node.isMesh || !node.geometry || !node.geometry.attributes || !node.geometry.attributes.uv) return;
                   var geo = node.geometry;
@@ -4573,15 +4575,39 @@ enum ExportLANServer {
                   }
                   var base = geo.userData._xrBaseUv;
                   var arr = uv.array;
+                  var u0 = 0;
+                  var uSpan = 1;
+                  if (sbs && eye === "left") uSpan = 0.5;
+                  else if (sbs && eye === "right") { u0 = 0.5; uSpan = 0.5; }
                   for (var i = 0; i < arr.length; i += 2) {
                     var u = base[i];
                     var v = base[i + 1];
-                    if (sbs && eye === "left") arr[i] = u * 0.5;
-                    else if (sbs && eye === "right") arr[i] = u * 0.5 + 0.5;
-                    else arr[i] = u;
-                    arr[i + 1] = v;
+                    arr[i] = u0 + uSpan * (inset + u * zoom);
+                    arr[i + 1] = inset + v * zoom;
                   }
                   uv.needsUpdate = true;
+                });
+                if (!eyeOverride && this.data.eye === "left" && !this.isDesktopRole()) {
+                  this.installEyeUv(mesh);
+                }
+              },
+              installEyeUv: function (mesh) {
+                var comp = this;
+                mesh.traverse(function (node) {
+                  if (!node.isMesh) return;
+                  node.onBeforeRender = function (renderer, scene, camera) {
+                    var eye = "left";
+                    try {
+                      var xr = renderer.xr;
+                      var cams = xr && xr.isPresenting && xr.getCamera && xr.getCamera().cameras;
+                      if (cams && cams.length >= 2 && comp.data.sbs) {
+                        eye = (cams.indexOf(camera) === 1) ? "right" : "left";
+                      }
+                    } catch (eEye) {}
+                    if (eye === comp._uvEye) return;
+                    comp._uvEye = eye;
+                    comp.applySbsUVs(eye);
+                  };
                 });
               },
               isArMode: function () {
@@ -4684,6 +4710,7 @@ enum ExportLANServer {
                   node.material = mat;
                   node.onBeforeRender = null;
                 });
+                if (this.data.eye === "left" && !this.isDesktopRole()) this.installEyeUv(mesh);
                 if (this.el.components.material) {
                   this.el.components.material.material = mat;
                 }
@@ -4876,34 +4903,6 @@ enum ExportLANServer {
                 syncHudVisible();
                 window.__xrSetPassthrough = applyPassthrough;
                 window.__xrSyncPassthroughHud = syncHudVisible;
-              }
-            });
-
-            AFRAME.registerComponent("xr-volume", {
-              init: function () {
-                var root = this.el;
-                var sceneEl = this.el.sceneEl;
-                function sync() {
-                  var on = false;
-                  try {
-                    on = !!(sceneEl && sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode")));
-                  } catch (e) {}
-                  try { root.setAttribute("visible", on ? "true" : "false"); } catch (e2) {}
-                  if (root.object3D) root.object3D.visible = on;
-                }
-                var down = document.getElementById("xr-vol-down");
-                var up = document.getElementById("xr-vol-up");
-                function bump(delta, evt) {
-                  if (evt && evt.stopPropagation) evt.stopPropagation();
-                  if (window.__xrStepVolume) window.__xrStepVolume(delta);
-                }
-                if (down) down.addEventListener("click", function (evt) { bump(-0.1, evt); });
-                if (up) up.addEventListener("click", function (evt) { bump(0.1, evt); });
-                if (sceneEl) {
-                  sceneEl.addEventListener("enter-vr", sync);
-                  sceneEl.addEventListener("exit-vr", sync);
-                }
-                sync();
               }
             });
           })();
@@ -5114,6 +5113,9 @@ enum ExportLANServer {
               <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Zoom
+                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" style="width:7rem" aria-label="Zoom">
+              </label>
               <span id="xr-time">0:00 / 0:00</span>
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Vol
                 <input type="range" id="xr-volume" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
@@ -5146,9 +5148,6 @@ enum ExportLANServer {
                   <option value="1.2">1.2×</option>
                   <option value="1.3">1.3×</option>
                 </select>
-              </label>
-              <label>Zoom
-                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="0.6" style="width:7rem" aria-label="Zoom">
               </label>
               <label>Vol
                 <input type="range" id="xr-volume-launch" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
@@ -5216,13 +5215,6 @@ enum ExportLANServer {
             <a-entity laser-controls="hand: left" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity laser-controls="hand: right" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity camera look-controls wasd-controls position="0 1.6 0">
-              <a-entity id="xr-vol" visible="false" position="0.62 -0.42 -1.2" xr-volume class="raycastable">
-                <a-plane id="xr-vol-down" class="raycastable" width="0.18" height="0.14" color="#1e293b" position="-0.24 0 0"></a-plane>
-                <a-text value="-" align="center" baseline="center" color="#fff" width="0.8" position="-0.24 0 0.02"></a-text>
-                <a-text id="xr-vol-label" value="100%" align="center" baseline="center" color="#fff" width="1.2" position="0 0 0.02"></a-text>
-                <a-plane id="xr-vol-up" class="raycastable" width="0.18" height="0.14" color="#1e293b" position="0.24 0 0"></a-plane>
-                <a-text value="+" align="center" baseline="center" color="#fff" width="0.8" position="0.24 0 0.02"></a-text>
-              </a-entity>
               <!-- Quest immersive only — hidden on PC desktop / magic-window. Short labels (long text clipped to "Switchthrough"). -->
               <a-entity id="xr-hud" visible="false" position="0 -0.42 -1.35" env-toggle class="raycastable">
                 <a-plane width="1.15" height="0.36" color="#166534" opacity="0.92"
@@ -5952,9 +5944,9 @@ enum ExportLANServer {
             if (refreshBtn) refreshBtn.onclick = function () { refreshPlaylists(); };
             var zoomEl = document.getElementById("xr-zoom");
             if (zoomEl) {
-              window.__xrZoom = Number(zoomEl.value) || 0.6;
+              window.__xrZoom = Number(zoomEl.value) || 1;
               zoomEl.addEventListener("input", function () {
-                window.__xrZoom = Number(zoomEl.value) || 0.6;
+                window.__xrZoom = Number(zoomEl.value) || 1;
                 var lab = document.getElementById("xr-zoom-label");
                 if (lab) lab.setAttribute("value", Math.round(window.__xrZoom * 180) + "°");
                 sphereEls().forEach(function (el) {
