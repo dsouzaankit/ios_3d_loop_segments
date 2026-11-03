@@ -4060,11 +4060,13 @@ enum ExportLANServer {
                 this._retries = 0;
                 this._onApply = this.applyMaterial.bind(this);
                 this._onEnterVr = this.syncEyeLayers.bind(this);
+                this._onExitVr = this.syncEyeLayers.bind(this);
                 this.el.addEventListener("object3dset", this._onApply);
                 this.el.addEventListener("materialtextureloaded", this._onApply);
                 if (this.el.sceneEl) {
                   this.el.sceneEl.addEventListener("loaded", this._onApply);
                   this.el.sceneEl.addEventListener("enter-vr", this._onEnterVr);
+                  this.el.sceneEl.addEventListener("exit-vr", this._onExitVr);
                 }
                 if (this.video) {
                   this.video.addEventListener("loadeddata", this._onApply);
@@ -4082,6 +4084,7 @@ enum ExportLANServer {
                 this.el.removeEventListener("materialtextureloaded", this._onApply);
                 if (this.el.sceneEl) {
                   this.el.sceneEl.removeEventListener("enter-vr", this._onEnterVr);
+                  this.el.sceneEl.removeEventListener("exit-vr", this._onExitVr);
                 }
               },
               tick: function () {
@@ -4096,29 +4099,45 @@ enum ExportLANServer {
                 if (this.data.eye === "right") return 2;
                 return 0;
               },
+              // Desktop / magic-window camera only sees layer 0. Eye layers 1/2 are immersive-only.
+              isImmersiveStereo: function () {
+                var sceneEl = this.el.sceneEl;
+                if (!sceneEl) return false;
+                try {
+                  if (sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode"))) return true;
+                } catch (e) {}
+                try {
+                  var xr = sceneEl.renderer && sceneEl.renderer.xr;
+                  if (xr && xr.isPresenting) return true;
+                } catch (e2) {}
+                return false;
+              },
               syncEyeLayers: function () {
                 var mesh = this.el.getObject3D("mesh");
                 var layer = this.eyeLayer();
                 var sbs = !!this.data.sbs;
+                var immersive = this.isImmersiveStereo();
+                var useEyeLayers = sbs && immersive && layer > 0;
                 if (mesh) {
                   mesh.traverse(function (node) {
                     if (!node.isMesh && !node.isObject3D) return;
-                    if (sbs && layer > 0) {
-                      node.layers.set(layer);
-                    } else {
-                      node.layers.set(0);
-                    }
+                    node.layers.set(useEyeLayers ? layer : 0);
                   });
+                }
+                // PC preview: only left dome on layer 0 (left SBS half). Right dome is immersive-only.
+                if (this.data.eye === "right") {
+                  this.el.object3D.visible = !!(sbs && immersive);
+                } else if (this.el.object3D) {
+                  this.el.object3D.visible = true;
                 }
                 var sceneEl = this.el.sceneEl;
                 if (!sceneEl || !sceneEl.renderer || !sceneEl.renderer.xr) return;
                 try {
                   var xrCam = sceneEl.renderer.xr.getCamera();
                   if (!xrCam || !xrCam.cameras || xrCam.cameras.length < 2) return;
-                  // Both eyes keep layer 0 (HUD / sky); SBS hemispheres live on 1 / 2.
                   xrCam.cameras[0].layers.enable(0);
                   xrCam.cameras[1].layers.enable(0);
-                  if (sbs) {
+                  if (sbs && immersive) {
                     xrCam.cameras[0].layers.enable(1);
                     xrCam.cameras[0].layers.disable(2);
                     xrCam.cameras[1].layers.enable(2);
@@ -4134,19 +4153,15 @@ enum ExportLANServer {
               bindMaterial: function (mat) {
                 var mesh = this.el.getObject3D("mesh");
                 if (!mesh || !mat) return false;
-                var layer = this.eyeLayer();
-                var sbs = !!this.data.sbs;
                 mesh.traverse(function (node) {
                   if (!node.isMesh) return;
                   node.material = mat;
                   node.onBeforeRender = null;
-                  if (sbs && layer > 0) node.layers.set(layer);
-                  else node.layers.set(0);
                 });
                 if (this.el.components.material) {
                   this.el.components.material.material = mat;
                 }
-                this.el.object3D.visible = true;
+                this.syncEyeLayers();
                 return true;
               },
               applyNativeVideo: function () {
@@ -4165,6 +4180,7 @@ enum ExportLANServer {
               },
               applyShaderVideo: function (videoTex) {
                 var data = this.data;
+                // Desktop mono preview uses left half when SBS is on.
                 var uvX = data.eye === "right" ? 0.5 : 0;
                 if (!this.shaderMaterial) {
                   this.shaderMaterial = xrMakeChromaMaterial(videoTex, data, uvX);
@@ -4188,9 +4204,9 @@ enum ExportLANServer {
                   if (this._retries++ < 100) setTimeout(this._onApply, 50);
                   return;
                 }
-                // Right-eye dome only used for SBS; hide when mono so PC / non-SBS stays single mesh.
-                if (this.data.eye === "right" && !this.data.sbs) {
+                if (this.data.eye === "right" && (!this.data.sbs || !this.isImmersiveStereo())) {
                   this.el.object3D.visible = false;
+                  this.syncEyeLayers();
                   return;
                 }
                 this.el.object3D.visible = true;
@@ -4255,7 +4271,20 @@ enum ExportLANServer {
               init: function () {
                 var sky = document.querySelector("#virtual-sky");
                 var sceneEl = this.el.sceneEl;
+                var hudEl = this.el;
                 var isPassthrough = false;
+                function immersiveNow() {
+                  try {
+                    return !!(sceneEl && sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode")));
+                  } catch (e) {
+                    return false;
+                  }
+                }
+                function syncHudVisible() {
+                  var on = immersiveNow();
+                  try { hudEl.setAttribute("visible", on ? "true" : "false"); } catch (e) {}
+                  if (hudEl.object3D) hudEl.object3D.visible = on;
+                }
                 function applyPassthrough(on) {
                   isPassthrough = !!on;
                   if (isPassthrough) {
@@ -4278,24 +4307,28 @@ enum ExportLANServer {
                 }
                 var lastToggleMs = 0;
                 function toggle() {
+                  if (!immersiveNow()) return;
                   var now = Date.now();
                   if (now - lastToggleMs < 280) return;
                   lastToggleMs = now;
                   applyPassthrough(!isPassthrough);
                 }
-                // Laser / mouse — HUD itself is raycastable (old plane stole clicks from the box).
                 this.el.addEventListener("click", toggle);
                 this.el.addEventListener("triggerdown", toggle);
                 if (sceneEl) {
                   sceneEl.addEventListener("enter-vr", function () {
+                    syncHudVisible();
                     var ar = !!(sceneEl.is && sceneEl.is("ar-mode"));
                     applyPassthrough(ar);
                   });
                   sceneEl.addEventListener("exit-vr", function () {
                     applyPassthrough(false);
+                    syncHudVisible();
                   });
                 }
+                syncHudVisible();
                 window.__xrSetPassthrough = applyPassthrough;
+                window.__xrSyncPassthroughHud = syncHudVisible;
               }
             });
           })();
@@ -4572,7 +4605,8 @@ enum ExportLANServer {
             <a-entity laser-controls="hand: left" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity laser-controls="hand: right" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.55"></a-entity>
             <a-entity camera look-controls wasd-controls position="0 1.6 0">
-              <a-entity id="xr-hud" position="0 -0.42 -1.35" env-toggle class="raycastable">
+              <!-- Quest immersive only — hidden on PC desktop / magic-window. -->
+              <a-entity id="xr-hud" visible="false" position="0 -0.42 -1.35" env-toggle class="raycastable">
                 <a-plane width="1.5" height="0.32" color="#166534" opacity="0.92"
                          class="raycastable"
                          animation__enter="property: scale; to: 1.04 1.04 1.04; startEvents: mouseenter, raycaster-intersected; dur: 120"
@@ -4716,13 +4750,35 @@ enum ExportLANServer {
               if (!playPauseBtn) return;
               playPauseBtn.textContent = video.paused ? "Play" : "Pause";
             }
+            function mediaDuration() {
+              var dur = Number(video.duration);
+              if (isFinite(dur) && dur > 0) return dur;
+              try {
+                if (video.seekable && video.seekable.length > 0) {
+                  var end = video.seekable.end(video.seekable.length - 1);
+                  if (isFinite(end) && end > 0) return end;
+                }
+              } catch (e) {}
+              return 0;
+            }
+            function applySeekTime(t) {
+              t = Number(t);
+              if (!isFinite(t)) return;
+              var dur = mediaDuration();
+              if (dur > 0) t = Math.max(0, Math.min(dur, t));
+              else t = Math.max(0, t);
+              try {
+                video.currentTime = t;
+              } catch (e) {}
+              try { refreshSphereShader(); } catch (e2) {}
+              syncTransportUI();
+            }
             function syncTransportUI() {
               if (!seekEl || !timeEl) return;
-              var dur = Number(video.duration);
-              if (!isFinite(dur) || dur < 0) dur = 0;
+              var dur = mediaDuration();
               var cur = Number(video.currentTime) || 0;
               if (!seekDragging) {
-                seekEl.max = String(dur > 0 ? dur : 0);
+                seekEl.max = String(dur > 0 ? dur : Math.max(cur, 1));
                 seekEl.value = String(Math.min(cur, dur > 0 ? dur : cur));
               }
               timeEl.textContent = formatClock(cur) + " / " + formatClock(dur);
@@ -4767,15 +4823,7 @@ enum ExportLANServer {
               syncArchiveFloat();
             }
             function seekBy(delta) {
-              try {
-                var dur = Number(video.duration);
-                var next = (Number(video.currentTime) || 0) + delta;
-                if (isFinite(dur) && dur > 0) next = Math.max(0, Math.min(dur, next));
-                else next = Math.max(0, next);
-                video.currentTime = next;
-                syncTransportUI();
-                refreshSphereShader();
-              } catch (e) {}
+              applySeekTime((Number(video.currentTime) || 0) + delta);
             }
             var workingSeekSec = 0;
             function refreshWorkingSeek() {
@@ -5242,23 +5290,22 @@ enum ExportLANServer {
             if (seekFwdBtn) seekFwdBtn.onclick = function () { seekBy(10); };
             if (seekEl) {
               seekEl.addEventListener("pointerdown", function () { seekDragging = true; });
-              seekEl.addEventListener("pointerup", function () { seekDragging = false; syncTransportUI(); });
-              seekEl.addEventListener("change", function () {
-                var t = parseFloat(seekEl.value);
-                if (!isFinite(t)) return;
-                try {
-                  video.currentTime = t;
-                  refreshSphereShader();
-                } catch (e) {}
+              seekEl.addEventListener("pointerup", function () {
                 seekDragging = false;
-                syncTransportUI();
+                applySeekTime(parseFloat(seekEl.value));
               });
+              seekEl.addEventListener("change", function () {
+                seekDragging = false;
+                applySeekTime(parseFloat(seekEl.value));
+              });
+              // Live scrub on PC — `change` alone often feels dead while dragging.
               seekEl.addEventListener("input", function () {
-                if (!timeEl) return;
-                var t = parseFloat(seekEl.value) || 0;
-                var dur = Number(video.duration);
-                if (!isFinite(dur) || dur < 0) dur = 0;
-                timeEl.textContent = formatClock(t) + " / " + formatClock(dur);
+                var t = parseFloat(seekEl.value);
+                if (timeEl) {
+                  var dur = mediaDuration();
+                  timeEl.textContent = formatClock(t || 0) + " / " + formatClock(dur);
+                }
+                if (seekDragging) applySeekTime(t);
               });
             }
             if (prevBtn) prevBtn.onclick = function () {
