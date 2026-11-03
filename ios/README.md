@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 350 (1.3.1):** Quest 3 — 6K stays a native video texture (no 1536 downscale); 8K uses an A-Frame canvas at 4096 so AR can show it; 180° dome seats on the headset.
+
 **Build 349 (1.3.1):** XR Quest — real THREE 180° hemisphere (stops 6K spherical stretch); shared canvas downscale capped ~1536/1024 so 8K shows in WebXR.
 
 **Build 348 (1.3.1):** XR — VR180 hemisphere attempt; hide Passthrough HUD in AR; Quest 8K canvas cap; PC flat `a-video` restored (domes defer video material until immersive).

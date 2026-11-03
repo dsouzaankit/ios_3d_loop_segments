@@ -3999,53 +3999,35 @@ enum ExportLANServer {
               return __xrVideoTex;
             }
 
-            // One canvas downscale for all meshes (Quest OOMs / blanks if each dome drawImage's 8K).
-            var __xrDs = { canvas: null, ctx: null, tex: null, stamp: "", limit: 0, questCap: 1536 };
-            function xrSharedDownscaleTex(video, limit, onlyUpdate) {
+            // Shared DOM canvas. A-Frame material src (not a raw CanvasTexture) — Quest 3 AR
+            // drops MeshBasicMaterial maps, which blanked both clips after the 1536 downscale.
+            var __xrDs = { canvas: null, ctx: null };
+            function xrDrawDownscale(video, limit) {
               if (!video || !video.videoWidth) return null;
               if (video.videoWidth <= limit && video.videoHeight <= limit) return null;
+              var canvas = __xrDs.canvas || document.getElementById("xr-ds-canvas");
+              if (!canvas) {
+                canvas = document.createElement("canvas");
+                canvas.id = "xr-ds-canvas";
+                document.body.appendChild(canvas);
+              }
+              __xrDs.canvas = canvas;
+              if (!__xrDs.ctx) {
+                __xrDs.ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: false });
+              }
               var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight);
               var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var ch = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
-              var stamp = video.currentTime.toFixed(4) + "|" + cw + "x" + ch + "|" + video.videoWidth;
-              if (__xrDs.tex && __xrDs.stamp === stamp) {
-                return __xrDs.tex;
-              }
-              if (!__xrDs.canvas) {
-                __xrDs.canvas = document.createElement("canvas");
-                __xrDs.ctx = __xrDs.canvas.getContext("2d", { alpha: false, willReadFrequently: false });
-              }
-              if (__xrDs.canvas.width !== cw || __xrDs.canvas.height !== ch) {
-                __xrDs.canvas.width = cw;
-                __xrDs.canvas.height = ch;
-                if (__xrDs.tex) {
-                  try { __xrDs.tex.dispose(); } catch (e0) {}
-                  __xrDs.tex = null;
-                }
+              if (canvas.width !== cw || canvas.height !== ch) {
+                canvas.width = cw;
+                canvas.height = ch;
               }
               try {
                 __xrDs.ctx.drawImage(video, 0, 0, cw, ch);
               } catch (e1) {
                 return null;
               }
-              if (!__xrDs.tex) {
-                __xrDs.tex = new THREE.CanvasTexture(__xrDs.canvas);
-                __xrDs.tex.minFilter = THREE.LinearFilter;
-                __xrDs.tex.magFilter = THREE.LinearFilter;
-                __xrDs.tex.generateMipmaps = false;
-                __xrDs.tex.wrapS = THREE.ClampToEdgeWrapping;
-                __xrDs.tex.wrapT = THREE.ClampToEdgeWrapping;
-                if ("colorSpace" in __xrDs.tex && THREE.SRGBColorSpace) {
-                  __xrDs.tex.colorSpace = THREE.SRGBColorSpace;
-                } else if ("encoding" in __xrDs.tex && THREE.sRGBEncoding) {
-                  __xrDs.tex.encoding = THREE.sRGBEncoding;
-                }
-              } else {
-                __xrDs.tex.needsUpdate = true;
-              }
-              __xrDs.stamp = stamp;
-              __xrDs.limit = limit;
-              return __xrDs.tex;
+              return canvas;
             }
 
             function xrMakeChromaMaterial(videoTex, data, uvOffsetX) {
@@ -4134,6 +4116,7 @@ enum ExportLANServer {
                   setTimeout(kick, 800);
                 }.bind(this);
                 this._onExitVr = function () {
+                  this._seated = false;
                   this.applyMaterial();
                   this.syncEyeLayers();
                 }.bind(this);
@@ -4168,7 +4151,13 @@ enum ExportLANServer {
               },
               tick: function () {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
-                if (this._mode === "canvas") this.refreshDownscaleCanvas(true);
+                if (this._mode === "canvas") {
+                  this.refreshDownscaleCanvas(true);
+                  try {
+                    var mesh = this.el.getObject3D("mesh");
+                    if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
+                  } catch (eTick) {}
+                }
                 this.syncEyeLayers();
               },
               isDesktopRole: function () {
@@ -4196,7 +4185,7 @@ enum ExportLANServer {
                 try {
                   var old = mesh.geometry;
                   // phiStart=π/2, phiLength=π → front hemisphere toward -Z (default camera look).
-                  var geo = new THREE.SphereGeometry(5, 64, 64, Math.PI * 0.5, Math.PI, 0, Math.PI);
+                  var geo = new THREE.SphereGeometry(20, 64, 40, Math.PI * 0.5, Math.PI, 0, Math.PI);
                   geo.userData._xrHemi = true;
                   mesh.geometry = geo;
                   if (old && old !== geo) {
@@ -4211,7 +4200,7 @@ enum ExportLANServer {
                       gd.phiLength = 180;
                       gd.thetaStart = 0;
                       gd.thetaLength = 180;
-                      gd.radius = 5;
+                      gd.radius = 20;
                     }
                   } catch (eSync) {}
                   // Negative X = inward-facing + correct equirect UV orientation for VR180.
@@ -4240,12 +4229,22 @@ enum ExportLANServer {
                 } catch (e) {}
                 // Headroom — drivers often fail video uploads at the exact max.
                 var limit = Math.max(512, maxTex - 64);
-                // Quest: CanvasTexture uploads fail near 2K–4K in WebXR; keep a conservative cap.
-                if (this.isQuestBrowser()) {
-                  var qCap = (__xrDs && __xrDs.questCap) || 1536;
-                  limit = Math.min(limit, qCap);
-                }
+                // Quest 3 max texture is 8192+. 6K SBS already plays natively; only 8K needs a shrink.
+                // Cap the native path at 6144 so 6K stays a video texture (AR can show it).
+                if (this.isQuestBrowser()) limit = Math.min(limit, 6144);
                 return limit;
+              },
+              downscaleTarget: function () {
+                var maxTex = 4096;
+                try {
+                  var r = this.el.sceneEl && this.el.sceneEl.renderer;
+                  if (r && r.capabilities && r.capabilities.maxTextureSize) {
+                    maxTex = r.capabilities.maxTextureSize;
+                  }
+                } catch (e) {}
+                // Quest 3 can upload a 4096 canvas in AR. 1536 was crushing both clips and still blanked AR.
+                var cap = this.isQuestBrowser() ? 4096 : Math.max(512, maxTex - 64);
+                return Math.min(cap, Math.max(512, maxTex - 64));
               },
               setTexNote: function (msg) {
                 try { window.__xrTexNote = msg || ""; } catch (e) {}
@@ -4270,58 +4269,49 @@ enum ExportLANServer {
                   return null;
                 }
                 var limit = this.maxWebGLTextureSize();
-                var forceQuest = this.isQuestBrowser()
-                  && (video.videoWidth > 1920 || video.videoHeight > 1920);
-                if (!forceQuest && video.videoWidth <= limit && video.videoHeight <= limit) {
+                if (video.videoWidth <= limit && video.videoHeight <= limit) {
                   if (!onlyUpdate) this.setTexNote("");
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
                   return null;
                 }
-                // Quest 8K: try 1536 then drop to 1024 if drawImage/upload path returns null.
-                var caps = this.isQuestBrowser() ? [limit, 1024] : [limit];
-                var tex = null;
-                var used = limit;
-                for (var i = 0; i < caps.length; i++) {
-                  used = Math.min(limit, caps[i]);
-                  if (this.isQuestBrowser()) __xrDs.questCap = used;
-                  tex = xrSharedDownscaleTex(video, used, onlyUpdate);
-                  if (tex) break;
-                }
-                if (!tex) {
+                var canvas = xrDrawDownscale(video, this.downscaleTarget());
+                if (!canvas) {
                   try { video.classList.add("xr-pip"); } catch (e2) {}
                   if (!onlyUpdate) this.setTexNote("8K WebGL downscale failed — HTML preview");
                   return null;
                 }
                 if (!onlyUpdate) {
-                  if (this.isQuestBrowser() && !this.isImmersiveStereo()) {
-                    try { video.classList.add("xr-pip"); } catch (e4) {}
-                  } else {
-                    try { video.classList.remove("xr-pip"); } catch (e5) {}
-                  }
-                  var cw = __xrDs.canvas ? __xrDs.canvas.width : used;
-                  var ch = __xrDs.canvas ? __xrDs.canvas.height : used;
+                  try { video.classList.remove("xr-pip"); } catch (e5) {}
                   this.setTexNote(
                     "Downscaling " + video.videoWidth + "×" + video.videoHeight
-                    + " → " + cw + "×" + ch + " (WebGL max texture)"
+                    + " → " + canvas.width + "×" + canvas.height + " (WebGL max texture)"
                   );
                 }
-                return tex;
+                return canvas;
               },
-              applyCanvasVideo: function (tex) {
+              applyCanvasVideo: function () {
                 this.ensureDomeGeometry();
                 this.applySbsUVs();
-                if (!this._canvasMat) {
-                  this._canvasMat = new THREE.MeshBasicMaterial({
-                    map: tex,
-                    side: THREE.DoubleSide,
-                    toneMapped: false
-                  });
-                } else {
-                  this._canvasMat.map = tex;
-                  this._canvasMat.needsUpdate = true;
-                }
                 this._mode = "canvas";
-                return this.bindMaterial(this._canvasMat);
+                // A-Frame's own canvas material. A raw MeshBasic CanvasTexture stays black in Quest 3 AR.
+                try {
+                  this.el.setAttribute("material", {
+                    shader: "flat",
+                    src: "#xr-ds-canvas",
+                    side: "double",
+                    transparent: false,
+                    npot: true
+                  });
+                } catch (e) {}
+                try {
+                  var mesh = this.el.getObject3D("mesh");
+                  if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
+                } catch (e2) {}
+                if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
+                  this.el.object3D.visible = true;
+                }
+                this.syncEyeLayers();
+                return true;
               },
               eyeLayer: function () {
                 if (this.data.eye === "left") return 1;
@@ -4414,6 +4404,24 @@ enum ExportLANServer {
                   this.el.object3D.visible = !!(sbs && immersive && hasStereoCams && !isAR);
                 } else if (this.el.object3D) {
                   this.el.object3D.visible = !!immersive;
+                }
+                // Quest 3 AR camera is not at the scene origin. Seat the 180 dome on the head
+                // once (and again if the user walks out) so the hemisphere is actually in view.
+                if (!desktop && immersive && this.el.object3D && sceneEl && sceneEl.camera) {
+                  try {
+                    if (!this._seatPos) this._seatPos = new THREE.Vector3();
+                    if (!this._seatQuat) this._seatQuat = new THREE.Quaternion();
+                    if (!this._seatEuler) this._seatEuler = new THREE.Euler(0, 0, 0, "YXZ");
+                    sceneEl.camera.getWorldPosition(this._seatPos);
+                    var dist = this.el.object3D.position.distanceTo(this._seatPos);
+                    if (!this._seated || dist > 8) {
+                      this.el.object3D.position.copy(this._seatPos);
+                      sceneEl.camera.getWorldQuaternion(this._seatQuat);
+                      this._seatEuler.setFromQuaternion(this._seatQuat, "YXZ");
+                      this.el.object3D.rotation.set(0, this._seatEuler.y, 0);
+                      this._seated = true;
+                    }
+                  } catch (eSeat) {}
                 }
                 try {
                   if (sceneEl && sceneEl.camera) sceneEl.camera.layers.enable(0);
@@ -4515,7 +4523,7 @@ enum ExportLANServer {
                 // 8K / huge SBS: downscale into canvas so WebGL can upload (native video tex → black).
                 var dsTex = this.refreshDownscaleCanvas(false);
                 if (dsTex) {
-                  this.applyCanvasVideo(dsTex);
+                  this.applyCanvasVideo();
                   return;
                 }
                 if (!this.wantsShader()) {
@@ -4771,6 +4779,10 @@ enum ExportLANServer {
               opacity: 0.01; pointer-events: none; z-index: 0; overflow: hidden;
             }
             /* Last-resort PC preview when even canvas downscale fails (rare). */
+            #xr-ds-canvas {
+              position: fixed; left: 0; top: 0; width: 16px; height: 16px;
+              opacity: 0.01; pointer-events: none; z-index: 0;
+            }
             #chroma-stream.xr-pip {
               left: auto; right: 1rem; top: auto; bottom: 5.5rem; z-index: 10045;
               width: min(480px, 46vw); height: auto; max-height: 36vh;
@@ -4895,6 +4907,7 @@ enum ExportLANServer {
 
           <!-- Outside a-assets; tiny opacity — feeds VideoTexture (avoid display:none / opacity:0). -->
           <video id="chroma-stream" playsinline webkit-playsinline preload="auto"></video>
+          <canvas id="xr-ds-canvas" width="16" height="16"></canvas>
 
           <a-scene
             background="color: #0a0a0a"
@@ -4917,7 +4930,7 @@ enum ExportLANServer {
             <a-entity
               id="chroma-sphere"
               visible="false"
-              geometry="primitive: sphere; radius: 5; segmentsWidth: 64; segmentsHeight: 64; phiStart: 90; phiLength: 180; thetaLength: 180"
+              geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 40; phiStart: 90; phiLength: 180; thetaLength: 180"
               scale="-1 1 1"
               position="0 1.6 0"
               material="shader: flat; color: #000; side: double"
@@ -4926,7 +4939,7 @@ enum ExportLANServer {
             <a-entity
               id="chroma-sphere-right"
               visible="false"
-              geometry="primitive: sphere; radius: 5; segmentsWidth: 64; segmentsHeight: 64; phiStart: 90; phiLength: 180; thetaLength: 180"
+              geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 40; phiStart: 90; phiLength: 180; thetaLength: 180"
               scale="-1 1 1"
               position="0 1.6 0"
               material="shader: flat; color: #000; side: double"
