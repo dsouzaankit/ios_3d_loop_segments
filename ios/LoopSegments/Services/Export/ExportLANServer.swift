@@ -4001,10 +4001,32 @@ enum ExportLANServer {
 
             // Shared DOM canvas. A-Frame material src (not a raw CanvasTexture) — Quest 3 AR
             // drops MeshBasicMaterial maps, which blanked both clips after the 1536 downscale.
-            var __xrDs = { canvas: null, ctx: null };
-            function xrDrawDownscale(video, limit) {
+            window.__xrZoom = 0.65;
+            var __xrDs = { canvas: null, ctx: null, stamp: "" };
+            function xrApplyChromaKey(ctx, cw, ch, keyHex, similarity, smoothness) {
+              var img = ctx.getImageData(0, 0, cw, ch);
+              var d = img.data;
+              var key = new THREE.Color(keyHex || "#00ff00");
+              var keyCr = 0.5 * key.r - 0.4187 * key.g - 0.0813 * key.b;
+              var keyCb = -0.1687 * key.r - 0.3313 * key.g + 0.5 * key.b;
+              var sim = (similarity == null) ? 0.3 : similarity;
+              var smo = (smoothness == null) ? 0.08 : smoothness;
+              if (smo < 0.0001) smo = 0.0001;
+              var edge = sim + smo;
+              for (var i = 0; i < d.length; i += 4) {
+                var r = d[i] / 255;
+                var g = d[i + 1] / 255;
+                var b = d[i + 2] / 255;
+                var cr = 0.5 * r - 0.4187 * g - 0.0813 * b;
+                var cb = -0.1687 * r - 0.3313 * g + 0.5 * b;
+                var dist = Math.sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));
+                var blend = dist <= sim ? 0 : (dist >= edge ? 1 : (dist - sim) / smo);
+                d[i + 3] = (blend * 255) | 0;
+              }
+              ctx.putImageData(img, 0, 0);
+            }
+            function xrDrawDownscale(video, limit, chroma) {
               if (!video || !video.videoWidth) return null;
-              if (video.videoWidth <= limit && video.videoHeight <= limit) return null;
               var canvas = __xrDs.canvas || document.getElementById("xr-ds-canvas");
               if (!canvas) {
                 canvas = document.createElement("canvas");
@@ -4013,11 +4035,13 @@ enum ExportLANServer {
               }
               __xrDs.canvas = canvas;
               if (!__xrDs.ctx) {
-                __xrDs.ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: false });
+                __xrDs.ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
               }
-              var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight);
+              var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight, 1);
               var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var ch = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
+              var stamp = (video.currentTime || 0).toFixed(3) + "|" + cw + "x" + ch + "|" + (chroma ? "c" : "o");
+              if (__xrDs.stamp === stamp && canvas.width === cw) return canvas;
               if (canvas.width !== cw || canvas.height !== ch) {
                 canvas.width = cw;
                 canvas.height = ch;
@@ -4027,6 +4051,10 @@ enum ExportLANServer {
               } catch (e1) {
                 return null;
               }
+              if (chroma) {
+                xrApplyChromaKey(__xrDs.ctx, cw, ch, chroma.keyColor, chroma.similarity, chroma.smoothness);
+              }
+              __xrDs.stamp = stamp;
               return canvas;
             }
 
@@ -4172,22 +4200,31 @@ enum ExportLANServer {
                 }
               },
               wantsShader: function () {
-                // Custom VideoTexture fragment shader goes black on PC + Quest. Only use it for chroma key.
-                // SBS eye halves use native A-Frame video material + geometry UV crop instead.
-                return !!this.data.chroma;
+                // Custom VideoTexture shader goes black on Quest, including chroma. Key on the canvas instead.
+                return false;
+              },
+              domeZoom: function () {
+                var z = Number(window.__xrZoom);
+                if (!(z > 0)) z = 0.65;
+                return Math.max(0.4, Math.min(1, z));
               },
               // A-Frame videosphere ignored phi-length → VR180 stretched to 360. Own the BufferGeometry.
               ensureDomeGeometry: function () {
                 if (this.isDesktopRole()) return;
                 var mesh = this.el.getObject3D("mesh");
                 if (!mesh) return;
+                var zoom = this.domeZoom();
                 var ready = mesh.geometry && mesh.geometry.userData && mesh.geometry.userData._xrHemi;
-                if (ready && this._domeGeoReady) return;
+                if (ready && this._domeGeoReady && this._domeZoom === zoom) return;
                 try {
                   var old = mesh.geometry;
-                  // phiStart=π, phiLength=π centers the 180 on -Z (camera forward).
-                  // π/2 centered it on +X, so after the X mirror the user saw left=mesh and right=passthrough.
-                  var geo = new THREE.SphereGeometry(20, 64, 40, Math.PI, Math.PI, 0, Math.PI);
+                  // Zoom < 1 shrinks the arc so the picture takes less of the AR view (radius does not).
+                  // Center stays on -Z (phi 3π/2) and the horizon (theta π/2).
+                  var phiLen = Math.PI * zoom;
+                  var thetaLen = Math.PI * zoom;
+                  var phiStart = Math.PI * 1.5 - phiLen / 2;
+                  var thetaStart = (Math.PI - thetaLen) / 2;
+                  var geo = new THREE.SphereGeometry(20, 48, 32, phiStart, phiLen, thetaStart, thetaLen);
                   geo.userData._xrHemi = true;
                   mesh.geometry = geo;
                   if (old && old !== geo) {
@@ -4198,21 +4235,19 @@ enum ExportLANServer {
                     if (this.el.components.geometry) {
                       this.el.components.geometry.geometry = geo;
                       var gd = this.el.components.geometry.data;
-                      gd.phiStart = 180;
-                      gd.phiLength = 180;
-                      gd.thetaStart = 0;
-                      gd.thetaLength = 180;
+                      gd.phiStart = phiStart * 180 / Math.PI;
+                      gd.phiLength = phiLen * 180 / Math.PI;
+                      gd.thetaStart = thetaStart * 180 / Math.PI;
+                      gd.thetaLength = thetaLen * 180 / Math.PI;
                       gd.radius = 20;
                     }
                   } catch (eSync) {}
                   // Negative X = inward-facing + correct equirect UV orientation for VR180.
                   this.el.object3D.scale.set(-1, 1, 1);
-                  this.el.object3D.rotation.set(0, 0, 0);
-                  try {
-                    this.el.setAttribute("scale", "-1 1 1");
-                    this.el.setAttribute("rotation", "0 0 0");
-                  } catch (eAttr) {}
+                  try { this.el.setAttribute("scale", "-1 1 1"); } catch (eAttr) {}
                   this._domeGeoReady = true;
+                  this._domeZoom = zoom;
+                  this._seated = false;
                   mesh.traverse(function (node) {
                     if (node.geometry && node.geometry.userData) {
                       delete node.geometry.userData._xrBaseUv;
@@ -4270,13 +4305,26 @@ enum ExportLANServer {
                   }
                   return null;
                 }
+                var chromaOn = !!this.data.chroma;
                 var limit = this.maxWebGLTextureSize();
-                if (video.videoWidth <= limit && video.videoHeight <= limit) {
+                var needsScale = video.videoWidth > limit || video.videoHeight > limit;
+                if (!chromaOn && !needsScale) {
                   if (!onlyUpdate) this.setTexNote("");
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
                   return null;
                 }
-                var canvas = xrDrawDownscale(video, this.downscaleTarget());
+                // One draw per frame. Right eye and the hidden flat screen reuse it.
+                if (this.data.eye === "right" || (this.isImmersiveStereo() && this.isDesktopRole()) || (!this.isImmersiveStereo() && !this.isDesktopRole())) {
+                  return __xrDs.canvas || null;
+                }
+                var target = this.downscaleTarget();
+                if (chromaOn) target = Math.min(target, 1600);
+                else if (!needsScale) target = limit;
+                var canvas = xrDrawDownscale(video, target, chromaOn ? {
+                  keyColor: this.data.keyColor,
+                  similarity: this.data.similarity,
+                  smoothness: this.data.smoothness
+                } : null);
                 if (!canvas) {
                   try { video.classList.add("xr-pip"); } catch (e2) {}
                   if (!onlyUpdate) this.setTexNote("8K WebGL downscale failed — HTML preview");
@@ -4285,8 +4333,9 @@ enum ExportLANServer {
                 if (!onlyUpdate) {
                   try { video.classList.remove("xr-pip"); } catch (e5) {}
                   this.setTexNote(
-                    "Downscaling " + video.videoWidth + "×" + video.videoHeight
-                    + " → " + canvas.width + "×" + canvas.height + " (WebGL max texture)"
+                    (chromaOn ? "Chroma " : "Downscaling ")
+                    + video.videoWidth + "×" + video.videoHeight
+                    + " → " + canvas.width + "×" + canvas.height
                   );
                 }
                 return canvas;
@@ -4295,14 +4344,18 @@ enum ExportLANServer {
                 this.ensureDomeGeometry();
                 this.applySbsUVs();
                 this._mode = "canvas";
-                // A-Frame's own canvas material. A raw MeshBasic CanvasTexture stays black in Quest 3 AR.
+                var chromaOn = !!this.data.chroma;
+                // A-Frame canvas material. Chroma alpha is punched in the canvas (the VideoTexture shader stays black on Quest).
                 try {
                   this.el.setAttribute("material", {
                     shader: "flat",
                     src: "#xr-ds-canvas",
                     color: "#ffffff",
                     side: "double",
-                    transparent: false,
+                    transparent: chromaOn,
+                    opacity: 1,
+                    depthWrite: !chromaOn,
+                    alphaTest: chromaOn ? 0.08 : 0,
                     npot: true
                   });
                 } catch (e) {}
@@ -4862,6 +4915,9 @@ enum ExportLANServer {
               <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Zoom
+                <input type="range" id="xr-zoom" min="0.45" max="1" step="0.05" value="0.65" style="width:7rem" aria-label="Zoom">
+              </label>
               <span id="xr-time">0:00 / 0:00</span>
               <p id="xr-tex-note" hidden></p>
             </div>
@@ -5653,6 +5709,19 @@ enum ExportLANServer {
             if (modeWorkingBtn) modeWorkingBtn.onclick = function () { setMode("working", false); };
             if (modeArchiveBtn) modeArchiveBtn.onclick = function () { setMode("archive", false); };
             if (refreshBtn) refreshBtn.onclick = function () { refreshPlaylists(); };
+            var zoomEl = document.getElementById("xr-zoom");
+            if (zoomEl) {
+              window.__xrZoom = Number(zoomEl.value) || 0.65;
+              zoomEl.addEventListener("input", function () {
+                window.__xrZoom = Number(zoomEl.value) || 0.65;
+                sphereEls().forEach(function (el) {
+                  var comp = el.components && el.components["chroma-stereo-sbs"];
+                  if (!comp) return;
+                  comp._domeGeoReady = false;
+                  try { comp.ensureDomeGeometry(); comp.syncEyeLayers(); } catch (eZ) {}
+                });
+              });
+            }
             if (chromaToggle) chromaToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
             if (sbsToggle) sbsToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
             if (reopenBtn) {

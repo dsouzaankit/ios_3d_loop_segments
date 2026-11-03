@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 352 (1.3.1):** Quest AR — dome zoom defaults to 65% so the picture is less tall (slider on the transport bar); chroma keys green on the canvas instead of the shader that stayed black.
+
 **Build 351 (1.3.1):** Quest AR — dome material color was `#000`, which multiplied the video to a black hemisphere; 180° sweep now faces the camera instead of one side.
 
 **Build 350 (1.3.1):** Quest 3 — 6K stays a native video texture (no 1536 downscale); 8K uses an A-Frame canvas at 4096 so AR can show it; 180° dome seats on the headset.
