@@ -177,7 +177,8 @@ function Publish-LoopSegmentsTunnelUrl {
     Write-Host ("  XR    : {0}/xr" -f $script:TunnelHttpsUrl) -ForegroundColor Green
     Write-Host '========================================' -ForegroundColor Green
     Write-Host ''
-    Write-Host ("On Quest Browser: {0}/  → Cloudflare tunnel field → Update links → Open XR chroma" -f $origin) -ForegroundColor Cyan
+    Write-Host ("On PC browser: {0}/  → paste host → Update links (writes phone xr_tunnel.json)" -f $origin) -ForegroundColor Cyan
+    Write-Host 'On Quest: refresh the LAN page → Open XR chroma (HTTPS).' -ForegroundColor Cyan
     Write-Host ''
 
     try {

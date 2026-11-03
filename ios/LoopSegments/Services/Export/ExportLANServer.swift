@@ -732,6 +732,10 @@ enum ExportLANServer {
             sendLANThroughputGET(connection: connection, done: done)
             return
         }
+        if normalized == "xr_tunnel.json" {
+            sendXRTunnelGET(connection: connection, done: done)
+            return
+        }
         let resourcePath = normalized
         if resourcePath == "pcloud_list.json" {
             guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
@@ -1300,6 +1304,16 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "xr_tunnel.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleXRTunnelWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         guard let rel = relativeExportPath(fromDAVPath: path) else {
             sendResponse(connection: connection, status: 404, contentType: "text/plain", body: Data("Not found".utf8), done: done)
             return
@@ -1444,11 +1458,21 @@ enum ExportLANServer {
             )
             return
         }
+        if normalized == "xr_tunnel.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleXRTunnelWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         sendResponse(
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, and /lan_throughput.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, /lan_throughput.json, and /xr_tunnel.json".utf8),
             done: done
         )
     }
@@ -2520,6 +2544,7 @@ enum ExportLANServer {
             #"<a href="status.json">status.json</a>"#,
             #"<a href="wifi_www_probe.json">wifi_www_probe.json</a>"#,
             #"<a href="lan_throughput.json">lan_throughput.json</a>"#,
+            #"<a href="xr_tunnel.json">xr_tunnel.json</a>"#,
             "<a href=\"\(LANExportTriggerControl.ackRelativePath)\">export_trigger.ack.json</a>",
             #"<a href="export_from_folder.json">export_from_folder.json</a>"#,
             #"<a href="export_queue.json">export_queue.json</a>"#,
@@ -3249,11 +3274,15 @@ enum ExportLANServer {
     }
 
     /// Paste Cloudflare quick-tunnel host; rewrite `[data-lan-tunnel-path]` links to `https://host…`.
+    /// Persists to phone `xr_tunnel.json` so Quest refresh sees the same host after a PC Update links.
     private static func htmlLANTunnelDomainScript() -> String {
-        """
+        let user = lanWebDAVUsername
+        let pass = lanWebDAVPassword
+        return """
         <script>
         (function () {
-          var KEY = "loopsegments.lan.cfTunnelHost.v1";
+          var ENDPOINT = "xr_tunnel.json";
+          var AUTH = "Basic " + btoa("\(user):\(pass)");
           var input = document.getElementById("lan-tunnel-domain");
           var applyBtn = document.getElementById("lan-tunnel-apply");
           var clearBtn = document.getElementById("lan-tunnel-clear");
@@ -3279,7 +3308,7 @@ enum ExportLANServer {
               return "";
             }
           }
-          function applyHost(host, persist) {
+          function applyHost(host) {
             host = String(host || "").trim();
             tunnelLinks().forEach(function (a) {
               var path = a.getAttribute("data-lan-tunnel-path") || "/xr";
@@ -3294,17 +3323,39 @@ enum ExportLANServer {
                 a.setAttribute("title", path);
               }
             });
-            if (persist) {
-              try {
-                if (host) localStorage.setItem(KEY, host);
-                else localStorage.removeItem(KEY);
-              } catch (e) {}
-            }
             if (host) {
-              setStatus("XR links → https://" + host + "/xr… (stored on this browser)");
+              setStatus("XR links → https://" + host + "/xr… (saved on phone — refresh Quest to pick up)");
             } else {
-              setStatus("XR links use this LAN origin (http)");
+              setStatus("XR links use this LAN origin (http) — phone tunnel cleared");
             }
+          }
+          function saveHost(host) {
+            setStatus(host ? "Saving tunnel host on phone…" : "Clearing tunnel host on phone…");
+            return fetch(ENDPOINT, {
+              method: "POST",
+              headers: {
+                "Authorization": AUTH,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({ host: host || "" }),
+              cache: "no-store"
+            }).then(function (r) {
+              return r.text().then(function (t) {
+                var j = null;
+                try { j = JSON.parse(t); } catch (e) {}
+                if (!r.ok) {
+                  throw new Error((j && (j.error || j.message)) || t || ("HTTP " + r.status));
+                }
+                return j;
+              });
+            }).then(function (j) {
+              var h = parseHost((j && j.host) || host || "");
+              input.value = h;
+              applyHost(h);
+              return h;
+            }).catch(function (e) {
+              setStatus("Could not save on phone: " + ((e && e.message) ? e.message : String(e)));
+            });
           }
           function applyFromInput() {
             var host = parseHost(input.value);
@@ -3313,7 +3364,8 @@ enum ExportLANServer {
               return;
             }
             input.value = host;
-            applyHost(host, true);
+            applyHost(host);
+            saveHost(host);
           }
           applyBtn.addEventListener("click", applyFromInput);
           input.addEventListener("keydown", function (ev) {
@@ -3325,17 +3377,22 @@ enum ExportLANServer {
           if (clearBtn) {
             clearBtn.addEventListener("click", function () {
               input.value = "";
-              applyHost("", true);
+              applyHost("");
+              saveHost("");
             });
           }
-          var stored = "";
-          try { stored = localStorage.getItem(KEY) || ""; } catch (e) {}
-          if (stored) {
-            input.value = stored;
-            applyHost(stored, false);
-          } else {
-            applyHost("", false);
-          }
+          setStatus("Loading tunnel host from phone…");
+          fetch(ENDPOINT, { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+              var h = parseHost((j && j.host) || "");
+              input.value = h;
+              applyHost(h);
+            })
+            .catch(function () {
+              applyHost("");
+              setStatus("No tunnel host on phone yet — paste trycloudflare host → Update links");
+            });
         })();
         </script>
         """
@@ -4899,6 +4956,140 @@ enum ExportLANServer {
         done: @escaping () -> Void
     ) {
         sendJSONPayload(FolderBookmarkStore.lanBookmarksPayload(), connection: connection, done: done)
+    }
+
+    private static var xrTunnelSidecarURL: URL {
+        _ = ExportPaths.lanExportScriptsDirectory
+        return ExportPaths.lanExportScriptsDirectory.appendingPathComponent("xr_tunnel.json")
+    }
+
+    private static func normalizeXRTunnelHost(_ raw: String) -> String? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return "" }
+        s = s.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+        if !s.lowercased().hasPrefix("http://"), !s.lowercased().hasPrefix("https://") {
+            s = "https://\(s)"
+        }
+        guard let url = URL(string: s), let host = url.host, !host.isEmpty else { return nil }
+        if let port = url.port {
+            return "\(host):\(port)"
+        }
+        return host
+    }
+
+    private static func xrTunnelPayload(host: String) -> [String: Any] {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        var payload: [String: Any] = [
+            "schema": "loopsegments-xr-tunnel/v1",
+            "host": trimmed,
+            "updatedAtUtc": ISO8601DateFormatter().string(from: Date()),
+            "file": "\(ExportPaths.mediaExportFolderName)/scripts/xr_tunnel.json",
+        ]
+        if trimmed.isEmpty {
+            payload["httpsBase"] = NSNull()
+            payload["xrUrl"] = NSNull()
+        } else {
+            payload["httpsBase"] = "https://\(trimmed)"
+            payload["xrUrl"] = "https://\(trimmed)/xr"
+        }
+        return payload
+    }
+
+    private static func readXRTunnelHostFromDisk() -> String {
+        let url = xrTunnelSidecarURL
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ""
+        }
+        if let host = obj["host"] as? String {
+            return normalizeXRTunnelHost(host) ?? ""
+        }
+        return ""
+    }
+
+    private static func writeXRTunnelHostToDisk(_ host: String) throws -> [String: Any] {
+        let payload = xrTunnelPayload(host: host)
+        _ = ExportPaths.lanExportScriptsDirectory
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: xrTunnelSidecarURL, options: .atomic)
+        return payload
+    }
+
+    private static func sendXRTunnelGET(connection: NWConnection, done: @escaping () -> Void) {
+        let host = readXRTunnelHostFromDisk()
+        sendJSONPayload(xrTunnelPayload(host: host), connection: connection, done: done, status: 200)
+    }
+
+    private static func handleXRTunnelWrite(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 4_096
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain",
+                        body: Data("JSON object required — { \"host\": \"xxxx.trycloudflare.com\" }".utf8),
+                        done: done
+                    )
+                    return
+                }
+                let rawHost: String
+                if let s = object["host"] as? String {
+                    rawHost = s
+                } else if object["host"] is NSNull || object["host"] == nil {
+                    rawHost = ""
+                } else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain",
+                        body: Data("host must be a string".utf8),
+                        done: done
+                    )
+                    return
+                }
+                guard let host = normalizeXRTunnelHost(rawHost) else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain; charset=utf-8",
+                        body: Data("Could not parse host — use xxxx.trycloudflare.com or https://…".utf8),
+                        done: done
+                    )
+                    return
+                }
+                do {
+                    let payload = try writeXRTunnelHostToDisk(host)
+                    sendJSONPayload(payload, connection: connection, done: done, status: 200)
+                } catch {
+                    sendResponse(
+                        connection: connection,
+                        status: 500,
+                        contentType: "text/plain; charset=utf-8",
+                        body: Data("Could not write xr_tunnel.json: \(error.localizedDescription)".utf8),
+                        done: done
+                    )
+                }
+            }
+        }
     }
 
     private static func sendLANThroughputGET(connection: NWConnection, done: @escaping () -> Void) {
