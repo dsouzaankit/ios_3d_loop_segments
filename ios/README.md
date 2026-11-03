@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 326 (1.2.90):** LAN **`/`** / **`/browse`** — Quest **chrome://flags** helper (insecure-origin flag link, copyable LAN origin for `unsafely-treat-insecure-origin-as-secure`).
+
 **Build 325 (1.2.89):** LAN **`/xr`** — A-Frame **1.6** with **Enter AR** + **Enter VR** (`XRMode: xr`); Quest passthrough needs **Enter AR** (`immersive-ar`). WebXR capability line on the overlay.
 
 **Build 324 (1.2.88):** LAN **Update links** writes Cloudflare tunnel host to phone **`xr_tunnel.json`** (GET/POST `/xr_tunnel.json`) so Quest refresh picks up the same HTTPS XR links.

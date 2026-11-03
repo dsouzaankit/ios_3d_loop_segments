@@ -3171,6 +3171,19 @@ enum ExportLANServer {
             .lan-tunnel-row #lan-tunnel-domain { flex: 1 1 14rem; min-width: 12rem; font-family: ui-monospace, monospace; font-size: 0.9em; }
             .lan-tunnel-row #lan-tunnel-status { flex: 1 1 100%; }
             a.btn[data-lan-tunnel-active="1"] { border-color: #166534; }
+            .lan-quest-flags {
+              margin: 0.25rem 0 0.85rem; padding: 0.75rem 0.85rem; max-width: 56rem;
+              border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel-bg);
+            }
+            .lan-quest-flags h3 { margin: 0 0 0.35rem; font-size: 1rem; }
+            .lan-quest-flags p { margin: 0.35rem 0; font-size: 0.9em; line-height: 1.4; }
+            .lan-quest-flags .lan-flag-row {
+              display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin: 0.45rem 0;
+            }
+            .lan-quest-flags input[readonly] {
+              flex: 1 1 14rem; min-width: 12rem; font-family: ui-monospace, monospace; font-size: 0.85em;
+            }
+            .lan-quest-flags ol { margin: 0.35rem 0 0; padding-left: 1.25rem; font-size: 0.9em; line-height: 1.45; }
             button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
             input[type="text"], input[type="url"], input[type="search"], select, textarea {
               background: var(--input-bg); color: var(--fg); border: 1px solid var(--input-border); border-radius: 6px; padding: 0.35rem 0.5rem;
@@ -3270,6 +3283,122 @@ enum ExportLANServer {
     private static func htmlLANNightModeToggleButton() -> String {
         """
         <button type="button" id="lan-night-toggle" onclick="__lanToggleNight()">Night mode</button>
+        """
+    }
+
+    /// Quest Browser: chrome://flags insecure-origin helper + this LAN origin to paste.
+    private static func htmlLANQuestFlagsBlock() -> String {
+        let flagHash = "unsafely-treat-insecure-origin-as-secure"
+        let flagsUrl = "chrome://flags/#\(flagHash)"
+        let flagsEscaped = htmlEscape(flagsUrl)
+        return """
+        <div class="lan-quest-flags" id="lan-quest-flags">
+          <h3>Quest Browser — LAN HTTP as secure (optional)</h3>
+          <p class="muted">Prefer this for fast on-Wi‑Fi WebXR (no Cloudflare www hop). HTTPS tunnel still works if the flag is awkward.</p>
+          <div class="lan-flag-row">
+            <a class="btn" id="lan-flags-open" href="\(flagsEscaped)" target="_blank" rel="noopener">Open chrome://flags (new tab)</a>
+            <button type="button" id="lan-flags-copy-url" title="Copy chrome://flags URL">Copy flags URL</button>
+          </div>
+          <div class="lan-flag-row">
+            <label for="lan-flags-setting">Flag
+              <input type="text" id="lan-flags-setting" readonly value="\(htmlEscape(flagHash))" spellcheck="false">
+            </label>
+            <button type="button" id="lan-flags-copy-setting">Copy flag name</button>
+          </div>
+          <div class="lan-flag-row">
+            <label for="lan-flags-origin">LAN origin (paste into the flag)
+              <input type="text" id="lan-flags-origin" readonly value="" spellcheck="false" aria-live="polite">
+            </label>
+            <button type="button" id="lan-flags-copy-origin">Copy LAN origin</button>
+          </div>
+          <ol>
+            <li>On <strong>Quest Browser</strong>, open the flags link (or type <code>chrome://flags</code> in the address bar).</li>
+            <li>Find <strong>Insecure origins treated as secure</strong> (<code>\(htmlEscape(flagHash))</code>).</li>
+            <li>Paste the <strong>LAN origin</strong> above (scheme + host + port, e.g. <code>http://10.0.100.10:8765</code>) — exact match.</li>
+            <li>Set Enabled → Relaunch → open this LAN page again → <strong>Open XR chroma</strong> over <strong>http://</strong> → <strong>Enter AR</strong>.</li>
+          </ol>
+          <p id="lan-flags-status" class="muted" role="status"></p>
+        </div>
+        """
+    }
+
+    private static func htmlLANQuestFlagsScript() -> String {
+        """
+        <script>
+        (function () {
+          var FLAG_URL = "chrome://flags/#unsafely-treat-insecure-origin-as-secure";
+          var FLAG_NAME = "unsafely-treat-insecure-origin-as-secure";
+          var originInput = document.getElementById("lan-flags-origin");
+          var status = document.getElementById("lan-flags-status");
+          var openBtn = document.getElementById("lan-flags-open");
+          function setStatus(msg) {
+            if (status) status.textContent = msg || "";
+          }
+          function lanOrigin() {
+            try {
+              return String(location.origin || "");
+            } catch (e) {
+              return "";
+            }
+          }
+          function fillOrigin() {
+            if (!originInput) return;
+            originInput.value = lanOrigin();
+          }
+          function copyText(text, okMsg) {
+            text = String(text || "");
+            if (!text) {
+              setStatus("Nothing to copy");
+              return;
+            }
+            function done() { setStatus(okMsg || ("Copied: " + text)); }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done).catch(function () {
+                try {
+                  originInput.focus();
+                  originInput.select();
+                  document.execCommand("copy");
+                  done();
+                } catch (e) {
+                  setStatus("Copy failed — select the field manually");
+                }
+              });
+            } else {
+              try {
+                var ta = document.createElement("textarea");
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+                done();
+              } catch (e) {
+                setStatus("Copy failed — select the field manually");
+              }
+            }
+          }
+          fillOrigin();
+          var copyOrigin = document.getElementById("lan-flags-copy-origin");
+          var copySetting = document.getElementById("lan-flags-copy-setting");
+          var copyFlags = document.getElementById("lan-flags-copy-url");
+          if (copyOrigin) copyOrigin.addEventListener("click", function () {
+            fillOrigin();
+            copyText(originInput && originInput.value, "Copied LAN origin");
+          });
+          if (copySetting) copySetting.addEventListener("click", function () {
+            copyText(FLAG_NAME, "Copied flag name");
+          });
+          if (copyFlags) copyFlags.addEventListener("click", function () {
+            copyText(FLAG_URL, "Copied chrome://flags URL — paste into Quest address bar if the link is blocked");
+          });
+          if (openBtn) {
+            openBtn.addEventListener("click", function (ev) {
+              // Some browsers block chrome:// from http pages; keep href for Quest when allowed.
+              setStatus("If the new tab did not open, paste chrome://flags into the Quest address bar");
+            });
+          }
+        })();
+        </script>
         """
     }
 
@@ -3418,7 +3547,9 @@ enum ExportLANServer {
           <a class="btn" href="/xr#working" id="lan-xr-working-link" data-lan-tunnel-path="/xr#working">Open XR chroma (working)</a>
           <a class="btn" href="/xr#archive" id="lan-xr-archive-link" data-lan-tunnel-path="/xr#archive">Open XR chroma (archive)</a>
         </p>
+        \(htmlLANQuestFlagsBlock())
         \(htmlLANTunnelDomainScript())
+        \(htmlLANQuestFlagsScript())
         <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
           <div class="row" style="margin-top:0">
             <strong>Loop folder player</strong>
