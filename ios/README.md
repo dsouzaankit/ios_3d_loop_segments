@@ -16,6 +16,8 @@ Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` 
 
 **Build 327 (1.2.91):** LAN HTTP harden — per-connection queues (one hung request no longer wedges all clients); sparse `_working` metrics refresh off the request path; smaller index-tail probe. Cloudflare tunnel script stops prior `cloudflared` processes.
 
+**Build 327 (1.2.91):** LAN HTTP harden — per-connection queues (one hung request no longer wedges all clients); sparse `_working` metrics refresh off the request path; smaller index-tail probe. Cloudflare tunnel script stops prior `cloudflared` processes.
+
 **Build 326 (1.2.90):** LAN **`/`** / **`/browse`** — Quest **chrome://flags** helper (insecure-origin flag link, copyable LAN origin for `unsafely-treat-insecure-origin-as-secure`).
 
 **Build 325 (1.2.89):** LAN **`/xr`** — A-Frame **1.6** with **Enter AR** + **Enter VR** (`XRMode: xr`); Quest passthrough needs **Enter AR** (`immersive-ar`). WebXR capability line on the overlay.
