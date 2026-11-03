@@ -4343,6 +4343,52 @@ enum ExportLANServer {
             .xr-file-item .xr-file-name { display: block; word-break: break-all; }
             .xr-file-item .xr-file-meta { display: block; color: #9ca3af; font-size: 0.78rem; margin-top: 0.15rem; }
             .xr-file-empty { padding: 0.85rem 0.75rem; color: #9ca3af; font-size: 0.9rem; }
+            /* Archive: compact current-selection chip → centered top dropdown (above a-scene). */
+            .xr-archive-pick-wrap {
+              width: min(40rem, 100%); margin: 0.25rem 0 0.75rem; text-align: left;
+            }
+            .xr-archive-pick {
+              display: flex; align-items: center; gap: 0.5rem; width: 100%; box-sizing: border-box;
+              padding: 0.7rem 0.85rem; border-radius: 10px; border: 1px solid #3f3f46;
+              background: #14532d; color: #f8fafc; font: inherit; font-size: 0.95rem;
+              cursor: pointer; text-align: left;
+            }
+            .xr-archive-pick .xr-archive-pick-label {
+              flex: 1 1 auto; min-width: 0; word-break: break-all;
+            }
+            .xr-archive-pick .xr-archive-pick-chevron { flex: 0 0 auto; opacity: 0.85; }
+            #xr-archive-dd {
+              display: none; position: fixed; inset: 0; z-index: 10060;
+              align-items: flex-start; justify-content: center;
+              padding: max(0.75rem, env(safe-area-inset-top, 0px) + 0.5rem) 0.75rem 1rem;
+              box-sizing: border-box;
+              background: rgba(0, 0, 0, 0.55);
+            }
+            #xr-archive-dd.open { display: flex; }
+            #xr-archive-dd .xr-archive-dd-panel {
+              width: min(36rem, 100%); max-height: min(70vh, 28rem);
+              overflow: auto; border-radius: 12px; border: 1px solid #334155;
+              background: #0f172a; box-shadow: 0 16px 48px rgba(0,0,0,0.55);
+              margin-top: 0.25rem;
+            }
+            #xr-archive-dd .xr-archive-dd-head {
+              position: sticky; top: 0; z-index: 1;
+              display: flex; align-items: center; gap: 0.5rem;
+              padding: 0.65rem 0.75rem; background: #0f172a; border-bottom: 1px solid #1e293b;
+              font-size: 0.8rem; letter-spacing: 0.04em; text-transform: uppercase; color: #94a3b8;
+            }
+            #xr-archive-dd .xr-archive-dd-close {
+              margin-left: auto; padding: 0.35rem 0.65rem; border-radius: 6px;
+              border: 1px solid #475569; background: #1e293b; color: #f8fafc; cursor: pointer; font: inherit;
+            }
+            #xr-archive-dd .xr-file-item { border-top-color: #1e293b; }
+            #xr-archive-float {
+              display: none; position: fixed; left: 50%; top: max(0.65rem, env(safe-area-inset-top, 0px) + 0.35rem);
+              transform: translateX(-50%); z-index: 10040; width: min(36rem, calc(100vw - 1.5rem));
+            }
+            #xr-archive-float .xr-archive-pick {
+              box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+            }
             #xr-reopen {
               display: none; position: fixed; right: 1rem; bottom: 1rem; z-index: 10000;
               padding: 0.7rem 1rem; border-radius: 999px; border: 1px solid #444;
@@ -4428,6 +4474,16 @@ enum ExportLANServer {
         </head>
         <body>
           <button type="button" id="xr-reopen" aria-label="Show file list">Files</button>
+          <div id="xr-archive-float" hidden></div>
+          <div id="xr-archive-dd" aria-hidden="true">
+            <div class="xr-archive-dd-panel" role="listbox" aria-label="Archive folder videos">
+              <div class="xr-archive-dd-head">
+                <span>Archive folder</span>
+                <button type="button" class="xr-archive-dd-close" id="xr-archive-dd-close">Close</button>
+              </div>
+              <div id="xr-archive-dd-list"></div>
+            </div>
+          </div>
           <div id="xr-transport" role="group" aria-label="Playback controls" hidden>
             <div class="xr-transport-row">
               <button type="button" id="xr-playpause" title="Play / Pause">Play</button>
@@ -4683,6 +4739,8 @@ enum ExportLANServer {
               overlay.style.display = show ? "flex" : "none";
               if (reopenBtn) reopenBtn.style.display = show ? "none" : "block";
               showTransport(!show);
+              if (!show) closeArchiveDropdown();
+              syncArchiveFloat();
             }
             function seekBy(delta) {
               try {
@@ -4723,15 +4781,121 @@ enum ExportLANServer {
                 video.addEventListener("loadedmetadata", onMeta);
               }
             }
-            function renderFileList() {
-              if (!fileListEl) return;
-              fileListEl.innerHTML = "";
-              var playlist = activePlaylist();
+            var archiveDd = document.getElementById("xr-archive-dd");
+            var archiveDdList = document.getElementById("xr-archive-dd-list");
+            var archiveDdClose = document.getElementById("xr-archive-dd-close");
+            var archiveFloat = document.getElementById("xr-archive-float");
+            function archiveSelectionLabel() {
+              var playlist = archivePlaylist;
+              if (!playlist.length) return emptyLabel();
+              var item = playlist[index] || playlist[0];
+              var sz = formatBytes(item.bytes);
+              return (index + 1) + "/" + playlist.length + " · " + leafName(item.name)
+                + (sz ? " · " + sz : "");
+            }
+            function closeArchiveDropdown() {
+              if (!archiveDd) return;
+              archiveDd.classList.remove("open");
+              archiveDd.setAttribute("aria-hidden", "true");
+            }
+            function openArchiveDropdown() {
+              if (!archiveDd || !archiveDdList) return;
+              archiveDdList.innerHTML = "";
+              var playlist = archivePlaylist;
               if (!playlist.length) {
                 var empty = document.createElement("div");
                 empty.className = "xr-file-empty";
                 empty.textContent = emptyLabel();
-                fileListEl.appendChild(empty);
+                archiveDdList.appendChild(empty);
+              } else {
+                playlist.forEach(function (item, idx) {
+                  var btn = document.createElement("button");
+                  btn.type = "button";
+                  btn.className = "xr-file-item" + (idx === index ? " selected" : "");
+                  btn.setAttribute("role", "option");
+                  btn.setAttribute("aria-selected", idx === index ? "true" : "false");
+                  var nameEl = document.createElement("span");
+                  nameEl.className = "xr-file-name";
+                  nameEl.textContent = leafName(item.name);
+                  var meta = document.createElement("span");
+                  meta.className = "xr-file-meta";
+                  var bits = [];
+                  var sz = formatBytes(item.bytes);
+                  if (sz) bits.push(sz);
+                  bits.push(item.name);
+                  meta.textContent = bits.join(" · ");
+                  btn.appendChild(nameEl);
+                  btn.appendChild(meta);
+                  btn.onclick = function () {
+                    closeArchiveDropdown();
+                    loadIndex(idx, wantPlay && !video.paused);
+                  };
+                  archiveDdList.appendChild(btn);
+                });
+              }
+              archiveDd.classList.add("open");
+              archiveDd.setAttribute("aria-hidden", "false");
+            }
+            function makeArchivePickButton() {
+              var btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "xr-archive-pick";
+              btn.setAttribute("aria-haspopup", "listbox");
+              btn.setAttribute("aria-expanded", "false");
+              var labelEl = document.createElement("span");
+              labelEl.className = "xr-archive-pick-label";
+              labelEl.textContent = archiveSelectionLabel();
+              var chev = document.createElement("span");
+              chev.className = "xr-archive-pick-chevron";
+              chev.textContent = "▾";
+              btn.appendChild(labelEl);
+              btn.appendChild(chev);
+              btn.onclick = function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                openArchiveDropdown();
+              };
+              return btn;
+            }
+            function syncArchiveFloat() {
+              if (!archiveFloat) return;
+              var overlayOpen = overlay && overlay.style.display !== "none";
+              var show = mode === "archive" && !overlayOpen;
+              archiveFloat.style.display = show ? "block" : "none";
+              if (show) {
+                archiveFloat.removeAttribute("hidden");
+                archiveFloat.innerHTML = "";
+                archiveFloat.appendChild(makeArchivePickButton());
+              } else {
+                archiveFloat.setAttribute("hidden", "");
+                archiveFloat.innerHTML = "";
+              }
+            }
+            function renderFileList() {
+              if (!fileListEl) return;
+              fileListEl.innerHTML = "";
+              var playlist = activePlaylist();
+              if (mode === "archive") {
+                var wrap = document.createElement("div");
+                wrap.className = "xr-archive-pick-wrap";
+                if (!playlist.length) {
+                  var empty = document.createElement("div");
+                  empty.className = "xr-file-empty";
+                  empty.textContent = emptyLabel();
+                  wrap.appendChild(empty);
+                } else {
+                  wrap.appendChild(makeArchivePickButton());
+                }
+                fileListEl.appendChild(wrap);
+                syncArchiveFloat();
+                return;
+              }
+              if (!playlist.length) {
+                var empty2 = document.createElement("div");
+                empty2.className = "xr-file-empty";
+                empty2.textContent = emptyLabel();
+                fileListEl.appendChild(empty2);
+                syncArchiveFloat();
                 return;
               }
               function addGroup(title) {
@@ -4767,7 +4931,17 @@ enum ExportLANServer {
               }
               addGroup(listGroupTitle());
               playlist.forEach(function (item, idx) { addItem(item, idx, modeTag()); });
+              syncArchiveFloat();
             }
+            if (archiveDdClose) archiveDdClose.onclick = function () { closeArchiveDropdown(); };
+            if (archiveDd) {
+              archiveDd.addEventListener("click", function (e) {
+                if (e.target === archiveDd) closeArchiveDropdown();
+              });
+            }
+            document.addEventListener("keydown", function (e) {
+              if (e.key === "Escape") closeArchiveDropdown();
+            });
             function snapRate(v) {
               var r = Math.round(Number(v) * 10) / 10;
               if (!isFinite(r)) return 1;
