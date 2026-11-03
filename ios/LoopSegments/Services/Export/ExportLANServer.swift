@@ -4100,9 +4100,11 @@ enum ExportLANServer {
                   this.video.addEventListener("loadedmetadata", this._onApply);
                   this.video.addEventListener("play", this._onApply);
                 }
+                this.ensureDomeGeometry();
                 this.applyMaterial();
               },
               update: function () {
+                this.ensureDomeGeometry();
                 this.applyMaterial();
                 this.syncEyeLayers();
               },
@@ -4123,10 +4125,44 @@ enum ExportLANServer {
               isDesktopRole: function () {
                 return this.data.role === "desktop" || this.data.eye === "both";
               },
+              isQuestBrowser: function () {
+                try {
+                  return /OculusBrowser|Quest|Pacific/i.test(navigator.userAgent || "");
+                } catch (e) {
+                  return false;
+                }
+              },
               wantsShader: function () {
                 // Custom VideoTexture fragment shader goes black on PC + Quest. Only use it for chroma key.
                 // SBS eye halves use native A-Frame video material + geometry UV crop instead.
                 return !!this.data.chroma;
+              },
+              // a-videosphere ignores phi-length → full 360 sphere stretches VR180. Force a true hemisphere.
+              ensureDomeGeometry: function () {
+                if (this.isDesktopRole() || this._domeGeoReady) return;
+                try {
+                  this.el.setAttribute("geometry", {
+                    primitive: "sphere",
+                    radius: 5,
+                    segmentsWidth: 64,
+                    segmentsHeight: 64,
+                    phiStart: 0,
+                    phiLength: 180,
+                    thetaStart: 0,
+                    thetaLength: 180
+                  });
+                  // Invert Z so the mesh faces inward (camera inside the dome).
+                  this.el.object3D.scale.set(1, 1, -1);
+                  this._domeGeoReady = true;
+                  var mesh = this.el.getObject3D("mesh");
+                  if (mesh) {
+                    mesh.traverse(function (node) {
+                      if (node.geometry && node.geometry.userData) {
+                        delete node.geometry.userData._xrBaseUv;
+                      }
+                    });
+                  }
+                } catch (e) {}
               },
               maxWebGLTextureSize: function () {
                 var maxTex = 4096;
@@ -4137,7 +4173,10 @@ enum ExportLANServer {
                   }
                 } catch (e) {}
                 // Headroom — drivers often fail video uploads at the exact max.
-                return Math.max(512, maxTex - 64);
+                var limit = Math.max(512, maxTex - 64);
+                // Quest WebGL is tighter in practice for video textures.
+                if (this.isQuestBrowser()) limit = Math.min(limit, 2048);
+                return limit;
               },
               setTexNote: function (msg) {
                 try { window.__xrTexNote = msg || ""; } catch (e) {}
@@ -4154,7 +4193,13 @@ enum ExportLANServer {
               // 8K SBS often exceeds WebGL MAX_TEXTURE_SIZE → black mesh. Downscale to canvas texture.
               refreshDownscaleCanvas: function (onlyUpdate) {
                 var video = this.video;
-                if (!video || !video.videoWidth) return null;
+                if (!video) return null;
+                if (!video.videoWidth) {
+                  if (!onlyUpdate && video.readyState >= 1) {
+                    this.setTexNote("No decoded frames yet — codec may be unsupported here");
+                  }
+                  return null;
+                }
                 var limit = this.maxWebGLTextureSize();
                 if (video.videoWidth <= limit && video.videoHeight <= limit) {
                   if (!onlyUpdate) this.setTexNote("");
@@ -4163,7 +4208,7 @@ enum ExportLANServer {
                 }
                 if (!this._dsCanvas) {
                   this._dsCanvas = document.createElement("canvas");
-                  this._dsCtx = this._dsCanvas.getContext("2d", { alpha: false });
+                  this._dsCtx = this._dsCanvas.getContext("2d", { alpha: false, willReadFrequently: false });
                 }
                 var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight);
                 var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
@@ -4179,7 +4224,7 @@ enum ExportLANServer {
                 try {
                   this._dsCtx.drawImage(video, 0, 0, cw, ch);
                 } catch (e2) {
-                  // drawImage failed — show HTML PIP so PC still has a picture.
+                  // drawImage failed — HTML PIP for flat browser (not visible inside immersive).
                   try { video.classList.add("xr-pip"); } catch (e3) {}
                   this.setTexNote("8K WebGL downscale failed — HTML preview");
                   return null;
@@ -4193,7 +4238,12 @@ enum ExportLANServer {
                   this._dsTex.needsUpdate = true;
                 }
                 if (!onlyUpdate) {
-                  try { video.classList.remove("xr-pip"); } catch (e4) {}
+                  // Quest flat: keep a small PIP as proof-of-decode while 3D uses canvas.
+                  if (this.isQuestBrowser() && !this.isImmersiveStereo()) {
+                    try { video.classList.add("xr-pip"); } catch (e4) {}
+                  } else {
+                    try { video.classList.remove("xr-pip"); } catch (e5) {}
+                  }
                   this.setTexNote(
                     "Downscaling " + video.videoWidth + "×" + video.videoHeight
                     + " → " + cw + "×" + ch + " (WebGL max texture)"
@@ -4202,6 +4252,7 @@ enum ExportLANServer {
                 return this._dsTex;
               },
               applyCanvasVideo: function (tex) {
+                this.ensureDomeGeometry();
                 this.applySbsUVs();
                 if (!this._canvasMat) {
                   this._canvasMat = new THREE.MeshBasicMaterial({
@@ -4350,6 +4401,7 @@ enum ExportLANServer {
               },
               applyNativeVideo: function () {
                 this._mode = "native";
+                this.ensureDomeGeometry();
                 this.applySbsUVs();
                 try {
                   this.el.setAttribute("material", {
@@ -4385,6 +4437,7 @@ enum ExportLANServer {
                 return this.bindMaterial(this.shaderMaterial);
               },
               applyMaterial: function () {
+                this.ensureDomeGeometry();
                 var mesh = this.el.getObject3D("mesh");
                 if (!mesh) {
                   if (this._retries++ < 100) setTimeout(this._onApply, 50);
@@ -4469,8 +4522,11 @@ enum ExportLANServer {
                   }
                 }
                 function syncHudVisible() {
-                  var on = immersiveNow();
-                  try { hudEl.setAttribute("visible", on ? "true" : "false"); } catch (e) {}
+                  var ar = false;
+                  try { ar = !!(sceneEl && sceneEl.is && sceneEl.is("ar-mode")); } catch (e) {}
+                  // Enter AR is already passthrough — hide the green toggle there (VR-only).
+                  var on = immersiveNow() && !ar;
+                  try { hudEl.setAttribute("visible", on ? "true" : "false"); } catch (e2) {}
                   if (hudEl.object3D) hudEl.object3D.visible = on;
                 }
                 function applyPassthrough(on) {
@@ -4789,28 +4845,26 @@ enum ExportLANServer {
               material="shader: flat; src: #chroma-stream; side: double; npot: true"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: both; role: desktop">
             </a-video>
-            <!-- Immersive: dual 180° domes on WebXR layers 1/2 for SBS. -->
-            <a-videosphere
+            <!-- Immersive VR180: explicit hemisphere (a-videosphere phi-length was ignored → 360 stretch). -->
+            <a-entity
               id="chroma-sphere"
-              src="#chroma-stream"
-              radius="5"
-              phi-length="180"
-              theta-length="100"
-              position="0 1.5 0"
+              geometry="primitive: sphere; radius: 5; phiLength: 180; thetaLength: 180; segmentsWidth: 64; segmentsHeight: 64"
+              scale="1 1 -1"
+              position="0 1.6 0"
               rotation="0 -90 0"
+              material="shader: flat; src: #chroma-stream; side: double; npot: true"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left; role: dome">
-            </a-videosphere>
-            <a-videosphere
+            </a-entity>
+            <a-entity
               id="chroma-sphere-right"
-              src="#chroma-stream"
-              radius="5"
-              phi-length="180"
-              theta-length="100"
-              position="0 1.5 0"
+              geometry="primitive: sphere; radius: 5; phiLength: 180; thetaLength: 180; segmentsWidth: 64; segmentsHeight: 64"
+              scale="1 1 -1"
+              position="0 1.6 0"
               rotation="0 -90 0"
               visible="false"
+              material="shader: flat; src: #chroma-stream; side: double; npot: true"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: right; role: dome">
-            </a-videosphere>
+            </a-entity>
 
             <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
 

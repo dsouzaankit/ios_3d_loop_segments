@@ -14,7 +14,11 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 346 (1.3.1):** XR HUD — short **Passthrough** / **VR Void** labels (long “Switch to Passthrough” clipped to “Switchthrough” in Enter VR).
+**Build 348 (1.3.1):** XR — true VR180 hemisphere geometry (fixes AR 360 stretch); hide Passthrough HUD in AR; Quest 8K caps canvas downscale at 2048 + flat PIP.
+
+**Build 348 (1.3.1):** XR — true VR180 hemisphere geometry (fixes AR 360 stretch); hide Passthrough HUD in AR; Quest 8K caps canvas downscale at 2048 + flat PIP.
+
+**Build 347 (1.3.1):** XR PC — hide 180° dome outside immersive so it no longer overlays the flat `a-video` (spherical noise); 8K canvas downscale unchanged.
 
 **Build 346 (1.3.1):** XR HUD — short **Passthrough** / **VR Void** labels (long “Switch to Passthrough” clipped to “Switchthrough” in Enter VR).
 
