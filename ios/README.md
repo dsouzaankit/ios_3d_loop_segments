@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 357 (1.3.1):** AR zoom bar hides during playback (trigger shows it for a few seconds). Canvas chroma/8K uploads are throttled so Quest playback is less choppy.
+
 **Build 356 (1.3.1):** AR zoom changes vertical coverage only (90°–180°). Horizontal stays a full 180°.
 
 **Build 355 (1.3.1):** PC chroma key stays up to 3840 wide. The 1600×800 cap is Quest-only.

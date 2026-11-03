@@ -4180,15 +4180,21 @@ enum ExportLANServer {
               },
               tick: function () {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
-                if (this._mode === "canvas") this.refreshDownscaleCanvas(true);
-                try {
-                  var mesh = this.el.getObject3D("mesh");
-                  if (mesh && mesh.material) {
-                    if (mesh.material.color) mesh.material.color.setRGB(1, 1, 1);
-                    if (mesh.material.map) mesh.material.map.needsUpdate = true;
+                // Canvas readback (chroma / 8K) every frame stalls Quest AR decode. Cap the upload rate.
+                if (this._mode === "canvas") {
+                  var now = (window.performance && performance.now) ? performance.now() : Date.now();
+                  var gap = this.isQuestBrowser() ? 50 : 32;
+                  if (!this._nextDraw || now >= this._nextDraw) {
+                    this._nextDraw = now + gap;
+                    this.refreshDownscaleCanvas(true);
+                    try {
+                      var mesh = this.el.getObject3D("mesh");
+                      if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
+                    } catch (eTick) {}
                   }
-                } catch (eTick) {}
-                this.syncEyeLayers();
+                }
+                this._layerTick = (this._layerTick || 0) + 1;
+                if (this._layerTick === 1 || this._layerTick % 8 === 0) this.syncEyeLayers();
               },
               isDesktopRole: function () {
                 return this.data.role === "desktop" || this.data.eye === "both";
@@ -4718,7 +4724,6 @@ enum ExportLANServer {
                 this._lastMs = 0;
                 this._aimed = false;
                 this._holdUntil = 0;
-                this._dir = new THREE.Vector3();
                 var self = this;
                 function paint(z) {
                   var lab = document.getElementById("xr-zoom-label");
@@ -4741,12 +4746,16 @@ enum ExportLANServer {
                 });
                 if (this.sceneEl) {
                   this.sceneEl.addEventListener("enter-vr", function () {
-                    self._holdUntil = Date.now() + 3200;
+                    self._holdUntil = Date.now() + 2500;
                   });
                   this.sceneEl.addEventListener("exit-vr", function () {
                     self._aimed = false;
                     self._holdUntil = 0;
                     if (root.object3D) root.object3D.visible = false;
+                  });
+                  // Looking slightly down was keeping the bar on. Trigger summons it, then it hides.
+                  this.sceneEl.addEventListener("triggerdown", function () {
+                    self._holdUntil = Date.now() + 4000;
                   });
                 }
                 if (root.object3D) root.object3D.visible = false;
@@ -4784,17 +4793,7 @@ enum ExportLANServer {
                   immersive = !!(sceneEl && sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode")));
                 } catch (e) {}
                 var show = false;
-                if (immersive) {
-                  var down = false;
-                  try {
-                    var cam = sceneEl.camera;
-                    if (cam) {
-                      cam.getWorldDirection(this._dir);
-                      down = this._dir.y < -0.22;
-                    }
-                  } catch (e2) {}
-                  show = this._aimed || down || Date.now() < this._holdUntil;
-                }
+                if (immersive) show = this._aimed || Date.now() < this._holdUntil;
                 if (this.el.object3D) this.el.object3D.visible = show;
               }
             });
