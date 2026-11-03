@@ -3968,26 +3968,99 @@ enum ExportLANServer {
             var THREE = window.AFRAME && AFRAME.THREE ? AFRAME.THREE : window.THREE;
             if (!THREE || !window.AFRAME) return;
 
+            // Shared video texture for left/right hemispheres (one decode).
+            var __xrVideoTex = null;
+            function xrEnsureVideoTexture(video) {
+              if (!video || !video.videoWidth) return null;
+              if (!__xrVideoTex) {
+                __xrVideoTex = new THREE.VideoTexture(video);
+                __xrVideoTex.minFilter = THREE.LinearFilter;
+                __xrVideoTex.magFilter = THREE.LinearFilter;
+                __xrVideoTex.generateMipmaps = false;
+                __xrVideoTex.wrapS = THREE.ClampToEdgeWrapping;
+                __xrVideoTex.wrapT = THREE.ClampToEdgeWrapping;
+                if ("colorSpace" in __xrVideoTex && THREE.SRGBColorSpace) {
+                  __xrVideoTex.colorSpace = THREE.SRGBColorSpace;
+                } else if ("encoding" in __xrVideoTex && THREE.sRGBEncoding) {
+                  __xrVideoTex.encoding = THREE.sRGBEncoding;
+                }
+              }
+              __xrVideoTex.needsUpdate = true;
+              return __xrVideoTex;
+            }
+
+            function xrMakeChromaMaterial(videoTex, data, uvOffsetX) {
+              return new THREE.ShaderMaterial({
+                uniforms: {
+                  textureMap: { value: videoTex },
+                  uvOffset: { value: new THREE.Vector2(uvOffsetX || 0, 0) },
+                  keyColor: { value: new THREE.Color(data.keyColor) },
+                  similarity: { value: data.similarity },
+                  smoothness: { value: data.smoothness },
+                  chromaEnabled: { value: data.chroma ? 1.0 : 0.0 },
+                  sbsEnabled: { value: data.sbs ? 1.0 : 0.0 }
+                },
+                vertexShader: [
+                  "varying vec2 vUv;",
+                  "void main() {",
+                  "  vUv = uv;",
+                  "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+                  "}"
+                ].join("\n"),
+                fragmentShader: [
+                  "uniform sampler2D textureMap;",
+                  "uniform vec2 uvOffset;",
+                  "uniform vec3 keyColor;",
+                  "uniform float similarity;",
+                  "uniform float smoothness;",
+                  "uniform float chromaEnabled;",
+                  "uniform float sbsEnabled;",
+                  "varying vec2 vUv;",
+                  "void main() {",
+                  "  vec2 eyeUv = (sbsEnabled > 0.5) ? (vUv * vec2(0.5, 1.0) + uvOffset) : vUv;",
+                  "  vec4 videoColor = texture2D(textureMap, eyeUv);",
+                  "  float blend = 1.0;",
+                  "  if (chromaEnabled > 0.5) {",
+                  "    float chromaSCr = 0.5000 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
+                  "    float chromasCb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5000 * videoColor.b;",
+                  "    float keyCr = 0.5000 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
+                  "    float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5000 * keyColor.b;",
+                  "    float distance = sqrt(pow(chromaSCr - keyCr, 2.0) + pow(chromasCb - keyCb, 2.0));",
+                  "    blend = smoothstep(similarity, similarity + smoothness, distance);",
+                  "  }",
+                  "  gl_FragColor = vec4(videoColor.rgb, videoColor.a * blend);",
+                  "}"
+                ].join("\n"),
+                transparent: !!data.chroma,
+                depthWrite: !data.chroma,
+                side: THREE.DoubleSide
+              });
+            }
+
+            /**
+             * eye: "left" | "right" | "both"
+             * SBS on Quest: two hemispheres on WebXR layers 1/2 (onBeforeRender eye detect is unreliable in AR).
+             */
             AFRAME.registerComponent("chroma-stereo-sbs", {
               schema: {
                 keyColor: { type: "color", default: "#00ff00" },
                 similarity: { type: "number", default: 0.3 },
                 smoothness: { type: "number", default: 0.08 },
                 chroma: { type: "boolean", default: false },
-                sbs: { type: "boolean", default: false }
+                sbs: { type: "boolean", default: true },
+                eye: { type: "string", default: "both" }
               },
               init: function () {
                 this.video = document.querySelector("#chroma-stream");
-                this.videoTexture = null;
                 this.shaderMaterial = null;
-                this.basicMaterial = null;
-                this._mode = "";
                 this._retries = 0;
                 this._onApply = this.applyMaterial.bind(this);
+                this._onEnterVr = this.syncEyeLayers.bind(this);
                 this.el.addEventListener("object3dset", this._onApply);
                 this.el.addEventListener("materialtextureloaded", this._onApply);
                 if (this.el.sceneEl) {
                   this.el.sceneEl.addEventListener("loaded", this._onApply);
+                  this.el.sceneEl.addEventListener("enter-vr", this._onEnterVr);
                 }
                 if (this.video) {
                   this.video.addEventListener("loadeddata", this._onApply);
@@ -3998,59 +4071,73 @@ enum ExportLANServer {
               },
               update: function () {
                 this.applyMaterial();
+                this.syncEyeLayers();
               },
               remove: function () {
                 this.el.removeEventListener("object3dset", this._onApply);
                 this.el.removeEventListener("materialtextureloaded", this._onApply);
-                if (this.videoTexture) {
-                  this.videoTexture.dispose();
-                  this.videoTexture = null;
+                if (this.el.sceneEl) {
+                  this.el.sceneEl.removeEventListener("enter-vr", this._onEnterVr);
                 }
               },
               tick: function () {
-                if (this.videoTexture) this.videoTexture.needsUpdate = true;
+                if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
+                this.syncEyeLayers();
               },
               wantsShader: function () {
                 return !!(this.data.chroma || this.data.sbs);
               },
-              ensureVideoTexture: function () {
-                var video = this.video;
-                if (!video || !video.videoWidth) return null;
-                if (!this.videoTexture) {
-                  this.videoTexture = new THREE.VideoTexture(video);
-                  this.videoTexture.minFilter = THREE.LinearFilter;
-                  this.videoTexture.magFilter = THREE.LinearFilter;
-                  this.videoTexture.generateMipmaps = false;
-                  this.videoTexture.wrapS = THREE.ClampToEdgeWrapping;
-                  this.videoTexture.wrapT = THREE.ClampToEdgeWrapping;
-                  if ("colorSpace" in this.videoTexture && THREE.SRGBColorSpace) {
-                    this.videoTexture.colorSpace = THREE.SRGBColorSpace;
-                  } else if ("encoding" in this.videoTexture && THREE.sRGBEncoding) {
-                    this.videoTexture.encoding = THREE.sRGBEncoding;
-                  }
+              eyeLayer: function () {
+                if (this.data.eye === "left") return 1;
+                if (this.data.eye === "right") return 2;
+                return 0;
+              },
+              syncEyeLayers: function () {
+                var mesh = this.el.getObject3D("mesh");
+                var layer = this.eyeLayer();
+                var sbs = !!this.data.sbs;
+                if (mesh) {
+                  mesh.traverse(function (node) {
+                    if (!node.isMesh && !node.isObject3D) return;
+                    if (sbs && layer > 0) {
+                      node.layers.set(layer);
+                    } else {
+                      node.layers.set(0);
+                    }
+                  });
                 }
-                this.videoTexture.needsUpdate = true;
-                return this.videoTexture;
+                var sceneEl = this.el.sceneEl;
+                if (!sceneEl || !sceneEl.renderer || !sceneEl.renderer.xr) return;
+                try {
+                  var xrCam = sceneEl.renderer.xr.getCamera();
+                  if (!xrCam || !xrCam.cameras || xrCam.cameras.length < 2) return;
+                  // Both eyes keep layer 0 (HUD / sky); SBS hemispheres live on 1 / 2.
+                  xrCam.cameras[0].layers.enable(0);
+                  xrCam.cameras[1].layers.enable(0);
+                  if (sbs) {
+                    xrCam.cameras[0].layers.enable(1);
+                    xrCam.cameras[0].layers.disable(2);
+                    xrCam.cameras[1].layers.enable(2);
+                    xrCam.cameras[1].layers.disable(1);
+                  } else {
+                    xrCam.cameras[0].layers.disable(1);
+                    xrCam.cameras[0].layers.disable(2);
+                    xrCam.cameras[1].layers.disable(1);
+                    xrCam.cameras[1].layers.disable(2);
+                  }
+                } catch (e) {}
               },
               bindMaterial: function (mat) {
                 var mesh = this.el.getObject3D("mesh");
                 if (!mesh || !mat) return false;
-                var self = this;
+                var layer = this.eyeLayer();
+                var sbs = !!this.data.sbs;
                 mesh.traverse(function (node) {
                   if (!node.isMesh) return;
                   node.material = mat;
-                  node.onBeforeRender = function (renderer, scene, camera) {
-                    if (!self.data.sbs || !self.shaderMaterial || mat !== self.shaderMaterial) return;
-                    var offset = 0;
-                    try {
-                      var xrCam = renderer.xr && renderer.xr.getCamera && renderer.xr.getCamera();
-                      if (xrCam && xrCam.cameras && xrCam.cameras.length > 1) {
-                        if (camera === xrCam.cameras[1]) offset = 0.5;
-                        else if (camera.cameras) return;
-                      }
-                    } catch (e) {}
-                    self.shaderMaterial.uniforms.uvOffset.value.set(offset, 0);
-                  };
+                  node.onBeforeRender = null;
+                  if (sbs && layer > 0) node.layers.set(layer);
+                  else node.layers.set(0);
                 });
                 if (this.el.components.material) {
                   this.el.components.material.material = mat;
@@ -4059,7 +4146,6 @@ enum ExportLANServer {
                 return true;
               },
               applyNativeVideo: function () {
-                // Let A-Frame's built-in video material drive the mesh (most reliable on PC).
                 this._mode = "native";
                 try {
                   this.el.setAttribute("material", {
@@ -4070,72 +4156,17 @@ enum ExportLANServer {
                     npot: true
                   });
                 } catch (e) {}
+                this.syncEyeLayers();
                 return true;
-              },
-              applyBasicVideo: function (videoTex) {
-                if (!this.basicMaterial) {
-                  this.basicMaterial = new THREE.MeshBasicMaterial({
-                    map: videoTex,
-                    side: THREE.DoubleSide,
-                    toneMapped: false
-                  });
-                } else {
-                  this.basicMaterial.map = videoTex;
-                  this.basicMaterial.needsUpdate = true;
-                }
-                this._mode = "basic";
-                return this.bindMaterial(this.basicMaterial);
               },
               applyShaderVideo: function (videoTex) {
                 var data = this.data;
+                var uvX = data.eye === "right" ? 0.5 : 0;
                 if (!this.shaderMaterial) {
-                  this.shaderMaterial = new THREE.ShaderMaterial({
-                    uniforms: {
-                      textureMap: { value: videoTex },
-                      uvOffset: { value: new THREE.Vector2(0, 0) },
-                      keyColor: { value: new THREE.Color(data.keyColor) },
-                      similarity: { value: data.similarity },
-                      smoothness: { value: data.smoothness },
-                      chromaEnabled: { value: data.chroma ? 1.0 : 0.0 },
-                      sbsEnabled: { value: data.sbs ? 1.0 : 0.0 }
-                    },
-                    vertexShader: [
-                      "varying vec2 vUv;",
-                      "void main() {",
-                      "  vUv = uv;",
-                      "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
-                      "}"
-                    ].join("\n"),
-                    fragmentShader: [
-                      "uniform sampler2D textureMap;",
-                      "uniform vec2 uvOffset;",
-                      "uniform vec3 keyColor;",
-                      "uniform float similarity;",
-                      "uniform float smoothness;",
-                      "uniform float chromaEnabled;",
-                      "uniform float sbsEnabled;",
-                      "varying vec2 vUv;",
-                      "void main() {",
-                      "  vec2 eyeUv = (sbsEnabled > 0.5) ? (vUv * vec2(0.5, 1.0) + uvOffset) : vUv;",
-                      "  vec4 videoColor = texture2D(textureMap, eyeUv);",
-                      "  float blend = 1.0;",
-                      "  if (chromaEnabled > 0.5) {",
-                      "    float chromaSCr = 0.5000 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
-                      "    float chromasCb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5000 * videoColor.b;",
-                      "    float keyCr = 0.5000 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
-                      "    float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5000 * keyColor.b;",
-                      "    float distance = sqrt(pow(chromaSCr - keyCr, 2.0) + pow(chromasCb - keyCb, 2.0));",
-                      "    blend = smoothstep(similarity, similarity + smoothness, distance);",
-                      "  }",
-                      "  gl_FragColor = vec4(videoColor.rgb, videoColor.a * blend);",
-                      "}"
-                    ].join("\n"),
-                    transparent: !!data.chroma,
-                    depthWrite: !data.chroma,
-                    side: THREE.DoubleSide
-                  });
+                  this.shaderMaterial = xrMakeChromaMaterial(videoTex, data, uvX);
                 } else {
                   this.shaderMaterial.uniforms.textureMap.value = videoTex;
+                  this.shaderMaterial.uniforms.uvOffset.value.set(uvX, 0);
                   this.shaderMaterial.uniforms.keyColor.value.set(data.keyColor);
                   this.shaderMaterial.uniforms.similarity.value = data.similarity;
                   this.shaderMaterial.uniforms.smoothness.value = data.smoothness;
@@ -4153,21 +4184,24 @@ enum ExportLANServer {
                   if (this._retries++ < 100) setTimeout(this._onApply, 50);
                   return;
                 }
-                // Default path: native A-Frame video material (no custom shader).
+                // Right-eye dome only used for SBS; hide when mono so PC / non-SBS stays single mesh.
+                if (this.data.eye === "right" && !this.data.sbs) {
+                  this.el.object3D.visible = false;
+                  return;
+                }
+                this.el.object3D.visible = true;
                 if (!this.wantsShader()) {
                   this.applyNativeVideo();
                   return;
                 }
-                var videoTex = this.ensureVideoTexture();
+                var videoTex = xrEnsureVideoTexture(this.video);
                 if (!videoTex) {
-                  // Fall back to native until the element has dimensions.
                   this.applyNativeVideo();
                   if (this._retries++ < 100) setTimeout(this._onApply, 100);
                   return;
                 }
                 this.applyShaderVideo(videoTex);
               },
-              // Back-compat for playlist JS that still calls applyShader().
               applyShader: function () {
                 this.applyMaterial();
               }
@@ -4178,6 +4212,7 @@ enum ExportLANServer {
                 var sky = document.querySelector("#virtual-sky");
                 var sceneEl = this.el.sceneEl;
                 var isPassthrough = false;
+                var self = this;
                 function applyPassthrough(on) {
                   isPassthrough = !!on;
                   if (isPassthrough) {
@@ -4198,12 +4233,18 @@ enum ExportLANServer {
                     if (t0) t0.setAttribute("value", "Switch to Passthrough");
                   }
                 }
-                this.el.addEventListener("click", function () {
+                var lastToggleMs = 0;
+                function toggle() {
+                  var now = Date.now();
+                  if (now - lastToggleMs < 280) return;
+                  lastToggleMs = now;
                   applyPassthrough(!isPassthrough);
-                });
+                }
+                // Laser / mouse — HUD itself is raycastable (old plane stole clicks from the box).
+                this.el.addEventListener("click", toggle);
+                this.el.addEventListener("triggerdown", toggle);
                 if (sceneEl) {
                   sceneEl.addEventListener("enter-vr", function () {
-                    // Quest passthrough is immersive-ar only; VR stays opaque void unless toggled.
                     var ar = !!(sceneEl.is && sceneEl.is("ar-mode"));
                     applyPassthrough(ar);
                   });
@@ -4373,9 +4414,9 @@ enum ExportLANServer {
                 </select>
               </label>
               <label><input type="checkbox" id="xr-chroma-toggle"> Chroma</label>
-              <label><input type="checkbox" id="xr-sbs-toggle"> SBS 3D</label>
+              <label><input type="checkbox" id="xr-sbs-toggle" checked> SBS 3D (VR180)</label>
             </div>
-            <p class="muted" style="font-size:0.85rem;max-width:36rem">After Launch, video plays on the A-Frame plane (PC: mouse look / WASD). Prefer <strong>Loop</strong> for PC tests — <code>_working.mp4</code> is often huge/sparse/6K HEVC. Enable Chroma/SBS only for green-screen SBS.</p>
+            <p class="muted" style="font-size:0.85rem;max-width:36rem">After Launch: <strong>180° hemisphere</strong> + SBS eye-split (left/right halves). PC: mouse look / WASD. Prefer <strong>Loop</strong> for tests — <code>_working.mp4</code> is often huge/sparse/6K HEVC. Enable <strong>Chroma</strong> for green-screen over passthrough.</p>
             <p id="xr-label" role="status">Loading playlists…</p>
             <p style="margin: 1rem 0 0">
               <button type="button" class="play-btn" id="xr-launch">Launch Engine</button>
@@ -4396,45 +4437,49 @@ enum ExportLANServer {
             background="color: #0a0a0a"
             webxr="requiredFeatures: local-floor; optionalFeatures: bounded-floor, hand-tracking, layers, anchors, plane-detection"
             xr-mode-ui="enabled: true; XRMode: xr; enterVREnabled: true; enterAREnabled: true"
-            device-orientation-permission-ui="enabled: true; httpsMessage: Use HTTPS via Cloudflare tunnel — on the LAN page paste the tunnel host, tap Update links, then Open XR chroma; cancelButtonText: OK"
-            cursor="rayOrigin: mouse"
-            raycaster="objects: .raycastable">
-            <!-- Flat screen for Enter VR; shader only when Chroma/SBS enabled. -->
-            <a-video
+            device-orientation-permission-ui="enabled: true; httpsMessage: Use HTTPS via Cloudflare tunnel — on the LAN page paste the tunnel host, tap Update links, then Open XR chroma; cancelButtonText: OK">
+            <!-- Dual 180° domes: left=layer1 / right=layer2 for real SBS (Quest AR ignores onBeforeRender eye hacks). -->
+            <a-videosphere
               id="chroma-sphere"
               src="#chroma-stream"
-              width="16"
-              height="9"
-              position="0 1.6 -4"
-              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: false"
-              material="shader: flat; src: #chroma-stream; side: double; npot: true">
-            </a-video>
+              radius="5"
+              phi-length="180"
+              theta-length="100"
+              position="0 1.5 0"
+              rotation="0 -90 0"
+              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left">
+            </a-videosphere>
+            <a-videosphere
+              id="chroma-sphere-right"
+              src="#chroma-stream"
+              radius="5"
+              phi-length="180"
+              theta-length="100"
+              position="0 1.5 0"
+              rotation="0 -90 0"
+              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: right">
+            </a-videosphere>
 
             <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
 
-            <a-entity id="xr-hud" position="0 1.15 -1.9">
-              <a-plane width="1.8" height="0.4" color="#222" opacity="0.9" class="raycastable"></a-plane>
-              <a-box env-toggle
-                     position="0 0 0.02"
-                     width="1.6" height="0.25" depth="0.02"
-                     color="#22c55e"
-                     class="raycastable"
-                     animation__mouseenter="property: scale; to: 1.03 1.03 1.03; startEvents: mouseenter; dur: 150"
-                     animation__mouseleave="property: scale; to: 1 1 1; startEvents: mouseleave; dur: 150">
+            <a-entity laser-controls="hand: left" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.65"></a-entity>
+            <a-entity laser-controls="hand: right" raycaster="objects: .raycastable; far: 6" line="color: #22c55e; opacity: 0.65"></a-entity>
+            <!-- No a-cursor: the fuse reticle is the center halo/donut that tracks the eye. -->
+            <a-entity camera look-controls wasd-controls position="0 1.6 0">
+              <a-entity id="xr-hud" position="0 -0.42 -1.35" env-toggle class="raycastable">
+                <a-plane width="1.5" height="0.32" color="#166534" opacity="0.92"
+                         class="raycastable"
+                         animation__enter="property: scale; to: 1.04 1.04 1.04; startEvents: mouseenter, raycaster-intersected; dur: 120"
+                         animation__leave="property: scale; to: 1 1 1; startEvents: mouseleave, raycaster-intersected-cleared; dur: 120">
+                </a-plane>
                 <a-text id="btn-text"
                         value="Switch to Passthrough"
                         align="center"
                         color="#fff"
-                        width="4"
+                        width="3.2"
                         position="0 0 0.02">
                 </a-text>
-              </a-box>
-            </a-entity>
-
-            <a-entity laser-controls="hand: left" raycaster="objects: .raycastable"></a-entity>
-            <a-entity laser-controls="hand: right" raycaster="objects: .raycastable"></a-entity>
-            <a-entity camera look-controls wasd-controls position="0 1.6 0">
-              <a-cursor raycaster="objects: .raycastable" material="color: #fff; shader: flat"></a-cursor>
+              </a-entity>
             </a-entity>
           </a-scene>
 
@@ -4481,24 +4526,31 @@ enum ExportLANServer {
               video.removeAttribute("crossorigin");
             } catch (e) {}
 
+            function sphereEls() {
+              return [
+                document.getElementById("chroma-sphere"),
+                document.getElementById("chroma-sphere-right")
+              ].filter(Boolean);
+            }
             function sphereComponent() {
               var sphere = document.getElementById("chroma-sphere");
               return sphere && sphere.components && sphere.components["chroma-stereo-sbs"];
             }
             function refreshSphereShader() {
-              var comp = sphereComponent();
-              if (!comp) return;
-              try { comp.applyShader(); } catch (e) {}
+              sphereEls().forEach(function (el) {
+                var comp = el.components && el.components["chroma-stereo-sbs"];
+                if (comp) try { comp.applyShader(); } catch (e) {}
+              });
             }
             function syncShaderToggles() {
-              var comp = sphereComponent();
-              if (!comp) return;
               var chromaOn = !chromaToggle || !!chromaToggle.checked;
               var sbsOn = !sbsToggle || !!sbsToggle.checked;
-              try {
-                comp.el.setAttribute("chroma-stereo-sbs", "chroma", chromaOn);
-                comp.el.setAttribute("chroma-stereo-sbs", "sbs", sbsOn);
-              } catch (e) {}
+              sphereEls().forEach(function (el) {
+                try {
+                  el.setAttribute("chroma-stereo-sbs", "chroma", chromaOn);
+                  el.setAttribute("chroma-stereo-sbs", "sbs", sbsOn);
+                } catch (e) {}
+              });
             }
 
             function setLabel(msg) {
