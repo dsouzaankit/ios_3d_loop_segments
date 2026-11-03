@@ -3241,7 +3241,8 @@ enum ExportLANServer {
         <p>
           <button type="button" id="lan-loop-player-toggle">Show loop player</button>
           <a href="/xr" id="lan-xr-chroma-link">Open XR chroma (loop)</a>
-          <a href="/xr?mode=media" id="lan-xr-media-link">Open XR chroma (working / archive)</a>
+          <a href="/xr?mode=working" id="lan-xr-working-link">Open XR chroma (working)</a>
+          <a href="/xr?mode=archive" id="lan-xr-archive-link">Open XR chroma (archive)</a>
         </p>
         <div id="lan-loop-player" class="lan-loop-player panel" style="display:none" hidden>
           <div class="row" style="margin-top:0">
@@ -3755,11 +3756,12 @@ enum ExportLANServer {
           <button type="button" id="xr-reopen" aria-label="Show file list">Files</button>
           <div id="overlay" class="play-overlay">
             <h1>3D Chroma Key 180° Player</h1>
-            <p class="muted">Two playlists (kept separate): <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working / archive</strong> = list &amp; open <code>_working*.mp4</code> + <code>archive/</code></p>
+            <p class="muted">Three playlists: <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working</strong> = root <code>_working*.mp4</code> (outside archive) · <strong>Archive</strong> = <code>\#(mediaRootHTML)archive/</code> folder</p>
             <p class="warn">Quest WebXR usually needs <strong>HTTPS</strong>. Plain <code>http://phone:8765/xr</code> often cannot enter immersive mode — use a TLS tunnel when testing on headset. A-Frame loads from CDN (headset needs internet once).</p>
             <div class="toolbar" role="group" aria-label="Playlist">
-              <button type="button" id="xr-mode-loop" class="active">Loop playlist</button>
-              <button type="button" id="xr-mode-media">Working / archive</button>
+              <button type="button" id="xr-mode-loop" class="active">Loop</button>
+              <button type="button" id="xr-mode-working">Working</button>
+              <button type="button" id="xr-mode-archive">Archive folder</button>
               <button type="button" id="xr-refresh-list">Refresh list</button>
             </div>
             <div id="xr-file-list" class="xr-file-panel" role="listbox" aria-label="Media files"></div>
@@ -3845,10 +3847,11 @@ enum ExportLANServer {
             var LOOP_PREFIX = "\#(prefixJS)";
             var ARCHIVE_PREFIX = "\#(archiveJS)";
             var RATE_KEY = "loopsegments.lan.xrChromaRate.v1";
-            var MODE_KEY = "loopsegments.lan.xrChromaMode.v1";
+            var MODE_KEY = "loopsegments.lan.xrChromaMode.v2";
             var RATES = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3];
             var loopPlaylist = [];
-            var mediaPlaylist = [];
+            var workingPlaylist = [];
+            var archivePlaylist = [];
             var mode = "loop";
             var index = 0;
             var wantPlay = false;
@@ -3860,7 +3863,8 @@ enum ExportLANServer {
             var prevBtn = document.getElementById("xr-prev");
             var nextBtn = document.getElementById("xr-next");
             var modeLoopBtn = document.getElementById("xr-mode-loop");
-            var modeMediaBtn = document.getElementById("xr-mode-media");
+            var modeWorkingBtn = document.getElementById("xr-mode-working");
+            var modeArchiveBtn = document.getElementById("xr-mode-archive");
             var fileListEl = document.getElementById("xr-file-list");
             var refreshBtn = document.getElementById("xr-refresh-list");
             var reopenBtn = document.getElementById("xr-reopen");
@@ -3869,13 +3873,34 @@ enum ExportLANServer {
             function setLabel(msg) {
               if (label) label.textContent = msg || "";
             }
+            function normalizeMode(m) {
+              if (m === "working" || m === "archive" || m === "loop") return m;
+              if (m === "media") return "working";
+              return "loop";
+            }
             function activePlaylist() {
-              return mode === "media" ? mediaPlaylist : loopPlaylist;
+              if (mode === "working") return workingPlaylist;
+              if (mode === "archive") return archivePlaylist;
+              return loopPlaylist;
             }
             function emptyLabel() {
-              return mode === "media"
-                ? "No _working / archive media yet — export on the phone, then Refresh list"
-                : "No loop/op_*.mp4 yet";
+              if (mode === "working") {
+                return "No root _working*.mp4 yet — export on the phone, then Refresh list";
+              }
+              if (mode === "archive") {
+                return "No archive/ videos yet — finish an export, then Refresh list";
+              }
+              return "No loop/op_*.mp4 yet";
+            }
+            function modeTag() {
+              if (mode === "working") return "working";
+              if (mode === "archive") return "archive";
+              return "loop";
+            }
+            function listGroupTitle() {
+              if (mode === "working") return "Working (media root, outside archive/)";
+              if (mode === "archive") return "Archive folder";
+              return "Loop segments";
             }
             function leafName(path) {
               var n = normPath(path);
@@ -3935,25 +3960,8 @@ enum ExportLANServer {
                 };
                 fileListEl.appendChild(btn);
               }
-              if (mode === "media") {
-                var wi = [];
-                var ai = [];
-                playlist.forEach(function (item, idx) {
-                  if (isWorkingMediaName(item.name)) wi.push({ item: item, idx: idx });
-                  else ai.push({ item: item, idx: idx });
-                });
-                if (wi.length) {
-                  addGroup("Working");
-                  wi.forEach(function (row) { addItem(row.item, row.idx, "working"); });
-                }
-                if (ai.length) {
-                  addGroup("Archive");
-                  ai.forEach(function (row) { addItem(row.item, row.idx, "archive"); });
-                }
-              } else {
-                addGroup("Loop segments");
-                playlist.forEach(function (item, idx) { addItem(item, idx, "loop"); });
-              }
+              addGroup(listGroupTitle());
+              playlist.forEach(function (item, idx) { addItem(item, idx, modeTag()); });
             }
             function snapRate(v) {
               var r = Math.round(Number(v) * 10) / 10;
@@ -3976,13 +3984,12 @@ enum ExportLANServer {
             }
             function readMode() {
               try {
-                var raw = localStorage.getItem(MODE_KEY);
-                if (raw === "media" || raw === "loop") return raw;
+                return normalizeMode(localStorage.getItem(MODE_KEY));
               } catch (e) {}
               return "loop";
             }
             function writeMode(m) {
-              try { localStorage.setItem(MODE_KEY, m); } catch (e) {}
+              try { localStorage.setItem(MODE_KEY, normalizeMode(m)); } catch (e) {}
             }
             function applyRate() {
               var v = readRate();
@@ -3991,7 +3998,8 @@ enum ExportLANServer {
             }
             function syncModeButtons() {
               if (modeLoopBtn) modeLoopBtn.classList.toggle("active", mode === "loop");
-              if (modeMediaBtn) modeMediaBtn.classList.toggle("active", mode === "media");
+              if (modeWorkingBtn) modeWorkingBtn.classList.toggle("active", mode === "working");
+              if (modeArchiveBtn) modeArchiveBtn.classList.toggle("active", mode === "archive");
             }
             function normPath(name) {
               return String(name || "").replace(/\\/g, "/");
@@ -4058,35 +4066,41 @@ enum ExportLANServer {
               }
               return out;
             }
-            function buildMediaPlaylist(files) {
+            function buildWorkingPlaylist(files) {
               var list = Array.isArray(files) ? files : [];
-              var working = [];
-              var archive = [];
+              var out = [];
               var seen = {};
               list.forEach(function (f) {
                 var name = f && f.name;
-                if (!name || seen[name]) return;
-                if (isWorkingMediaName(name)) {
-                  seen[name] = true;
-                  working.push(entryFromFile(f));
-                } else if (isArchiveMediaName(name)) {
-                  seen[name] = true;
-                  archive.push(entryFromFile(f));
-                }
+                if (!name || seen[name] || !isWorkingMediaName(name)) return;
+                seen[name] = true;
+                out.push(entryFromFile(f));
               });
-              working.sort(function (a, b) {
+              out.sort(function (a, b) {
                 var aw = /_working\.mp4$/i.test(a.name) ? 0 : 1;
                 var bw = /_working\.mp4$/i.test(b.name) ? 0 : 1;
                 if (aw !== bw) return aw - bw;
                 return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
               });
-              archive.sort(function (a, b) {
+              return out;
+            }
+            function buildArchivePlaylist(files) {
+              var list = Array.isArray(files) ? files : [];
+              var out = [];
+              var seen = {};
+              list.forEach(function (f) {
+                var name = f && f.name;
+                if (!name || seen[name] || !isArchiveMediaName(name)) return;
+                seen[name] = true;
+                out.push(entryFromFile(f));
+              });
+              out.sort(function (a, b) {
                 if (a.modified && b.modified && a.modified !== b.modified) {
                   return a.modified > b.modified ? -1 : 1;
                 }
                 return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
               });
-              return working.concat(archive);
+              return out;
             }
             function loadIndex(i, autoplay) {
               var playlist = activePlaylist();
@@ -4100,8 +4114,7 @@ enum ExportLANServer {
               wantPlay = !!autoplay;
               video.src = item.url;
               applyRate();
-              var tag = mode === "media" ? "working/archive" : "loop";
-              setLabel("[" + tag + "] " + (index + 1) + "/" + playlist.length + ": " + item.name);
+              setLabel("[" + modeTag() + "] " + (index + 1) + "/" + playlist.length + ": " + item.name);
               renderFileList();
               var sphere = document.getElementById("chroma-sphere");
               if (sphere && sphere.components && sphere.components["chroma-stereo-sbs"]) {
@@ -4115,7 +4128,7 @@ enum ExportLANServer {
               }
             }
             function setMode(next, keepPlay) {
-              mode = next === "media" ? "media" : "loop";
+              mode = normalizeMode(next);
               writeMode(mode);
               syncModeButtons();
               index = 0;
@@ -4131,7 +4144,8 @@ enum ExportLANServer {
             }
             function applyFiles(files) {
               loopPlaylist = buildLoopPlaylist(files);
-              mediaPlaylist = buildMediaPlaylist(files);
+              workingPlaylist = buildWorkingPlaylist(files);
+              archivePlaylist = buildArchivePlaylist(files);
               applyRate();
               if (activePlaylist().length) loadIndex(Math.min(index, activePlaylist().length - 1), false);
               else {
@@ -4166,7 +4180,8 @@ enum ExportLANServer {
             }
             if (launchBtn) launchBtn.onclick = initializePlayer;
             if (modeLoopBtn) modeLoopBtn.onclick = function () { setMode("loop", false); };
-            if (modeMediaBtn) modeMediaBtn.onclick = function () { setMode("media", false); };
+            if (modeWorkingBtn) modeWorkingBtn.onclick = function () { setMode("working", false); };
+            if (modeArchiveBtn) modeArchiveBtn.onclick = function () { setMode("archive", false); };
             if (refreshBtn) refreshBtn.onclick = function () { refreshPlaylists(); };
             if (reopenBtn) {
               reopenBtn.onclick = function () {
@@ -4209,10 +4224,12 @@ enum ExportLANServer {
             showOverlay(true);
             try {
               var params = new URLSearchParams(window.location.search || "");
-              if (params.get("mode") === "media") mode = "media";
-              else if (params.get("mode") === "loop") mode = "loop";
-              writeMode(mode);
-              syncModeButtons();
+              var qMode = params.get("mode");
+              if (qMode) {
+                mode = normalizeMode(qMode);
+                writeMode(mode);
+                syncModeButtons();
+              }
             } catch (e) {}
             refreshPlaylists();
           })();
