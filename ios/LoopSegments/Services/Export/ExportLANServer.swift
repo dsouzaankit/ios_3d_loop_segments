@@ -3968,6 +3968,27 @@ enum ExportLANServer {
               padding: 0.7rem 1rem; border-radius: 999px; border: 1px solid #444;
               background: #166534; color: #fff; font-weight: 700; cursor: pointer;
             }
+            #xr-transport {
+              display: none; position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%);
+              z-index: 10000; width: min(42rem, calc(100vw - 7rem));
+              padding: 0.55rem 0.75rem; border-radius: 12px; border: 1px solid #333;
+              background: rgba(15, 23, 42, 0.92); color: #f8fafc;
+              box-shadow: 0 8px 28px rgba(0,0,0,0.45); backdrop-filter: blur(6px);
+            }
+            #xr-transport .xr-transport-row {
+              display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
+            }
+            #xr-transport button {
+              padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid #444;
+              background: #1e293b; color: #f8fafc; cursor: pointer; font: inherit;
+            }
+            #xr-transport #xr-seek {
+              flex: 1 1 10rem; min-width: 8rem; accent-color: #22c55e;
+            }
+            #xr-transport #xr-time {
+              font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #cbd5e1;
+              min-width: 7.5rem; text-align: right;
+            }
             /* Texture source only — keep in DOM/layout so WebGL can sample; never cover a-scene. */
             #chroma-stream {
               position: fixed; left: -2px; top: -2px; width: 2px; height: 2px;
@@ -4020,6 +4041,15 @@ enum ExportLANServer {
         </head>
         <body>
           <button type="button" id="xr-reopen" aria-label="Show file list">Files</button>
+          <div id="xr-transport" role="group" aria-label="Playback controls" hidden>
+            <div class="xr-transport-row">
+              <button type="button" id="xr-playpause" title="Play / Pause">Play</button>
+              <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
+              <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
+              <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
+              <span id="xr-time">0:00 / 0:00</span>
+            </div>
+          </div>
           <div id="overlay" class="play-overlay">
             <h1>3D Chroma Key 180° Player</h1>
             <p class="muted">Three playlists: <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working</strong> = root <code>_working*.mp4</code> (outside archive) · <strong>Archive</strong> = <code>\#(mediaRootHTML)archive/</code> folder</p>
@@ -4137,8 +4167,15 @@ enum ExportLANServer {
             var fileListEl = document.getElementById("xr-file-list");
             var refreshBtn = document.getElementById("xr-refresh-list");
             var reopenBtn = document.getElementById("xr-reopen");
+            var transport = document.getElementById("xr-transport");
+            var playPauseBtn = document.getElementById("xr-playpause");
+            var seekEl = document.getElementById("xr-seek");
+            var seekBackBtn = document.getElementById("xr-seek-back");
+            var seekFwdBtn = document.getElementById("xr-seek-fwd");
+            var timeEl = document.getElementById("xr-time");
             var chromaToggle = document.getElementById("xr-chroma-toggle");
             var sbsToggle = document.getElementById("xr-sbs-toggle");
+            var seekDragging = false;
             if (!video || !overlay) return;
             // Same-origin LAN files must not use crossOrigin=anonymous (no CORS headers → black WebGL + audio OK).
             try {
@@ -4210,9 +4247,53 @@ enum ExportLANServer {
               if (b < 1024 * 1024) return Math.round(b / 1024) + " KB";
               return (b / (1024 * 1024)).toFixed(1) + " MB";
             }
+            function formatClock(sec) {
+              var s = Math.max(0, Math.floor(Number(sec) || 0));
+              var h = Math.floor(s / 3600);
+              var m = Math.floor((s % 3600) / 60);
+              var r = s % 60;
+              var mm = (h > 0 ? String(m).padStart(2, "0") : String(m));
+              var ss = String(r).padStart(2, "0");
+              return h > 0 ? (h + ":" + mm + ":" + ss) : (mm + ":" + ss);
+            }
+            function syncPlayPauseLabel() {
+              if (!playPauseBtn) return;
+              playPauseBtn.textContent = video.paused ? "Play" : "Pause";
+            }
+            function syncTransportUI() {
+              if (!seekEl || !timeEl) return;
+              var dur = Number(video.duration);
+              if (!isFinite(dur) || dur < 0) dur = 0;
+              var cur = Number(video.currentTime) || 0;
+              if (!seekDragging) {
+                seekEl.max = String(dur > 0 ? dur : 0);
+                seekEl.value = String(Math.min(cur, dur > 0 ? dur : cur));
+              }
+              timeEl.textContent = formatClock(cur) + " / " + formatClock(dur);
+              syncPlayPauseLabel();
+            }
+            function showTransport(show) {
+              if (!transport) return;
+              transport.style.display = show ? "block" : "none";
+              if (show) transport.removeAttribute("hidden");
+              else transport.setAttribute("hidden", "");
+              if (show) syncTransportUI();
+            }
             function showOverlay(show) {
               overlay.style.display = show ? "flex" : "none";
               if (reopenBtn) reopenBtn.style.display = show ? "none" : "block";
+              showTransport(!show);
+            }
+            function seekBy(delta) {
+              try {
+                var dur = Number(video.duration);
+                var next = (Number(video.currentTime) || 0) + delta;
+                if (isFinite(dur) && dur > 0) next = Math.max(0, Math.min(dur, next));
+                else next = Math.max(0, next);
+                video.currentTime = next;
+                syncTransportUI();
+                refreshSphereShader();
+              } catch (e) {}
             }
             var workingSeekSec = 0;
             function refreshWorkingSeek() {
@@ -4540,6 +4621,47 @@ enum ExportLANServer {
                 renderFileList();
               };
             }
+            if (playPauseBtn) {
+              playPauseBtn.onclick = function () {
+                if (video.paused) {
+                  wantPlay = true;
+                  var p = video.play();
+                  if (p && typeof p.then === "function") {
+                    p.then(function () { refreshSphereShader(); syncPlayPauseLabel(); }).catch(function () {});
+                  } else {
+                    refreshSphereShader();
+                    syncPlayPauseLabel();
+                  }
+                } else {
+                  video.pause();
+                  wantPlay = false;
+                  syncPlayPauseLabel();
+                }
+              };
+            }
+            if (seekBackBtn) seekBackBtn.onclick = function () { seekBy(-10); };
+            if (seekFwdBtn) seekFwdBtn.onclick = function () { seekBy(10); };
+            if (seekEl) {
+              seekEl.addEventListener("pointerdown", function () { seekDragging = true; });
+              seekEl.addEventListener("pointerup", function () { seekDragging = false; syncTransportUI(); });
+              seekEl.addEventListener("change", function () {
+                var t = parseFloat(seekEl.value);
+                if (!isFinite(t)) return;
+                try {
+                  video.currentTime = t;
+                  refreshSphereShader();
+                } catch (e) {}
+                seekDragging = false;
+                syncTransportUI();
+              });
+              seekEl.addEventListener("input", function () {
+                if (!timeEl) return;
+                var t = parseFloat(seekEl.value) || 0;
+                var dur = Number(video.duration);
+                if (!isFinite(dur) || dur < 0) dur = 0;
+                timeEl.textContent = formatClock(t) + " / " + formatClock(dur);
+              });
+            }
             if (prevBtn) prevBtn.onclick = function () {
               if (!activePlaylist().length) return;
               loadIndex(index - 1, wantPlay && !video.paused);
@@ -4557,6 +4679,11 @@ enum ExportLANServer {
                 applyRate();
               };
             }
+            video.addEventListener("timeupdate", syncTransportUI);
+            video.addEventListener("durationchange", syncTransportUI);
+            video.addEventListener("loadedmetadata", syncTransportUI);
+            video.addEventListener("play", syncPlayPauseLabel);
+            video.addEventListener("pause", syncPlayPauseLabel);
             video.addEventListener("ended", function () {
               if (!activePlaylist().length) return;
               loadIndex(index + 1, true);
