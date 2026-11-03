@@ -4403,6 +4403,8 @@ enum ExportLANServer {
                 this._mode = "native";
                 this.ensureDomeGeometry();
                 this.applySbsUVs();
+                // Desktop: keep A-Frame's own video material (VideoTexture MeshBasic was black on PC).
+                // Domes (immersive-only callers): same attribute path once session starts.
                 try {
                   this.el.setAttribute("material", {
                     shader: "flat",
@@ -4412,6 +4414,10 @@ enum ExportLANServer {
                     npot: true
                   });
                 } catch (e) {}
+                // Ensure flat screen is on after material bind (dome thrash used to leave it hidden/black).
+                if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
+                  this.el.object3D.visible = true;
+                }
                 this.syncEyeLayers();
                 return true;
               },
@@ -4437,6 +4443,12 @@ enum ExportLANServer {
                 return this.bindMaterial(this.shaderMaterial);
               },
               applyMaterial: function () {
+                // Domes must not touch A-Frame's shared video material until immersive.
+                // Otherwise they thrash #chroma-stream and the PC flat a-video goes black.
+                if (!this.isDesktopRole() && !this.isImmersiveStereo()) {
+                  this.syncEyeLayers();
+                  return;
+                }
                 this.ensureDomeGeometry();
                 var mesh = this.el.getObject3D("mesh");
                 if (!mesh) {
@@ -4450,7 +4462,6 @@ enum ExportLANServer {
                   this.applyCanvasVideo(dsTex);
                   return;
                 }
-                // Still bind materials even if temporarily hidden so Enter AR is ready.
                 if (!this.wantsShader()) {
                   this.applyNativeVideo();
                   return;
@@ -4845,14 +4856,16 @@ enum ExportLANServer {
               material="shader: flat; src: #chroma-stream; side: double; npot: true"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: both; role: desktop">
             </a-video>
-            <!-- Immersive VR180: explicit hemisphere (a-videosphere phi-length was ignored → 360 stretch). -->
+            <!-- Immersive VR180: explicit hemisphere (a-videosphere phi-length was ignored → 360 stretch).
+                 Start hidden — visible before syncEyeLayers blacks out PC flat a-video (camera inside dome). -->
             <a-entity
               id="chroma-sphere"
+              visible="false"
               geometry="primitive: sphere; radius: 5; phiLength: 180; thetaLength: 180; segmentsWidth: 64; segmentsHeight: 64"
               scale="1 1 -1"
               position="0 1.6 0"
               rotation="0 -90 0"
-              material="shader: flat; src: #chroma-stream; side: double; npot: true"
+              material="shader: flat; color: #000; side: double"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left; role: dome">
             </a-entity>
             <a-entity
@@ -4862,7 +4875,7 @@ enum ExportLANServer {
               position="0 1.6 0"
               rotation="0 -90 0"
               visible="false"
-              material="shader: flat; src: #chroma-stream; side: double; npot: true"
+              material="shader: flat; color: #000; side: double"
               chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: right; role: dome">
             </a-entity>
 
