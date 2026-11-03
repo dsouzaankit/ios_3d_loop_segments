@@ -14,7 +14,9 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 374 (1.3.1):** Chroma keys on the GPU, so AR playback is not stalled by a per-pixel read. Enter VR keeps the hemisphere facing session forward instead of turning with the headset. Build 373 was cancelled and folded into this one.
+**Build 375 (1.3.1):** Zooming out pulls the vertical arc in by an extra 14°, matching the headset’s shorter view. Width stays 180° at zoom 1. Build 374 was cancelled; its GPU chroma and forward-facing VR hemisphere are in this build.
+
+**Build 374 (1.3.1):** Cancelled before an IPA was copied. Chroma keys on the GPU, and Enter VR keeps the hemisphere facing session forward. Those changes shipped in 375.
 
 **Build 372 (1.3.1):** The chroma key color comes from the Key picker on the page and the playback bar. The choice is remembered.
 
