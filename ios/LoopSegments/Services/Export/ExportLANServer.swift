@@ -222,17 +222,32 @@ enum ExportLANServer {
                 nwListener.newConnectionHandler = { connection in
                     // Per-connection queue so one slow/hung request cannot wedge every LAN client
                     // (serial `queue` previously blocked all HTTP while TCP still accepted).
+                    // Set stateUpdateHandler BEFORE start: ready is delivered on connQueue and can
+                    // race ahead of work still on the listener queue (TCP up, 0 HTTP bytes).
                     let id = ObjectIdentifier(connection)
                     let connQueue = DispatchQueue(label: "com.loopsegments.lan-conn.\(id)")
-                    connection.start(queue: connQueue)
                     lock.lock()
                     connections[id] = connection
                     lock.unlock()
-                    Self.receiveRequest(on: connection) { [id] in
+                    let finished: () -> Void = {
                         lock.lock()
                         connections.removeValue(forKey: id)
                         lock.unlock()
                     }
+                    connection.stateUpdateHandler = { state in
+                        switch state {
+                        case .ready:
+                            connection.stateUpdateHandler = nil
+                            Self.receiveRequest(on: connection, done: finished)
+                        case .failed, .cancelled:
+                            connection.stateUpdateHandler = nil
+                            connection.cancel()
+                            finished()
+                        default:
+                            break
+                        }
+                    }
+                    connection.start(queue: connQueue)
                 }
 
                 nwListener.start(queue: queue)
