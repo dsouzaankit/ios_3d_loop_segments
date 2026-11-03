@@ -5114,9 +5114,6 @@ enum ExportLANServer {
               <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
-              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Zoom
-                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="0.6" style="width:7rem" aria-label="Zoom">
-              </label>
               <span id="xr-time">0:00 / 0:00</span>
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Vol
                 <input type="range" id="xr-volume" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
@@ -5149,6 +5146,9 @@ enum ExportLANServer {
                   <option value="1.2">1.2×</option>
                   <option value="1.3">1.3×</option>
                 </select>
+              </label>
+              <label>Zoom
+                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="0.6" style="width:7rem" aria-label="Zoom">
               </label>
               <label>Vol
                 <input type="range" id="xr-volume-launch" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">

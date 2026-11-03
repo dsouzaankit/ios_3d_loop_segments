@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 364 (1.3.1):** Zoom slider stays on the file page only. It is no longer drawn on the playback bar over the AR view.
+
 **Build 363 (1.3.1):** Zoom scales the horizontal and vertical arcs by the same amount. The AV1 resolve keeps the frame up to 6144 wide and copies the video colors unchanged.
 
 **Build 362 (1.3.1):** Quest AR AV1 is resolved with a full-frame GPU pass. Copying that video into a 2D canvas was showing the decoder’s tile atlas (one block on top, two splitting the bottom). Minute-segment canvas updates run on every new frame again. Volume is on the page and on a − / + control in the headset.
