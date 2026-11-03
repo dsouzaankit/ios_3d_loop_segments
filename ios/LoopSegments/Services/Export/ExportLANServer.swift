@@ -4001,7 +4001,8 @@ enum ExportLANServer {
 
             // Shared DOM canvas. A-Frame material src (not a raw CanvasTexture) — Quest 3 AR
             // drops MeshBasicMaterial maps, which blanked both clips after the 1536 downscale.
-            window.__xrZoom = 0.65;
+            window.__xrZoom = 0.6;
+            window.__xrZoomSteps = [0.5, 0.6, 0.7, 0.8, 0.9, 1];
             var __xrDs = { canvas: null, ctx: null, stamp: "" };
             function xrApplyChromaKey(ctx, cw, ch, keyHex, similarity, smoothness) {
               var img = ctx.getImageData(0, 0, cw, ch);
@@ -4205,7 +4206,7 @@ enum ExportLANServer {
               },
               domeZoom: function () {
                 var z = Number(window.__xrZoom);
-                if (!(z > 0)) z = 0.65;
+                if (!(z > 0)) z = 0.6;
                 return Math.max(0.4, Math.min(1, z));
               },
               // A-Frame videosphere ignored phi-length → VR180 stretched to 360. Own the BufferGeometry.
@@ -4707,6 +4708,72 @@ enum ExportLANServer {
                 window.__xrSyncPassthroughHud = syncHudVisible;
               }
             });
+
+            // Headset zoom. HTML range is off-screen in AR, so − / + steps live on the camera.
+            AFRAME.registerComponent("xr-zoom-steps", {
+              init: function () {
+                var root = this.el;
+                var sceneEl = this.el.sceneEl;
+                var lastMs = 0;
+                function steps() {
+                  return (window.__xrZoomSteps && window.__xrZoomSteps.length) ? window.__xrZoomSteps : [0.5, 0.6, 0.7, 0.8, 0.9, 1];
+                }
+                function nearest(z) {
+                  var list = steps();
+                  var best = 0;
+                  var bestD = 99;
+                  for (var i = 0; i < list.length; i++) {
+                    var d = Math.abs(list[i] - z);
+                    if (d < bestD) { bestD = d; best = i; }
+                  }
+                  return best;
+                }
+                function paint(z) {
+                  var lab = document.getElementById("xr-zoom-label");
+                  if (lab) lab.setAttribute("value", Math.round(z * 100) + "%");
+                }
+                function syncVis() {
+                  var on = false;
+                  try {
+                    on = !!(sceneEl && sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode")));
+                  } catch (e) {}
+                  try { root.setAttribute("visible", on ? "true" : "false"); } catch (e2) {}
+                  if (root.object3D) root.object3D.visible = on;
+                }
+                function step(dir) {
+                  var list = steps();
+                  var i = nearest(Number(window.__xrZoom) || 0.6) + dir;
+                  if (i < 0) i = 0;
+                  if (i > list.length - 1) i = list.length - 1;
+                  var z = list[i];
+                  window.__xrZoom = z;
+                  var zoomEl = document.getElementById("xr-zoom");
+                  if (zoomEl) zoomEl.value = String(z);
+                  paint(z);
+                  ["chroma-screen", "chroma-sphere", "chroma-sphere-right"].forEach(function (id) {
+                    var el = document.getElementById(id);
+                    var comp = el && el.components && el.components["chroma-stereo-sbs"];
+                    if (!comp) return;
+                    comp._domeGeoReady = false;
+                    try { comp.ensureDomeGeometry(); comp.syncEyeLayers(); } catch (e3) {}
+                  });
+                }
+                root.addEventListener("click", function (ev) {
+                  var now = Date.now();
+                  if (now - lastMs < 280) return;
+                  var id = ev.target && ev.target.id;
+                  if (id !== "xr-zoom-out" && id !== "xr-zoom-in") return;
+                  lastMs = now;
+                  step(id === "xr-zoom-in" ? 1 : -1);
+                });
+                if (sceneEl) {
+                  sceneEl.addEventListener("enter-vr", syncVis);
+                  sceneEl.addEventListener("exit-vr", syncVis);
+                }
+                syncVis();
+                paint(Number(window.__xrZoom) || 0.6);
+              }
+            });
           })();
           </script>
           <style>
@@ -4916,7 +4983,7 @@ enum ExportLANServer {
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Zoom
-                <input type="range" id="xr-zoom" min="0.45" max="1" step="0.05" value="0.65" style="width:7rem" aria-label="Zoom">
+                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="0.6" style="width:7rem" aria-label="Zoom">
               </label>
               <span id="xr-time">0:00 / 0:00</span>
               <p id="xr-tex-note" hidden></p>
@@ -5027,6 +5094,14 @@ enum ExportLANServer {
                         wrap-count="14"
                         position="0 0 0.02">
                 </a-text>
+              </a-entity>
+              <!-- AR/VR only. Stepped zoom; the page slider is not reachable inside the headset. -->
+              <a-entity id="xr-zoom-hud" visible="false" position="0 -0.68 -1.25" xr-zoom-steps>
+                <a-plane id="xr-zoom-out" class="raycastable" width="0.32" height="0.24" color="#14532d" position="-0.46 0 0"></a-plane>
+                <a-text value="-" align="center" baseline="center" color="#fff" width="0.8" position="-0.46 0 0.02"></a-text>
+                <a-text id="xr-zoom-label" value="60%" align="center" baseline="center" color="#fff" width="1.1" position="0 0 0.02"></a-text>
+                <a-plane id="xr-zoom-in" class="raycastable" width="0.32" height="0.24" color="#14532d" position="0.46 0 0"></a-plane>
+                <a-text value="+" align="center" baseline="center" color="#fff" width="0.8" position="0.46 0 0.02"></a-text>
               </a-entity>
             </a-entity>
           </a-scene>
@@ -5711,9 +5786,11 @@ enum ExportLANServer {
             if (refreshBtn) refreshBtn.onclick = function () { refreshPlaylists(); };
             var zoomEl = document.getElementById("xr-zoom");
             if (zoomEl) {
-              window.__xrZoom = Number(zoomEl.value) || 0.65;
+              window.__xrZoom = Number(zoomEl.value) || 0.6;
               zoomEl.addEventListener("input", function () {
-                window.__xrZoom = Number(zoomEl.value) || 0.65;
+                window.__xrZoom = Number(zoomEl.value) || 0.6;
+                var lab = document.getElementById("xr-zoom-label");
+                if (lab) lab.setAttribute("value", Math.round(window.__xrZoom * 100) + "%");
                 sphereEls().forEach(function (el) {
                   var comp = el.components && el.components["chroma-stereo-sbs"];
                   if (!comp) return;
