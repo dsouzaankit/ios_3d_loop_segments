@@ -3578,57 +3578,95 @@ enum ExportLANServer {
               schema: {
                 keyColor: { type: "color", default: "#00ff00" },
                 similarity: { type: "number", default: 0.3 },
-                smoothness: { type: "number", default: 0.08 }
+                smoothness: { type: "number", default: 0.08 },
+                chroma: { type: "boolean", default: true },
+                sbs: { type: "boolean", default: true }
               },
               init: function () {
-                this._applied = false;
+                this.video = document.querySelector("#chroma-stream");
+                this.videoTexture = null;
+                this.shaderMaterial = null;
+                this._retries = 0;
                 this._onApply = this.applyShader.bind(this);
-                this.el.addEventListener("materialtextureloaded", this._onApply);
                 this.el.addEventListener("object3dset", this._onApply);
-                var video = document.querySelector("#chroma-stream");
-                if (video) {
-                  video.addEventListener("loadeddata", this._onApply);
-                  video.addEventListener("play", this._onApply);
+                if (this.el.sceneEl) {
+                  this.el.sceneEl.addEventListener("loaded", this._onApply);
+                }
+                if (this.video) {
+                  this.video.addEventListener("loadeddata", this._onApply);
+                  this.video.addEventListener("loadedmetadata", this._onApply);
+                  this.video.addEventListener("play", this._onApply);
                 }
                 this.applyShader();
               },
+              update: function () {
+                this.syncUniforms();
+              },
               remove: function () {
-                this.el.removeEventListener("materialtextureloaded", this._onApply);
                 this.el.removeEventListener("object3dset", this._onApply);
+                if (this.videoTexture) {
+                  this.videoTexture.dispose();
+                  this.videoTexture = null;
+                }
+              },
+              tick: function () {
+                // Video frames only upload when needsUpdate is set each frame.
+                if (this.videoTexture) this.videoTexture.needsUpdate = true;
+              },
+              syncUniforms: function () {
+                var mat = this.shaderMaterial;
+                if (!mat || !mat.uniforms) return;
+                var data = this.data;
+                mat.uniforms.keyColor.value.set(data.keyColor);
+                mat.uniforms.similarity.value = data.similarity;
+                mat.uniforms.smoothness.value = data.smoothness;
+                mat.uniforms.chromaEnabled.value = data.chroma ? 1.0 : 0.0;
+                mat.uniforms.sbsEnabled.value = data.sbs ? 1.0 : 0.0;
+                mat.transparent = !!data.chroma;
+                mat.depthWrite = !data.chroma;
+              },
+              ensureVideoTexture: function () {
+                var video = this.video;
+                if (!video || !video.videoWidth) return null;
+                if (!this.videoTexture) {
+                  this.videoTexture = new THREE.VideoTexture(video);
+                  this.videoTexture.minFilter = THREE.LinearFilter;
+                  this.videoTexture.magFilter = THREE.LinearFilter;
+                  this.videoTexture.generateMipmaps = false;
+                  this.videoTexture.wrapS = THREE.ClampToEdgeWrapping;
+                  this.videoTexture.wrapT = THREE.ClampToEdgeWrapping;
+                  if ("colorSpace" in this.videoTexture && THREE.SRGBColorSpace) {
+                    this.videoTexture.colorSpace = THREE.SRGBColorSpace;
+                  } else if ("encoding" in this.videoTexture && THREE.sRGBEncoding) {
+                    this.videoTexture.encoding = THREE.sRGBEncoding;
+                  }
+                }
+                this.videoTexture.needsUpdate = true;
+                return this.videoTexture;
               },
               applyShader: function () {
                 var mesh = this.el.getObject3D("mesh");
-                if (!mesh) return;
-                var data = this.data;
-                var targetColor = new THREE.Color(data.keyColor);
+                var videoTex = this.ensureVideoTexture();
+                if (!mesh) {
+                  if (this._retries++ < 80) setTimeout(this._onApply, 50);
+                  return;
+                }
+                if (!videoTex) {
+                  if (this._retries++ < 80) setTimeout(this._onApply, 100);
+                  return;
+                }
                 var self = this;
-                mesh.traverse(function (node) {
-                  if (!node.isMesh || !node.material) return;
-                  var videoTexture = node.material.map;
-                  if (!videoTexture && node.material.uniforms && node.material.uniforms.textureMap) {
-                    videoTexture = node.material.uniforms.textureMap.value;
-                  }
-                  if (!videoTexture) return;
-
-                  // SBS crop only in the fragment shader (do not also set texture.repeat).
-                  if (videoTexture.repeat) videoTexture.repeat.set(1, 1);
-                  if (videoTexture.offset) videoTexture.offset.set(0, 0);
-
-                  if (self._applied && node.material.type === "ShaderMaterial" && node.material.uniforms) {
-                    node.material.uniforms.textureMap.value = videoTexture;
-                    node.material.uniforms.keyColor.value = targetColor;
-                    node.material.uniforms.similarity.value = data.similarity;
-                    node.material.uniforms.smoothness.value = data.smoothness;
-                    return;
-                  }
-
-                  var customMaterial = new THREE.ShaderMaterial({
+                var data = this.data;
+                if (!this.shaderMaterial) {
+                  this.shaderMaterial = new THREE.ShaderMaterial({
                     uniforms: {
-                      textureMap: { value: videoTexture },
+                      textureMap: { value: videoTex },
                       uvOffset: { value: new THREE.Vector2(0, 0) },
-                      keyColor: { value: targetColor },
+                      keyColor: { value: new THREE.Color(data.keyColor) },
                       similarity: { value: data.similarity },
-                      smoothness: { value: data.smoothness }
+                      smoothness: { value: data.smoothness },
+                      chromaEnabled: { value: data.chroma ? 1.0 : 0.0 },
+                      sbsEnabled: { value: data.sbs ? 1.0 : 0.0 }
                     },
                     vertexShader: [
                       "varying vec2 vUv;",
@@ -3643,25 +3681,37 @@ enum ExportLANServer {
                       "uniform vec3 keyColor;",
                       "uniform float similarity;",
                       "uniform float smoothness;",
+                      "uniform float chromaEnabled;",
+                      "uniform float sbsEnabled;",
                       "varying vec2 vUv;",
                       "void main() {",
-                      "  vec2 eyeUv = vUv * vec2(0.5, 1.0) + uvOffset;",
+                      "  vec2 eyeUv = (sbsEnabled > 0.5) ? (vUv * vec2(0.5, 1.0) + uvOffset) : vUv;",
                       "  vec4 videoColor = texture2D(textureMap, eyeUv);",
-                      "  float chromaSCr = 0.5000 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
-                      "  float chromasCb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5000 * videoColor.b;",
-                      "  float keyCr = 0.5000 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
-                      "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5000 * keyColor.b;",
-                      "  float distance = sqrt(pow(chromaSCr - keyCr, 2.0) + pow(chromasCb - keyCb, 2.0));",
-                      "  float blend = smoothstep(similarity, similarity + smoothness, distance);",
+                      "  float blend = 1.0;",
+                      "  if (chromaEnabled > 0.5) {",
+                      "    float chromaSCr = 0.5000 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
+                      "    float chromasCb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5000 * videoColor.b;",
+                      "    float keyCr = 0.5000 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
+                      "    float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5000 * keyColor.b;",
+                      "    float distance = sqrt(pow(chromaSCr - keyCr, 2.0) + pow(chromasCb - keyCb, 2.0));",
+                      "    blend = smoothstep(similarity, similarity + smoothness, distance);",
+                      "  }",
                       "  gl_FragColor = vec4(videoColor.rgb, videoColor.a * blend);",
                       "}"
                     ].join("\n"),
                     transparent: true,
                     depthWrite: false,
-                    side: THREE.BackSide
+                    side: THREE.DoubleSide
                   });
-                  node.material = customMaterial;
+                } else {
+                  this.shaderMaterial.uniforms.textureMap.value = videoTex;
+                }
+                this.syncUniforms();
+                mesh.traverse(function (node) {
+                  if (!node.isMesh) return;
+                  node.material = self.shaderMaterial;
                   node.onBeforeRender = function (renderer, scene, camera) {
+                    if (!self.data.sbs || !self.shaderMaterial) return;
                     var offset = 0;
                     try {
                       var xrCam = renderer.xr && renderer.xr.getCamera && renderer.xr.getCamera();
@@ -3672,10 +3722,14 @@ enum ExportLANServer {
                         offset = 0.5;
                       }
                     } catch (e) {}
-                    customMaterial.uniforms.uvOffset.value.set(offset, 0);
+                    self.shaderMaterial.uniforms.uvOffset.value.set(offset, 0);
                   };
-                  self._applied = true;
                 });
+                // Stop A-Frame's material component from fighting the custom shader.
+                if (this.el.components.material) {
+                  this.el.components.material.material = this.shaderMaterial;
+                }
+                this.el.object3D.visible = true;
               }
             });
 
@@ -3779,6 +3833,8 @@ enum ExportLANServer {
                   <option value="1.3">1.3×</option>
                 </select>
               </label>
+              <label><input type="checkbox" id="xr-chroma-toggle" checked> Chroma</label>
+              <label><input type="checkbox" id="xr-sbs-toggle" checked> SBS 3D</label>
             </div>
             <p id="xr-label" role="status">Loading playlists…</p>
             <p style="margin: 1rem 0 0">
@@ -3802,14 +3858,15 @@ enum ExportLANServer {
               <video id="chroma-stream" playsinline webkit-playsinline></video>
             </a-assets>
 
+            <!-- No src here: chroma-stereo-sbs owns a THREE.VideoTexture from #chroma-stream (avoids audio-only / black mesh). -->
             <a-videosphere
               id="chroma-sphere"
-              src="#chroma-stream"
-              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08"
-              radius="5"
+              chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: true; sbs: true"
+              material="shader: flat; color: #111; side: back"
+              radius="20"
               phi-length="180"
               theta-length="100"
-              position="0 1.5 0"
+              position="0 1.6 0"
               rotation="0 -90 0">
             </a-videosphere>
 
@@ -3868,7 +3925,29 @@ enum ExportLANServer {
             var fileListEl = document.getElementById("xr-file-list");
             var refreshBtn = document.getElementById("xr-refresh-list");
             var reopenBtn = document.getElementById("xr-reopen");
+            var chromaToggle = document.getElementById("xr-chroma-toggle");
+            var sbsToggle = document.getElementById("xr-sbs-toggle");
             if (!video || !overlay) return;
+
+            function sphereComponent() {
+              var sphere = document.getElementById("chroma-sphere");
+              return sphere && sphere.components && sphere.components["chroma-stereo-sbs"];
+            }
+            function refreshSphereShader() {
+              var comp = sphereComponent();
+              if (!comp) return;
+              try { comp.applyShader(); } catch (e) {}
+            }
+            function syncShaderToggles() {
+              var comp = sphereComponent();
+              if (!comp) return;
+              var chromaOn = !chromaToggle || !!chromaToggle.checked;
+              var sbsOn = !sbsToggle || !!sbsToggle.checked;
+              try {
+                comp.el.setAttribute("chroma-stereo-sbs", "chroma", chromaOn);
+                comp.el.setAttribute("chroma-stereo-sbs", "sbs", sbsOn);
+              } catch (e) {}
+            }
 
             function setLabel(msg) {
               if (label) label.textContent = msg || "";
@@ -4116,15 +4195,26 @@ enum ExportLANServer {
               applyRate();
               setLabel("[" + modeTag() + "] " + (index + 1) + "/" + playlist.length + ": " + item.name);
               renderFileList();
-              var sphere = document.getElementById("chroma-sphere");
-              if (sphere && sphere.components && sphere.components["chroma-stereo-sbs"]) {
-                try { sphere.components["chroma-stereo-sbs"].applyShader(); } catch (e) {}
-              }
+              syncShaderToggles();
+              var onReady = function () { refreshSphereShader(); };
+              var onLoaded = function () {
+                video.removeEventListener("loadeddata", onLoaded);
+                onReady();
+              };
+              video.addEventListener("loadeddata", onLoaded);
+              if (video.readyState >= 2) onReady();
               if (wantPlay) {
                 var p = video.play();
-                if (p && typeof p.catch === "function") {
-                  p.catch(function () { wantPlay = false; setLabel("Play blocked — tap Launch Engine"); });
+                if (p && typeof p.then === "function") {
+                  p.then(function () { refreshSphereShader(); }).catch(function () {
+                    wantPlay = false;
+                    setLabel("Play blocked — tap Launch Engine");
+                  });
+                } else {
+                  refreshSphereShader();
                 }
+              } else {
+                refreshSphereShader();
               }
             }
             function setMode(next, keepPlay) {
@@ -4174,15 +4264,24 @@ enum ExportLANServer {
               else {
                 applyRate();
                 var p = video.play();
-                if (p && typeof p.catch === "function") p.catch(function () {});
+                if (p && typeof p.then === "function") {
+                  p.then(function () { refreshSphereShader(); }).catch(function () {});
+                } else {
+                  refreshSphereShader();
+                }
               }
               showOverlay(false);
+              // Give the mesh a moment after overlay hide / first paint.
+              setTimeout(refreshSphereShader, 200);
+              setTimeout(refreshSphereShader, 800);
             }
             if (launchBtn) launchBtn.onclick = initializePlayer;
             if (modeLoopBtn) modeLoopBtn.onclick = function () { setMode("loop", false); };
             if (modeWorkingBtn) modeWorkingBtn.onclick = function () { setMode("working", false); };
             if (modeArchiveBtn) modeArchiveBtn.onclick = function () { setMode("archive", false); };
             if (refreshBtn) refreshBtn.onclick = function () { refreshPlaylists(); };
+            if (chromaToggle) chromaToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
+            if (sbsToggle) sbsToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
             if (reopenBtn) {
               reopenBtn.onclick = function () {
                 showOverlay(true);

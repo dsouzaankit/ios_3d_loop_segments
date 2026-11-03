@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 314 (1.2.78):** LAN **`/xr`** video fix — own `THREE.VideoTexture` + per-frame update (was audio-only / black sphere); Chroma / SBS toggles on the overlay.
+
 **Build 313 (1.2.77):** LAN **`/xr`** splits **Working** (root `_working*.mp4`, outside archive) and **Archive folder** into separate playlists/modes (`?mode=working` / `?mode=archive`).
 
 **Build 312 (1.2.76):** LAN **`/xr`** listed working + archive for tap-to-open (later split in **313**); **Refresh list**; **Files** reopen after Launch.
