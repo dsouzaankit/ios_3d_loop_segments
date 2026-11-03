@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 344 (1.3.1):** XR 8K on PC — when frame exceeds WebGL `MAX_TEXTURE_SIZE`, downscale via canvas texture (yellow note in transport); HTML PIP if drawImage fails.
+
 **Build 343 (1.3.1):** XR video — native A-Frame material everywhere (custom shader was black on PC+Quest); SBS via UV crop + eye layers; flat `a-video` for magic-window; left dome always on.
 
 **Build 342 (1.3.1):** XR PC playback — native flat `a-video` outside immersive (fixes black custom VideoTexture); dual 180° domes only in VR/AR.

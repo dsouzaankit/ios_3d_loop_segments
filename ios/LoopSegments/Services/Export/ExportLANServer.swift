@@ -4066,6 +4066,10 @@ enum ExportLANServer {
               init: function () {
                 this.video = document.querySelector("#chroma-stream");
                 this.shaderMaterial = null;
+                this._canvasMat = null;
+                this._dsCanvas = null;
+                this._dsCtx = null;
+                this._dsTex = null;
                 this._retries = 0;
                 this._onApply = this.applyMaterial.bind(this);
                 this._onEnterVr = function () {
@@ -4101,9 +4105,11 @@ enum ExportLANServer {
                   this.el.sceneEl.removeEventListener("enter-vr", this._onEnterVr);
                   this.el.sceneEl.removeEventListener("exit-vr", this._onExitVr);
                 }
+                try { if (this._dsTex) this._dsTex.dispose(); } catch (e) {}
               },
               tick: function () {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
+                if (this._mode === "canvas") this.refreshDownscaleCanvas(true);
                 this.syncEyeLayers();
               },
               isDesktopRole: function () {
@@ -4113,6 +4119,94 @@ enum ExportLANServer {
                 // Custom VideoTexture fragment shader goes black on PC + Quest. Only use it for chroma key.
                 // SBS eye halves use native A-Frame video material + geometry UV crop instead.
                 return !!this.data.chroma;
+              },
+              maxWebGLTextureSize: function () {
+                var maxTex = 4096;
+                try {
+                  var r = this.el.sceneEl && this.el.sceneEl.renderer;
+                  if (r && r.capabilities && r.capabilities.maxTextureSize) {
+                    maxTex = r.capabilities.maxTextureSize;
+                  }
+                } catch (e) {}
+                // Headroom — drivers often fail video uploads at the exact max.
+                return Math.max(512, maxTex - 64);
+              },
+              setTexNote: function (msg) {
+                try { window.__xrTexNote = msg || ""; } catch (e) {}
+                var el = document.getElementById("xr-tex-note");
+                if (!el) return;
+                if (msg) {
+                  el.hidden = false;
+                  el.textContent = msg;
+                } else {
+                  el.hidden = true;
+                  el.textContent = "";
+                }
+              },
+              // 8K SBS often exceeds WebGL MAX_TEXTURE_SIZE → black mesh. Downscale to canvas texture.
+              refreshDownscaleCanvas: function (onlyUpdate) {
+                var video = this.video;
+                if (!video || !video.videoWidth) return null;
+                var limit = this.maxWebGLTextureSize();
+                if (video.videoWidth <= limit && video.videoHeight <= limit) {
+                  if (!onlyUpdate) this.setTexNote("");
+                  try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
+                  return null;
+                }
+                if (!this._dsCanvas) {
+                  this._dsCanvas = document.createElement("canvas");
+                  this._dsCtx = this._dsCanvas.getContext("2d", { alpha: false });
+                }
+                var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight);
+                var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
+                var ch = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
+                if (this._dsCanvas.width !== cw || this._dsCanvas.height !== ch) {
+                  this._dsCanvas.width = cw;
+                  this._dsCanvas.height = ch;
+                  if (this._dsTex) {
+                    try { this._dsTex.dispose(); } catch (e1) {}
+                    this._dsTex = null;
+                  }
+                }
+                try {
+                  this._dsCtx.drawImage(video, 0, 0, cw, ch);
+                } catch (e2) {
+                  // drawImage failed — show HTML PIP so PC still has a picture.
+                  try { video.classList.add("xr-pip"); } catch (e3) {}
+                  this.setTexNote("8K WebGL downscale failed — HTML preview");
+                  return null;
+                }
+                if (!this._dsTex) {
+                  this._dsTex = new THREE.CanvasTexture(this._dsCanvas);
+                  this._dsTex.minFilter = THREE.LinearFilter;
+                  this._dsTex.magFilter = THREE.LinearFilter;
+                  this._dsTex.generateMipmaps = false;
+                } else {
+                  this._dsTex.needsUpdate = true;
+                }
+                if (!onlyUpdate) {
+                  try { video.classList.remove("xr-pip"); } catch (e4) {}
+                  this.setTexNote(
+                    "Downscaling " + video.videoWidth + "×" + video.videoHeight
+                    + " → " + cw + "×" + ch + " (WebGL max texture)"
+                  );
+                }
+                return this._dsTex;
+              },
+              applyCanvasVideo: function (tex) {
+                this.applySbsUVs();
+                if (!this._canvasMat) {
+                  this._canvasMat = new THREE.MeshBasicMaterial({
+                    map: tex,
+                    side: THREE.DoubleSide,
+                    toneMapped: false
+                  });
+                } else {
+                  this._canvasMat.map = tex;
+                  this._canvasMat.needsUpdate = true;
+                }
+                this._mode = "canvas";
+                return this.bindMaterial(this._canvasMat);
               },
               eyeLayer: function () {
                 if (this.data.eye === "left") return 1;
@@ -4277,6 +4371,12 @@ enum ExportLANServer {
                   return;
                 }
                 this.syncEyeLayers();
+                // 8K / huge SBS: downscale into canvas so WebGL can upload (native video tex → black).
+                var dsTex = this.refreshDownscaleCanvas(false);
+                if (dsTex) {
+                  this.applyCanvasVideo(dsTex);
+                  return;
+                }
                 // Still bind materials even if temporarily hidden so Enter AR is ready.
                 if (!this.wantsShader()) {
                   this.applyNativeVideo();
@@ -4519,10 +4619,19 @@ enum ExportLANServer {
               font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #cbd5e1;
               min-width: 7.5rem; text-align: right;
             }
+            #xr-transport #xr-tex-note {
+              flex: 1 1 100%; font-size: 0.75rem; color: #fbbf24; margin: 0;
+            }
             /* Texture source — must stay in layout with tiny opacity (opacity:0 / display:none → black VideoTexture on Quest/PC). */
             #chroma-stream {
               position: fixed; left: 0; top: 0; width: 16px; height: 16px;
               opacity: 0.01; pointer-events: none; z-index: 0; overflow: hidden;
+            }
+            /* Last-resort PC preview when even canvas downscale fails (rare). */
+            #chroma-stream.xr-pip {
+              left: auto; right: 1rem; top: auto; bottom: 5.5rem; z-index: 10045;
+              width: min(480px, 46vw); height: auto; max-height: 36vh;
+              opacity: 1; background: #000; border: 2px solid #22c55e; border-radius: 8px;
             }
             a-scene { z-index: 1; }
             /* Hide gaze fuse reticle (center donut) if A-Frame / Quest re-injects it. */
@@ -4595,6 +4704,7 @@ enum ExportLANServer {
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
               <span id="xr-time">0:00 / 0:00</span>
+              <p id="xr-tex-note" hidden></p>
             </div>
           </div>
           <div id="overlay" class="play-overlay">
