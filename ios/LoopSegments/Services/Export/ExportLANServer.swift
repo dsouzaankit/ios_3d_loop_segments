@@ -4715,88 +4715,6 @@ enum ExportLANServer {
                 window.__xrSyncPassthroughHud = syncHudVisible;
               }
             });
-
-            // Headset zoom. Hidden unless you look down, point a controller at it, or just stepped.
-            AFRAME.registerComponent("xr-zoom-steps", {
-              init: function () {
-                var root = this.el;
-                this.sceneEl = this.el.sceneEl;
-                this._lastMs = 0;
-                this._aimed = false;
-                this._holdUntil = 0;
-                var self = this;
-                function paint(z) {
-                  var lab = document.getElementById("xr-zoom-label");
-                  if (lab) lab.setAttribute("value", Math.round(z * 180) + "°");
-                }
-                this._paint = paint;
-                root.addEventListener("raycaster-intersected", function () { self._aimed = true; });
-                root.addEventListener("raycaster-intersected-cleared", function () {
-                  self._aimed = false;
-                  self._holdUntil = Date.now() + 1200;
-                });
-                root.addEventListener("click", function (ev) {
-                  var now = Date.now();
-                  if (now - self._lastMs < 280) return;
-                  var id = ev.target && ev.target.id;
-                  if (id !== "xr-zoom-out" && id !== "xr-zoom-in") return;
-                  self._lastMs = now;
-                  self._holdUntil = now + 1800;
-                  self.step(id === "xr-zoom-in" ? 1 : -1);
-                });
-                if (this.sceneEl) {
-                  this.sceneEl.addEventListener("enter-vr", function () {
-                    self._holdUntil = Date.now() + 2500;
-                  });
-                  this.sceneEl.addEventListener("exit-vr", function () {
-                    self._aimed = false;
-                    self._holdUntil = 0;
-                    if (root.object3D) root.object3D.visible = false;
-                  });
-                  // Looking slightly down was keeping the bar on. Trigger summons it, then it hides.
-                  this.sceneEl.addEventListener("triggerdown", function () {
-                    self._holdUntil = Date.now() + 4000;
-                  });
-                }
-                if (root.object3D) root.object3D.visible = false;
-                paint(Number(window.__xrZoom) || 0.6);
-              },
-              step: function (dir) {
-                var list = (window.__xrZoomSteps && window.__xrZoomSteps.length) ? window.__xrZoomSteps : [0.5, 0.6, 0.7, 0.8, 0.9, 1];
-                var z0 = Number(window.__xrZoom) || 0.6;
-                var best = 0;
-                var bestD = 99;
-                for (var i = 0; i < list.length; i++) {
-                  var d = Math.abs(list[i] - z0);
-                  if (d < bestD) { bestD = d; best = i; }
-                }
-                best += dir;
-                if (best < 0) best = 0;
-                if (best > list.length - 1) best = list.length - 1;
-                var z = list[best];
-                window.__xrZoom = z;
-                var zoomEl = document.getElementById("xr-zoom");
-                if (zoomEl) zoomEl.value = String(z);
-                this._paint(z);
-                ["chroma-screen", "chroma-sphere", "chroma-sphere-right"].forEach(function (id) {
-                  var el = document.getElementById(id);
-                  var comp = el && el.components && el.components["chroma-stereo-sbs"];
-                  if (!comp) return;
-                  comp._domeGeoReady = false;
-                  try { comp.ensureDomeGeometry(); comp.syncEyeLayers(); } catch (e3) {}
-                });
-              },
-              tick: function () {
-                var sceneEl = this.sceneEl;
-                var immersive = false;
-                try {
-                  immersive = !!(sceneEl && sceneEl.is && (sceneEl.is("vr-mode") || sceneEl.is("ar-mode")));
-                } catch (e) {}
-                var show = false;
-                if (immersive) show = this._aimed || Date.now() < this._holdUntil;
-                if (this.el.object3D) this.el.object3D.visible = show;
-              }
-            });
           })();
           </script>
           <style>
@@ -5117,14 +5035,6 @@ enum ExportLANServer {
                         wrap-count="14"
                         position="0 0 0.02">
                 </a-text>
-              </a-entity>
-              <!-- AR/VR only. Stepped zoom; the page slider is not reachable inside the headset. -->
-              <a-entity id="xr-zoom-hud" visible="false" position="0 -0.68 -1.25" xr-zoom-steps>
-                <a-plane id="xr-zoom-out" class="raycastable" width="0.32" height="0.24" color="#14532d" position="-0.46 0 0"></a-plane>
-                <a-text value="-" align="center" baseline="center" color="#fff" width="0.8" position="-0.46 0 0.02"></a-text>
-                <a-text id="xr-zoom-label" value="108°" align="center" baseline="center" color="#fff" width="1.1" position="0 0 0.02"></a-text>
-                <a-plane id="xr-zoom-in" class="raycastable" width="0.32" height="0.24" color="#14532d" position="0.46 0 0"></a-plane>
-                <a-text value="+" align="center" baseline="center" color="#fff" width="0.8" position="0.46 0 0.02"></a-text>
               </a-entity>
             </a-entity>
           </a-scene>
