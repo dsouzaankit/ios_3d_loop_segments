@@ -4924,14 +4924,20 @@ enum ExportLANServer {
                   if (this.isImmersiveStereo()) {
                     if (this.video) this.video.classList.remove("xr-flat-preview");
                     var offCanvas = document.getElementById("xr-ds-canvas");
-                    if (offCanvas) offCanvas.classList.remove("xr-keyed-preview");
+                    if (offCanvas) {
+                      offCanvas.classList.remove("xr-keyed-preview");
+                      offCanvas.style.cssText = "";
+                    }
                   } else {
                     var showKeyed = quest && !!this.data.chroma;
                     var showVideo = quest && !showKeyed && __xrDs.av1Known && __xrDs.av1 === true;
                     flatOverlay = !!(showKeyed || showVideo);
                     if (!showKeyed) {
                       var offKeyed = document.getElementById("xr-ds-canvas");
-                      if (offKeyed) offKeyed.classList.remove("xr-keyed-preview");
+                      if (offKeyed) {
+                        offKeyed.classList.remove("xr-keyed-preview");
+                        offKeyed.style.cssText = "";
+                      }
                     }
                     if (this.video && !showKeyed) this.video.classList.toggle("xr-flat-preview", !!showVideo);
                     if (showVideo) this._mode = "flat-video";
@@ -4963,12 +4969,25 @@ enum ExportLANServer {
                     previewFrame = xrDrawDownscale(this.video, this.downscaleTarget(), this.chromaArgs(), "flat");
                   }
                   var keyedEl = document.getElementById("xr-ds-canvas");
-                  if (previewFrame && keyedEl) {
+                  if (previewFrame && keyedEl && keyedEl.width > 16) {
                     keyedEl.classList.add("xr-keyed-preview");
+                    keyedEl.style.position = "fixed";
+                    keyedEl.style.left = "0";
+                    keyedEl.style.top = "0";
+                    keyedEl.style.width = "100vw";
+                    keyedEl.style.height = "calc(100vh - 6.5rem)";
+                    keyedEl.style.maxHeight = "none";
+                    keyedEl.style.opacity = "1";
+                    keyedEl.style.zIndex = "2";
+                    keyedEl.style.objectFit = "contain";
+                    keyedEl.style.background = "#111";
                     if (this.video) this.video.classList.remove("xr-flat-preview");
                     this._mode = "canvas";
                   } else {
-                    if (keyedEl) keyedEl.classList.remove("xr-keyed-preview");
+                    if (keyedEl) {
+                      keyedEl.classList.remove("xr-keyed-preview");
+                      keyedEl.style.cssText = "";
+                    }
                     if (this.video) this.video.classList.add("xr-flat-preview");
                     try { if (__xrVideoTex) __xrVideoTex.needsUpdate = false; } catch (eHold) {}
                     this._mode = "flat-video";
@@ -5046,12 +5065,25 @@ enum ExportLANServer {
                   obj.position.copy(this._seatPos);
                   // AR's reference yaw is not VR's. Lock once to the headset heading so the
                   // 180 opening is in front of the user instead of the previous session's -Z.
-                  this._poseFrames = (this._poseFrames || 0) + 1;
-                  if (!this.isArMode() && !this._yawLocked && this._poseFrames >= 8) {
-                    if (!this._yawEuler) this._yawEuler = new THREE.Euler(0, 0, 0, "YXZ");
-                    this._yawEuler.setFromQuaternion(cam.quaternion, "YXZ");
-                    this._lockedYaw = this._yawEuler.y;
-                    this._yawLocked = true;
+                  if (!this.isArMode() && !this._yawLocked) {
+                    var xrRef = sceneEl.renderer && sceneEl.renderer.xr;
+                    var head = xrRef && xrRef.getCamera && xrRef.getCamera();
+                    var stereo = !!(xrRef && xrRef.isPresenting && head && head.cameras && head.cameras.length >= 2);
+                    if (stereo) {
+                      this._poseFrames = (this._poseFrames || 0) + 1;
+                      if (this._poseFrames >= 8) {
+                        if (!this._yawEuler) this._yawEuler = new THREE.Euler(0, 0, 0, "YXZ");
+                        this._yawEuler.setFromQuaternion(head.quaternion, "YXZ");
+                        this._lockedYaw = this._yawEuler.y;
+                        this._yawLocked = true;
+                        try {
+                          xrLog("dome-yaw", {
+                            yaw: Math.round(this._lockedYaw * 180 / Math.PI),
+                            frames: this._poseFrames
+                          });
+                        } catch (eYaw) {}
+                      }
+                    }
                   }
                   var yaw = (!this.isArMode() && this._yawLocked) ? (this._lockedYaw || 0) : 0;
                   obj.rotation.set(0, yaw, 0);
@@ -5372,6 +5404,9 @@ enum ExportLANServer {
                       for (var ci = 0; ci < xrCam.cameras.length; ci++) {
                         if (xrCam.cameras[ci] === camera) { idx = ci; break; }
                       }
+                      if (idx < 0 && camera && camera.position && Math.abs(camera.position.x) > 0.0001) {
+                        idx = camera.position.x < 0 ? 0 : 1;
+                      }
                       if (idx < 0 && camera && camera.viewport && xrCam.cameras[0] && xrCam.cameras[0].viewport) {
                         var vp = camera.viewport;
                         var v0 = xrCam.cameras[0].viewport;
@@ -5389,7 +5424,9 @@ enum ExportLANServer {
                           }
                         }
                       }
-                      if (idx < 0) { this.visible = true; return; }
+                      // Unknown eye used to show both domes. Each eye then saw the outer
+                      // edge of the other half. Hide this dome until the eye is known.
+                      if (idx < 0) { this.visible = false; return; }
                       this.visible = idx === eyeIndex;
                     } catch (e) {
                       this.visible = true;
@@ -5567,7 +5604,19 @@ enum ExportLANServer {
                 // (left dome always-on caused spherical overlay noise on top of the flat screen).
                 if (desktop) {
                   this.clearQuestEyeCull();
-                  if (this.el.object3D) this.el.object3D.visible = !immersive;
+                  // The HTML preview covers the page except the bottom strip. Leaving the
+                  // plane on paints a second copy of the frame in that strip.
+                  var showPlane = !immersive;
+                  if (showPlane && this.isQuestBrowser()) {
+                    var flatVid = !!(this.video && this.video.classList.contains("xr-flat-preview"));
+                    var keyedPrev = false;
+                    try {
+                      var keyedNode = document.getElementById("xr-ds-canvas");
+                      keyedPrev = !!(keyedNode && keyedNode.classList.contains("xr-keyed-preview"));
+                    } catch (ePlane) {}
+                    if (flatVid || keyedPrev) showPlane = false;
+                  }
+                  if (this.el.object3D) this.el.object3D.visible = showPlane;
                 } else if (this.data.eye === "right") {
                   if (useQuestEyeSplit) {
                     if (this.el.object3D) this.el.object3D.visible = true;

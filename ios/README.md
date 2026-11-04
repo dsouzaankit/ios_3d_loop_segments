@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 403 (1.3.1):** Quest flat preview no longer leaves the WebGL plane visible under the picture. Chroma keeps the full preview until the keyed canvas is actually sized. Enter VR after AR waits for the stereo pose before locking the dome, and an unidentified eye hides its dome instead of showing both.
+
 **Build 402 (1.3.1):** The seek bar takes the leftover width on the playback row. FOV and Zoom sit on the row under it.
 
 **Build 401 (1.3.1):** The playback bar stays on the bottom row and stops short of Enter AR, so AR and VR have a clear column on the right.
