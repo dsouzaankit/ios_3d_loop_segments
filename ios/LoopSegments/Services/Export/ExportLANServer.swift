@@ -4121,6 +4121,9 @@ enum ExportLANServer {
               __xrDs.rt = null;
               __xrDs.rtW = 0;
               __xrDs.rtH = 0;
+              // The texture is gone. Drop the handle so Enter VR does not sample it.
+              __xrDs.resolved = null;
+              __xrDs.resolvedSrc = "";
               // Do not dispose __xrVideoTex here — Quest then blacks A-Frame's video map too.
               if (__xrVideoTex) {
                 try { __xrVideoTex.needsUpdate = false; } catch (eStop) {}
@@ -4156,10 +4159,10 @@ enum ExportLANServer {
                 __xrDs.suspendBlit = false;
               }, 700);
             }
-            // Soft stop for AR/VR exit. Hard dispose only when the session is gone.
+            // Soft stop for AR/VR exit. Keep the last blit and the codec — clearing them
+            // made the next Enter VR seed the dome from a canvas (AV1 tile atlas, or empty).
             function xrSuspendAv1Pipeline() {
               __xrDs.suspendBlit = true;
-              xrClearAv1Flags();
               xrClearComponentModes();
             }
             // Still in XR: re-probe the new clip but keep the last RT on screen (no black hole).
@@ -4216,8 +4219,8 @@ enum ExportLANServer {
               __xrDs.codecSrc = src;
               __xrDs.av1Known = false;
               // Do not keep the previous clip's AV1 flag while the new probe runs.
+              // Leave __xrDs.resolved up so the dome holds the last picture until this probe finishes.
               __xrDs.av1 = false;
-              __xrDs.resolved = null;
               function hasAv01(buf) {
                 // Box type only. A raw "av01" scan false-positives inside HEVC mdat and then
                 // the dome stays on the AV1 blit path (blank after a real AV1 clip).
@@ -4462,7 +4465,9 @@ enum ExportLANServer {
             }
             function xrDrawDownscale(video, limit, chroma, slot) {
               if (!video || !video.videoWidth) return null;
-              // CPU chroma reads every pixel. Cap the copy so a 4K key does not stall Enter VR.
+              // CPU chroma reads every pixel. The headset keys on the GPU; this cap is the
+              // flat preview and the blit-failure fallback. Preview stays smaller so the page does not hitch.
+              if (chroma && slot !== "ar" && limit > 1280) limit = 1280;
               if (chroma && limit > 2048) limit = 2048;
               var bag = xrSlotBag(slot);
               var canvasId = slot === "ar" ? "xr-ds-ar" : "xr-ds-canvas";
@@ -4653,21 +4658,32 @@ enum ExportLANServer {
                     __xrDs.resolvedSrc = "";
                     __xrDs.lastBlitTime = -1;
                   }
+                  var keepRt = !!(__xrDs.resolved && __xrDs.resolvedSrc === srcNow);
                   var seeded = null;
                   try { xrForgetStaleCanvases(self.video); } catch (eBag) {}
-                  try { seeded = xrSeedArFromFlat(self.video); } catch (eSeed) {}
+                  // A canvas copy of AV1 is the decoder tile atlas. Keep the blit instead.
+                  if (!keepRt) {
+                    try { seeded = xrSeedArFromFlat(self.video); } catch (eSeed) {}
+                  }
                   if (seeded && !self.isDesktopRole()) {
                     self._dsCanvas = seeded;
-                    self._dsSrc = xrVideoSrc(self.video);
+                    self._dsSrc = srcNow;
                   }
-                  if (__xrVideoTex) {
+                  if (__xrDs.resumeAfterExit && self.video) {
+                    __xrDs.resumeAfterExit = false;
+                    try {
+                      var rp = self.video.play();
+                      if (rp && rp.catch) rp.catch(function () {});
+                    } catch (ePlay) {}
+                  }
+                  if (__xrVideoTex && (keepRt || (__xrDs.av1Known && __xrDs.av1 === true) || !!self.data.chroma)) {
                     try { __xrVideoTex.needsUpdate = true; } catch (eTex) {}
                   }
                   self._mode = "";
                   self._gpuSig = "";
                   self._uvZoom = null;
                   self._uvEyeApplied = null;
-                  try { xrLog("enter-vr", { eye: self.data.eye, role: self.data.role, ar: self.isArMode(), seeded: !!seeded }); } catch (eL) {}
+                  try { xrLog("enter-vr", { eye: self.data.eye, role: self.data.role, ar: self.isArMode(), seeded: !!seeded, rt: keepRt }); } catch (eL) {}
                   function kick() {
                     try { self.applySbsUVs(); } catch (eUv) {}
                     self.applyMaterial();
@@ -4694,18 +4710,25 @@ enum ExportLANServer {
                   this._mode = "";
                   this._gpuSig = "";
                   this.clearQuestEyeCull();
-                  // Pause after AV1 session — flat VideoTexture is poisoned; keep decode off during exit.
-                  if (__xrDs.sawAv1Tex && this.video) {
+                  // Pause only through teardown. The blit stays alive for the next Enter VR.
+                  if (__xrDs.sawAv1Tex && this.video && !this.video.paused) {
+                    __xrDs.resumeAfterExit = true;
                     try { this.video.pause(); } catch (eP) {}
-                    try { wantPlay = false; } catch (eW) {}
                   }
                   try { this.syncEyeLayers(); } catch (eLay) {}
-                  xrScheduleDisposeAv1Gpu();
                   var self = this;
                   setTimeout(function () {
                     if (xrIsPresenting()) return;
                     __xrDs.exiting = false;
+                    __xrDs.suspendBlit = false;
                     try { xrLog("exit-vr settled"); } catch (eL1) {}
+                    if (__xrDs.resumeAfterExit && self.video) {
+                      __xrDs.resumeAfterExit = false;
+                      try {
+                        var rp = self.video.play();
+                        if (rp && rp.catch) rp.catch(function () {});
+                      } catch (eR) {}
+                    }
                     try { self.applyMaterial(); } catch (eMat) {}
                   }, 900);
                 }.bind(this);
@@ -4739,8 +4762,17 @@ enum ExportLANServer {
                 try { if (this._dsTex) this._dsTex.dispose(); } catch (e) {}
               },
               tick: function () {
-                if (__xrVideoTex && __xrDs.av1Known && __xrDs.av1 === true) __xrVideoTex.needsUpdate = true;
                 var quest = this.isQuestBrowser();
+                // Uploading the video texture on the flat page steals Quest's only WebGL consumer,
+                // so the preview element stays blank while the shader draws nothing.
+                if (__xrVideoTex && this.isImmersiveStereo() && !__xrDs.suspendBlit && !__xrDs.exiting
+                    && ((__xrDs.av1Known && __xrDs.av1 === true) || (quest && !!this.data.chroma))) {
+                  __xrVideoTex.needsUpdate = true;
+                }
+                if (this.isDesktopRole() && this.video) {
+                  var flatAv1 = quest && !this.isImmersiveStereo() && __xrDs.av1Known && __xrDs.av1 === true;
+                  this.video.classList.toggle("xr-flat-preview", !!flatAv1);
+                }
                 // Probe AV1 even with Chroma on — keyed AV1 still needs the full-frame blit.
                 if (quest && this.video) xrWatchAv1(this.video);
                 this.followHead();
@@ -4752,25 +4784,35 @@ enum ExportLANServer {
                 var av1Immersive = quest && this.isImmersiveStereo()
                   && !__xrDs.suspendBlit
                   && __xrDs.av1Known && __xrDs.av1 === true;
-                if (av1Immersive && this.drawsSharedFrame()) {
+                // HEVC chroma uses the same blit. The canvas readback stuttered, and the
+                // video-texture chroma shader stays black on Quest (preview and AR).
+                var questGpu = av1Immersive || (
+                  quest && this.isImmersiveStereo() && !__xrDs.suspendBlit && !__xrDs.exiting && !!this.data.chroma
+                );
+                if (questGpu && this.drawsSharedFrame()) {
                   var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
                   var v = this.video;
                   var t = v ? v.currentTime : -1;
+                  var blitSrc = xrVideoSrc(v);
                   // Blit only when the decoder advances — tick is faster than the video.
-                  if (__xrDs.resolved && __xrDs.lastBlitTime === t) {
+                  if (__xrDs.resolved && __xrDs.resolvedSrc === blitSrc && __xrDs.lastBlitTime === t) {
                     this.applyAv1Resolve(__xrDs.resolved);
                   } else {
                     var resolved = xrBlitFullVideo(renderer, v);
                     if (resolved) {
                       __xrDs.resolved = resolved;
-                      __xrDs.resolvedSrc = xrVideoSrc(v);
+                      __xrDs.resolvedSrc = blitSrc;
                       __xrDs.lastBlitTime = t;
                       this.applyAv1Resolve(resolved);
-                    } else if (__xrDs.resolved) {
+                    } else if (__xrDs.resolved && __xrDs.resolvedSrc === blitSrc) {
                       this.applyAv1Resolve(__xrDs.resolved);
+                    } else if (this.data.chroma) {
+                      var fallback = xrDrawDownscale(v, this.downscaleTarget(), this.chromaArgs(), "ar");
+                      if (fallback) this.applyPostAv1Canvas(fallback);
+                      else this.holdPreviewCanvas();
                     }
                   }
-                } else if (av1Immersive && this.data.eye === "right" && __xrDs.resolved) {
+                } else if (questGpu && this.data.eye === "right" && __xrDs.resolved) {
                   this.applyAv1Resolve(__xrDs.resolved);
                 } else if (this.needsPostAv1Canvas() && this.drawsSharedFrame()) {
                   var postSlot = this.isDesktopRole() ? "flat" : "ar";
@@ -4787,6 +4829,7 @@ enum ExportLANServer {
                   var tex = (mat && mat.uniforms && mat.uniforms.src && mat.uniforms.src.value) || (mat && mat.map);
                   var upload = this._mode === "canvas" ? true : (this._mode !== "av1rt" && this._mode !== "gpu");
                   if (this._mode === "gpu" && tex) upload = true;
+                  if (this.video && this.video.classList.contains("xr-flat-preview")) upload = false;
                   if (upload && tex) {
                     tex.needsUpdate = true;
                     if (this._mode === "canvas") frameBag.pendingUpload = false;
@@ -4839,6 +4882,12 @@ enum ExportLANServer {
               // material is what left Enter VR black.
               holdPreviewCanvas: function () {
                 var now = xrVideoSrc(this.video);
+                if (__xrDs.resolved && __xrDs.resolvedSrc === now) {
+                  this.applyAv1Resolve(__xrDs.resolved);
+                  return true;
+                }
+                // drawImage of an AV1 <video> is the tile atlas, not the picture.
+                if (__xrDs.av1Known && __xrDs.av1 === true) return false;
                 var hold = (this._dsSrc === now) ? this._dsCanvas : null;
                 if (!hold) {
                   var flat = xrSlotBag("flat");
@@ -5075,6 +5124,8 @@ enum ExportLANServer {
                 if (!this.isQuestBrowser() || !__xrDs.sawAv1Tex) return false;
                 if (__xrDs.exiting || __xrDs.suspendBlit) return false;
                 if (__xrDs.av1Known && __xrDs.av1 === true) return false;
+                // Immersive chroma is the blit shader. A per-frame canvas readback is what stuttered HEVC.
+                if (this.data.chroma && this.isImmersiveStereo()) return false;
                 if (this.isDesktopRole()) return !this.isImmersiveStereo();
                 return this.isImmersiveStereo();
               },
@@ -5118,7 +5169,7 @@ enum ExportLANServer {
                     try {
                       var xrCam = renderer.xr && renderer.xr.getCamera && renderer.xr.getCamera();
                       if (!xrCam || !xrCam.cameras || xrCam.cameras.length < 2) {
-                        this.visible = eyeIndex === 0;
+                        this.visible = true;
                         return;
                       }
                       var idx = -1;
@@ -5126,15 +5177,26 @@ enum ExportLANServer {
                         if (xrCam.cameras[ci] === camera) { idx = ci; break; }
                       }
                       if (idx < 0 && camera && camera.viewport && xrCam.cameras[0] && xrCam.cameras[0].viewport) {
+                        var vp = camera.viewport;
                         var v0 = xrCam.cameras[0].viewport;
                         var v1 = xrCam.cameras[1] && xrCam.cameras[1].viewport;
-                        if (camera.viewport.x === v0.x && camera.viewport.y === v0.y) idx = 0;
-                        else if (v1 && camera.viewport.x === v1.x && camera.viewport.y === v1.y) idx = 1;
+                        if (vp.x === v0.x && vp.y === v0.y) idx = 0;
+                        else if (v1 && vp.x === v1.x && vp.y === v1.y) idx = 1;
+                        // After AR, the render camera often is not cameras[i]. Split on the
+                        // view rectangle instead of forcing the left eye for the whole session.
+                        if (idx < 0) {
+                          var gl = renderer.getContext && renderer.getContext();
+                          var bufW = gl && gl.drawingBufferWidth;
+                          var vpW = vp.z || vp.width || 0;
+                          if (bufW && vpW > 0 && vpW < bufW * 0.75) {
+                            idx = (vp.x + vpW * 0.5) < bufW * 0.5 ? 0 : 1;
+                          }
+                        }
                       }
-                      // Unknown camera used to hide both domes, so Enter VR stayed black.
-                      this.visible = idx < 0 ? (eyeIndex === 0) : (idx === eyeIndex);
+                      if (idx < 0) { this.visible = true; return; }
+                      this.visible = idx === eyeIndex;
                     } catch (e) {
-                      this.visible = eyeIndex === 0;
+                      this.visible = true;
                     }
                   };
                 });
@@ -5179,14 +5241,15 @@ enum ExportLANServer {
                       "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5 * keyColor.b;",
                       "  float dist = sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));",
                       "  float blend = smoothstep(similarity, similarity + smoothness, dist);",
-                      "  gl_FragColor = vec4(videoColor.rgb, blend);",
+                      "  gl_FragColor = vec4(videoColor.rgb * blend, blend);",
                       "}"
                     ].join("\n"),
                     side: THREE.DoubleSide,
                     toneMapped: false,
                     transparent: chromaOn,
+                    premultipliedAlpha: chromaOn,
                     depthWrite: !chromaOn,
-                    alphaTest: chromaOn ? 0.08 : 0
+                    alphaTest: 0
                   });
                 } else {
                   this._av1Mat.uniforms.tex.value = tex;
@@ -5195,8 +5258,9 @@ enum ExportLANServer {
                   this._av1Mat.uniforms.smoothness.value = this.data.smoothness;
                   this._av1Mat.uniforms.chromaEnabled.value = chromaOn ? 1.0 : 0.0;
                   this._av1Mat.transparent = chromaOn;
+                  this._av1Mat.premultipliedAlpha = chromaOn;
                   this._av1Mat.depthWrite = !chromaOn;
-                  this._av1Mat.alphaTest = chromaOn ? 0.08 : 0;
+                  this._av1Mat.alphaTest = 0;
                 }
                 var mat = this._av1Mat;
                 this._gpuSig = "";
@@ -5528,21 +5592,21 @@ enum ExportLANServer {
                   return;
                 }
                 this.syncEyeLayers();
-                // Quest AV1: prefer the full-frame blit. If the next clip is still probing,
-                // keep the last RT on screen instead of returning with an empty material.
-                var questAv1 = this.isQuestBrowser() && !this.isDesktopRole()
-                  && !__xrDs.suspendBlit
-                  && __xrDs.av1Known && __xrDs.av1 === true;
-                if (questAv1 && __xrDs.resolved) {
+                // Flat AV1 preview is the <video> element. A canvas copy is the tile atlas,
+                // and a WebGL upload here blanks that element.
+                if (this.isDesktopRole() && !this.isImmersiveStereo() && this.isQuestBrowser()
+                    && __xrDs.av1Known && __xrDs.av1 === true) {
+                  return;
+                }
+                // Quest dome: AV1, and HEVC when chroma is on, sample the blit (GPU key).
+                var srcNowMat = xrVideoSrc(this.video);
+                var questDomeGpu = this.isQuestBrowser() && !this.isDesktopRole() && !__xrDs.suspendBlit
+                  && ((__xrDs.av1Known && __xrDs.av1 === true) || !!this.data.chroma);
+                if (questDomeGpu && __xrDs.resolved && __xrDs.resolvedSrc === srcNowMat) {
                   this.applyAv1Resolve(__xrDs.resolved);
                   return;
                 }
-                if (__xrDs.resolved && this._mode === "av1rt" && !__xrDs.suspendBlit
-                    && (!__xrDs.av1Known || __xrDs.av1 === true)) {
-                  this.applyAv1Resolve(__xrDs.resolved);
-                  return;
-                }
-                if (questAv1) {
+                if (questDomeGpu) {
                   this.holdPreviewCanvas();
                   return;
                 }
@@ -5559,6 +5623,16 @@ enum ExportLANServer {
                   return;
                 }
                 if (this.data.chroma) {
+                  if (this.isQuestBrowser()) {
+                    // xr-chroma on a Quest video texture stays black. Key into a canvas
+                    // and bind A-Frame's flat material. The headset already returned above.
+                    if (this.drawsSharedFrame()) {
+                      var keyed = xrDrawDownscale(this.video, this.downscaleTarget(), this.chromaArgs(), this.isDesktopRole() ? "flat" : "ar");
+                      if (keyed && this.applyPostAv1Canvas(keyed)) return;
+                    } else if (this.holdPreviewCanvas()) return;
+                    this.applyNativeVideo();
+                    return;
+                  }
                   var scaled = null;
                   var video = this.video;
                   if (video && video.videoWidth) {
@@ -5687,8 +5761,14 @@ enum ExportLANServer {
                 if (sceneEl) {
                   sceneEl.addEventListener("enter-vr", function () {
                     syncHudVisible();
-                    var ar = !!(sceneEl.is && sceneEl.is("ar-mode"));
-                    applyPassthrough(ar);
+                    function apply() {
+                      var ar = !!(sceneEl.is && sceneEl.is("ar-mode"));
+                      applyPassthrough(ar);
+                    }
+                    // The first VR session after AR can run before the clear color flips back.
+                    apply();
+                    setTimeout(apply, 50);
+                    setTimeout(apply, 300);
                   });
                   sceneEl.addEventListener("exit-vr", function () {
                     applyPassthrough(false);
@@ -5837,6 +5917,11 @@ enum ExportLANServer {
               left: auto; right: 1rem; top: auto; bottom: 5.5rem; z-index: 10045;
               width: min(480px, 46vw); height: auto; max-height: 36vh;
               opacity: 1; background: #000; border: 2px solid #22c55e; border-radius: 8px;
+            }
+            /* Quest flat AV1. WebGL preview is either the tile atlas or a black shader. */
+            #chroma-stream.xr-flat-preview {
+              left: 0; top: 0; width: 100vw; height: 100vh; max-height: none;
+              opacity: 1; z-index: 2; object-fit: contain; background: #111; border: 0; border-radius: 0;
             }
             a-scene { z-index: 1; }
             /* Hide gaze fuse reticle (center donut) if A-Frame / Quest re-injects it. */
