@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 395 (1.3.1):** Enter VR was showing a frozen frame from the previous attempt. The dome keeps its own canvas, separate from the live preview, and a failed copy during session start left the old picture in place. Clip changes clear that canvas. Enter VR copies the current preview frame in first.
+
 **Build 394 (1.3.1):** `/xr` preview and AR stayed black on PC and Quest while the video element kept playing. Eye-cull cleanup set `mesh.onBeforeRender = null`; Three.js still calls it, the frame throws, and the render loop stops. Restore the prototype hook instead of null.
 
 **Build 393 (1.3.1):** Fix PC `/xr` stuck on **Checking WebXR…** / **Loading playlists…** (no Launch preview). Homepage init called `__xrDs` from another script scope and aborted before probes. Shared XR helpers are on `window`; WebXR probe has a 2.5s timeout.

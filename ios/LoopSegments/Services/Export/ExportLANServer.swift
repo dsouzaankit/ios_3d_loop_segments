@@ -4175,12 +4175,14 @@ enum ExportLANServer {
               __xrDs.needsMaterialKick = true;
               // Keep __xrDs.resolved + RT until the first blit of the new clip replaces them.
               xrClearComponentModes();
+              try { xrForgetStaleCanvases(document.getElementById("chroma-stream")); } catch (eBag) {}
             }
             function xrResetPlaybackPipeline() {
               __xrDs.suspendBlit = true;
               __xrDs.exiting = false;
               xrClearAv1Flags();
               xrClearComponentModes();
+              try { xrForgetStaleCanvases(document.getElementById("chroma-stream")); } catch (eBag) {}
               __xrDs.lastBlitTime = -1;
               // Keep sawAv1Tex for this page load — once Quest has blitted AV1, native
               // VideoTexture stays unreliable; canvas path must continue after Files.
@@ -4403,9 +4405,59 @@ enum ExportLANServer {
               var key = slot === "ar" ? "ar" : "flat";
               if (!__xrDs.bags) __xrDs.bags = {};
               if (!__xrDs.bags[key]) {
-                __xrDs.bags[key] = { canvas: null, ctx: null, stamp: "", readFreq: false, pendingUpload: false };
+                __xrDs.bags[key] = { canvas: null, ctx: null, stamp: "", src: "", readFreq: false, pendingUpload: false };
               }
               return __xrDs.bags[key];
+            }
+            function xrVideoSrc(video) {
+              return (video && (video.currentSrc || video.src)) || "";
+            }
+            function xrClearBagPixels(bag) {
+              if (!bag) return;
+              bag.stamp = "";
+              bag.src = "";
+              bag.pendingUpload = false;
+              try {
+                if (bag.ctx && bag.canvas) bag.ctx.clearRect(0, 0, bag.canvas.width, bag.canvas.height);
+              } catch (e) {}
+            }
+            // Clip changes must not leave the previous picture in the dome canvas.
+            function xrForgetStaleCanvases(video) {
+              var src = xrVideoSrc(video);
+              if (!__xrDs.bags) return;
+              ["flat", "ar"].forEach(function (key) {
+                var bag = __xrDs.bags[key];
+                if (!bag || !bag.src || bag.src === src) return;
+                xrClearBagPixels(bag);
+              });
+            }
+            // Enter VR often cannot draw the <video> yet. Copy the live preview canvas
+            // so the dome does not keep the previous attempt's frame.
+            function xrSeedArFromFlat(video) {
+              var src = xrVideoSrc(video);
+              var flat = xrSlotBag("flat");
+              if (!flat.canvas || !flat.canvas.width || !flat.src || flat.src !== src) return null;
+              var ar = xrSlotBag("ar");
+              var canvas = ar.canvas || document.getElementById("xr-ds-ar");
+              if (!canvas) {
+                canvas = document.createElement("canvas");
+                canvas.id = "xr-ds-ar";
+                canvas.width = 16;
+                canvas.height = 16;
+                document.body.appendChild(canvas);
+              }
+              if (canvas.width !== flat.canvas.width || canvas.height !== flat.canvas.height) {
+                canvas.width = flat.canvas.width;
+                canvas.height = flat.canvas.height;
+                ar.ctx = null;
+              }
+              if (!ar.ctx) ar.ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: !!ar.readFreq });
+              try { ar.ctx.drawImage(flat.canvas, 0, 0); } catch (e) { return null; }
+              ar.canvas = canvas;
+              ar.src = src;
+              ar.stamp = "";
+              ar.pendingUpload = true;
+              return canvas;
             }
             function xrDrawDownscale(video, limit, chroma, slot) {
               if (!video || !video.videoWidth) return null;
@@ -4433,11 +4485,14 @@ enum ExportLANServer {
                 bag.readFreq = wantRead;
               }
               bag.canvas = canvas;
+              var srcNow = xrVideoSrc(video);
+              if (bag.src && bag.src !== srcNow) xrClearBagPixels(bag);
+              bag.canvas = canvas;
               var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight, 1);
               var cw = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var ch = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
-              var stamp = (video.currentTime || 0).toFixed(3) + "|" + cw + "x" + ch + "|" + (chroma ? ("c" + (chroma.keyColor || "")) : "o");
-              if (bag.stamp === stamp && canvas.width === cw) return canvas;
+              var stamp = (video.currentTime || 0).toFixed(3) + "|" + cw + "x" + ch + "|" + (chroma ? ("c" + (chroma.keyColor || "")) : "o") + "|" + srcNow;
+              if (bag.stamp === stamp && canvas.width === cw && bag.src === srcNow) return canvas;
               if (canvas.width !== cw || canvas.height !== ch) {
                 canvas.width = cw;
                 canvas.height = ch;
@@ -4451,6 +4506,7 @@ enum ExportLANServer {
                 xrApplyChromaKey(bag.ctx, cw, ch, chroma.keyColor, chroma.similarity, chroma.smoothness);
               }
               bag.stamp = stamp;
+              bag.src = srcNow;
               bag.pendingUpload = true;
               return canvas;
             }
@@ -4589,6 +4645,13 @@ enum ExportLANServer {
                   // Drop a stale AV1 sample from the last clip so Enter VR/AR cannot show a frozen frame.
                   __xrDs.resolved = null;
                   __xrDs.lastBlitTime = -1;
+                  var seeded = null;
+                  try { xrForgetStaleCanvases(self.video); } catch (eBag) {}
+                  try { seeded = xrSeedArFromFlat(self.video); } catch (eSeed) {}
+                  if (seeded && !self.isDesktopRole()) {
+                    self._dsCanvas = seeded;
+                    self._dsSrc = xrVideoSrc(self.video);
+                  }
                   if (__xrVideoTex) {
                     try { __xrVideoTex.needsUpdate = true; } catch (eTex) {}
                   }
@@ -4596,7 +4659,7 @@ enum ExportLANServer {
                   self._gpuSig = "";
                   self._uvZoom = null;
                   self._uvEyeApplied = null;
-                  try { xrLog("enter-vr", { eye: self.data.eye, role: self.data.role, ar: self.isArMode() }); } catch (eL) {}
+                  try { xrLog("enter-vr", { eye: self.data.eye, role: self.data.role, ar: self.isArMode(), seeded: !!seeded }); } catch (eL) {}
                   function kick() {
                     try { self.applySbsUVs(); } catch (eUv) {}
                     self.applyMaterial();
@@ -4713,7 +4776,7 @@ enum ExportLANServer {
                   var frameBag = xrSlotBag(this.isDesktopRole() ? "flat" : "ar");
                   var mat = mesh && mesh.material;
                   var tex = (mat && mat.uniforms && mat.uniforms.src && mat.uniforms.src.value) || (mat && mat.map);
-                  var upload = this._mode === "canvas" ? !!frameBag.pendingUpload : (this._mode !== "av1rt" && this._mode !== "gpu");
+                  var upload = this._mode === "canvas" ? true : (this._mode !== "av1rt" && this._mode !== "gpu");
                   if (this._mode === "gpu" && tex) upload = true;
                   if (upload && tex) {
                     tex.needsUpdate = true;
@@ -4896,14 +4959,35 @@ enum ExportLANServer {
                   try { if (video) video.classList.remove("xr-pip"); } catch (e0) {}
                   return null;
                 }
+                var srcNow = xrVideoSrc(video);
                 if (!this.drawsSharedFrame()) {
-                  var existing = xrSlotBag(slot).canvas;
-                  this._dsCanvas = existing || this._dsCanvas;
-                  return this._dsCanvas || null;
+                  var existingBag = xrSlotBag(slot);
+                  var existing = (existingBag.src === srcNow) ? existingBag.canvas : null;
+                  if (!existing && slot === "ar") {
+                    var flatBag = xrSlotBag("flat");
+                    if (flatBag.src === srcNow) existing = flatBag.canvas;
+                  }
+                  this._dsCanvas = existing || null;
+                  this._dsSrc = existing ? srcNow : "";
+                  return this._dsCanvas;
                 }
                 var target = this.downscaleTarget();
                 var canvas = xrDrawDownscale(video, target, null, slot);
-                this._dsCanvas = canvas || this._dsCanvas;
+                if (!canvas && slot === "ar") {
+                  var flatOk = xrSlotBag("flat");
+                  if (flatOk.src === srcNow && flatOk.canvas) {
+                    canvas = flatOk.canvas;
+                    // Dome samples the live preview canvas when the immersive copy fails.
+                    xrSlotBag("ar").pendingUpload = true;
+                  }
+                }
+                if (canvas) {
+                  this._dsCanvas = canvas;
+                  this._dsSrc = srcNow;
+                } else if (this._dsSrc !== srcNow) {
+                  this._dsCanvas = null;
+                  this._dsSrc = "";
+                }
                 if (!canvas) {
                   try { video.classList.add("xr-pip"); } catch (e2) {}
                   if (!onlyUpdate) this.setTexNote("8K WebGL downscale failed — HTML preview");
