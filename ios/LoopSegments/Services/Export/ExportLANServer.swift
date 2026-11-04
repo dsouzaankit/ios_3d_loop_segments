@@ -4026,6 +4026,9 @@ enum ExportLANServer {
             // Skybox-style: meters to push the dome along world -Z (session forward). 0 = centered.
             window.__xrDist = 0;
             var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false, suspendBlit: false, exiting: false, sawAv1Tex: false };
+            // Player script (second IIFE) must see these — bare refs otherwise throw and leave
+            // "Checking WebXR…" / "Loading playlists…" stuck (PC + Quest).
+            window.__xrDs = __xrDs;
             var __xrLogBuf = [];
             var __xrLogFlushTimer = 0;
             function xrDebugSnapshot() {
@@ -4188,6 +4191,12 @@ enum ExportLANServer {
               xrDisposeAv1Gpu();
               __xrDs.suspendBlit = false;
             }
+            window.xrIsPresenting = xrIsPresenting;
+            window.xrLog = xrLog;
+            window.xrSuspendAv1Pipeline = xrSuspendAv1Pipeline;
+            window.xrScheduleDisposeAv1Gpu = xrScheduleDisposeAv1Gpu;
+            window.xrPrepareNewClip = xrPrepareNewClip;
+            window.xrResetPlaybackPipeline = xrResetPlaybackPipeline;
             // Quest's 2D canvas draw of an AV1 <video> copies the decoder tile atlas
             // (one wide tile on top, two tiles splitting the bottom), not the picture.
             // A GPU pass that samples the whole video texture forces every tile to update.
@@ -6836,21 +6845,36 @@ enum ExportLANServer {
               if (!el) return;
               var secure = !!(window.isSecureContext);
               var origin = String(location.origin || "");
+              function setStatus(msg) { el.textContent = msg; }
               if (!navigator.xr) {
-                el.textContent = "WebXR API missing — origin " + origin
-                  + (secure ? " (secure context OK)" : " (NOT a secure context — need https:// tunnel)");
+                setStatus("WebXR API missing — origin " + origin
+                  + (secure ? " (secure context OK)" : " (NOT a secure context — need https:// tunnel or Quest flags)"));
                 return;
               }
+              var done = false;
+              function finish(vr, ar) {
+                if (done) return;
+                done = true;
+                setStatus("WebXR @ " + origin
+                  + " — immersive-vr: " + (vr ? "yes" : "no")
+                  + ", immersive-ar (passthrough): " + (ar ? "yes — use Enter AR" : "no")
+                  + (secure ? "" : " — insecure context"));
+              }
+              var timeout = setTimeout(function () {
+                if (done) return;
+                done = true;
+                setStatus("WebXR probe timed out @ " + origin
+                  + (secure ? "" : " — insecure context; PC preview still works after Launch"));
+              }, 2500);
               Promise.all([
                 navigator.xr.isSessionSupported("immersive-vr").catch(function () { return false; }),
                 navigator.xr.isSessionSupported("immersive-ar").catch(function () { return false; })
               ]).then(function (bits) {
-                var vr = !!bits[0];
-                var ar = !!bits[1];
-                el.textContent = "WebXR @ " + origin
-                  + " — immersive-vr: " + (vr ? "yes" : "no")
-                  + ", immersive-ar (passthrough): " + (ar ? "yes — use Enter AR" : "no")
-                  + (secure ? "" : " — insecure context");
+                clearTimeout(timeout);
+                finish(!!bits[0], !!bits[1]);
+              }).catch(function () {
+                clearTimeout(timeout);
+                finish(false, false);
               });
             })();
             refreshWorkingSeek().finally(function () {

@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 393 (1.3.1):** Fix PC `/xr` stuck on **Checking WebXR…** / **Loading playlists…** (no Launch preview). Homepage init called `__xrDs` from another script scope and aborted before probes. Shared XR helpers are on `window`; WebXR probe has a 2.5s timeout.
+
 **Build 392 (1.3.1):** `/xr_debug.json` POST no longer requires Basic auth. Build 390’s debug beacon was getting **401** → Quest login sheet (often on AR exit) and an empty log ring. Includes 391’s black preview/AR fix after AV1 texture dispose.
 
 **Build 391 (1.3.1):** Fix black flat preview + AR after AV1 (and after Files). Do not dispose the blit `VideoTexture` mid-session (Quest was poisoning A-Frame’s video map). Post-AV1 frames use an A-Frame **canvas** material; `sawAv1Tex` stays for the page load. Hard-refresh `/xr` still resets fully. (IPA may not have been copied — folded into 392.)
