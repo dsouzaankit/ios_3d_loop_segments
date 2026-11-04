@@ -4170,7 +4170,7 @@ enum ExportLANServer {
               var tex = xrEnsureVideoTexture(video);
               if (!tex) return null;
               // Quest lenses do not need a 4K+ blit every frame — that was crushing AR fps.
-              var maxW = 2048;
+              var maxW = 6144;
               var scale = Math.min(maxW / video.videoWidth, maxW / video.videoHeight, 1);
               var w = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var h = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
