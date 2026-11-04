@@ -4005,9 +4005,16 @@ enum ExportLANServer {
             window.__xrZoomSteps = [0.5, 0.6, 0.7, 0.8, 0.9, 1];
             // Skybox-style: meters to push the dome along world -Z (session forward). 0 = centered.
             window.__xrDist = 0;
-            var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false };
-            // Drop AV1 blit / video-texture state so a new clip cannot keep drawing the old RT.
-            function xrResetPlaybackPipeline() {
+            var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false, suspendBlit: false };
+            function xrIsPresenting() {
+              try {
+                var scene = document.querySelector("a-scene");
+                return !!(scene && scene.renderer && scene.renderer.xr && scene.renderer.xr.isPresenting);
+              } catch (e) {
+                return false;
+              }
+            }
+            function xrClearAv1Flags() {
               __xrDs.av1 = false;
               __xrDs.av1Known = false;
               __xrDs.codecSrc = "";
@@ -4016,12 +4023,8 @@ enum ExportLANServer {
               __xrDs.codecRetryAfter = 0;
               __xrDs.resolved = null;
               __xrDs.stamp = "";
-              try { if (__xrDs.rt) __xrDs.rt.dispose(); } catch (eRt) {}
-              __xrDs.rt = null;
-              __xrDs.rtW = 0;
-              __xrDs.rtH = 0;
-              try { if (__xrVideoTex) __xrVideoTex.dispose(); } catch (eTex) {}
-              __xrVideoTex = null;
+            }
+            function xrClearComponentModes() {
               try {
                 ["chroma-screen", "chroma-sphere", "chroma-sphere-right"].forEach(function (id) {
                   var el = document.getElementById(id);
@@ -4034,6 +4037,45 @@ enum ExportLANServer {
                   comp._domeGeoReady = false;
                 });
               } catch (eComp) {}
+            }
+            // Disposing a 6K AV1 RT / VideoTexture while WebXR is still presenting freezes Quest.
+            function xrDisposeAv1Gpu() {
+              try { if (__xrDs.rt) __xrDs.rt.dispose(); } catch (eRt) {}
+              __xrDs.rt = null;
+              __xrDs.rtW = 0;
+              __xrDs.rtH = 0;
+              try { if (__xrVideoTex) __xrVideoTex.dispose(); } catch (eTex) {}
+              __xrVideoTex = null;
+            }
+            function xrScheduleDisposeAv1Gpu() {
+              var token = (__xrDs.disposeToken || 0) + 1;
+              __xrDs.disposeToken = token;
+              setTimeout(function () {
+                if (__xrDs.disposeToken !== token) return;
+                if (xrIsPresenting()) {
+                  xrScheduleDisposeAv1Gpu();
+                  return;
+                }
+                xrDisposeAv1Gpu();
+                __xrDs.suspendBlit = false;
+              }, 700);
+            }
+            // Soft stop for AR/VR exit. Hard dispose only when the session is gone.
+            function xrSuspendAv1Pipeline() {
+              __xrDs.suspendBlit = true;
+              xrClearAv1Flags();
+              xrClearComponentModes();
+            }
+            function xrResetPlaybackPipeline() {
+              __xrDs.suspendBlit = true;
+              xrClearAv1Flags();
+              xrClearComponentModes();
+              if (xrIsPresenting()) {
+                xrScheduleDisposeAv1Gpu();
+                return;
+              }
+              xrDisposeAv1Gpu();
+              __xrDs.suspendBlit = false;
             }
             // Quest's 2D canvas draw of an AV1 <video> copies the decoder tile atlas
             // (one wide tile on top, two tiles splitting the bottom), not the picture.
@@ -4103,9 +4145,14 @@ enum ExportLANServer {
             }
             function xrBlitFullVideo(renderer, video) {
               if (!renderer || !video || !video.videoWidth) return null;
+              // Never blit while exiting AR/VR or after the session has ended.
+              if (__xrDs.suspendBlit) return null;
+              var xr = renderer.xr;
+              if (!xr || !xr.isPresenting) return null;
+              if (__xrDs.blitting) return __xrDs.resolved || null;
               var tex = xrEnsureVideoTexture(video);
               if (!tex) return null;
-              var maxW = 6144;
+              var maxW = 4096;
               var scale = Math.min(maxW / video.videoWidth, maxW / video.videoHeight, 1);
               var w = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var h = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
@@ -4154,9 +4201,7 @@ enum ExportLANServer {
               }
               __xrDs.blitMat.uniforms.tex.value = tex;
               tex.needsUpdate = true;
-              var xr = renderer.xr;
-              var wasEnabled = xr && xr.enabled;
-              if (xr) xr.enabled = false;
+              var wasEnabled = !!xr.enabled;
               var prev = renderer.getRenderTarget();
               var prevClear = renderer.autoClear;
               if (!__xrDs.viewport) __xrDs.viewport = new THREE.Vector4();
@@ -4175,15 +4220,24 @@ enum ExportLANServer {
                 } catch (eSc2) {}
                 try { renderer.setScissorTest(prevScissorTest); } catch (eSt2) {}
                 renderer.autoClear = prevClear;
-                if (xr) xr.enabled = !!wasEnabled;
+                // Only restore XR if the session is still live — enabling during teardown hangs Quest.
+                try {
+                  if (xr.isPresenting) xr.enabled = wasEnabled;
+                } catch (eXr) {}
+                __xrDs.blitting = false;
               }
+              __xrDs.blitting = true;
               try {
+                xr.enabled = false;
                 renderer.autoClear = true;
                 renderer.setRenderTarget(__xrDs.rt);
                 renderer.render(__xrDs.blitScene, __xrDs.blitCam);
-              } catch (eBlit) {}
+              } catch (eBlit) {
+                restoreBlit();
+                return null;
+              }
               restoreBlit();
-              return __xrDs.rt.texture;
+              return __xrDs.rt ? __xrDs.rt.texture : null;
             }
             function xrApplyChromaKey(ctx, cw, ch, keyHex, similarity, smoothness) {
               var img = ctx.getImageData(0, 0, cw, ch);
@@ -4391,7 +4445,8 @@ enum ExportLANServer {
                   var self = this;
                   self._yawLocked = false;
                   self._poseFrames = 0;
-                  // Drop a stale AV1 RT from the last clip so Enter VR/AR cannot show a frozen frame.
+                  __xrDs.suspendBlit = false;
+                  // Drop a stale AV1 sample from the last clip so Enter VR/AR cannot show a frozen frame.
                   __xrDs.resolved = null;
                   if (__xrVideoTex) {
                     try { __xrVideoTex.needsUpdate = true; } catch (eTex) {}
@@ -4409,11 +4464,17 @@ enum ExportLANServer {
                   setTimeout(kick, 800);
                 }.bind(this);
                 this._onExitVr = function () {
+                  // Stop AV1 blits and defer GPU dispose — tearing down a large RT during
+                  // WebXR exit freezes Quest Browser / the whole system.
+                  xrSuspendAv1Pipeline();
+                  xrScheduleDisposeAv1Gpu();
                   this._seated = false;
                   this._yawLocked = false;
                   this._poseFrames = 0;
-                  this.applyMaterial();
-                  this.syncEyeLayers();
+                  this._mode = "";
+                  this._gpuSig = "";
+                  try { this.applyMaterial(); } catch (eMat) {}
+                  try { this.syncEyeLayers(); } catch (eLay) {}
                 }.bind(this);
                 this.el.addEventListener("object3dset", this._onApply);
                 this.el.addEventListener("materialtextureloaded", this._onApply);
@@ -4451,6 +4512,7 @@ enum ExportLANServer {
                 if (quest && this.video) xrWatchAv1(this.video);
                 this.followHead();
                 var av1Immersive = quest && this.isImmersiveStereo()
+                  && !__xrDs.suspendBlit
                   && __xrDs.av1Known && __xrDs.av1 === true;
                 if (av1Immersive && this.drawsSharedFrame()) {
                   var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
@@ -5027,6 +5089,7 @@ enum ExportLANServer {
                 this.syncEyeLayers();
                 // Quest AV1: wait for / use the full-frame blit even when Chroma is on.
                 var questAv1 = this.isQuestBrowser() && !this.isDesktopRole()
+                  && !__xrDs.suspendBlit
                   && __xrDs.av1Known && __xrDs.av1 === true;
                 if (questAv1 && __xrDs.resolved) {
                   this.applyAv1Resolve(__xrDs.resolved);
@@ -5736,16 +5799,18 @@ enum ExportLANServer {
             }
             function stopPlaybackForHome() {
               // Pause alone can leave Quest WebXR decoding / audio running under the overlay.
+              // Suspend AV1 first, exit XR, then dispose GPU — never dispose while presenting.
               wantPlay = false;
-              try { xrResetPlaybackPipeline(); } catch (eReset) {}
+              try { xrSuspendAv1Pipeline(); } catch (eSus) {}
               try { video.pause(); } catch (e) {}
+              exitImmersiveIfNeeded();
               try {
                 video.removeAttribute("src");
                 video.load();
-              } catch (e) {}
-              try { syncPlayPauseLabel(); } catch (e) {}
-              try { refreshSphereShader(); } catch (e) {}
-              exitImmersiveIfNeeded();
+              } catch (e2) {}
+              try { syncPlayPauseLabel(); } catch (e3) {}
+              try { refreshSphereShader(); } catch (e4) {}
+              try { xrScheduleDisposeAv1Gpu(); } catch (eDisp) {}
             }
             function showOverlay(show) {
               overlay.style.display = show ? "flex" : "none";
@@ -6140,8 +6205,15 @@ enum ExportLANServer {
               index = ((i % playlist.length) + playlist.length) % playlist.length;
               var item = playlist[index];
               wantPlay = !!autoplay;
-              // New clip: drop previous AV1 blit / VideoTexture so AR cannot freeze on the old frame.
-              try { xrResetPlaybackPipeline(); } catch (eReset) {}
+              // New clip: drop previous AV1 flags. Do not dispose the RT while still in XR.
+              try {
+                if (xrIsPresenting()) {
+                  xrSuspendAv1Pipeline();
+                  __xrDs.suspendBlit = false;
+                } else {
+                  xrResetPlaybackPipeline();
+                }
+              } catch (eReset) {}
               video.src = item.url;
               applyRate();
               setLabel("[" + modeTag() + "] " + (index + 1) + "/" + playlist.length + ": " + item.name);

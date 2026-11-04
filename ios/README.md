@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 381 (1.3.1):** Exiting AR/VR during AV1 no longer disposes the blit render target while WebXR is still presenting (that freeze hung Quest Browser). Blits suspend on exit and GPU teardown waits until the session ends.
+
 **Build 380 (1.3.1):** `/xr` clears the AV1 blit / video-texture pipeline when the clip changes or you open Files. That stops AR from freezing on the previous frame and reduces Enter VR garbled leftovers. Transport labels are **FOV** / **Zoom** (was Arc / Dist).
 
 **Build 379 (1.3.1):** `/xr` **Working** lists any playable file in the media root next to `_working.mp4` (not only `_working*`). `status_lists.json` / the LAN index include those root media files too.
