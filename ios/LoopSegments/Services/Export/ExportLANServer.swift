@@ -4398,6 +4398,10 @@ enum ExportLANServer {
               var bag = xrSlotBag("flat");
               var stamp = (video.currentTime || 0).toFixed(3) + "|" + w + "x" + h + "|gpuc" + (chroma.keyColor || "") + "|" + srcNow;
               if (bag.stamp === stamp && bag.canvas && bag.canvas.width === w && bag.src === srcNow) return bag.canvas;
+              var nowMs = Date.now();
+              if (bag.canvas && bag.src === srcNow && __xrDs.previewReadAt && (nowMs - __xrDs.previewReadAt) < 120) {
+                return bag.canvas;
+              }
               var key = new THREE.Color(chroma.keyColor || "#00ff00");
               var sim = (chroma.similarity == null) ? 0.3 : chroma.similarity;
               var smo = (chroma.smoothness == null) ? 0.08 : chroma.smoothness;
@@ -4525,6 +4529,7 @@ enum ExportLANServer {
               bag.src = srcNow;
               bag.stamp = stamp;
               bag.pendingUpload = true;
+              __xrDs.previewReadAt = Date.now();
               __xrDs.sawAv1Tex = true;
               return canvas;
             }
@@ -4914,10 +4919,24 @@ enum ExportLANServer {
                     && ((__xrDs.av1Known && __xrDs.av1 === true) || (quest && !!this.data.chroma))) {
                   __xrVideoTex.needsUpdate = true;
                 }
-                if (this.isDesktopRole() && this.video) {
-                  var flatAv1 = quest && !this.isImmersiveStereo() && !this.data.chroma
-                    && __xrDs.av1Known && __xrDs.av1 === true;
-                  this.video.classList.toggle("xr-flat-preview", !!flatAv1);
+                var flatOverlay = false;
+                if (this.isDesktopRole()) {
+                  if (this.isImmersiveStereo()) {
+                    if (this.video) this.video.classList.remove("xr-flat-preview");
+                    var offCanvas = document.getElementById("xr-ds-canvas");
+                    if (offCanvas) offCanvas.classList.remove("xr-keyed-preview");
+                  } else {
+                    var showKeyed = quest && !!this.data.chroma;
+                    var showVideo = quest && !showKeyed && __xrDs.av1Known && __xrDs.av1 === true;
+                    flatOverlay = !!(showKeyed || showVideo);
+                    if (!showKeyed) {
+                      var offKeyed = document.getElementById("xr-ds-canvas");
+                      if (offKeyed) offKeyed.classList.remove("xr-keyed-preview");
+                    }
+                    if (this.video && !showKeyed) this.video.classList.toggle("xr-flat-preview", !!showVideo);
+                    if (showVideo) this._mode = "flat-video";
+                    if (this.el.object3D) this.el.object3D.visible = !flatOverlay;
+                  }
                 }
                 // Probe AV1 even with Chroma on — keyed AV1 still needs the full-frame blit.
                 if (quest && this.video) xrWatchAv1(this.video);
@@ -4943,7 +4962,17 @@ enum ExportLANServer {
                   if (!previewFrame && !(__xrDs.av1Known && __xrDs.av1 === true)) {
                     previewFrame = xrDrawDownscale(this.video, this.downscaleTarget(), this.chromaArgs(), "flat");
                   }
-                  if (previewFrame) this.applyPostAv1Canvas(previewFrame);
+                  var keyedEl = document.getElementById("xr-ds-canvas");
+                  if (previewFrame && keyedEl) {
+                    keyedEl.classList.add("xr-keyed-preview");
+                    if (this.video) this.video.classList.remove("xr-flat-preview");
+                    this._mode = "canvas";
+                  } else {
+                    if (keyedEl) keyedEl.classList.remove("xr-keyed-preview");
+                    if (this.video) this.video.classList.add("xr-flat-preview");
+                    try { if (__xrVideoTex) __xrVideoTex.needsUpdate = false; } catch (eHold) {}
+                    this._mode = "flat-video";
+                  }
                 } else if (questGpu && this.drawsSharedFrame()) {
                   var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
                   var v = this.video;
@@ -4969,12 +4998,12 @@ enum ExportLANServer {
                   }
                 } else if (questGpu && this.data.eye === "right" && __xrDs.resolved) {
                   this.applyAv1Resolve(__xrDs.resolved);
-                } else if (this.needsPostAv1Canvas() && this.drawsSharedFrame()) {
+                } else if (!flatOverlay && this.needsPostAv1Canvas() && this.drawsSharedFrame()) {
                   var postSlot = this.isDesktopRole() ? "flat" : "ar";
                   var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), this.chromaArgs(), postSlot);
                   if (postCanvas) this.applyPostAv1Canvas(postCanvas);
                   else if (this._dsCanvas && this._dsSrc === xrVideoSrc(this.video)) this.applyPostAv1Canvas(this._dsCanvas);
-                } else if (this._mode === "canvas" && this.drawsSharedFrame()) {
+                } else if (!flatOverlay && this._mode === "canvas" && this.drawsSharedFrame()) {
                   this.refreshDownscaleCanvas(true);
                 }
                 try {
@@ -4990,7 +5019,13 @@ enum ExportLANServer {
                     if (this._mode === "canvas") frameBag.pendingUpload = false;
                   }
                   if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
-                    this.el.object3D.visible = true;
+                    var keyedOn = false;
+                    try {
+                      var keyedNode = document.getElementById("xr-ds-canvas");
+                      keyedOn = !!(keyedNode && keyedNode.classList.contains("xr-keyed-preview"));
+                    } catch (eKeyVis) {}
+                    var videoOn = !!(this.video && this.video.classList.contains("xr-flat-preview"));
+                    this.el.object3D.visible = !(keyedOn || videoOn);
                   }
                 } catch (eTick) {}
                 if (!quest || this.isDesktopRole()) this.syncEyeLayers();
@@ -5009,13 +5044,19 @@ enum ExportLANServer {
                   if (!this._seatPos) this._seatPos = new THREE.Vector3();
                   cam.getWorldPosition(this._seatPos);
                   obj.position.copy(this._seatPos);
-                  // Skybox-style zoom: keep the 180° mapping, push the shell farther along
-                  // session forward (-Z) so the face subtends less of the view.
+                  // AR's reference yaw is not VR's. Lock once to the headset heading so the
+                  // 180 opening is in front of the user instead of the previous session's -Z.
+                  this._poseFrames = (this._poseFrames || 0) + 1;
+                  if (!this.isArMode() && !this._yawLocked && this._poseFrames >= 8) {
+                    if (!this._yawEuler) this._yawEuler = new THREE.Euler(0, 0, 0, "YXZ");
+                    this._yawEuler.setFromQuaternion(cam.quaternion, "YXZ");
+                    this._lockedYaw = this._yawEuler.y;
+                    this._yawLocked = true;
+                  }
+                  var yaw = (!this.isArMode() && this._yawLocked) ? (this._lockedYaw || 0) : 0;
+                  obj.rotation.set(0, yaw, 0);
                   var dist = this.domeDistance();
-                  if (dist > 0) obj.position.z -= dist;
-                  // Keep the authored facing. Copying headset yaw aimed the 180 opening
-                  // away from the session forward, so Enter VR showed the empty sky.
-                  obj.rotation.set(0, 0, 0);
+                  if (dist > 0) obj.translateZ(-dist);
                 } catch (eFollow) {}
               },
               isDesktopRole: function () {
@@ -6042,7 +6083,7 @@ enum ExportLANServer {
               background: #166534; color: #fff; font-weight: 700; cursor: pointer;
             }
             #xr-transport {
-              display: none; position: fixed; left: 0.75rem; right: 9rem; bottom: 1rem;
+              display: none; position: fixed; left: 0.75rem; right: 0.75rem; bottom: 5.25rem;
               z-index: 10050; width: auto;
               padding: 0.55rem 0.75rem; border-radius: 12px; border: 1px solid #333;
               background: rgba(15, 23, 42, 0.92); color: #f8fafc;
@@ -6083,10 +6124,11 @@ enum ExportLANServer {
               width: min(480px, 46vw); height: auto; max-height: 36vh;
               opacity: 1; background: #000; border: 2px solid #22c55e; border-radius: 8px;
             }
-            /* Quest flat AV1. WebGL preview is either the tile atlas or a black shader.
-               Leave the bottom-right clear: Enter AR sits at right:60px, Enter VR at right:5px. */
-            #chroma-stream.xr-flat-preview {
-              left: 0; top: 0; width: 100vw; height: calc(100vh - 4.5rem); max-height: none;
+            /* Quest flat preview. One full picture, above the Enter AR / Enter VR row.
+               The WebGL plane stays hidden so it does not tile a second copy in that gap. */
+            #chroma-stream.xr-flat-preview,
+            #xr-ds-canvas.xr-keyed-preview {
+              left: 0; top: 0; width: 100vw; height: calc(100vh - 6.5rem); max-height: none;
               opacity: 1; z-index: 2; object-fit: contain; background: #111; border: 0; border-radius: 0;
             }
             a-scene { z-index: 1; }
