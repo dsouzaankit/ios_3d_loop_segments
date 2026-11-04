@@ -4129,9 +4129,13 @@ enum ExportLANServer {
               __xrDs.av1 = false;
               __xrDs.resolved = null;
               function hasAv01(buf) {
+                // Box type only. A raw "av01" scan false-positives inside HEVC mdat and then
+                // the dome stays on the AV1 blit path (blank after a real AV1 clip).
                 var u8 = new Uint8Array(buf);
-                for (var i = 0; i < u8.length - 3; i++) {
-                  if (u8[i] === 97 && u8[i + 1] === 118 && u8[i + 2] === 48 && u8[i + 3] === 49) return true;
+                for (var i = 0; i + 8 <= u8.length; i++) {
+                  var size = (u8[i] << 24) | (u8[i + 1] << 16) | (u8[i + 2] << 8) | u8[i + 3];
+                  if (size < 8 || size > 16777216) continue;
+                  if (u8[i + 4] === 97 && u8[i + 5] === 118 && u8[i + 6] === 48 && u8[i + 7] === 49) return true;
                 }
                 return false;
               }
@@ -4278,6 +4282,7 @@ enum ExportLANServer {
                 return null;
               }
               restoreBlit();
+              __xrDs.sawAv1Tex = true;
               return __xrDs.rt ? __xrDs.rt.texture : null;
             }
             function xrApplyChromaKey(ctx, cw, ch, keyHex, similarity, smoothness) {
@@ -4559,12 +4564,6 @@ enum ExportLANServer {
                   if (!this.isDesktopRole()) __xrDs.needsMaterialKick = false;
                   try { this.applyMaterial(); } catch (eKick) {}
                 }
-                if (quest && __xrDs.av1Known && __xrDs.av1 === false && this._av1Mat && !this.isDesktopRole()) {
-                  var stuckMesh = this.el.getObject3D("mesh");
-                  if (stuckMesh && stuckMesh.material === this._av1Mat) {
-                    try { this.applyMaterial(); } catch (eHevc) {}
-                  }
-                }
                 var av1Immersive = quest && this.isImmersiveStereo()
                   && !__xrDs.suspendBlit
                   && __xrDs.av1Known && __xrDs.av1 === true;
@@ -4587,6 +4586,9 @@ enum ExportLANServer {
                   }
                 } else if (av1Immersive && this.data.eye === "right" && __xrDs.resolved) {
                   this.applyAv1Resolve(__xrDs.resolved);
+                } else if (this.needsPostAv1Canvas() && this.drawsSharedFrame()) {
+                  var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, "ar");
+                  if (postCanvas) this.applyPostAv1Canvas(postCanvas);
                 } else if (this._mode === "canvas" && this.drawsSharedFrame()) {
                   this.refreshDownscaleCanvas(true);
                 }
@@ -4836,6 +4838,34 @@ enum ExportLANServer {
                 }
                 this.syncEyeLayers();
                 return true;
+              },
+              needsPostAv1Canvas: function () {
+                // After an AV1 blit, Quest will not show a later HEVC frame through any VideoTexture.
+                return this.isQuestBrowser() && !this.isDesktopRole() && !!__xrDs.sawAv1Tex
+                  && !__xrDs.suspendBlit
+                  && !(__xrDs.av1Known && __xrDs.av1 === true);
+              },
+              applyPostAv1Canvas: function (canvas) {
+                if (!canvas) return;
+                if (!this._postTex) {
+                  this._postTex = new THREE.CanvasTexture(canvas);
+                  this._postTex.minFilter = THREE.LinearFilter;
+                  this._postTex.magFilter = THREE.LinearFilter;
+                  this._postTex.generateMipmaps = false;
+                  if (THREE.SRGBColorSpace && "colorSpace" in this._postTex) {
+                    this._postTex.colorSpace = THREE.SRGBColorSpace;
+                  }
+                } else if (this._postTex.image !== canvas) {
+                  this._postTex.image = canvas;
+                }
+                this._postTex.needsUpdate = true;
+                this.applyAv1Resolve(this._postTex);
+                this._mode = "canvasrt";
+                var video = this.video;
+                if (video && video.videoWidth) {
+                  this.setTexNote("HEVC canvas " + video.videoWidth + "×" + video.videoHeight
+                    + (this.data.chroma ? " + chroma" : ""));
+                }
               },
               applyAv1Resolve: function (tex) {
                 this.ensureDomeGeometry();
@@ -5230,14 +5260,13 @@ enum ExportLANServer {
                   return;
                 }
                 if (questAv1) return;
-                if (this.isQuestBrowser() && !this.isDesktopRole()
-                    && __xrDs.av1Known && __xrDs.av1 === false) {
-                  var hevcSrc = (this.video && (this.video.currentSrc || this.video.src)) || "";
-                  var hevcReady = this.video && this.video.readyState >= 2 && this.video.videoWidth;
-                  if (hevcSrc && this._rebuiltFor !== hevcSrc) {
-                    if (hevcReady) this.rebuildLiveVideoMaterial();
-                    return;
+                // Quest VideoTexture stays black for HEVC once this session has blitted AV1.
+                if (this.needsPostAv1Canvas()) {
+                  if (this.drawsSharedFrame()) {
+                    var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, "ar");
+                    if (postCanvas) this.applyPostAv1Canvas(postCanvas);
                   }
+                  return;
                 }
                 if (this.data.chroma) {
                   var scaled = null;
