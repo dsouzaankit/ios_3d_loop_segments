@@ -4383,6 +4383,151 @@ enum ExportLANServer {
               __xrDs.sawAv1Tex = true;
               return __xrDs.rt ? __xrDs.rt.texture : null;
             }
+            // Quest flat preview. drawImage of AV1 is the tile atlas, and xr-chroma on a
+            // video texture stays black. Blit a small keyed frame and hand A-Frame a canvas.
+            function xrKeyedPreviewCanvas(renderer, video, chroma) {
+              if (!renderer || !video || !video.videoWidth || !chroma) return null;
+              if (__xrDs.exiting || __xrDs.suspendBlit || __xrDs.blitting) return null;
+              var tex = xrEnsureVideoTexture(video);
+              if (!tex) return null;
+              var limit = 1280;
+              var scale = Math.min(limit / video.videoWidth, limit / video.videoHeight, 1);
+              var w = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
+              var h = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
+              var srcNow = xrVideoSrc(video);
+              var bag = xrSlotBag("flat");
+              var stamp = (video.currentTime || 0).toFixed(3) + "|" + w + "x" + h + "|gpuc" + (chroma.keyColor || "") + "|" + srcNow;
+              if (bag.stamp === stamp && bag.canvas && bag.canvas.width === w && bag.src === srcNow) return bag.canvas;
+              var key = new THREE.Color(chroma.keyColor || "#00ff00");
+              var sim = (chroma.similarity == null) ? 0.3 : chroma.similarity;
+              var smo = (chroma.smoothness == null) ? 0.08 : chroma.smoothness;
+              if (!__xrDs.previewRt || __xrDs.previewW !== w || __xrDs.previewH !== h) {
+                try { if (__xrDs.previewRt) __xrDs.previewRt.dispose(); } catch (eRt) {}
+                __xrDs.previewRt = new THREE.WebGLRenderTarget(w, h, {
+                  minFilter: THREE.LinearFilter,
+                  magFilter: THREE.LinearFilter,
+                  type: THREE.UnsignedByteType,
+                  format: THREE.RGBAFormat,
+                  depthBuffer: false,
+                  stencilBuffer: false
+                });
+                __xrDs.previewRt.texture.generateMipmaps = false;
+                __xrDs.previewW = w;
+                __xrDs.previewH = h;
+                __xrDs.previewBuf = null;
+              }
+              if (!__xrDs.previewMat) {
+                __xrDs.previewCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+                __xrDs.previewScene = new THREE.Scene();
+                __xrDs.previewMat = new THREE.RawShaderMaterial({
+                  uniforms: {
+                    tex: { value: tex },
+                    keyColor: { value: key },
+                    similarity: { value: sim },
+                    smoothness: { value: smo }
+                  },
+                  vertexShader: [
+                    "attribute vec3 position;",
+                    "attribute vec2 uv;",
+                    "uniform mat4 projectionMatrix;",
+                    "uniform mat4 modelViewMatrix;",
+                    "varying vec2 vUv;",
+                    "void main(){",
+                    "  vUv = vec2(uv.x, 1.0 - uv.y);",
+                    "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+                    "}"
+                  ].join("\n"),
+                  fragmentShader: [
+                    "precision highp float;",
+                    "uniform sampler2D tex;",
+                    "uniform vec3 keyColor;",
+                    "uniform float similarity;",
+                    "uniform float smoothness;",
+                    "varying vec2 vUv;",
+                    "void main(){",
+                    "  vec4 videoColor = texture2D(tex, vUv);",
+                    "  float cr = 0.5 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
+                    "  float cb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5 * videoColor.b;",
+                    "  float keyCr = 0.5 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
+                    "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5 * keyColor.b;",
+                    "  float dist = sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));",
+                    "  float blend = smoothstep(similarity, similarity + smoothness, dist);",
+                    "  gl_FragColor = vec4(videoColor.rgb * blend, blend);",
+                    "}"
+                  ].join("\n"),
+                  depthTest: false,
+                  depthWrite: false
+                });
+                __xrDs.previewScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), __xrDs.previewMat));
+              } else {
+                __xrDs.previewMat.uniforms.tex.value = tex;
+                __xrDs.previewMat.uniforms.keyColor.value.copy(key);
+                __xrDs.previewMat.uniforms.similarity.value = sim;
+                __xrDs.previewMat.uniforms.smoothness.value = smo;
+              }
+              tex.needsUpdate = true;
+              var prevTarget = renderer.getRenderTarget();
+              var prevClear = renderer.autoClear;
+              var xr = renderer.xr;
+              var wasEnabled = !!(xr && xr.enabled);
+              if (!__xrDs.viewport) __xrDs.viewport = new THREE.Vector4();
+              if (!__xrDs.scissor) __xrDs.scissor = new THREE.Vector4();
+              var prevScissorTest = false;
+              try { renderer.getViewport(__xrDs.viewport); } catch (eVp) {}
+              try { renderer.getScissor(__xrDs.scissor); } catch (eSc) {}
+              try { prevScissorTest = !!renderer.getScissorTest(); } catch (eSt) {}
+              function restorePreview() {
+                try { renderer.setRenderTarget(prevTarget); } catch (eSet) {}
+                try {
+                  renderer.setViewport(__xrDs.viewport.x, __xrDs.viewport.y, __xrDs.viewport.z, __xrDs.viewport.w);
+                } catch (eVp2) {}
+                try {
+                  renderer.setScissor(__xrDs.scissor.x, __xrDs.scissor.y, __xrDs.scissor.z, __xrDs.scissor.w);
+                } catch (eSc2) {}
+                try { renderer.setScissorTest(prevScissorTest); } catch (eSt2) {}
+                renderer.autoClear = prevClear;
+                try { if (xr && xr.isPresenting) xr.enabled = wasEnabled; } catch (eXr) {}
+                __xrDs.blitting = false;
+              }
+              __xrDs.blitting = true;
+              try {
+                if (xr && xr.isPresenting) xr.enabled = false;
+                renderer.autoClear = true;
+                renderer.setRenderTarget(__xrDs.previewRt);
+                renderer.render(__xrDs.previewScene, __xrDs.previewCam);
+                if (!__xrDs.previewBuf || __xrDs.previewBuf.length !== w * h * 4) {
+                  __xrDs.previewBuf = new Uint8Array(w * h * 4);
+                }
+                renderer.readRenderTargetPixels(__xrDs.previewRt, 0, 0, w, h, __xrDs.previewBuf);
+              } catch (ePreview) {
+                restorePreview();
+                return null;
+              }
+              restorePreview();
+              var canvas = bag.canvas || document.getElementById("xr-ds-canvas");
+              if (!canvas) {
+                canvas = document.createElement("canvas");
+                canvas.id = "xr-ds-canvas";
+                canvas.width = 16;
+                canvas.height = 16;
+                document.body.appendChild(canvas);
+              }
+              if (canvas.width !== w || canvas.height !== h) {
+                canvas.width = w;
+                canvas.height = h;
+                bag.ctx = null;
+              }
+              if (!bag.ctx) bag.ctx = canvas.getContext("2d", { alpha: true });
+              var img = bag.ctx.createImageData(w, h);
+              img.data.set(__xrDs.previewBuf);
+              bag.ctx.putImageData(img, 0, 0);
+              bag.canvas = canvas;
+              bag.src = srcNow;
+              bag.stamp = stamp;
+              bag.pendingUpload = true;
+              __xrDs.sawAv1Tex = true;
+              return canvas;
+            }
             function xrApplyChromaKey(ctx, cw, ch, keyHex, similarity, smoothness) {
               var img = ctx.getImageData(0, 0, cw, ch);
               var d = img.data;
@@ -4770,7 +4915,8 @@ enum ExportLANServer {
                   __xrVideoTex.needsUpdate = true;
                 }
                 if (this.isDesktopRole() && this.video) {
-                  var flatAv1 = quest && !this.isImmersiveStereo() && __xrDs.av1Known && __xrDs.av1 === true;
+                  var flatAv1 = quest && !this.isImmersiveStereo() && !this.data.chroma
+                    && __xrDs.av1Known && __xrDs.av1 === true;
                   this.video.classList.toggle("xr-flat-preview", !!flatAv1);
                 }
                 // Probe AV1 even with Chroma on — keyed AV1 still needs the full-frame blit.
@@ -4789,7 +4935,16 @@ enum ExportLANServer {
                 var questGpu = av1Immersive || (
                   quest && this.isImmersiveStereo() && !__xrDs.suspendBlit && !__xrDs.exiting && !!this.data.chroma
                 );
-                if (questGpu && this.drawsSharedFrame()) {
+                var flatChroma = quest && this.isDesktopRole() && !this.isImmersiveStereo() && this.data.chroma
+                  && this.drawsSharedFrame() && !__xrDs.exiting && !__xrDs.suspendBlit;
+                if (flatChroma) {
+                  var prevRenderer = this.el.sceneEl && this.el.sceneEl.renderer;
+                  var previewFrame = xrKeyedPreviewCanvas(prevRenderer, this.video, this.chromaArgs());
+                  if (!previewFrame && !(__xrDs.av1Known && __xrDs.av1 === true)) {
+                    previewFrame = xrDrawDownscale(this.video, this.downscaleTarget(), this.chromaArgs(), "flat");
+                  }
+                  if (previewFrame) this.applyPostAv1Canvas(previewFrame);
+                } else if (questGpu && this.drawsSharedFrame()) {
                   var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
                   var v = this.video;
                   var t = v ? v.currentTime : -1;
@@ -5595,7 +5750,17 @@ enum ExportLANServer {
                 // Flat AV1 preview is the <video> element. A canvas copy is the tile atlas,
                 // and a WebGL upload here blanks that element.
                 if (this.isDesktopRole() && !this.isImmersiveStereo() && this.isQuestBrowser()
-                    && __xrDs.av1Known && __xrDs.av1 === true) {
+                    && __xrDs.av1Known && __xrDs.av1 === true && !this.data.chroma) {
+                  return;
+                }
+                if (this.isDesktopRole() && !this.isImmersiveStereo() && this.isQuestBrowser()
+                    && this.data.chroma && this.drawsSharedFrame()) {
+                  var rendererP = this.el.sceneEl && this.el.sceneEl.renderer;
+                  var preview = xrKeyedPreviewCanvas(rendererP, this.video, this.chromaArgs());
+                  if (!preview && !(__xrDs.av1Known && __xrDs.av1 === true)) {
+                    preview = xrDrawDownscale(this.video, this.downscaleTarget(), this.chromaArgs(), "flat");
+                  }
+                  if (preview) this.applyPostAv1Canvas(preview);
                   return;
                 }
                 // Quest dome: AV1, and HEVC when chroma is on, sample the blit (GPU key).
@@ -5877,8 +6042,8 @@ enum ExportLANServer {
               background: #166534; color: #fff; font-weight: 700; cursor: pointer;
             }
             #xr-transport {
-              display: none; position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%);
-              z-index: 10050; width: min(42rem, calc(100vw - 7rem));
+              display: none; position: fixed; left: 0.75rem; right: 9rem; bottom: 1rem;
+              z-index: 10050; width: auto;
               padding: 0.55rem 0.75rem; border-radius: 12px; border: 1px solid #333;
               background: rgba(15, 23, 42, 0.92); color: #f8fafc;
               box-shadow: 0 8px 28px rgba(0,0,0,0.45); backdrop-filter: blur(6px);
@@ -5918,9 +6083,10 @@ enum ExportLANServer {
               width: min(480px, 46vw); height: auto; max-height: 36vh;
               opacity: 1; background: #000; border: 2px solid #22c55e; border-radius: 8px;
             }
-            /* Quest flat AV1. WebGL preview is either the tile atlas or a black shader. */
+            /* Quest flat AV1. WebGL preview is either the tile atlas or a black shader.
+               Leave the bottom-right clear: Enter AR sits at right:60px, Enter VR at right:5px. */
             #chroma-stream.xr-flat-preview {
-              left: 0; top: 0; width: 100vw; height: 100vh; max-height: none;
+              left: 0; top: 0; width: 100vw; height: calc(100vh - 4.5rem); max-height: none;
               opacity: 1; z-index: 2; object-fit: contain; background: #111; border: 0; border-radius: 0;
             }
             a-scene { z-index: 1; }

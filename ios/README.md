@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 399 (1.3.1):** Enter AR stays visible on the playback page. The transport bar and the full-screen AV1 preview were covering it (the AR control sits just left of Enter VR). Flat preview with chroma on is a keyed canvas: AV1 is blitted on the GPU into that canvas, and HEVC uses the same blit.
+
 **Build 398 (1.3.1):** Enter VR after AR keeps the last blit instead of seeding a canvas. Quest chroma in AR/VR is the blit shader for HEVC and AV1 (no per-frame canvas readback). Flat AV1 preview is the video element; flat HEVC chroma stays on a smaller canvas.
 
 **Build 397 (1.3.1):** Enter VR keeps the current blit until a new one is ready, and an unrecognized eye camera shows the left dome instead of hiding both. HEVC after AV1 punches chroma into the canvas (capped at 2048) so the key is not AV1-only.
