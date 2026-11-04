@@ -4097,6 +4097,7 @@ enum ExportLANServer {
               __xrDs.codecRetrySrc = "";
               __xrDs.codecRetryAfter = 0;
               __xrDs.resolved = null;
+              __xrDs.resolvedSrc = "";
               __xrDs.stamp = "";
             }
             function xrClearComponentModes() {
@@ -4461,6 +4462,8 @@ enum ExportLANServer {
             }
             function xrDrawDownscale(video, limit, chroma, slot) {
               if (!video || !video.videoWidth) return null;
+              // CPU chroma reads every pixel. Cap the copy so a 4K key does not stall Enter VR.
+              if (chroma && limit > 2048) limit = 2048;
               var bag = xrSlotBag(slot);
               var canvasId = slot === "ar" ? "xr-ds-ar" : "xr-ds-canvas";
               var canvas = bag.canvas || document.getElementById(canvasId);
@@ -4642,9 +4645,14 @@ enum ExportLANServer {
                   __xrDs.disposeToken = (__xrDs.disposeToken || 0) + 1;
                   __xrDs.exiting = false;
                   __xrDs.suspendBlit = false;
-                  // Drop a stale AV1 sample from the last clip so Enter VR/AR cannot show a frozen frame.
-                  __xrDs.resolved = null;
-                  __xrDs.lastBlitTime = -1;
+                  // Drop the blit only when it belongs to another clip. Clearing it on every
+                  // Enter VR left the dome with no frame until the next blit landed.
+                  var srcNow = xrVideoSrc(self.video);
+                  if (__xrDs.resolvedSrc && __xrDs.resolvedSrc !== srcNow) {
+                    __xrDs.resolved = null;
+                    __xrDs.resolvedSrc = "";
+                    __xrDs.lastBlitTime = -1;
+                  }
                   var seeded = null;
                   try { xrForgetStaleCanvases(self.video); } catch (eBag) {}
                   try { seeded = xrSeedArFromFlat(self.video); } catch (eSeed) {}
@@ -4755,6 +4763,7 @@ enum ExportLANServer {
                     var resolved = xrBlitFullVideo(renderer, v);
                     if (resolved) {
                       __xrDs.resolved = resolved;
+                      __xrDs.resolvedSrc = xrVideoSrc(v);
                       __xrDs.lastBlitTime = t;
                       this.applyAv1Resolve(resolved);
                     } else if (__xrDs.resolved) {
@@ -4765,9 +4774,9 @@ enum ExportLANServer {
                   this.applyAv1Resolve(__xrDs.resolved);
                 } else if (this.needsPostAv1Canvas() && this.drawsSharedFrame()) {
                   var postSlot = this.isDesktopRole() ? "flat" : "ar";
-                  var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, postSlot);
+                  var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), this.chromaArgs(), postSlot);
                   if (postCanvas) this.applyPostAv1Canvas(postCanvas);
-                  else if (this._dsCanvas) this.applyPostAv1Canvas(this._dsCanvas);
+                  else if (this._dsCanvas && this._dsSrc === xrVideoSrc(this.video)) this.applyPostAv1Canvas(this._dsCanvas);
                 } else if (this._mode === "canvas" && this.drawsSharedFrame()) {
                   this.refreshDownscaleCanvas(true);
                 }
@@ -4818,6 +4827,27 @@ enum ExportLANServer {
                 if (this.data.eye === "right") return false;
                 if (this.isImmersiveStereo() && this.isDesktopRole()) return false;
                 if (!this.isImmersiveStereo() && !this.isDesktopRole()) return false;
+                return true;
+              },
+              chromaArgs: function () {
+                if (!this.data.chroma) return null;
+                var key = "#00ff00";
+                try { key = "#" + new THREE.Color(this.data.keyColor).getHexString(); } catch (eKey) {}
+                return { keyColor: key, similarity: this.data.similarity, smoothness: this.data.smoothness };
+              },
+              // Show the current preview canvas until an AV1 blit exists. Returning with no
+              // material is what left Enter VR black.
+              holdPreviewCanvas: function () {
+                var now = xrVideoSrc(this.video);
+                var hold = (this._dsSrc === now) ? this._dsCanvas : null;
+                if (!hold) {
+                  var flat = xrSlotBag("flat");
+                  if (flat.src === now && flat.canvas) hold = flat.canvas;
+                }
+                if (!hold) return false;
+                this._dsCanvas = hold;
+                this._dsSrc = now;
+                this.applyCanvasVideo();
                 return true;
               },
               isQuestBrowser: function () {
@@ -4972,7 +5002,7 @@ enum ExportLANServer {
                   return this._dsCanvas;
                 }
                 var target = this.downscaleTarget();
-                var canvas = xrDrawDownscale(video, target, null, slot);
+                var canvas = xrDrawDownscale(video, target, this.chromaArgs(), slot);
                 if (!canvas && slot === "ar") {
                   var flatOk = xrSlotBag("flat");
                   if (flatOk.src === srcNow && flatOk.canvas) {
@@ -5091,7 +5121,18 @@ enum ExportLANServer {
                         this.visible = eyeIndex === 0;
                         return;
                       }
-                      this.visible = camera === xrCam.cameras[eyeIndex];
+                      var idx = -1;
+                      for (var ci = 0; ci < xrCam.cameras.length; ci++) {
+                        if (xrCam.cameras[ci] === camera) { idx = ci; break; }
+                      }
+                      if (idx < 0 && camera && camera.viewport && xrCam.cameras[0] && xrCam.cameras[0].viewport) {
+                        var v0 = xrCam.cameras[0].viewport;
+                        var v1 = xrCam.cameras[1] && xrCam.cameras[1].viewport;
+                        if (camera.viewport.x === v0.x && camera.viewport.y === v0.y) idx = 0;
+                        else if (v1 && camera.viewport.x === v1.x && camera.viewport.y === v1.y) idx = 1;
+                      }
+                      // Unknown camera used to hide both domes, so Enter VR stayed black.
+                      this.visible = idx < 0 ? (eyeIndex === 0) : (idx === eyeIndex);
                     } catch (e) {
                       this.visible = eyeIndex === 0;
                     }
@@ -5501,16 +5542,20 @@ enum ExportLANServer {
                   this.applyAv1Resolve(__xrDs.resolved);
                   return;
                 }
-                if (questAv1) return;
+                if (questAv1) {
+                  this.holdPreviewCanvas();
+                  return;
+                }
                 // Quest VideoTexture stays black once this session has blitted AV1.
                 if (this.needsPostAv1Canvas()) {
                   if (this.drawsSharedFrame()) {
                     var postSlot2 = this.isDesktopRole() ? "flat" : "ar";
-                    var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, postSlot2);
+                    var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), this.chromaArgs(), postSlot2);
                     if (postCanvas && this.applyPostAv1Canvas(postCanvas)) return;
-                    if (this._dsCanvas && this.applyPostAv1Canvas(this._dsCanvas)) return;
+                    if (this._dsCanvas && this._dsSrc === xrVideoSrc(this.video) && this.applyPostAv1Canvas(this._dsCanvas)) return;
+                  } else {
+                    this.holdPreviewCanvas();
                   }
-                  // Frame not ready yet — retry next kick; do not stick on a blank material.
                   return;
                 }
                 if (this.data.chroma) {

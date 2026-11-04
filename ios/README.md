@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 397 (1.3.1):** Enter VR keeps the current blit until a new one is ready, and an unrecognized eye camera shows the left dome instead of hiding both. HEVC after AV1 punches chroma into the canvas (capped at 2048) so the key is not AV1-only.
+
 **Build 396 (1.3.1):** `/xr` debug logs `post-av1-canvas` once per role, eye, size, and clip. The per-frame trace was filling the 500-line ring and dropping `enter-vr`.
 
 **Build 395 (1.3.1):** Enter VR was showing a frozen frame from the previous attempt. The dome keeps its own canvas, separate from the live preview, and a failed copy during session start left the old picture in place. Clip changes clear that canvas. Enter VR copies the current preview frame in first.
