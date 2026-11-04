@@ -4006,6 +4006,35 @@ enum ExportLANServer {
             // Skybox-style: meters to push the dome along world -Z (session forward). 0 = centered.
             window.__xrDist = 0;
             var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false };
+            // Drop AV1 blit / video-texture state so a new clip cannot keep drawing the old RT.
+            function xrResetPlaybackPipeline() {
+              __xrDs.av1 = false;
+              __xrDs.av1Known = false;
+              __xrDs.codecSrc = "";
+              __xrDs.codecPending = "";
+              __xrDs.codecRetrySrc = "";
+              __xrDs.codecRetryAfter = 0;
+              __xrDs.resolved = null;
+              __xrDs.stamp = "";
+              try { if (__xrDs.rt) __xrDs.rt.dispose(); } catch (eRt) {}
+              __xrDs.rt = null;
+              __xrDs.rtW = 0;
+              __xrDs.rtH = 0;
+              try { if (__xrVideoTex) __xrVideoTex.dispose(); } catch (eTex) {}
+              __xrVideoTex = null;
+              try {
+                ["chroma-screen", "chroma-sphere", "chroma-sphere-right"].forEach(function (id) {
+                  var el = document.getElementById(id);
+                  var comp = el && el.components && el.components["chroma-stereo-sbs"];
+                  if (!comp) return;
+                  comp._mode = "";
+                  comp._gpuSig = "";
+                  comp._uvZoom = null;
+                  comp._uvEyeApplied = null;
+                  comp._domeGeoReady = false;
+                });
+              } catch (eComp) {}
+            }
             // Quest's 2D canvas draw of an AV1 <video> copies the decoder tile atlas
             // (one wide tile on top, two tiles splitting the bottom), not the picture.
             // A GPU pass that samples the whole video texture forces every tile to update.
@@ -4021,6 +4050,9 @@ enum ExportLANServer {
               __xrDs.codecPending = src;
               __xrDs.codecSrc = src;
               __xrDs.av1Known = false;
+              // Do not keep the previous clip's AV1 flag while the new probe runs.
+              __xrDs.av1 = false;
+              __xrDs.resolved = null;
               function hasAv01(buf) {
                 var u8 = new Uint8Array(buf);
                 for (var i = 0; i < u8.length - 3; i++) {
@@ -4359,6 +4391,13 @@ enum ExportLANServer {
                   var self = this;
                   self._yawLocked = false;
                   self._poseFrames = 0;
+                  // Drop a stale AV1 RT from the last clip so Enter VR/AR cannot show a frozen frame.
+                  __xrDs.resolved = null;
+                  if (__xrVideoTex) {
+                    try { __xrVideoTex.needsUpdate = true; } catch (eTex) {}
+                  }
+                  self._mode = "";
+                  self._gpuSig = "";
                   function kick() {
                     self.applyMaterial();
                     self.syncEyeLayers();
@@ -4411,7 +4450,8 @@ enum ExportLANServer {
                 // Probe AV1 even with Chroma on — keyed AV1 still needs the full-frame blit.
                 if (quest && this.video) xrWatchAv1(this.video);
                 this.followHead();
-                var av1Immersive = quest && this.isImmersiveStereo() && __xrDs.av1 === true;
+                var av1Immersive = quest && this.isImmersiveStereo()
+                  && __xrDs.av1Known && __xrDs.av1 === true;
                 if (av1Immersive && this.drawsSharedFrame()) {
                   var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
                   var resolved = xrBlitFullVideo(renderer, this.video);
@@ -5343,11 +5383,11 @@ enum ExportLANServer {
               <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
-              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="Packs the full frame onto a shorter degree arc">Arc
-                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" style="width:7rem" aria-label="Arc zoom degrees">
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="How many degrees the shell covers (180° → 90°). Packs the full frame onto a shorter arc.">FOV
+                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" style="width:7rem" aria-label="Field of view degrees">
               </label>
-              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="Skybox-style: keep 180° mapping, push the dome farther">Dist
-                <input type="range" id="xr-dist" min="0" max="12" step="0.5" value="0" style="width:7rem" aria-label="Skybox-style distance zoom">
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="Skybox / PLAY’A style: keep 180° mapping, push the dome farther so the face looks smaller.">Zoom
+                <input type="range" id="xr-dist" min="0" max="12" step="0.5" value="0" style="width:7rem" aria-label="Distance zoom">
               </label>
               <span id="xr-time">0:00 / 0:00</span>
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Key
@@ -5697,6 +5737,7 @@ enum ExportLANServer {
             function stopPlaybackForHome() {
               // Pause alone can leave Quest WebXR decoding / audio running under the overlay.
               wantPlay = false;
+              try { xrResetPlaybackPipeline(); } catch (eReset) {}
               try { video.pause(); } catch (e) {}
               try {
                 video.removeAttribute("src");
@@ -6099,6 +6140,8 @@ enum ExportLANServer {
               index = ((i % playlist.length) + playlist.length) % playlist.length;
               var item = playlist[index];
               wantPlay = !!autoplay;
+              // New clip: drop previous AV1 blit / VideoTexture so AR cannot freeze on the old frame.
+              try { xrResetPlaybackPipeline(); } catch (eReset) {}
               video.src = item.url;
               applyRate();
               setLabel("[" + modeTag() + "] " + (index + 1) + "/" + playlist.length + ": " + item.name);
