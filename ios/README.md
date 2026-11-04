@@ -14,7 +14,9 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 378 (1.3.1):** Transport bar has two zoom controls in parallel. **Arc** packs the frame onto a shorter degree span. **Dist** is Skybox-style: keeps the 180° shell and pushes it farther along session forward.
+**Build 379 (1.3.1):** **`/xr` Working** playlist lists root `_vanilla_download.*` next to `_working*.mp4`.
+
+**Build 378 (1.3.1):** Transport bar has two zoom controls in parallel — see **`/xr` zoom** below.
 
 **Build 377 (1.3.1):** Quest immersive chroma can key AV1. The full-frame blit runs first, then the GPU key samples that frame instead of the tile atlas.
 
@@ -415,7 +417,16 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 |------|----------|
 | **`/` (monitor)** | Export source + resume when paused, static playback/log links, **Refresh status** / **Refresh file list** / **LAN speed test** / **Show loop player** / **Open XR chroma player** (no timers). Link to **`/browse`**. Browsers always get this HTML at **`GET /`** — not an in-page WebDAV folder tree. |
 | **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, **Show loop player**, **Open XR chroma player**, **Export from URL**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
-| **`/xr`** (alias **`/chroma`**) | Separate **WebXR / A-Frame** page: 180° hemisphere + SBS eye split + YUV green-screen chroma (`chroma-stereo-sbs`). **Three playlists** (toggle): **Loop** = `loop/op_*.mp4`; **Working** = root `_working*.mp4` (not under archive); **Archive** = top-level `archive/` folder videos. Tap to open, Refresh list; `?mode=working` / `?mode=archive` / `?mode=loop`. Passthrough toggle clears the sky / canvas alpha. **Does not** replace the 2D loop player. Quest immersive mode typically needs **HTTPS** (not plain `http://phone:8765`). A-Frame CDN load needs internet on the headset once. |
+| **`/xr`** (alias **`/chroma`**) | Separate **WebXR / A-Frame** page: 180° hemisphere + SBS eye split + YUV green-screen chroma (`chroma-stereo-sbs`). **Three playlists** (toggle): **Loop** = `loop/op_*.mp4`; **Working** = root `_working*.mp4` and `_vanilla_download.*` (not under archive); **Archive** = top-level `archive/` folder videos. Tap to open, Refresh list; `?mode=working` / `?mode=archive` / `?mode=loop`. Passthrough toggle clears the sky / canvas alpha. **Does not** replace the 2D loop player. Quest immersive mode typically needs **HTTPS** (not plain `http://phone:8765`). A-Frame CDN load needs internet on the headset once. Transport **Arc** / **Dist** zoom — see below. |
+
+**`/xr` zoom (build 378+):** both sliders sit on the transport bar under the flat player and can be used together.
+
+| Control | What it changes | Mapping | Closest to |
+|---------|-----------------|---------|------------|
+| **Arc** | Hemisphere `phi`/`theta` = `180° × value` (0.5–1). Full frame remapped onto that shorter arc (not a UV crop). | Degree span of the shell | FOV / arc shrink |
+| **Dist** | Pushes the dome along session forward (`−Z`), 0–12. Geometry stays a true 180° shell. | Distance between head and shell | **Skybox** 180/360 Zoom (and PLAY’A Zoom naming); **not** Gemini’s uniform `object3D.scale` |
+
+Gemini-style uniform mesh scale is **not** used: it fights the inward `scale -1 1 1`, and with the eye at the sphere center it does not match Skybox’s distance zoom.
 
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 

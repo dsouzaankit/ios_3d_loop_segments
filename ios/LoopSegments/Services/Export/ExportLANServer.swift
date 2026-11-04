@@ -5361,7 +5361,7 @@ enum ExportLANServer {
           </div>
           <div id="overlay" class="play-overlay">
             <h1>3D Chroma Key 180° Player</h1>
-            <p class="muted">Three playlists: <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working</strong> = root <code>_working*.mp4</code> (outside archive) · <strong>Archive</strong> = <code>\#(mediaRootHTML)archive/</code> folder</p>
+            <p class="muted">Three playlists: <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working</strong> = root <code>_working*.mp4</code> and <code>_vanilla_download.*</code> (outside archive) · <strong>Archive</strong> = <code>\#(mediaRootHTML)archive/</code> folder</p>
             <p class="warn">Quest WebXR needs a <strong>secure context</strong>: prefer Quest <code>chrome://flags</code> insecure-origin + LAN <code>http://</code> (see LAN page). Cloudflare tunnel is optional (slow). Passthrough = <strong>Enter AR</strong> (not Enter VR). A-Frame CDN needs internet on the headset once.</p>
             <p id="xr-webxr-status" class="muted" style="font-size:0.85rem;max-width:36rem" role="status">Checking WebXR…</p>
             <div class="toolbar" role="group" aria-label="Playlist">
@@ -5564,7 +5564,7 @@ enum ExportLANServer {
             }
             function emptyLabel() {
               if (mode === "working") {
-                return "No root _working*.mp4 yet — export on the phone, then Refresh list";
+                return "No root _working*.mp4 or _vanilla_download.* yet — export on the phone, then Refresh list";
               }
               if (mode === "archive") {
                 return "No archive/ videos yet — finish an export, then Refresh list";
@@ -5577,7 +5577,7 @@ enum ExportLANServer {
               return "loop";
             }
             function listGroupTitle() {
-              if (mode === "working") return "Working (media root, outside archive/)";
+              if (mode === "working") return "Working (_working* + _vanilla_download.*)";
               if (mode === "archive") return "Archive folder";
               return "Loop segments";
             }
@@ -5993,7 +5993,8 @@ enum ExportLANServer {
               if (n.indexOf(MEDIA_ROOT) !== 0) return false;
               var leaf = n.slice(MEDIA_ROOT.length);
               if (!leaf || leaf.indexOf("/") >= 0) return false;
-              return /^_working/i.test(leaf) && isVideoExt(leaf);
+              if (!isVideoExt(leaf)) return false;
+              return /^_working/i.test(leaf) || /^_vanilla_download\./i.test(leaf);
             }
             function isArchiveMediaName(name) {
               var n = normPath(name);
@@ -6050,9 +6051,15 @@ enum ExportLANServer {
                 out.push(entryFromFile(f));
               });
               out.sort(function (a, b) {
-                var aw = /_working\.mp4$/i.test(a.name) ? 0 : 1;
-                var bw = /_working\.mp4$/i.test(b.name) ? 0 : 1;
-                if (aw !== bw) return aw - bw;
+                function rank(name) {
+                  if (/_working\.mp4$/i.test(name)) return 0;
+                  if (/_working/i.test(name)) return 1;
+                  if (/_vanilla_download\./i.test(name)) return 2;
+                  return 3;
+                }
+                var ar = rank(a.name);
+                var br = rank(b.name);
+                if (ar !== br) return ar - br;
                 return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
               });
               return out;
