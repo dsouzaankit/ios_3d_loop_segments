@@ -169,6 +169,7 @@ This is different from [re-linking after a SideStore reinstall](#reinstall-or-up
 | Error | Fix |
 |-------|-----|
 | **`DeviceEndpointNotInitialized`** (“unable to reach the device endpoint”; Connection Config shows Tunnel/Device IP **N/A**) | **Restart the iPhone**, reconnect LocalDevVPN, refresh — fixed it here ([SideStore #1621](https://github.com/SideStore/SideStore/issues/1621)). Otherwise: On-Device Anisette off, re-place pairing with iloader, reinstall LocalDevVPN, or downgrade SideStore to 0.6.4. |
+| **`NSURLErrorDomain` code `-1001`** (request timed out on install / +) | **Restart the iPhone**, reconnect LocalDevVPN (Wi‑Fi), wait until the IPA is fully local (no iCloud badge), then **My Apps → +** again — fixed it here. |
 | **`VerifyCertificateOperation`** → **`targetAppBundle is missing in context`** | Not a certificate problem: SideStore lost its stored copy of the app. LocalDevVPN on → **My Apps → +** → pick that app’s fully local IPA (Loop Segments: `.\copy-to-icloud.ps1`) → Refresh All. Same Apple ID ⇒ app data kept. Do this for every app the error names ([SideStore #1575](https://github.com/SideStore/SideStore/issues/1575)). |
 
 #### Reinstall or update SideStore with iloader
