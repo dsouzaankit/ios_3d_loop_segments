@@ -468,6 +468,8 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 **Why chroma needs `/xr` (not browser immersive display mode):** fullscreen immersive display mode and Skybox/Media Layers–style compositors feed the decode into an **opaque** equirect/hemisphere layer — no per-pixel fragment shader — so a keyed color cannot be dropped to transparency (passthrough). Chroma keying needs a mesh (or equivalent) that samples each frame in a shader and discards/blends the key color; that is the `/xr` WebGL path (including the Quest AV1 blit when the browser exposes a tile atlas).
 
+**AR/VR exit vs flat playback:** immersive and the flat player share one `#chroma-stream` `<video>`. Leaving AR/VR suspends the AV1 blit and defers RT dispose — it does **not** call `pause()` / `play()`. If the clip was playing in headset, flat playback keeps going (it never stopped). **Files** (home overlay) is what hard-stops (`pause` + clear `src`). Tip: for heavy Quest AV1, **pause in AR first**, then exit — teardown is lighter when decode/blit are not still running during WebXR session end.
+
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 
 | Area | Contents |
