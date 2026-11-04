@@ -4035,6 +4035,7 @@ enum ExportLANServer {
                   comp._uvZoom = null;
                   comp._uvEyeApplied = null;
                   comp._domeGeoReady = false;
+                  comp._rebuiltFor = "";
                 });
               } catch (eComp) {}
             }
@@ -4044,8 +4045,24 @@ enum ExportLANServer {
               __xrDs.rt = null;
               __xrDs.rtW = 0;
               __xrDs.rtH = 0;
-              try { if (__xrVideoTex) __xrVideoTex.dispose(); } catch (eTex) {}
+              xrReleaseLiveVideoTexture();
+            }
+            // Quest only feeds one WebGL consumer per <video>. The AV1 blit texture
+            // keeps taking frames after the next clip is HEVC, so A-Frame's map stays black.
+            function xrReleaseLiveVideoTexture() {
+              var tex = __xrVideoTex;
               __xrVideoTex = null;
+              if (!tex) return;
+              try { tex.needsUpdate = false; } catch (e0) {}
+              try {
+                if (!__xrDs.blankCanvas) {
+                  __xrDs.blankCanvas = document.createElement("canvas");
+                  __xrDs.blankCanvas.width = 2;
+                  __xrDs.blankCanvas.height = 2;
+                }
+                tex.image = __xrDs.blankCanvas;
+              } catch (e1) {}
+              try { tex.dispose(); } catch (e2) {}
             }
             function xrScheduleDisposeAv1Gpu() {
               var token = (__xrDs.disposeToken || 0) + 1;
@@ -4128,6 +4145,7 @@ enum ExportLANServer {
                 if (!isAv1) {
                   __xrDs.resolved = null;
                   __xrDs.lastBlitTime = -1;
+                  xrReleaseLiveVideoTexture();
                 }
                 __xrDs.needsMaterialKick = true;
               }
@@ -4531,13 +4549,14 @@ enum ExportLANServer {
                 try { if (this._dsTex) this._dsTex.dispose(); } catch (e) {}
               },
               tick: function () {
-                if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
+                if (__xrVideoTex && __xrDs.av1Known && __xrDs.av1 === true) __xrVideoTex.needsUpdate = true;
                 var quest = this.isQuestBrowser();
                 // Probe AV1 even with Chroma on — keyed AV1 still needs the full-frame blit.
                 if (quest && this.video) xrWatchAv1(this.video);
                 this.followHead();
                 if (__xrDs.needsMaterialKick) {
-                  __xrDs.needsMaterialKick = false;
+                  // The flat player ticks first. Leave the flag for a dome or the kick never reaches AR.
+                  if (!this.isDesktopRole()) __xrDs.needsMaterialKick = false;
                   try { this.applyMaterial(); } catch (eKick) {}
                 }
                 if (quest && __xrDs.av1Known && __xrDs.av1 === false && this._av1Mat && !this.isDesktopRole()) {
@@ -5048,6 +5067,48 @@ enum ExportLANServer {
                 try { if (mat.map) mat.map.needsUpdate = true; } catch (eMap) {}
                 return this.bindMaterial(mat);
               },
+              // New VideoTexture after AV1. Reusing the pre-AV1 map stays black on Quest.
+              rebuildLiveVideoMaterial: function () {
+                var srcNow = (this.video && (this.video.currentSrc || this.video.src)) || "";
+                var chromaOn = !!this.data.chroma;
+                var key = "#00ff00";
+                try { key = "#" + new THREE.Color(this.data.keyColor).getHexString(); } catch (eK) {}
+                try { this.el.removeAttribute("material"); } catch (eRm) {}
+                try {
+                  if (chromaOn) {
+                    this.el.setAttribute("material", {
+                      shader: "xr-chroma",
+                      src: "#chroma-stream",
+                      keyColor: key,
+                      similarity: this.data.similarity,
+                      smoothness: this.data.smoothness,
+                      side: "double",
+                      transparent: true,
+                      opacity: 1,
+                      depthWrite: false,
+                      alphaTest: 0.08,
+                      npot: true
+                    });
+                  } else {
+                    this.el.setAttribute("material", {
+                      shader: "flat",
+                      src: "#chroma-stream",
+                      color: "#ffffff",
+                      side: "double",
+                      transparent: false,
+                      npot: true
+                    });
+                  }
+                } catch (eSet) {}
+                var comp = this.el.components && this.el.components.material;
+                var mat = comp && comp.material;
+                if (!mat) return false;
+                try { if (mat.map) mat.map.needsUpdate = true; } catch (eMap) {}
+                this._mode = chromaOn ? "gpu" : "native";
+                this._gpuSig = "";
+                this._rebuiltFor = srcNow;
+                return this.bindMaterial(mat);
+              },
               applyNativeVideo: function () {
                 this._mode = "native";
                 this._gpuSig = "";
@@ -5169,6 +5230,15 @@ enum ExportLANServer {
                   return;
                 }
                 if (questAv1) return;
+                if (this.isQuestBrowser() && !this.isDesktopRole()
+                    && __xrDs.av1Known && __xrDs.av1 === false) {
+                  var hevcSrc = (this.video && (this.video.currentSrc || this.video.src)) || "";
+                  var hevcReady = this.video && this.video.readyState >= 2 && this.video.videoWidth;
+                  if (hevcSrc && this._rebuiltFor !== hevcSrc) {
+                    if (hevcReady) this.rebuildLiveVideoMaterial();
+                    return;
+                  }
+                }
                 if (this.data.chroma) {
                   var scaled = null;
                   var video = this.video;
@@ -5831,7 +5901,7 @@ enum ExportLANServer {
                 try { video.currentTime = t; } catch (e2) {}
               }
               try {
-                if (typeof __xrVideoTex !== "undefined" && __xrVideoTex) __xrVideoTex.needsUpdate = true;
+                if (typeof __xrVideoTex !== "undefined" && __xrVideoTex && __xrDs.av1Known && __xrDs.av1 === true) __xrVideoTex.needsUpdate = true;
               } catch (e3) {}
               try { refreshSphereShader(); } catch (e4) {}
               syncTransportUI();
@@ -6549,7 +6619,7 @@ enum ExportLANServer {
             video.addEventListener("loadedmetadata", syncTransportUI);
             video.addEventListener("seeked", function () {
               try {
-                if (typeof __xrVideoTex !== "undefined" && __xrVideoTex) __xrVideoTex.needsUpdate = true;
+                if (typeof __xrVideoTex !== "undefined" && __xrVideoTex && __xrDs.av1Known && __xrDs.av1 === true) __xrVideoTex.needsUpdate = true;
               } catch (e) {}
               try { refreshSphereShader(); } catch (e2) {}
               syncTransportUI();

@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 388 (1.3.1):** HEVC in AR after AV1 creates a new video texture. Quest only feeds one WebGL consumer per `<video>`, so the old AV1 texture was still taking the frame and the dome stayed blank. Build 387 rebound that same texture.
+
 **Build 387 (1.3.1):** HEVC (and any non-AV1) in AR after an AV1 clip binds A-Frame’s video material again. The AV1 blit shader was left on the dome, so the next clip stayed blank.
 
 **Build 386 (1.3.1):** In AR/VR, Quest controller **trigger** (WebXR `select`, not gaze) toggles play/pause — same as the Play/Pause control on the page bar under the flat player, or a scene tap.
