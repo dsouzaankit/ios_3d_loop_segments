@@ -14,7 +14,9 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 391 (1.3.1):** Fix black flat preview + AR after AV1 (and after Files). Do not dispose the blit `VideoTexture` mid-session (Quest was poisoning A-Frame’s video map). Post-AV1 frames use an A-Frame **canvas** material; `sawAv1Tex` stays for the page load. Hard-refresh `/xr` still resets fully.
+**Build 392 (1.3.1):** `/xr_debug.json` POST no longer requires Basic auth. Build 390’s debug beacon was getting **401** → Quest login sheet (often on AR exit) and an empty log ring. Includes 391’s black preview/AR fix after AV1 texture dispose.
+
+**Build 391 (1.3.1):** Fix black flat preview + AR after AV1 (and after Files). Do not dispose the blit `VideoTexture` mid-session (Quest was poisoning A-Frame’s video map). Post-AV1 frames use an A-Frame **canvas** material; `sawAv1Tex` stays for the page load. Hard-refresh `/xr` still resets fully. (IPA may not have been copied — folded into 392.)
 
 **Build 390 (1.3.1):** `/xr` posts a debug ring to **`xr_debug.json`** (GET to pull). After AV1, exit pauses and keeps flat on the canvas path so Quest Browser does not die on a poisoned VideoTexture. Quest **Enter VR** SBS uses per-eye `onBeforeRender` culling (layers 1/2 stay unused).
 

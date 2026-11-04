@@ -612,7 +612,12 @@ enum ExportLANServer {
     /// Auth on OPTIONS/PROPFIND/LOCK, WebDAV writes, and WebDAV `GET /`. Media GET stays open (Skybox often omits Authorization on play).
     private static func requiresLANWebDAVAuth(method: String, path: String, requestHeaders: String) -> Bool {
         switch method {
-        case "OPTIONS", "PROPFIND", "LOCK", "PUT", "POST", "MKCOL", "DELETE", "MOVE":
+        case "OPTIONS", "PROPFIND", "LOCK", "PUT", "MKCOL", "DELETE", "MOVE":
+            return true
+        case "POST":
+            // Quest /xr posts xr_debug.json with no Basic auth. A 401 here pops the browser
+            // login sheet (seen on AR exit) and drops the debug ring.
+            if normalizedGETPath(path) == "xr_debug.json" { return false }
             return true
         case "GET", "HEAD":
             return normalizedGETPath(path).isEmpty && !isBrowserLikeRequest(requestHeaders: requestHeaders)
