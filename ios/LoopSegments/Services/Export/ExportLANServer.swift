@@ -6094,7 +6094,15 @@ enum ExportLANServer {
               pointer-events: auto;
             }
             #xr-transport .xr-transport-row {
-              display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
+              display: flex; flex-wrap: nowrap; gap: 0.45rem; align-items: center;
+            }
+            #xr-transport .xr-transport-row + .xr-transport-row { margin-top: 0.45rem; }
+            #xr-transport .xr-view-row label {
+              flex: 1 1 0; min-width: 0;
+              display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;
+            }
+            #xr-transport .xr-view-row input[type="range"] {
+              flex: 1 1 auto; width: auto; min-width: 0; height: 1.65rem;
             }
             #xr-transport button {
               padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid #444;
@@ -6102,7 +6110,7 @@ enum ExportLANServer {
               pointer-events: auto;
             }
             #xr-transport #xr-seek {
-              flex: 1 1 10rem; min-width: 8rem; height: 1.65rem;
+              flex: 1 1 auto; width: 1px; min-width: 6rem; height: 1.65rem;
               accent-color: #22c55e; touch-action: none; pointer-events: auto; cursor: pointer;
             }
             #xr-transport #xr-time {
@@ -6110,7 +6118,7 @@ enum ExportLANServer {
               min-width: 7.5rem; text-align: right;
             }
             #xr-transport #xr-tex-note {
-              flex: 1 1 100%; font-size: 0.75rem; color: #fbbf24; margin: 0;
+              width: 100%; font-size: 0.75rem; color: #fbbf24; margin: 0.35rem 0 0;
             }
             /* Texture source — must stay in layout with tiny opacity (opacity:0 / display:none → black VideoTexture on Quest/PC). */
             #chroma-stream {
@@ -6204,14 +6212,6 @@ enum ExportLANServer {
               <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
-              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="How many degrees the shell covers (180° → 90°). Packs the full frame onto a shorter arc.">FOV
-                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" style="width:7rem" aria-label="Field of view degrees">
-              </label>
-              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="Skybox / PLAY’A style. Left = zoom in (dome closer). Right = zoom out (dome farther, face smaller).">Zoom
-                <span>In</span>
-                <input type="range" id="xr-dist" min="0" max="12" step="0.5" value="0" style="width:7rem" aria-label="Zoom: in on the left, out on the right">
-                <span>Out</span>
-              </label>
               <span id="xr-time">0:00 / 0:00</span>
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Key
                 <input type="color" id="xr-chroma-key-play" value="#00ff00" aria-label="Chroma key color">
@@ -6219,8 +6219,18 @@ enum ExportLANServer {
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Vol
                 <input type="range" id="xr-volume" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
               </label>
-              <p id="xr-tex-note" hidden></p>
             </div>
+            <div class="xr-transport-row xr-view-row">
+              <label title="How many degrees the shell covers (180° → 90°). Packs the full frame onto a shorter arc.">FOV
+                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" aria-label="Field of view degrees">
+              </label>
+              <label title="Skybox / PLAY’A style. Left = zoom in (dome closer). Right = zoom out (dome farther, face smaller).">Zoom
+                <span>In</span>
+                <input type="range" id="xr-dist" min="0" max="12" step="0.5" value="0" aria-label="Zoom: in on the left, out on the right">
+                <span>Out</span>
+              </label>
+            </div>
+            <p id="xr-tex-note" hidden></p>
           </div>
           <div id="overlay" class="play-overlay">
             <h1>3D Chroma Key 180° Player</h1>
