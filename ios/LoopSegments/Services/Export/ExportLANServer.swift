@@ -4124,6 +4124,11 @@ enum ExportLANServer {
                 __xrDs.av1 = !!isAv1;
                 __xrDs.av1Known = true;
                 __xrDs.codecPending = "";
+                // HEVC must not keep sampling the previous AV1 render target.
+                if (!isAv1) {
+                  __xrDs.resolved = null;
+                  __xrDs.lastBlitTime = -1;
+                }
                 __xrDs.needsMaterialKick = true;
               }
               function fail() {
@@ -4535,6 +4540,12 @@ enum ExportLANServer {
                   __xrDs.needsMaterialKick = false;
                   try { this.applyMaterial(); } catch (eKick) {}
                 }
+                if (quest && __xrDs.av1Known && __xrDs.av1 === false && this._av1Mat && !this.isDesktopRole()) {
+                  var stuckMesh = this.el.getObject3D("mesh");
+                  if (stuckMesh && stuckMesh.material === this._av1Mat) {
+                    try { this.applyMaterial(); } catch (eHevc) {}
+                  }
+                }
                 var av1Immersive = quest && this.isImmersiveStereo()
                   && !__xrDs.suspendBlit
                   && __xrDs.av1Known && __xrDs.av1 === true;
@@ -4800,6 +4811,7 @@ enum ExportLANServer {
                   var mesh = this.el.getObject3D("mesh");
                   if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
                 } catch (e2) {}
+                this.restoreAFrameMaterial();
                 if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
                   this.el.object3D.visible = true;
                 }
@@ -5017,6 +5029,25 @@ enum ExportLANServer {
                 this.syncEyeLayers();
                 return true;
               },
+              // AV1 puts a ShaderMaterial on the mesh directly. A later setAttribute("material")
+              // with the same flat/chroma schema is a no-op, so the dome stays on the blit RT
+              // and the next HEVC clip looks blank. Put A-Frame's material back on the mesh.
+              restoreAFrameMaterial: function () {
+                if (!(__xrDs.av1Known && __xrDs.av1 === false)) return false;
+                var comp = this.el.components && this.el.components.material;
+                var mat = comp && comp.material;
+                if (!mat || mat === this._av1Mat) return false;
+                var mesh = this.el.getObject3D("mesh");
+                if (!mesh) return false;
+                var av1Mat = this._av1Mat;
+                var stuck = this._mode === "av1rt";
+                mesh.traverse(function (node) {
+                  if (node.isMesh && av1Mat && node.material === av1Mat) stuck = true;
+                });
+                if (!stuck && mesh.material !== av1Mat) return false;
+                try { if (mat.map) mat.map.needsUpdate = true; } catch (eMap) {}
+                return this.bindMaterial(mat);
+              },
               applyNativeVideo: function () {
                 this._mode = "native";
                 this._gpuSig = "";
@@ -5034,6 +5065,7 @@ enum ExportLANServer {
                     npot: true
                   });
                 } catch (e) {}
+                this.restoreAFrameMaterial();
                 // Ensure flat screen is on after material bind (dome thrash used to leave it hidden/black).
                 if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
                   this.el.object3D.visible = true;
@@ -5080,6 +5112,7 @@ enum ExportLANServer {
                   }
                 } catch (e2) {}
                 if (!canvas) this.setTexNote("");
+                this.restoreAFrameMaterial();
                 if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
                   this.el.object3D.visible = true;
                 }

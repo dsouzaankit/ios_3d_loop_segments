@@ -14,7 +14,9 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 386 (1.3.1):** In AR/VR, Quest controller **trigger** (WebXR `select`, not gaze) toggles play/pause — same as the transport button / scene tap.
+**Build 387 (1.3.1):** HEVC (and any non-AV1) in AR after an AV1 clip binds A-Frame’s video material again. The AV1 blit shader was left on the dome, so the next clip stayed blank.
+
+**Build 386 (1.3.1):** In AR/VR, Quest controller **trigger** (WebXR `select`, not gaze) toggles play/pause — same as the Play/Pause control on the page bar under the flat player, or a scene tap.
 
 **Build 385 (1.3.1):** Quest AV1 blit long-edge cap is **6144** again (was 2048 in 384) for sharper mesh AR/VR; expect more GPU load than the lighter blit.
 
