@@ -444,6 +444,8 @@ Sparse export seek (start time from `status.json`) applies only to **`_working*`
 
 Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uniform mesh scale is **not** used: it fights the inward `scale -1 1 1`, and with the eye at the sphere center it does not match Skybox’s distance zoom.
 
+**`/xr` troubleshooting — left/right out of orientation:** If **Enter VR** shows the SBS eyes wrong (left/right frames out of orientation, swapped, or similarly garbled), leave immersive mode, open the LAN **homepage** (`/` or use **Files** on `/xr`), then open the XR/AR page again and retry **Enter VR**. A full homepage → `/xr` round trip resets the WebXR / texture pipeline better than switching clips alone.
+
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 
 | Area | Contents |
