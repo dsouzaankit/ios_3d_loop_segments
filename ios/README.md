@@ -450,6 +450,16 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 **`/xr` troubleshooting — left/right out of orientation:** If **Enter VR** shows the SBS eyes wrong (left/right frames out of orientation, swapped, or similarly garbled), leave immersive mode, open the LAN **homepage** (`/` or use **Files** on `/xr`), then open the XR/AR page again and retry **Enter VR**. A full homepage → `/xr` round trip resets the WebXR / texture pipeline better than switching clips alone.
 
+**`/xr` vs Quest Browser fullscreen vs Skybox (AV1):** these are different pipelines.
+
+| Path | What plays the picture | AV1 on Quest 3 |
+|------|------------------------|----------------|
+| **Skybox** (native app) | Hardware decode → Skybox’s own immersive compositor | Smooth / sharp when the app supports it — no browser WebGL copy |
+| **Quest Browser fullscreen → immersive display mode** (manual 180/360 / SBS on the video) | Hardware decode → **browser/OS reprojection** | Also **no** `/xr` blit — closer to native than WebXR mesh |
+| **`/xr` Enter VR / Enter AR** (A-Frame + Three mesh dome) | WebGL samples a video texture on a hemisphere (chroma, FOV, Zoom, SBS UVs) | Quest often exposes AV1 as a **gaze tile atlas** to WebGL, so `/xr` runs a **full-frame GPU blit** into a render target, then the dome samples that. Extra copy → can feel softer/heavier than HEVC on the same page or than Skybox / fullscreen display mode |
+
+`/xr` does **not** use **WebXR Media Layers** (`XRMediaBinding` equirect/cylinder layers) yet. Meta recommends those for efficient immersive video in the browser (compositor path, closer to fullscreen display mode). We stayed on the mesh stack for PC + chroma + custom zoom; Media Layers would be a separate Quest immersive path (chroma would still need the mesh/blit unless redesigned).
+
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 
 | Area | Contents |
