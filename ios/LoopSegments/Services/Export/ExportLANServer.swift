@@ -6083,8 +6083,11 @@ enum ExportLANServer {
               background: #166534; color: #fff; font-weight: 700; cursor: pointer;
             }
             #xr-transport {
-              display: none; position: fixed; left: 0.75rem; right: 0.75rem; bottom: 5.25rem;
-              z-index: 10050; width: auto;
+              /* Same bottom row as Enter AR / Enter VR. Stop short of that column
+                 (AR sits near right: 60px, about 15rem wide with VR). A full-width
+                 bar paints over the buttons because a-scene is its own stacking context. */
+              display: none; position: fixed; left: 0.75rem; right: 15.5rem; bottom: 0.45rem;
+              z-index: 10050; width: auto; overflow: hidden;
               padding: 0.55rem 0.75rem; border-radius: 12px; border: 1px solid #333;
               background: rgba(15, 23, 42, 0.92); color: #f8fafc;
               box-shadow: 0 8px 28px rgba(0,0,0,0.45); backdrop-filter: blur(6px);
@@ -6124,11 +6127,11 @@ enum ExportLANServer {
               width: min(480px, 46vw); height: auto; max-height: 36vh;
               opacity: 1; background: #000; border: 2px solid #22c55e; border-radius: 8px;
             }
-            /* Quest flat preview. One full picture, above the Enter AR / Enter VR row.
-               The WebGL plane stays hidden so it does not tile a second copy in that gap. */
+            /* Quest flat preview. One full picture, ending above the bottom control row.
+               The WebGL plane stays hidden so it does not tile a second copy in that strip. */
             #chroma-stream.xr-flat-preview,
             #xr-ds-canvas.xr-keyed-preview {
-              left: 0; top: 0; width: 100vw; height: calc(100vh - 6.5rem); max-height: none;
+              left: 0; top: 0; width: 100vw; height: calc(100vh - 4.75rem); max-height: none;
               opacity: 1; z-index: 2; object-fit: contain; background: #111; border: 0; border-radius: 0;
             }
             a-scene { z-index: 1; }
