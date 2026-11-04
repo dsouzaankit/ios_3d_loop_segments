@@ -4003,6 +4003,8 @@ enum ExportLANServer {
             // drops MeshBasicMaterial maps, which blanked both clips after the 1536 downscale.
             window.__xrZoom = 1;
             window.__xrZoomSteps = [0.5, 0.6, 0.7, 0.8, 0.9, 1];
+            // Skybox-style: meters to push the dome along world -Z (session forward). 0 = centered.
+            window.__xrDist = 0;
             var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false };
             // Quest's 2D canvas draw of an AV1 <video> copies the decoder tile atlas
             // (one wide tile on top, two tiles splitting the bottom), not the picture.
@@ -4453,6 +4455,10 @@ enum ExportLANServer {
                   if (!this._seatPos) this._seatPos = new THREE.Vector3();
                   cam.getWorldPosition(this._seatPos);
                   obj.position.copy(this._seatPos);
+                  // Skybox-style zoom: keep the 180° mapping, push the shell farther along
+                  // session forward (-Z) so the face subtends less of the view.
+                  var dist = this.domeDistance();
+                  if (dist > 0) obj.position.z -= dist;
                   // Keep the authored facing. Copying headset yaw aimed the 180 opening
                   // away from the session forward, so Enter VR showed the empty sky.
                   obj.rotation.set(0, 0, 0);
@@ -4483,8 +4489,13 @@ enum ExportLANServer {
                 if (!(z > 0)) z = 1;
                 return Math.max(0.4, Math.min(1, z));
               },
-              // Zoom scales the whole frame onto a shorter arc. Cropping the UVs
-              // kept the center the same size and only cut the edges off.
+              domeDistance: function () {
+                var d = Number(window.__xrDist);
+                if (!(d > 0)) return 0;
+                return Math.max(0, Math.min(12, d));
+              },
+              // Arc Zoom packs the whole frame onto a shorter FOV. Dist (Skybox-style)
+              // leaves the 180° shell alone and only moves it farther from the head.
               domeAngles: function () {
                 var zoom = this.isDesktopRole() ? 1 : this.domeZoom();
                 var span = Math.PI * zoom;
@@ -5332,8 +5343,11 @@ enum ExportLANServer {
               <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
-              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Zoom
-                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" style="width:7rem" aria-label="Zoom">
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="Packs the full frame onto a shorter degree arc">Arc
+                <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" style="width:7rem" aria-label="Arc zoom degrees">
+              </label>
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="Skybox-style: keep 180° mapping, push the dome farther">Dist
+                <input type="range" id="xr-dist" min="0" max="12" step="0.5" value="0" style="width:7rem" aria-label="Skybox-style distance zoom">
               </label>
               <span id="xr-time">0:00 / 0:00</span>
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Key
@@ -6179,6 +6193,18 @@ enum ExportLANServer {
                   if (!comp) return;
                   comp._domeGeoReady = false;
                   try { comp.ensureDomeGeometry(); comp.syncEyeLayers(); } catch (eZ) {}
+                });
+              });
+            }
+            var distEl = document.getElementById("xr-dist");
+            if (distEl) {
+              window.__xrDist = Number(distEl.value) || 0;
+              distEl.addEventListener("input", function () {
+                window.__xrDist = Number(distEl.value) || 0;
+                // followHead reads __xrDist every immersive frame; nudge once for immediate feedback.
+                sphereEls().forEach(function (el) {
+                  var comp = el.components && el.components["chroma-stereo-sbs"];
+                  if (comp) try { comp.followHead(); } catch (eD) {}
                 });
               });
             }
