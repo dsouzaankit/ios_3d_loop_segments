@@ -4112,7 +4112,10 @@ enum ExportLANServer {
               __xrDs.rt = null;
               __xrDs.rtW = 0;
               __xrDs.rtH = 0;
-              xrReleaseLiveVideoTexture();
+              // Do not dispose __xrVideoTex here — Quest then blacks A-Frame's video map too.
+              if (__xrVideoTex) {
+                try { __xrVideoTex.needsUpdate = false; } catch (eStop) {}
+              }
             }
             // Quest only feeds one WebGL consumer per <video>. The AV1 blit texture
             // keeps taking frames after the next clip is HEVC, so A-Frame's map stays black.
@@ -4167,9 +4170,12 @@ enum ExportLANServer {
             }
             function xrResetPlaybackPipeline() {
               __xrDs.suspendBlit = true;
+              __xrDs.exiting = false;
               xrClearAv1Flags();
               xrClearComponentModes();
               __xrDs.lastBlitTime = -1;
+              // Keep sawAv1Tex for this page load — once Quest has blitted AV1, native
+              // VideoTexture stays unreliable; canvas path must continue after Files.
               if (xrIsPresenting()) {
                 xrScheduleDisposeAv1Gpu();
                 return;
@@ -4213,10 +4219,14 @@ enum ExportLANServer {
                 __xrDs.av1Known = true;
                 __xrDs.codecPending = "";
                 // HEVC must not keep sampling the previous AV1 render target.
+                // Do not dispose the VideoTexture here — on Quest that poisons the same
+                // <video> for A-Frame preview/AR and both stay black until a full reload.
                 if (!isAv1) {
                   __xrDs.resolved = null;
                   __xrDs.lastBlitTime = -1;
-                  xrReleaseLiveVideoTexture();
+                  if (__xrVideoTex) {
+                    try { __xrVideoTex.needsUpdate = false; } catch (eStop) {}
+                  }
                 }
                 __xrDs.needsMaterialKick = true;
                 try { xrLog("codec", { av1: !!isAv1, sawAv1Tex: !!__xrDs.sawAv1Tex, src: (src || "").slice(-60) }); } catch (eLog) {}
@@ -4680,6 +4690,7 @@ enum ExportLANServer {
                   var postSlot = this.isDesktopRole() ? "flat" : "ar";
                   var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, postSlot);
                   if (postCanvas) this.applyPostAv1Canvas(postCanvas);
+                  else if (this._dsCanvas) this.applyPostAv1Canvas(this._dsCanvas);
                 } else if (this._mode === "canvas" && this.drawsSharedFrame()) {
                   this.refreshDownscaleCanvas(true);
                 }
@@ -4931,35 +4942,26 @@ enum ExportLANServer {
                 return true;
               },
               needsPostAv1Canvas: function () {
-                // After an AV1 blit, Quest will not show a later frame through any VideoTexture —
-                // immersive and flat both need the canvas path until a full page reload.
+                // After an AV1 blit, Quest VideoTexture stays black for the rest of the page.
+                // Use a 2D canvas copy (A-Frame flat/chroma material) for flat + immersive.
                 if (!this.isQuestBrowser() || !__xrDs.sawAv1Tex) return false;
-                if (__xrDs.exiting) return false;
+                if (__xrDs.exiting || __xrDs.suspendBlit) return false;
                 if (__xrDs.av1Known && __xrDs.av1 === true) return false;
                 if (this.isDesktopRole()) return !this.isImmersiveStereo();
-                return this.isImmersiveStereo() && !__xrDs.suspendBlit;
+                return this.isImmersiveStereo();
               },
               applyPostAv1Canvas: function (canvas) {
-                if (!canvas) return;
-                if (!this._postTex) {
-                  this._postTex = new THREE.CanvasTexture(canvas);
-                  this._postTex.minFilter = THREE.LinearFilter;
-                  this._postTex.magFilter = THREE.LinearFilter;
-                  this._postTex.generateMipmaps = false;
-                  if (THREE.SRGBColorSpace && "colorSpace" in this._postTex) {
-                    this._postTex.colorSpace = THREE.SRGBColorSpace;
-                  }
-                } else if (this._postTex.image !== canvas) {
-                  this._postTex.image = canvas;
-                }
-                this._postTex.needsUpdate = true;
-                this.applyAv1Resolve(this._postTex);
-                this._mode = "canvasrt";
+                if (!canvas) return false;
+                this._dsCanvas = canvas;
+                // A-Frame canvas material — ShaderMaterial on the flat preview was black on Quest.
+                this.applyCanvasVideo();
                 var video = this.video;
                 if (video && video.videoWidth) {
                   this.setTexNote("post-AV1 canvas " + video.videoWidth + "×" + video.videoHeight
                     + (this.data.chroma ? " + chroma" : ""));
                 }
+                try { xrLog("post-av1-canvas", { role: this.data.role, eye: this.data.eye, w: canvas.width, h: canvas.height }); } catch (eL) {}
+                return true;
               },
               clearQuestEyeCull: function () {
                 var mesh = this.el.getObject3D("mesh");
@@ -5398,8 +5400,10 @@ enum ExportLANServer {
                   if (this.drawsSharedFrame()) {
                     var postSlot2 = this.isDesktopRole() ? "flat" : "ar";
                     var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, postSlot2);
-                    if (postCanvas) this.applyPostAv1Canvas(postCanvas);
+                    if (postCanvas && this.applyPostAv1Canvas(postCanvas)) return;
+                    if (this._dsCanvas && this.applyPostAv1Canvas(this._dsCanvas)) return;
                   }
+                  // Frame not ready yet — retry next kick; do not stick on a blank material.
                   return;
                 }
                 if (this.data.chroma) {
@@ -6110,6 +6114,7 @@ enum ExportLANServer {
               // Suspend AV1 first, exit XR, then dispose GPU — never dispose while presenting.
               wantPlay = false;
               try { xrSuspendAv1Pipeline(); } catch (eSus) {}
+              __xrDs.exiting = false;
               try { video.pause(); } catch (e) {}
               exitImmersiveIfNeeded();
               try {
@@ -6119,6 +6124,7 @@ enum ExportLANServer {
               try { syncPlayPauseLabel(); } catch (e3) {}
               try { refreshSphereShader(); } catch (e4) {}
               try { xrScheduleDisposeAv1Gpu(); } catch (eDisp) {}
+              try { xrLog("files-home", { sawAv1Tex: !!__xrDs.sawAv1Tex }); } catch (eL) {}
             }
             function showOverlay(show) {
               overlay.style.display = show ? "flex" : "none";
@@ -6128,6 +6134,10 @@ enum ExportLANServer {
                 stopPlaybackForHome();
               } else {
                 closeArchiveDropdown();
+                __xrDs.exiting = false;
+                __xrDs.suspendBlit = false;
+                try { refreshSphereShader(); } catch (eKick) {}
+                try { xrLog("launch-engine", { sawAv1Tex: !!__xrDs.sawAv1Tex }); } catch (eL) {}
               }
               syncArchiveFloat();
             }
