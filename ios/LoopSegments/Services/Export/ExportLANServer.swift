@@ -5449,9 +5449,9 @@ enum ExportLANServer {
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="How many degrees the shell covers (180° → 90°). Packs the full frame onto a shorter arc.">FOV
                 <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" style="width:7rem" aria-label="Field of view degrees">
               </label>
-              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="Skybox / PLAY’A style. Left = zoom in (dome closer). Right = zoom out (dome farther, face smaller).">
+              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem" title="Skybox / PLAY’A style. Left = zoom in (dome closer). Right = zoom out (dome farther, face smaller).">Zoom
                 <span>In</span>
-                <input type="range" id="xr-dist" min="0" max="12" step="0.5" value="0" style="width:7rem" aria-label="Zoom in on the left, zoom out on the right">
+                <input type="range" id="xr-dist" min="0" max="12" step="0.5" value="0" style="width:7rem" aria-label="Zoom: in on the left, out on the right">
                 <span>Out</span>
               </label>
               <span id="xr-time">0:00 / 0:00</span>

@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 383 (1.3.1):** Distance control reads **Zoom In** ← slider → **Out** so the control name stays visible.
+
 **Build 382 (1.3.1):** Distance zoom control is labeled **In** ← → **Out** (left = closer / zoom in, right = farther / zoom out). Build 381’s AV1 exit-safe teardown is included; 381 was cancelled into this build.
 
 **Build 381 (1.3.1):** Cancelled before an IPA was copied. Exiting AR/VR during AV1 no longer disposes the blit render target while WebXR is still presenting. Shipped in 382.
@@ -440,7 +442,7 @@ Sparse export seek (start time from `status.json`) applies only to **`_working*`
 | Control | What it changes | Mapping | Closest to |
 |---------|-----------------|---------|------------|
 | **FOV** | Hemisphere `phi`/`theta` = `180° × value` (0.5–1 → 90°–180°). Full frame remapped onto that shorter arc (not a UV crop). | Degree span of the shell | Angular FOV / arc shrink |
-| **In** ← → **Out** | Pushes the dome along session forward (`−Z`), 0–12. **Left (In)** = closer / larger face. **Right (Out)** = farther / smaller face. Geometry stays a true 180° shell. | Distance between head and shell | **Skybox** / **PLAY’A** Zoom; **not** Gemini’s uniform `object3D.scale` |
+| **Zoom In** ← → **Out** | Pushes the dome along session forward (`−Z`), 0–12. **Left (In)** = closer / larger face. **Right (Out)** = farther / smaller face. Geometry stays a true 180° shell. | Distance between head and shell | **Skybox** / **PLAY’A** Zoom; **not** Gemini’s uniform `object3D.scale` |
 
 Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uniform mesh scale is **not** used: it fights the inward `scale -1 1 1`, and with the eye at the sphere center it does not match Skybox’s distance zoom.
 
