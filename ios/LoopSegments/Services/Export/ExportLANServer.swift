@@ -4066,10 +4066,26 @@ enum ExportLANServer {
               xrClearAv1Flags();
               xrClearComponentModes();
             }
+            // Still in XR: re-probe the new clip but keep the last RT on screen (no black hole).
+            function xrPrepareNewClip() {
+              __xrDs.disposeToken = (__xrDs.disposeToken || 0) + 1;
+              __xrDs.suspendBlit = false;
+              __xrDs.av1 = false;
+              __xrDs.av1Known = false;
+              __xrDs.codecSrc = "";
+              __xrDs.codecPending = "";
+              __xrDs.codecRetrySrc = "";
+              __xrDs.codecRetryAfter = 0;
+              __xrDs.lastBlitTime = -1;
+              __xrDs.needsMaterialKick = true;
+              // Keep __xrDs.resolved + RT until the first blit of the new clip replaces them.
+              xrClearComponentModes();
+            }
             function xrResetPlaybackPipeline() {
               __xrDs.suspendBlit = true;
               xrClearAv1Flags();
               xrClearComponentModes();
+              __xrDs.lastBlitTime = -1;
               if (xrIsPresenting()) {
                 xrScheduleDisposeAv1Gpu();
                 return;
@@ -4108,6 +4124,7 @@ enum ExportLANServer {
                 __xrDs.av1 = !!isAv1;
                 __xrDs.av1Known = true;
                 __xrDs.codecPending = "";
+                __xrDs.needsMaterialKick = true;
               }
               function fail() {
                 if (__xrDs.codecSrc !== src && __xrDs.codecPending !== src) return;
@@ -4152,7 +4169,8 @@ enum ExportLANServer {
               if (__xrDs.blitting) return __xrDs.resolved || null;
               var tex = xrEnsureVideoTexture(video);
               if (!tex) return null;
-              var maxW = 4096;
+              // Quest lenses do not need a 4K+ blit every frame — that was crushing AR fps.
+              var maxW = 2048;
               var scale = Math.min(maxW / video.videoWidth, maxW / video.videoHeight, 1);
               var w = Math.max(2, Math.floor(video.videoWidth * scale / 2) * 2);
               var h = Math.max(2, Math.floor(video.videoHeight * scale / 2) * 2);
@@ -4445,9 +4463,11 @@ enum ExportLANServer {
                   var self = this;
                   self._yawLocked = false;
                   self._poseFrames = 0;
+                  __xrDs.disposeToken = (__xrDs.disposeToken || 0) + 1;
                   __xrDs.suspendBlit = false;
                   // Drop a stale AV1 sample from the last clip so Enter VR/AR cannot show a frozen frame.
                   __xrDs.resolved = null;
+                  __xrDs.lastBlitTime = -1;
                   if (__xrVideoTex) {
                     try { __xrVideoTex.needsUpdate = true; } catch (eTex) {}
                   }
@@ -4511,15 +4531,29 @@ enum ExportLANServer {
                 // Probe AV1 even with Chroma on — keyed AV1 still needs the full-frame blit.
                 if (quest && this.video) xrWatchAv1(this.video);
                 this.followHead();
+                if (__xrDs.needsMaterialKick) {
+                  __xrDs.needsMaterialKick = false;
+                  try { this.applyMaterial(); } catch (eKick) {}
+                }
                 var av1Immersive = quest && this.isImmersiveStereo()
                   && !__xrDs.suspendBlit
                   && __xrDs.av1Known && __xrDs.av1 === true;
                 if (av1Immersive && this.drawsSharedFrame()) {
                   var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
-                  var resolved = xrBlitFullVideo(renderer, this.video);
-                  if (resolved) {
-                    __xrDs.resolved = resolved;
-                    this.applyAv1Resolve(resolved);
+                  var v = this.video;
+                  var t = v ? v.currentTime : -1;
+                  // Blit only when the decoder advances — tick is faster than the video.
+                  if (__xrDs.resolved && __xrDs.lastBlitTime === t) {
+                    this.applyAv1Resolve(__xrDs.resolved);
+                  } else {
+                    var resolved = xrBlitFullVideo(renderer, v);
+                    if (resolved) {
+                      __xrDs.resolved = resolved;
+                      __xrDs.lastBlitTime = t;
+                      this.applyAv1Resolve(resolved);
+                    } else if (__xrDs.resolved) {
+                      this.applyAv1Resolve(__xrDs.resolved);
+                    }
                   }
                 } else if (av1Immersive && this.data.eye === "right" && __xrDs.resolved) {
                   this.applyAv1Resolve(__xrDs.resolved);
@@ -5087,11 +5121,17 @@ enum ExportLANServer {
                   return;
                 }
                 this.syncEyeLayers();
-                // Quest AV1: wait for / use the full-frame blit even when Chroma is on.
+                // Quest AV1: prefer the full-frame blit. If the next clip is still probing,
+                // keep the last RT on screen instead of returning with an empty material.
                 var questAv1 = this.isQuestBrowser() && !this.isDesktopRole()
                   && !__xrDs.suspendBlit
                   && __xrDs.av1Known && __xrDs.av1 === true;
                 if (questAv1 && __xrDs.resolved) {
+                  this.applyAv1Resolve(__xrDs.resolved);
+                  return;
+                }
+                if (__xrDs.resolved && this._mode === "av1rt" && !__xrDs.suspendBlit
+                    && (!__xrDs.av1Known || __xrDs.av1 === true)) {
                   this.applyAv1Resolve(__xrDs.resolved);
                   return;
                 }
@@ -6207,14 +6247,10 @@ enum ExportLANServer {
               index = ((i % playlist.length) + playlist.length) % playlist.length;
               var item = playlist[index];
               wantPlay = !!autoplay;
-              // New clip: drop previous AV1 flags. Do not dispose the RT while still in XR.
+              // New clip: soft reset in XR (keep last frame); hard reset only outside XR.
               try {
-                if (xrIsPresenting()) {
-                  xrSuspendAv1Pipeline();
-                  __xrDs.suspendBlit = false;
-                } else {
-                  xrResetPlaybackPipeline();
-                }
+                if (xrIsPresenting()) xrPrepareNewClip();
+                else xrResetPlaybackPipeline();
               } catch (eReset) {}
               video.src = item.url;
               applyRate();

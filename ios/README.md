@@ -14,7 +14,9 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
-**Build 383 (1.3.1):** Distance control reads **Zoom In** ← slider → **Out** so the control name stays visible.
+**Build 384 (1.3.1):** AV1 AR keeps the last good frame while the next clip probes (no black/passthrough hole). Blits run only when the video clock advances and at 2048 max, so Quest AR is less sluggish vs HEVC. Includes the **Zoom In**/**Out** label.
+
+**Build 383 (1.3.1):** Distance control reads **Zoom In** ← slider → **Out** so the control name stays visible. (IPA may not have been copied — folded into 384.)
 
 **Build 382 (1.3.1):** Distance zoom control is labeled **In** ← → **Out** (left = closer / zoom in, right = farther / zoom out). Build 381’s AV1 exit-safe teardown is included; 381 was cancelled into this build.
 
