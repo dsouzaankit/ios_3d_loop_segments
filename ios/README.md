@@ -460,6 +460,8 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 `/xr` does **not** use **WebXR Media Layers** (`XRMediaBinding` equirect/cylinder layers) yet. Meta recommends those for efficient immersive video in the browser (compositor path, closer to fullscreen display mode). We stayed on the mesh stack for PC + chroma + custom zoom; Media Layers would be a separate Quest immersive path (chroma would still need the mesh/blit unless redesigned).
 
+**Why chroma needs `/xr` (not browser immersive display mode):** fullscreen immersive display mode and Skybox/Media Layers–style compositors feed the decode into an **opaque** equirect/hemisphere layer — no per-pixel fragment shader — so a keyed color cannot be dropped to transparency (passthrough). Chroma keying needs a mesh (or equivalent) that samples each frame in a shader and discards/blends the key color; that is the `/xr` WebGL path (including the Quest AV1 blit when the browser exposes a tile atlas).
+
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 
 | Area | Contents |
