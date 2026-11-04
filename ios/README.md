@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 386 (1.3.1):** In AR/VR, Quest controller **trigger** (WebXR `select`, not gaze) toggles play/pause — same as the transport button / scene tap.
+
 **Build 385 (1.3.1):** Quest AV1 blit long-edge cap is **6144** again (was 2048 in 384) for sharper mesh AR/VR; expect more GPU load than the lighter blit.
 
 **Build 384 (1.3.1):** AV1 AR keeps the last good frame while the next clip probes (no black/passthrough hole). Blits run only when the video clock advances and at 2048 max, so Quest AR is less sluggish vs HEVC. Includes the **Zoom In**/**Out** label.
@@ -429,7 +431,7 @@ Open **`http://<phone-ip>:8765/`** (monitor) or **`/browse`** (full UI) on the s
 |------|----------|
 | **`/` (monitor)** | Export source + resume when paused, static playback/log links, **Refresh status** / **Refresh file list** / **LAN speed test** / **Show loop player** / **Open XR chroma player** (no timers). Link to **`/browse`**. Browsers always get this HTML at **`GET /`** — not an in-page WebDAV folder tree. |
 | **`/browse`** | Same middle section as monitor when refreshed, plus **Export random in folder**, **Trim media**, **Clear media**, **LAN speed test**, **Show loop player**, **Open XR chroma player**, **Export from URL**, pCloud folder browser (JSON APIs, not browser WebDAV). Auto-refresh when export is idle; manual refresh only while export runs. |
-| **`/xr`** (alias **`/chroma`**) | Separate **WebXR / A-Frame** page: 180° hemisphere + SBS eye split + YUV green-screen chroma (`chroma-stereo-sbs`). **Three playlists** (toggle): **Loop** / **Working** / **Archive** — listing rules below. Tap to open, Refresh list; `?mode=working` / `?mode=archive` / `?mode=loop`. Passthrough toggle clears the sky / canvas alpha. **Does not** replace the 2D loop player. Quest immersive mode typically needs **HTTPS** (not plain `http://phone:8765`). A-Frame CDN load needs internet on the headset once. Transport **FOV** / **In↔Out** zoom — see below. |
+| **`/xr`** (alias **`/chroma`**) | Separate **WebXR / A-Frame** page: 180° hemisphere + SBS eye split + YUV green-screen chroma (`chroma-stereo-sbs`). **Three playlists** (toggle): **Loop** / **Working** / **Archive** — listing rules below. Tap to open, Refresh list; `?mode=working` / `?mode=archive` / `?mode=loop`. Passthrough toggle clears the sky / canvas alpha. **Does not** replace the 2D loop player. Quest immersive mode typically needs **HTTPS** (not plain `http://phone:8765`). A-Frame CDN load needs internet on the headset once. Transport **FOV** / **In↔Out** zoom — see below. Play/pause: transport button, scene tap, or Quest controller **trigger** in AR/VR (WebXR `select`). |
 
 **`/xr` playlists (build 379+):** lists come from **`status_lists.json`** (`files[]`). The page then filters by mode. Shared `/xr` extensions: **`mp4`**, **`m4v`**, **`mov`**, **`webm`**, **`mkv`**. LAN/WebDAV may still list **`wmv`**, **`avi`**, **`ts`**, etc.; those do **not** appear on `/xr`. Quest Browser officially plays **MP4 / WebM / Ogg** (not MKV) — prefer remux to **MP4** for AR.
 

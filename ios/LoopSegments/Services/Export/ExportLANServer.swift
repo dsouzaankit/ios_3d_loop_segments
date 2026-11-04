@@ -6421,6 +6421,44 @@ enum ExportLANServer {
               if (isXrChromeTarget(e.target)) return;
               togglePlayPause();
             });
+            // Quest controller trigger (WebXR select) toggles play/pause in AR/VR.
+            (function wireXrTriggerPlayPause() {
+              var lastMs = 0;
+              var boundSession = null;
+              function onSelect(ev) {
+                try {
+                  if (ev && ev.inputSource && ev.inputSource.targetRayMode === "gaze") return;
+                } catch (eGaze) {}
+                if (overlay && overlay.style.display !== "none") return;
+                var now = Date.now();
+                if (now - lastMs < 280) return;
+                lastMs = now;
+                togglePlayPause();
+              }
+              function unbind() {
+                if (!boundSession) return;
+                try { boundSession.removeEventListener("select", onSelect); } catch (eOff) {}
+                boundSession = null;
+              }
+              function bind() {
+                unbind();
+                var session = null;
+                try {
+                  var scene = document.querySelector("a-scene");
+                  session = scene && scene.renderer && scene.renderer.xr && scene.renderer.xr.getSession
+                    ? scene.renderer.xr.getSession()
+                    : null;
+                } catch (eSess) {}
+                if (!session) return;
+                boundSession = session;
+                try { session.addEventListener("select", onSelect); } catch (eOn) {}
+              }
+              var sceneEl = document.querySelector("a-scene");
+              if (sceneEl) {
+                sceneEl.addEventListener("enter-vr", function () { setTimeout(bind, 0); setTimeout(bind, 200); });
+                sceneEl.addEventListener("exit-vr", unbind);
+              }
+            })();
             if (seekBackBtn) seekBackBtn.onclick = function () { seekBy(-10); };
             if (seekFwdBtn) seekFwdBtn.onclick = function () { seekBy(10); };
             if (seekEl) {
