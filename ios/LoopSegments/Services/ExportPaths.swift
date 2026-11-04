@@ -410,7 +410,9 @@ enum ExportPaths {
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return }
             let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
             guard size > 0 else { return }
-            paths.append(pathRelativeToExports(url))
+            let rel = pathRelativeToExports(url)
+            guard !paths.contains(rel) else { return }
+            paths.append(rel)
         }
 
         for index in 0 ..< segmentFileCount {
@@ -420,9 +422,9 @@ enum ExportPaths {
         appendFileIfPresent(workingTranscodedURL)
         appendFileIfPresent(vanillaFastStartURL)
 
+        // Any playable file sitting next to `_working.mp4` (vanilla, copies, dropped media).
         if let names = try? fm.contentsOfDirectory(atPath: mediaExportDirectory.path) {
-            for name in names.sorted() where isVanillaDownloadMediaCopy(fileName: name) {
-                guard isLANBrowsableMediaFile(fileName: name) else { continue }
+            for name in names.sorted() where isLANBrowsableMediaFile(fileName: name) {
                 appendFileIfPresent(mediaExportDirectory.appendingPathComponent(name))
             }
         }

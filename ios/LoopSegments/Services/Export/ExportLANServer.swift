@@ -3931,7 +3931,7 @@ enum ExportLANServer {
         """
     }
 
-    /// Quest Browser WebXR page: 180° SBS + green-screen chroma over loop / `_working` / `archive/` media.
+    /// Quest Browser WebXR page: 180° SBS + green-screen chroma over loop / media-root / `archive/` media.
     private static func sendXRChromaPlayerHTML(_ connection: NWConnection, done: @escaping () -> Void) {
         autoreleasepool {
             let mediaRoot = "\(ExportPaths.mediaExportFolderName)/"
@@ -5361,7 +5361,7 @@ enum ExportLANServer {
           </div>
           <div id="overlay" class="play-overlay">
             <h1>3D Chroma Key 180° Player</h1>
-            <p class="muted">Three playlists: <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working</strong> = root <code>_working*.mp4</code> and <code>_vanilla_download.*</code> (outside archive) · <strong>Archive</strong> = <code>\#(mediaRootHTML)archive/</code> folder</p>
+            <p class="muted">Three playlists: <strong>Loop</strong> = <code>\#(mediaRootHTML)loop/op_*.mp4</code> · <strong>Working</strong> = any playable file in the media root next to <code>_working.mp4</code> · <strong>Archive</strong> = <code>\#(mediaRootHTML)archive/</code> folder</p>
             <p class="warn">Quest WebXR needs a <strong>secure context</strong>: prefer Quest <code>chrome://flags</code> insecure-origin + LAN <code>http://</code> (see LAN page). Cloudflare tunnel is optional (slow). Passthrough = <strong>Enter AR</strong> (not Enter VR). A-Frame CDN needs internet on the headset once.</p>
             <p id="xr-webxr-status" class="muted" style="font-size:0.85rem;max-width:36rem" role="status">Checking WebXR…</p>
             <div class="toolbar" role="group" aria-label="Playlist">
@@ -5564,7 +5564,7 @@ enum ExportLANServer {
             }
             function emptyLabel() {
               if (mode === "working") {
-                return "No root _working*.mp4 or _vanilla_download.* yet — export on the phone, then Refresh list";
+                return "No playable media in the media root yet — export or copy a file next to _working.mp4, then Refresh list";
               }
               if (mode === "archive") {
                 return "No archive/ videos yet — finish an export, then Refresh list";
@@ -5577,7 +5577,7 @@ enum ExportLANServer {
               return "loop";
             }
             function listGroupTitle() {
-              if (mode === "working") return "Working (_working* + _vanilla_download.*)";
+              if (mode === "working") return "Working (media root videos, outside archive/)";
               if (mode === "archive") return "Archive folder";
               return "Loop segments";
             }
@@ -5732,7 +5732,7 @@ enum ExportLANServer {
                 .catch(function () { workingSeekSec = 0; });
             }
             function applyWorkingSeekIfNeeded(item) {
-              if (!item || !isWorkingMediaName(item.name) || !(workingSeekSec > 0)) return;
+              if (!item || !isSparseWorkingName(item.name) || !(workingSeekSec > 0)) return;
               var target = workingSeekSec;
               var apply = function () {
                 try {
@@ -5988,13 +5988,21 @@ enum ExportLANServer {
               if (/staging/i.test(base)) return false;
               return /^op_\d+\.(mp4|m4v|mov)$/i.test(base);
             }
-            function isWorkingMediaName(name) {
+            function isSparseWorkingName(name) {
               var n = normPath(name);
               if (n.indexOf(MEDIA_ROOT) !== 0) return false;
               var leaf = n.slice(MEDIA_ROOT.length);
               if (!leaf || leaf.indexOf("/") >= 0) return false;
-              if (!isVideoExt(leaf)) return false;
-              return /^_working/i.test(leaf) || /^_vanilla_download\./i.test(leaf);
+              return /^_working/i.test(leaf) && isVideoExt(leaf);
+            }
+            // Working tab: any playable file in the media root (alongside `_working.mp4`), not loop/ or archive/.
+            function isMediaRootPlayableName(name) {
+              var n = normPath(name);
+              if (n.indexOf(MEDIA_ROOT) !== 0) return false;
+              var leaf = n.slice(MEDIA_ROOT.length);
+              if (!leaf || leaf.indexOf("/") >= 0) return false;
+              if (/staging/i.test(leaf) || /\.sparse\.json$/i.test(leaf)) return false;
+              return isVideoExt(leaf);
             }
             function isArchiveMediaName(name) {
               var n = normPath(name);
@@ -6046,16 +6054,15 @@ enum ExportLANServer {
               var seen = {};
               list.forEach(function (f) {
                 var name = f && f.name;
-                if (!name || seen[name] || !isWorkingMediaName(name)) return;
+                if (!name || seen[name] || !isMediaRootPlayableName(name)) return;
                 seen[name] = true;
                 out.push(entryFromFile(f));
               });
               out.sort(function (a, b) {
-                function rank(name) {
-                  if (/_working\.mp4$/i.test(name)) return 0;
-                  if (/_working/i.test(name)) return 1;
-                  if (/_vanilla_download\./i.test(name)) return 2;
-                  return 3;
+                function rank(n) {
+                  if (/_working\.mp4$/i.test(n)) return 0;
+                  if (/_working/i.test(n)) return 1;
+                  return 2;
                 }
                 var ar = rank(a.name);
                 var br = rank(b.name);
