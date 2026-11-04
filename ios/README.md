@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 377 (1.3.1):** Quest immersive chroma can key AV1. The full-frame blit runs first, then the GPU key samples that frame instead of the tile atlas.
+
 **Build 376 (1.3.1):** Zoom scales the whole frame onto a smaller hemisphere. The slider no longer crops the edges and leaves the center the same size. Zoom 1 is still 180° wide and tall.
 
 **Build 375 (1.3.1):** Zooming out pulls the vertical arc in by an extra 14°, matching the headset’s shorter view. Width stays 180° at zoom 1. Build 374 was cancelled; its GPU chroma and forward-facing VR hemisphere are in this build.

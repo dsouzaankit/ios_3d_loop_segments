@@ -4406,9 +4406,10 @@ enum ExportLANServer {
               tick: function () {
                 if (__xrVideoTex) __xrVideoTex.needsUpdate = true;
                 var quest = this.isQuestBrowser();
-                if (quest && !this.data.chroma && this.video) xrWatchAv1(this.video);
+                // Probe AV1 even with Chroma on — keyed AV1 still needs the full-frame blit.
+                if (quest && this.video) xrWatchAv1(this.video);
                 this.followHead();
-                var av1Immersive = quest && this.isImmersiveStereo() && !this.data.chroma && __xrDs.av1 === true;
+                var av1Immersive = quest && this.isImmersiveStereo() && __xrDs.av1 === true;
                 if (av1Immersive && this.drawsSharedFrame()) {
                   var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
                   var resolved = xrBlitFullVideo(renderer, this.video);
@@ -4668,18 +4669,57 @@ enum ExportLANServer {
                 }
                 var mesh = this.el.getObject3D("mesh");
                 if (!mesh || !tex) return;
+                // Sample the blitted full frame (not the Quest AV1 tile atlas). Optional GPU key.
+                var chromaOn = !!this.data.chroma;
+                var keyCol = new THREE.Color("#00ff00");
+                try { keyCol = new THREE.Color(this.data.keyColor); } catch (eKey) {}
                 if (!this._av1Mat) {
                   this._av1Mat = new THREE.ShaderMaterial({
-                    uniforms: { tex: { value: tex } },
+                    uniforms: {
+                      tex: { value: tex },
+                      keyColor: { value: keyCol },
+                      similarity: { value: this.data.similarity },
+                      smoothness: { value: this.data.smoothness },
+                      chromaEnabled: { value: chromaOn ? 1.0 : 0.0 }
+                    },
                     vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
-                    fragmentShader: "uniform sampler2D tex; varying vec2 vUv; void main(){ gl_FragColor = texture2D(tex, vUv); }",
+                    fragmentShader: [
+                      "uniform sampler2D tex;",
+                      "uniform vec3 keyColor;",
+                      "uniform float similarity;",
+                      "uniform float smoothness;",
+                      "uniform float chromaEnabled;",
+                      "varying vec2 vUv;",
+                      "void main(){",
+                      "  vec4 videoColor = texture2D(tex, vUv);",
+                      "  if (chromaEnabled < 0.5) { gl_FragColor = videoColor; return; }",
+                      "  float cr = 0.5 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
+                      "  float cb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5 * videoColor.b;",
+                      "  float keyCr = 0.5 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
+                      "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5 * keyColor.b;",
+                      "  float dist = sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));",
+                      "  float blend = smoothstep(similarity, similarity + smoothness, dist);",
+                      "  gl_FragColor = vec4(videoColor.rgb, blend);",
+                      "}"
+                    ].join("\n"),
                     side: THREE.DoubleSide,
-                    toneMapped: false
+                    toneMapped: false,
+                    transparent: chromaOn,
+                    depthWrite: !chromaOn,
+                    alphaTest: chromaOn ? 0.08 : 0
                   });
                 } else {
                   this._av1Mat.uniforms.tex.value = tex;
+                  this._av1Mat.uniforms.keyColor.value.copy(keyCol);
+                  this._av1Mat.uniforms.similarity.value = this.data.similarity;
+                  this._av1Mat.uniforms.smoothness.value = this.data.smoothness;
+                  this._av1Mat.uniforms.chromaEnabled.value = chromaOn ? 1.0 : 0.0;
+                  this._av1Mat.transparent = chromaOn;
+                  this._av1Mat.depthWrite = !chromaOn;
+                  this._av1Mat.alphaTest = chromaOn ? 0.08 : 0;
                 }
                 var mat = this._av1Mat;
+                this._gpuSig = "";
                 if (this._mode !== "av1rt" || mesh.material !== mat) {
                   mesh.traverse(function (node) {
                     if (!node.isMesh) return;
@@ -4689,7 +4729,8 @@ enum ExportLANServer {
                 if (this._mode !== "av1rt") {
                   var video = this.video;
                   this.setTexNote("AV1 full frame " + (video && video.videoWidth ? video.videoWidth : "?")
-                    + "×" + (video && video.videoHeight ? video.videoHeight : "?"));
+                    + "×" + (video && video.videoHeight ? video.videoHeight : "?")
+                    + (chromaOn ? " + chroma" : ""));
                   this._mode = "av1rt";
                   this.syncEyeLayers();
                 } else {
@@ -4933,7 +4974,8 @@ enum ExportLANServer {
                   return;
                 }
                 this.syncEyeLayers();
-                var questAv1 = this.isQuestBrowser() && !this.isDesktopRole() && !this.data.chroma
+                // Quest AV1: wait for / use the full-frame blit even when Chroma is on.
+                var questAv1 = this.isQuestBrowser() && !this.isDesktopRole()
                   && __xrDs.av1Known && __xrDs.av1 === true;
                 if (questAv1 && __xrDs.resolved) {
                   this.applyAv1Resolve(__xrDs.resolved);
