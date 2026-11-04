@@ -6127,11 +6127,11 @@ enum ExportLANServer {
               width: min(480px, 46vw); height: auto; max-height: 36vh;
               opacity: 1; background: #000; border: 2px solid #22c55e; border-radius: 8px;
             }
-            /* Quest flat preview. One full picture, ending above the bottom control row.
-               The WebGL plane stays hidden so it does not tile a second copy in that strip. */
+            /* Quest flat preview. One full picture, above the Enter AR / Enter VR row.
+               The WebGL plane stays hidden so it does not tile a second copy in that gap. */
             #chroma-stream.xr-flat-preview,
             #xr-ds-canvas.xr-keyed-preview {
-              left: 0; top: 0; width: 100vw; height: calc(100vh - 4.75rem); max-height: none;
+              left: 0; top: 0; width: 100vw; height: calc(100vh - 6.5rem); max-height: none;
               opacity: 1; z-index: 2; object-fit: contain; background: #111; border: 0; border-radius: 0;
             }
             a-scene { z-index: 1; }
