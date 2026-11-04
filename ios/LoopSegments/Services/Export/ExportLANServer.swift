@@ -5054,10 +5054,17 @@ enum ExportLANServer {
                 // A-Frame canvas material — ShaderMaterial on the flat preview was black on Quest.
                 this.applyCanvasVideo();
                 var video = this.video;
+                var src = (video && (video.currentSrc || video.src)) || "";
                 if (video && video.videoWidth) {
                   this.setTexNote("post-AV1 canvas " + video.videoWidth + "×" + video.videoHeight
                     + (this.data.chroma ? " + chroma" : ""));
                 }
+                // Tick calls this every frame. One line per role/eye/size/clip, or the ring
+                // fills with duplicates and drops enter-vr.
+                var sig = (this.data.role || "") + "|" + (this.data.eye || "") + "|"
+                  + canvas.width + "x" + canvas.height + "|" + (this.data.chroma ? "1" : "0") + "|" + src;
+                if (this._postAv1Log === sig) return true;
+                this._postAv1Log = sig;
                 try { xrLog("post-av1-canvas", { role: this.data.role, eye: this.data.eye, w: canvas.width, h: canvas.height }); } catch (eL) {}
                 return true;
               },
