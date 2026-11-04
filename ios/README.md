@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 394 (1.3.1):** `/xr` preview and AR stayed black on PC and Quest while the video element kept playing. Eye-cull cleanup set `mesh.onBeforeRender = null`; Three.js still calls it, the frame throws, and the render loop stops. Restore the prototype hook instead of null.
+
 **Build 393 (1.3.1):** Fix PC `/xr` stuck on **Checking WebXR…** / **Loading playlists…** (no Launch preview). Homepage init called `__xrDs` from another script scope and aborted before probes. Shared XR helpers are on `window`; WebXR probe has a 2.5s timeout.
 
 **Build 392 (1.3.1):** `/xr_debug.json` POST no longer requires Basic auth. Build 390’s debug beacon was getting **401** → Quest login sheet (often on AR exit) and an empty log ring. Includes 391’s black preview/AR fix after AV1 texture dispose.

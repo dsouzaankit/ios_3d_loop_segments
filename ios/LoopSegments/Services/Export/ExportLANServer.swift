@@ -4982,7 +4982,9 @@ enum ExportLANServer {
                 if (!mesh) return;
                 mesh.traverse(function (node) {
                   if (!node.isMesh) return;
-                  node.onBeforeRender = null;
+                  // null is not the THREE noop. The renderer still invokes it and the
+                  // throw kills the animation loop — black preview on PC and Quest, and black AR.
+                  try { delete node.onBeforeRender; } catch (eHook) {}
                   node.visible = true;
                 });
               },
@@ -5219,7 +5221,7 @@ enum ExportLANServer {
                 mesh.traverse(function (node) {
                   if (!node.isMesh) return;
                   node.material = mat;
-                  node.onBeforeRender = null;
+                  try { delete node.onBeforeRender; } catch (eHook) {}
                 });
                 if (this.el.components.material) {
                   this.el.components.material.material = mat;
