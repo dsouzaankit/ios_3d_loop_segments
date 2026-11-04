@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 390 (1.3.1):** `/xr` posts a debug ring to **`xr_debug.json`** (GET to pull). After AV1, exit pauses and keeps flat on the canvas path so Quest Browser does not die on a poisoned VideoTexture. Quest **Enter VR** SBS uses per-eye `onBeforeRender` culling (layers 1/2 stay unused).
+
 **Build 389 (1.3.1):** After an AV1 clip, Quest AR shows the next HEVC clip from a canvas copy. A new video texture (388) still stayed black in that session. Codec sniff now requires an `av01` MP4 box so HEVC media data is not treated as AV1.
 
 **Build 388 (1.3.1):** HEVC in AR after AV1 creates a new video texture. Quest only feeds one WebGL consumer per `<video>`, so the old AV1 texture was still taking the frame and the dome stayed blank. Build 387 rebound that same texture.
@@ -474,7 +476,11 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 **Why chroma needs `/xr` (not browser immersive display mode):** fullscreen immersive display mode and Skybox/Media Layers–style compositors feed the decode into an **opaque** equirect/hemisphere layer — no per-pixel fragment shader — so a keyed color cannot be dropped to transparency (passthrough). Chroma keying needs a mesh (or equivalent) that samples each frame in a shader and discards/blends the key color; that is the `/xr` WebGL path (including the Quest AV1 blit when the browser exposes a tile atlas).
 
-**AR/VR exit vs flat playback:** immersive and the flat player share one `#chroma-stream` `<video>`. Leaving AR/VR suspends the AV1 blit and defers RT dispose — it does **not** call `pause()` / `play()`. If the clip was playing in headset, flat playback keeps going (it never stopped). **Files** (home overlay) is what hard-stops (`pause` + clear `src`). Tip: for heavy Quest AV1, **pause in AR first**, then exit — teardown is lighter when decode/blit are not still running during WebXR session end.
+**AR/VR exit vs flat playback:** immersive and the flat player share one `#chroma-stream` `<video>`. Leaving AR/VR suspends the AV1 blit and defers RT dispose. After an AV1 blit in the session (`sawAv1Tex`), exit **pauses** and keeps flat on the **canvas** path — a poisoned VideoTexture was killing Quest Browser on exit. Otherwise exit does not pause, so flat keeps playing. **Files** (home overlay) hard-stops (`pause` + clear `src`). Tip: pause in AR before exit on heavy AV1 when you can.
+
+**Quest VR SBS:** WebGL layers 1/2 stay black on Quest. **Enter VR** shows left/right domes on layer 0 and culls per eye in `onBeforeRender`. **Enter AR** stays mono (left half both eyes).
+
+**`/xr` debug:** the page POSTs a ring buffer to **`/xr_debug.json`** (also under monitor quick links). `GET /xr_debug.json` returns `{ lines, snapshot }`. Skill: `.cursor/skills/xr-debug/`.
 
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 

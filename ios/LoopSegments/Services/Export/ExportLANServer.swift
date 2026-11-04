@@ -821,6 +821,10 @@ enum ExportLANServer {
             sendXRTunnelGET(connection: connection, done: done)
             return
         }
+        if normalized == "xr_debug.json" {
+            sendXRDebugGET(connection: connection, done: done)
+            return
+        }
         let resourcePath = normalized
         if resourcePath == "pcloud_list.json" {
             guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
@@ -1553,11 +1557,21 @@ enum ExportLANServer {
             )
             return
         }
+        // Quest Browser posts here without Basic auth (same as video GETs on the LAN).
+        if normalized == "xr_debug.json" {
+            handleXRDebugWrite(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         sendResponse(
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, /lan_throughput.json, and /xr_tunnel.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, /lan_throughput.json, /xr_tunnel.json, and /xr_debug.json".utf8),
             done: done
         )
     }
@@ -2633,6 +2647,7 @@ enum ExportLANServer {
             #"<a href="wifi_www_probe.json">wifi_www_probe.json</a>"#,
             #"<a href="lan_throughput.json">lan_throughput.json</a>"#,
             #"<a href="xr_tunnel.json">xr_tunnel.json</a>"#,
+            #"<a href="xr_debug.json">xr_debug.json</a>"#,
             "<a href=\"\(LANExportTriggerControl.ackRelativePath)\">export_trigger.ack.json</a>",
             #"<a href="export_from_folder.json">export_from_folder.json</a>"#,
             #"<a href="export_queue.json">export_queue.json</a>"#,
@@ -4005,7 +4020,59 @@ enum ExportLANServer {
             window.__xrZoomSteps = [0.5, 0.6, 0.7, 0.8, 0.9, 1];
             // Skybox-style: meters to push the dome along world -Z (session forward). 0 = centered.
             window.__xrDist = 0;
-            var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false, suspendBlit: false };
+            var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false, suspendBlit: false, exiting: false, sawAv1Tex: false };
+            var __xrLogBuf = [];
+            var __xrLogFlushTimer = 0;
+            function xrDebugSnapshot() {
+              var v = document.getElementById("chroma-stream");
+              var mode = "";
+              try {
+                var el = document.getElementById("chroma-sphere");
+                var c = el && el.components && el.components["chroma-stereo-sbs"];
+                mode = (c && c._mode) || "";
+              } catch (eM) {}
+              return {
+                t: Date.now(),
+                presenting: !!xrIsPresenting(),
+                exiting: !!__xrDs.exiting,
+                suspendBlit: !!__xrDs.suspendBlit,
+                av1: !!__xrDs.av1,
+                av1Known: !!__xrDs.av1Known,
+                sawAv1Tex: !!__xrDs.sawAv1Tex,
+                mode: mode,
+                resolved: !!__xrDs.resolved,
+                codecSrc: (__xrDs.codecSrc || "").slice(-80),
+                videoSrc: v ? ((v.currentSrc || v.src || "").slice(-80)) : "",
+                paused: !!(v && v.paused),
+                vw: v ? (v.videoWidth || 0) : 0,
+                vh: v ? (v.videoHeight || 0) : 0,
+                ct: v ? (Number(v.currentTime) || 0) : 0,
+                note: (typeof window.__xrTexNote === "string") ? window.__xrTexNote : ""
+              };
+            }
+            function xrLog(msg, extra) {
+              var line = new Date().toISOString() + " " + String(msg || "");
+              if (extra != null) {
+                try { line += " " + JSON.stringify(extra); } catch (eJ) {}
+              }
+              __xrLogBuf.push(line);
+              if (__xrLogBuf.length > 80) __xrLogBuf.splice(0, __xrLogBuf.length - 80);
+              if (__xrLogFlushTimer) return;
+              __xrLogFlushTimer = setTimeout(function () {
+                __xrLogFlushTimer = 0;
+                var batch = __xrLogBuf.splice(0, __xrLogBuf.length);
+                if (!batch.length) return;
+                var body = JSON.stringify({ lines: batch, snapshot: xrDebugSnapshot() });
+                try {
+                  fetch("xr_debug.json", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: body,
+                    keepalive: true
+                  }).catch(function () {});
+                } catch (ePost) {}
+              }, 400);
+            }
             function xrIsPresenting() {
               try {
                 var scene = document.querySelector("a-scene");
@@ -4152,6 +4219,7 @@ enum ExportLANServer {
                   xrReleaseLiveVideoTexture();
                 }
                 __xrDs.needsMaterialKick = true;
+                try { xrLog("codec", { av1: !!isAv1, sawAv1Tex: !!__xrDs.sawAv1Tex, src: (src || "").slice(-60) }); } catch (eLog) {}
               }
               function fail() {
                 if (__xrDs.codecSrc !== src && __xrDs.codecPending !== src) return;
@@ -4492,6 +4560,7 @@ enum ExportLANServer {
                   self._yawLocked = false;
                   self._poseFrames = 0;
                   __xrDs.disposeToken = (__xrDs.disposeToken || 0) + 1;
+                  __xrDs.exiting = false;
                   __xrDs.suspendBlit = false;
                   // Drop a stale AV1 sample from the last clip so Enter VR/AR cannot show a frozen frame.
                   __xrDs.resolved = null;
@@ -4501,7 +4570,11 @@ enum ExportLANServer {
                   }
                   self._mode = "";
                   self._gpuSig = "";
+                  self._uvZoom = null;
+                  self._uvEyeApplied = null;
+                  try { xrLog("enter-vr", { eye: self.data.eye, role: self.data.role, ar: self.isArMode() }); } catch (eL) {}
                   function kick() {
+                    try { self.applySbsUVs(); } catch (eUv) {}
                     self.applyMaterial();
                     self.syncEyeLayers();
                   }
@@ -4512,17 +4585,34 @@ enum ExportLANServer {
                   setTimeout(kick, 800);
                 }.bind(this);
                 this._onExitVr = function () {
-                  // Stop AV1 blits and defer GPU dispose — tearing down a large RT during
-                  // WebXR exit freezes Quest Browser / the whole system.
+                  // Stop AV1/canvas GPU work first. Never applyMaterial / dispose RT while
+                  // WebXR is still tearing down — that kills Quest Browser after AV1→HEVC.
+                  __xrDs.exiting = true;
+                  __xrDs.suspendBlit = true;
+                  try { xrLog("exit-vr begin", { eye: this.data.eye, sawAv1: !!__xrDs.sawAv1Tex }); } catch (eL0) {}
                   xrSuspendAv1Pipeline();
-                  xrScheduleDisposeAv1Gpu();
+                  __xrDs.exiting = true;
+                  __xrDs.suspendBlit = true;
                   this._seated = false;
                   this._yawLocked = false;
                   this._poseFrames = 0;
                   this._mode = "";
                   this._gpuSig = "";
-                  try { this.applyMaterial(); } catch (eMat) {}
+                  this.clearQuestEyeCull();
+                  // Pause after AV1 session — flat VideoTexture is poisoned; keep decode off during exit.
+                  if (__xrDs.sawAv1Tex && this.video) {
+                    try { this.video.pause(); } catch (eP) {}
+                    try { wantPlay = false; } catch (eW) {}
+                  }
                   try { this.syncEyeLayers(); } catch (eLay) {}
+                  xrScheduleDisposeAv1Gpu();
+                  var self = this;
+                  setTimeout(function () {
+                    if (xrIsPresenting()) return;
+                    __xrDs.exiting = false;
+                    try { xrLog("exit-vr settled"); } catch (eL1) {}
+                    try { self.applyMaterial(); } catch (eMat) {}
+                  }, 900);
                 }.bind(this);
                 this.el.addEventListener("object3dset", this._onApply);
                 this.el.addEventListener("materialtextureloaded", this._onApply);
@@ -4587,7 +4677,8 @@ enum ExportLANServer {
                 } else if (av1Immersive && this.data.eye === "right" && __xrDs.resolved) {
                   this.applyAv1Resolve(__xrDs.resolved);
                 } else if (this.needsPostAv1Canvas() && this.drawsSharedFrame()) {
-                  var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, "ar");
+                  var postSlot = this.isDesktopRole() ? "flat" : "ar";
+                  var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, postSlot);
                   if (postCanvas) this.applyPostAv1Canvas(postCanvas);
                 } else if (this._mode === "canvas" && this.drawsSharedFrame()) {
                   this.refreshDownscaleCanvas(true);
@@ -4840,10 +4931,13 @@ enum ExportLANServer {
                 return true;
               },
               needsPostAv1Canvas: function () {
-                // After an AV1 blit, Quest will not show a later HEVC frame through any VideoTexture.
-                return this.isQuestBrowser() && !this.isDesktopRole() && !!__xrDs.sawAv1Tex
-                  && !__xrDs.suspendBlit
-                  && !(__xrDs.av1Known && __xrDs.av1 === true);
+                // After an AV1 blit, Quest will not show a later frame through any VideoTexture —
+                // immersive and flat both need the canvas path until a full page reload.
+                if (!this.isQuestBrowser() || !__xrDs.sawAv1Tex) return false;
+                if (__xrDs.exiting) return false;
+                if (__xrDs.av1Known && __xrDs.av1 === true) return false;
+                if (this.isDesktopRole()) return !this.isImmersiveStereo();
+                return this.isImmersiveStereo() && !__xrDs.suspendBlit;
               },
               applyPostAv1Canvas: function (canvas) {
                 if (!canvas) return;
@@ -4863,9 +4957,37 @@ enum ExportLANServer {
                 this._mode = "canvasrt";
                 var video = this.video;
                 if (video && video.videoWidth) {
-                  this.setTexNote("HEVC canvas " + video.videoWidth + "×" + video.videoHeight
+                  this.setTexNote("post-AV1 canvas " + video.videoWidth + "×" + video.videoHeight
                     + (this.data.chroma ? " + chroma" : ""));
                 }
+              },
+              clearQuestEyeCull: function () {
+                var mesh = this.el.getObject3D("mesh");
+                if (!mesh) return;
+                mesh.traverse(function (node) {
+                  if (!node.isMesh) return;
+                  node.onBeforeRender = null;
+                  node.visible = true;
+                });
+              },
+              wireQuestEyeCull: function (eyeIndex) {
+                var mesh = this.el.getObject3D("mesh");
+                if (!mesh) return;
+                mesh.traverse(function (node) {
+                  if (!node.isMesh) return;
+                  node.onBeforeRender = function (renderer, scene, camera) {
+                    try {
+                      var xrCam = renderer.xr && renderer.xr.getCamera && renderer.xr.getCamera();
+                      if (!xrCam || !xrCam.cameras || xrCam.cameras.length < 2) {
+                        this.visible = eyeIndex === 0;
+                        return;
+                      }
+                      this.visible = camera === xrCam.cameras[eyeIndex];
+                    } catch (e) {
+                      this.visible = eyeIndex === 0;
+                    }
+                  };
+                });
               },
               applyAv1Resolve: function (tex) {
                 this.ensureDomeGeometry();
@@ -5016,9 +5138,11 @@ enum ExportLANServer {
                     hasStereoCams = !!(presenting && xrCam && xrCam.cameras && xrCam.cameras.length >= 2);
                   } catch (e0) {}
                 }
-                // Quest never shows WebGL layers 1/2 (AR or VR), so a per-eye layer is a black screen.
-                // Keep the dome on layer 0. The right eye mesh stays hidden here; both eyes see the left half.
+                // Quest never shows WebGL layers 1/2, so layer bits stay black.
+                // PC VR can use layers. Quest VR SBS uses onBeforeRender eye culling on layer 0.
+                // Quest AR stays mono (left half both eyes) — stereo + passthrough is harsher.
                 var useEyeLayers = !this.isQuestBrowser() && !desktop && !isAR && sbs && immersive && layer > 0 && hasStereoCams;
+                var useQuestEyeSplit = this.isQuestBrowser() && !desktop && !isAR && sbs && immersive && hasStereoCams;
                 function setNodeLayer(node, layerBit) {
                   if (!node || (!node.isMesh && !node.isObject3D)) return;
                   node.layers.set(layerBit);
@@ -5032,11 +5156,20 @@ enum ExportLANServer {
                 // Flat a-video: PC / magic-window only. Domes: immersive only
                 // (left dome always-on caused spherical overlay noise on top of the flat screen).
                 if (desktop) {
+                  this.clearQuestEyeCull();
                   if (this.el.object3D) this.el.object3D.visible = !immersive;
                 } else if (this.data.eye === "right") {
-                  this.el.object3D.visible = !!useEyeLayers;
+                  if (useQuestEyeSplit) {
+                    if (this.el.object3D) this.el.object3D.visible = true;
+                    this.wireQuestEyeCull(1);
+                  } else {
+                    this.clearQuestEyeCull();
+                    if (this.el.object3D) this.el.object3D.visible = !!useEyeLayers;
+                  }
                 } else if (this.el.object3D) {
                   this.el.object3D.visible = !!immersive;
+                  if (useQuestEyeSplit) this.wireQuestEyeCull(0);
+                  else this.clearQuestEyeCull();
                 }
                 try {
                   if (sceneEl && sceneEl.camera) sceneEl.camera.layers.enable(0);
@@ -5260,10 +5393,11 @@ enum ExportLANServer {
                   return;
                 }
                 if (questAv1) return;
-                // Quest VideoTexture stays black for HEVC once this session has blitted AV1.
+                // Quest VideoTexture stays black once this session has blitted AV1.
                 if (this.needsPostAv1Canvas()) {
                   if (this.drawsSharedFrame()) {
-                    var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, "ar");
+                    var postSlot2 = this.isDesktopRole() ? "flat" : "ar";
+                    var postCanvas = xrDrawDownscale(this.video, this.downscaleTarget(), null, postSlot2);
                     if (postCanvas) this.applyPostAv1Canvas(postCanvas);
                   }
                   return;
@@ -6384,6 +6518,7 @@ enum ExportLANServer {
                 if (xrIsPresenting()) xrPrepareNewClip();
                 else xrResetPlaybackPipeline();
               } catch (eReset) {}
+              try { xrLog("loadIndex", { i: index, name: item.name, presenting: !!xrIsPresenting(), sawAv1Tex: !!__xrDs.sawAv1Tex }); } catch (eLog) {}
               video.src = item.url;
               applyRate();
               setLabel("[" + modeTag() + "] " + (index + 1) + "/" + playlist.length + ": " + item.name);
@@ -6900,6 +7035,109 @@ enum ExportLANServer {
     private static var xrTunnelSidecarURL: URL {
         _ = ExportPaths.lanExportScriptsDirectory
         return ExportPaths.lanExportScriptsDirectory.appendingPathComponent("xr_tunnel.json")
+    }
+
+    // MARK: - XR debug ring (Quest /xr posts; PC pulls GET)
+
+    private static let xrDebugLock = NSLock()
+    private static var xrDebugLines: [String] = []
+    private static var xrDebugSnapshot: [String: Any] = [:]
+    private static let xrDebugCap = 500
+
+    private static var xrDebugLogURL: URL {
+        _ = ExportPaths.lanExportScriptsDirectory
+        return ExportPaths.lanExportScriptsDirectory.appendingPathComponent("xr_debug.log")
+    }
+
+    private static func appendXRDebugLines(_ lines: [String], snapshot: [String: Any]?) {
+        guard !lines.isEmpty || snapshot != nil else { return }
+        xrDebugLock.lock()
+        defer { xrDebugLock.unlock() }
+        if let snapshot {
+            xrDebugSnapshot = snapshot
+        }
+        for raw in lines {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+            xrDebugLines.append(line)
+        }
+        if xrDebugLines.count > xrDebugCap {
+            xrDebugLines.removeFirst(xrDebugLines.count - xrDebugCap)
+        }
+        let joined = xrDebugLines.joined(separator: "\n") + (xrDebugLines.isEmpty ? "" : "\n")
+        try? joined.data(using: .utf8)?.write(to: xrDebugLogURL, options: .atomic)
+    }
+
+    private static func xrDebugPayload() -> [String: Any] {
+        xrDebugLock.lock()
+        defer { xrDebugLock.unlock() }
+        return [
+            "schema": "loopsegments-xr-debug/v1",
+            "count": xrDebugLines.count,
+            "cap": xrDebugCap,
+            "lines": xrDebugLines,
+            "snapshot": xrDebugSnapshot,
+            "file": "\(ExportPaths.mediaExportFolderName)/scripts/xr_debug.log",
+        ]
+    }
+
+    private static func sendXRDebugGET(connection: NWConnection, done: @escaping () -> Void) {
+        sendJSONPayload(xrDebugPayload(), connection: connection, done: done, status: 200)
+    }
+
+    private static func handleXRDebugWrite(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 64_000
+        ) { result in
+            switch result {
+            case .failure(.missingContentLength):
+                sendResponse(connection: connection, status: 411, contentType: "text/plain", body: Data("Content-Length required".utf8), done: done)
+            case .failure(.payloadTooLarge):
+                sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+            case .success(let body):
+                guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                    sendResponse(
+                        connection: connection,
+                        status: 400,
+                        contentType: "text/plain",
+                        body: Data("JSON object required — { \"lines\": [\"…\"], \"snapshot\": {…} }".utf8),
+                        done: done
+                    )
+                    return
+                }
+                if object["action"] as? String == "clear" {
+                    xrDebugLock.lock()
+                    xrDebugLines.removeAll()
+                    xrDebugSnapshot.removeAll()
+                    xrDebugLock.unlock()
+                    try? Data().write(to: xrDebugLogURL, options: .atomic)
+                    sendJSONPayload(xrDebugPayload(), connection: connection, done: done, status: 200)
+                    return
+                }
+                var lines: [String] = []
+                if let arr = object["lines"] as? [String] {
+                    lines = arr
+                } else if let one = object["line"] as? String {
+                    lines = [one]
+                } else if let msg = object["message"] as? String {
+                    lines = [msg]
+                }
+                let snap = object["snapshot"] as? [String: Any]
+                appendXRDebugLines(lines, snapshot: snap)
+                sendJSONPayload(["ok": true, "count": xrDebugPayload()["count"] as Any], connection: connection, done: done, status: 200)
+            }
+        }
     }
 
     private static func normalizeXRTunnelHost(_ raw: String) -> String? {
