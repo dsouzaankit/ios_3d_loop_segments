@@ -4940,9 +4940,10 @@ enum ExportLANServer {
                       offCanvas.style.cssText = "";
                     }
                   } else {
-                    var showKeyed = quest && !!this.data.chroma;
-                    // A fullscreen <video> takes the AV1 preview path: a WebGL upload would blank it.
-                    var videoFull = document.fullscreenElement === this.video;
+                    // A fullscreen <video> takes the AV1 preview path, with Chroma on or off:
+                    // a WebGL upload would blank it.
+                    var videoFull = this.videoIsFullscreen();
+                    var showKeyed = quest && !!this.data.chroma && !videoFull;
                     var showVideo = quest && !showKeyed && (videoFull || (__xrDs.av1Known && __xrDs.av1 === true));
                     flatOverlay = !!(showKeyed || showVideo);
                     if (!showKeyed) {
@@ -4974,7 +4975,7 @@ enum ExportLANServer {
                   quest && this.isImmersiveStereo() && !__xrDs.suspendBlit && !__xrDs.exiting && !!this.data.chroma
                 );
                 var flatChroma = quest && this.isDesktopRole() && !this.isImmersiveStereo() && this.data.chroma
-                  && this.drawsSharedFrame() && !__xrDs.exiting && !__xrDs.suspendBlit;
+                  && this.drawsSharedFrame() && !__xrDs.exiting && !__xrDs.suspendBlit && !this.videoIsFullscreen();
                 if (flatChroma) {
                   var prevRenderer = this.el.sceneEl && this.el.sceneEl.renderer;
                   var previewFrame = xrKeyedPreviewCanvas(prevRenderer, this.video, this.chromaArgs());
@@ -5100,6 +5101,9 @@ enum ExportLANServer {
                   var dist = this.domeDistance();
                   if (dist > 0) obj.translateZ(-dist);
                 } catch (eFollow) {}
+              },
+              videoIsFullscreen: function () {
+                return !!this.video && document.fullscreenElement === this.video;
               },
               isDesktopRole: function () {
                 return this.data.role === "desktop" || this.data.eye === "both";
@@ -5846,6 +5850,8 @@ enum ExportLANServer {
                   return;
                 }
                 this.syncEyeLayers();
+                // The browser player owns the video. Exiting fullscreen rebinds the preview.
+                if (this.isDesktopRole() && this.videoIsFullscreen()) return;
                 // Flat AV1 preview is the <video> element. A canvas copy is the tile atlas,
                 // and a WebGL upload here blanks that element.
                 if (this.isDesktopRole() && !this.isImmersiveStereo() && this.isQuestBrowser()
@@ -6200,9 +6206,8 @@ enum ExportLANServer {
               left: 0; top: 0; width: 100vw; height: calc(100vh - 6.5rem); max-height: none;
               opacity: 1; z-index: 2; object-fit: contain; background: #111; border: 0; border-radius: 0;
             }
-            /* Fullscreen preview. The base rules keep these 16px and nearly invisible for WebGL. */
-            #chroma-stream:fullscreen,
-            #xr-ds-canvas:fullscreen {
+            /* Fullscreen preview. The base rule keeps the video 16px and nearly invisible for WebGL. */
+            #chroma-stream:fullscreen {
               width: 100vw !important; height: 100vh !important; max-height: none !important;
               opacity: 1 !important; pointer-events: auto; object-fit: contain; background: #000;
             }
@@ -6275,7 +6280,7 @@ enum ExportLANServer {
               <button type="button" id="xr-playpause" title="Play / Pause">Play</button>
               <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
-              <button type="button" id="xr-fullscreen" title="Fullscreen preview. Chroma on shows the keyed picture. Chroma off uses the browser video player.">Fullscreen</button>
+              <button type="button" id="xr-fullscreen" title="Fullscreen in the browser video player. Chroma is not applied here.">Fullscreen</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
               <span id="xr-time">0:00 / 0:00</span>
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Key
@@ -7208,26 +7213,20 @@ enum ExportLANServer {
                 syncPlayPauseLabel();
               }
             }
-            // Keyed canvas when it is the preview. Otherwise the <video>, which gets the browser
-            // player (screen size, brightness, 180/3D menu) but no chroma.
-            function fullscreenTarget() {
-              var keyed = document.getElementById("xr-ds-canvas");
-              if (keyed && keyed.classList.contains("xr-keyed-preview")) return keyed;
-              return video;
-            }
+            // Always the <video>, Chroma on or off: the browser player has full resolution and its
+            // own controls (screen size, brightness, 180/3D menu). Keying only pays off in AR.
             function toggleFullscreen() {
               if (document.fullscreenElement) {
                 document.exitFullscreen();
                 return;
               }
               if (xrIsPresenting()) return;
-              var target = fullscreenTarget();
-              var request = target.requestFullscreen || target.webkitRequestFullscreen;
+              var request = video.requestFullscreen || video.webkitRequestFullscreen;
               if (!request) return;
-              var result = request.call(target);
+              var result = request.call(video);
               if (result && result.catch) {
                 result.catch(function (e) {
-                  try { xrLog("fullscreen-failed", { target: target.id, error: String(e) }); } catch (eLog) {}
+                  try { xrLog("fullscreen-failed", { error: String(e) }); } catch (eLog) {}
                 });
               }
             }
@@ -7235,7 +7234,7 @@ enum ExportLANServer {
               var full = document.fullscreenElement;
               video.controls = full === video;
               if (fullscreenBtn) fullscreenBtn.textContent = full ? "Exit Fullscreen" : "Fullscreen";
-              try { xrLog("fullscreen", { target: full ? full.id : "" }); } catch (eLog) {}
+              try { xrLog("fullscreen", { on: !!full }); } catch (eLog) {}
               // Back to the normal preview: rebind, or the plane stays on the fullscreen path.
               if (!full) {
                 try { xrClearComponentModes(); } catch (eModes) {}
