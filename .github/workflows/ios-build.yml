@@ -20,6 +20,8 @@ env:
 
 jobs:
   build-simulator:
+    # The push run already builds this commit. A deploy only needs build-ipa.
+    if: github.event_name != 'workflow_dispatch'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
