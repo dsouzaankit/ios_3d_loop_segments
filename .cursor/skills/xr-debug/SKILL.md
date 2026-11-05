@@ -40,7 +40,8 @@ curl.exe -s -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: app
 | `snapshot.note` | Transport tex note (`post-AV1 canvas`, `AV1 full frame`, …) |
 | `exit-vr settled` | Safe to touch materials again after teardown |
 | `eye-layers` | Dome layer and visibility: VR left 1 / right 2, AR and flat 0 |
-| `xr-probe` | 1.5s and 4s into each session: `xrOn`, `blend`, `masks`, `clearA`, `domes[]`, `video`, `rtPx` (blit pixel) |
+| `xr-enabled-fixed` | `xr.enabled` was false in a live session and was repaired. `ticks` = when; `n` above 1 = something keeps clearing it |
+| `xr-probe` | 1.5s and 4s into each session: `xrOn`, `fixes`, `blend`, `masks`, `clearA`, `domes[]`, `video`, `rtPx` (blit pixel) |
 
 ## Classify
 
@@ -49,7 +50,7 @@ curl.exe -s -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: app
 | HEVC blank in AR after AV1 | Missing canvas path / still on VideoTexture; check `sawAv1Tex` + `mode` |
 | Browser dies on AR exit after AV1→HEVC | Exit must pause + avoid VideoTexture on flat; check `exit-vr begin` then silence |
 | Enter VR background / both-eye discomfort | SBS / eye layers; expect `eye-layers` left 1, right 2 in VR |
-| First VR after AR black, second fine | Diff `xr-probe` between the two sessions. Domes differ = not drawn; `rtPx` black = black frame |
+| First VR after AR black, second fine | Check `xrOn` and `xr-enabled-fixed`, then diff `xr-probe` between the two sessions. Dome `pos` 0,0,0 = XR off; `rtPx` black = black frame |
 | Wrong codec path | `codec av1:true` on an HEVC file → sniff false positive |
 
 ## Fix rules

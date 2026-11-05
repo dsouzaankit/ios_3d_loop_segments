@@ -4848,6 +4848,7 @@ enum ExportLANServer {
                   setTimeout(kick, 800);
                   if (self.data.eye === "left") {
                     __xrDs._probeTicks = 0;
+                    __xrDs._xrFixes = 0;
                     setTimeout(function () { self.logXrProbe("1.5s"); }, 1500);
                     setTimeout(function () { self.logXrProbe("4s"); }, 4000);
                   }
@@ -4918,7 +4919,10 @@ enum ExportLANServer {
                 try { if (this._dsTex) this._dsTex.dispose(); } catch (e) {}
               },
               tick: function () {
-                if (this.data.eye === "left") __xrDs._probeTicks = (__xrDs._probeTicks || 0) + 1;
+                if (this.data.eye === "left") {
+                  __xrDs._probeTicks = (__xrDs._probeTicks || 0) + 1;
+                  this.ensureXrEnabled();
+                }
                 var quest = this.isQuestBrowser();
                 // Uploading the video texture on the flat page steals Quest's only WebGL consumer,
                 // so the preview element stays blank while the shader draws nothing.
@@ -5383,12 +5387,28 @@ enum ExportLANServer {
               },
               // One line per check, so the first VR after AR can be compared with the second.
               // The dome and blit fields separate "not drawn" from "drawn with a black frame".
+              // The first VR after AR starts with xr.enabled false, so three never renders through
+              // the headset cameras: black, with no head tracking. /xr does not cause it (HEVC with
+              // no blit does the same). A-Frame clears the flag just before exit-vr, and exit-vr
+              // sets __xrDs.exiting, so this never turns XR back on during teardown.
+              ensureXrEnabled: function () {
+                var renderer = this.el.sceneEl && this.el.sceneEl.renderer;
+                var xr = renderer && renderer.xr;
+                if (!xr || !xr.isPresenting || xr.enabled || __xrDs.exiting || __xrDs.blitting) return;
+                xr.enabled = true;
+                __xrDs._xrFixes = (__xrDs._xrFixes || 0) + 1;
+                if (__xrDs._xrFixes <= 3) {
+                  try {
+                    xrLog("xr-enabled-fixed", { ticks: __xrDs._probeTicks || 0, n: __xrDs._xrFixes, ar: this.isArMode() });
+                  } catch (eLog) {}
+                }
+              },
               logXrProbe: function (tag) {
                 var sceneEl = this.el.sceneEl;
                 var renderer = sceneEl && sceneEl.renderer;
                 var xr = renderer && renderer.xr;
                 if (!xr || !xr.isPresenting) return;
-                var out = { at: tag, ticks: __xrDs._probeTicks || 0, xrOn: !!xr.enabled };
+                var out = { at: tag, ticks: __xrDs._probeTicks || 0, xrOn: !!xr.enabled, fixes: __xrDs._xrFixes || 0 };
                 try {
                   var session = xr.getSession && xr.getSession();
                   var state = session && session.renderState;

@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 408 (1.3.1):** The first Enter VR after AR was black because `renderer.xr.enabled` stayed false for that session, so nothing drew through the headset cameras. It happened with AV1 and HEVC, with Chroma on and off, and with no blit. `/xr` now turns the flag back on while a session is live and logs `xr-enabled-fixed`. What leaves it off is still unknown.
+
 **Build 407 (1.3.1):** Diagnostic build, not a fix. The first Enter VR after AR is still black; the second shows the picture. `/xr` debug adds `xr-probe` at 1.5s and 4s into each session (session, layer masks, dome state, video, one blit pixel) so the two sessions can be compared.
 
 **Build 406 (1.3.1):** Quest VR SBS now uses three.js eye layers: left dome on layer 1, right dome on layer 2. The `onBeforeRender` eye hook and its per-pass cache are gone. Setting `visible` inside that hook never stopped the current draw, so each eye drew both domes and the result depended on state left from the previous frame (and from AR). `syncEyeLayers` no longer edits the XR cameras or runs every tick. AR and mono still show the left dome on layer 0.
