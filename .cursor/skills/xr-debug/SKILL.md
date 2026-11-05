@@ -40,6 +40,7 @@ curl.exe -s -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: app
 | `snapshot.note` | Transport tex note (`post-AV1 canvas`, `AV1 full frame`, …) |
 | `exit-vr settled` | Safe to touch materials again after teardown |
 | `eye-layers` | Dome layer and visibility: VR left 1 / right 2, AR and flat 0 |
+| `canvas-tex-reset` | Canvas texture released after a size change: `from`, `to`, `presenting` |
 | `xr-enabled-fixed` | `xr.enabled` was false in a live session and was repaired. `ticks` = when; `n` above 1 = something keeps clearing it |
 | `xr-probe` | 1.5s and 4s into each session: `xrOn`, `fixes`, `blend`, `masks`, `clearA`, `domes[]`, `video`, `rtPx` (blit pixel) |
 
@@ -51,6 +52,7 @@ curl.exe -s -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: app
 | Browser dies on AR exit after AV1→HEVC | Exit must pause + avoid VideoTexture on flat; check `exit-vr begin` then silence |
 | Enter VR background / both-eye discomfort | SBS / eye layers; expect `eye-layers` left 1, right 2 in VR |
 | First VR after AR black, second fine | Check `xrOn` and `xr-enabled-fixed`, then diff `xr-probe` between the two sessions. Dome `pos` 0,0,0 = XR off; `rtPx` black = black frame |
+| Black preview or white dome on a plain clip after Chroma | `post-av1-canvas` size jump; expect `canvas-tex-reset` right after it |
 | Wrong codec path | `codec av1:true` on an HEVC file → sniff false positive |
 
 ## Fix rules

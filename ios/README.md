@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 409 (1.3.1):** A plain clip after Chroma could show a black preview and a white AR/VR dome until you opened it again. The shared canvas grows from 1280 to 4096, and three keeps a canvas texture at its first size. `/xr` now releases the texture when the canvas size changes and logs `canvas-tex-reset`.
+
 **Build 408 (1.3.1):** The first Enter VR after AR was black because `renderer.xr.enabled` stayed false for that session, so nothing drew through the headset cameras. It happened with AV1 and HEVC, with Chroma on and off, and with no blit. `/xr` now turns the flag back on while a session is live and logs `xr-enabled-fixed`. What leaves it off is still unknown.
 
 **Build 407 (1.3.1):** Diagnostic build, not a fix. The first Enter VR after AR is still black; the second shows the picture. `/xr` debug adds `xr-probe` at 1.5s and 4s into each session (session, layer masks, dome state, video, one blit pixel) so the two sessions can be compared.

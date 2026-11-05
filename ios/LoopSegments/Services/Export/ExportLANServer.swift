@@ -5318,6 +5318,25 @@ enum ExportLANServer {
                 }
                 return canvas;
               },
+              // three allocates a canvas texture once, at its first size, and never grows it. The
+              // shared canvas jumps from 1280 (chroma preview) to 4096 (plain clip), and those frames
+              // no longer fit: black preview, blank dome. dispose() makes three allocate again.
+              resetCanvasTexture: function (sizeKey) {
+                var comp = this.el.components && this.el.components.material;
+                var mat = comp && comp.material;
+                var map = mat && mat.map;
+                if (!map || !sizeKey) return;
+                var from = map.userData._xrSize;
+                if (from === sizeKey) return;
+                map.userData._xrSize = sizeKey;
+                try { map.dispose(); } catch (eDisp) {}
+                map.needsUpdate = true;
+                mat.needsUpdate = true;
+                if (!from) return;
+                try {
+                  xrLog("canvas-tex-reset", { role: this.data.role, eye: this.data.eye, from: from, to: sizeKey, presenting: !!xrIsPresenting() });
+                } catch (eLog) {}
+              },
               applyCanvasVideo: function () {
                 this.ensureDomeGeometry();
                 this.applySbsUVs();
@@ -5348,6 +5367,7 @@ enum ExportLANServer {
                   if (mesh && mesh.material && mesh.material.map) mesh.material.map.needsUpdate = true;
                 } catch (e2) {}
                 this.restoreAFrameMaterial();
+                this.resetCanvasTexture(sizeKey);
                 if (this.isDesktopRole() && this.el.object3D && !this.isImmersiveStereo()) {
                   this.el.object3D.visible = true;
                 }
