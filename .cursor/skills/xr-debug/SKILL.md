@@ -39,6 +39,8 @@ curl.exe -s -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: app
 | `snapshot.mode` | `av1rt` / `canvasrt` / `native` / `gpu` / … |
 | `snapshot.note` | Transport tex note (`post-AV1 canvas`, `AV1 full frame`, …) |
 | `exit-vr settled` | Safe to touch materials again after teardown |
+| `eye-layers` | Dome layer and visibility: VR left 1 / right 2, AR and flat 0 |
+| `xr-probe` | 1.5s and 4s into each session: `xrOn`, `blend`, `masks`, `clearA`, `domes[]`, `video`, `rtPx` (blit pixel) |
 
 ## Classify
 
@@ -46,12 +48,14 @@ curl.exe -s -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: app
 |---------|--------|
 | HEVC blank in AR after AV1 | Missing canvas path / still on VideoTexture; check `sawAv1Tex` + `mode` |
 | Browser dies on AR exit after AV1→HEVC | Exit must pause + avoid VideoTexture on flat; check `exit-vr begin` then silence |
-| Enter VR background / both-eye discomfort | SBS / eye cull; expect Quest VR `onBeforeRender` split, not layers 1/2 |
+| Enter VR background / both-eye discomfort | SBS / eye layers; expect `eye-layers` left 1, right 2 in VR |
+| First VR after AR black, second fine | Diff `xr-probe` between the two sessions. Domes differ = not drawn; `rtPx` black = black frame |
 | Wrong codec path | `codec av1:true` on an HEVC file → sniff false positive |
 
 ## Fix rules
 
 - Prefer narrow patches in `ExportLANServer.swift` `/xr` JS (Swift raw string: interpolate with `\#(` not `\(`).
-- Do not reintroduce WebGL layers 1/2 on Quest.
+- Quest VR uses WebGL layers 1/2 (build 406+). Do not edit the XR cameras' layers.
+- Do not set `visible` in `onBeforeRender`: three reads it before the hook, and a hidden mesh never runs the hook again.
 - Do not dispose large RTs while `xr.isPresenting`.
 - Ship IPA only if the user wants a build (`deploy.ps1 -NoWaitEnter`).
