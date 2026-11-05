@@ -4940,11 +4940,12 @@ enum ExportLANServer {
                       offCanvas.style.cssText = "";
                     }
                   } else {
-                    // A fullscreen <video> takes the AV1 preview path, with Chroma on or off:
-                    // a WebGL upload would blank it.
+                    // A fullscreen <video> takes the AV1 preview path on every browser, with Chroma
+                    // on or off: Quest would blank it on a WebGL upload, and PC would keep updating
+                    // a plane nobody can see.
                     var videoFull = this.videoIsFullscreen();
                     var showKeyed = quest && !!this.data.chroma && !videoFull;
-                    var showVideo = quest && !showKeyed && (videoFull || (__xrDs.av1Known && __xrDs.av1 === true));
+                    var showVideo = videoFull || (quest && !showKeyed && __xrDs.av1Known && __xrDs.av1 === true);
                     flatOverlay = !!(showKeyed || showVideo);
                     if (!showKeyed) {
                       var offKeyed = document.getElementById("xr-ds-canvas");

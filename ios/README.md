@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 413 (1.3.1):** `/xr` **Fullscreen** on a PC browser now hides the WebGL plane and stops video uploads too, as on Quest, so the preview is not updated behind the fullscreen video.
+
 **Build 412 (1.3.1):** `/xr` **Fullscreen** always uses the browser video player, even with Chroma on, so a green-screen clip shows its green there. The keyed preview pauses until you exit. AR and VR still key.
 
 **Build 411 (1.3.1):** `/xr` playback bar adds **Fullscreen**. With Chroma on it shows the keyed canvas. With Chroma off it uses the browser video player, with its screen size, brightness and 180/3D controls.
@@ -520,7 +522,7 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 **Why chroma needs `/xr` (not browser immersive display mode):** fullscreen immersive display mode and Skybox/Media Layers–style compositors feed the decode into an **opaque** equirect/hemisphere layer — no per-pixel fragment shader — so a keyed color cannot be dropped to transparency (passthrough). Chroma keying needs a mesh (or equivalent) that samples each frame in a shader and discards/blends the key color; that is the `/xr` WebGL path (including the Quest AV1 blit when the browser exposes a tile atlas).
 
-**Fullscreen vs Chroma:** the playback bar **Fullscreen** button always uses the `<video>` in the browser player, even with Chroma on, so keying does not apply there and a green-screen clip shows its green. The keyed preview pauses until you exit. Chroma still applies to the flat preview, AR and VR.
+**Fullscreen vs Chroma:** the playback bar **Fullscreen** button always uses the `<video>` in the browser player, even with Chroma on, so keying does not apply there and a green-screen clip shows its green. While fullscreen, the WebGL plane is hidden, and the keyed preview and video uploads to WebGL stop, on Quest and PC. The A-Frame render loop keeps running. Exiting rebinds the preview at the current position. Chroma still applies to the flat preview, AR and VR.
 
 **AR/VR exit vs flat playback:** immersive and the flat player share one `#chroma-stream` `<video>`. Leaving AR/VR suspends the AV1 blit and defers RT dispose. After an AV1 blit in the session (`sawAv1Tex`), exit **pauses** and keeps flat on the **canvas** path — a poisoned VideoTexture was killing Quest Browser on exit. Otherwise exit does not pause, so flat keeps playing. **Files** (home overlay) hard-stops (`pause` + clear `src`). Tip: pause in AR before exit on heavy AV1 when you can.
 
