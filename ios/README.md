@@ -520,6 +520,8 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 **Why chroma needs `/xr` (not browser immersive display mode):** fullscreen immersive display mode and Skybox/Media Layers–style compositors feed the decode into an **opaque** equirect/hemisphere layer — no per-pixel fragment shader — so a keyed color cannot be dropped to transparency (passthrough). Chroma keying needs a mesh (or equivalent) that samples each frame in a shader and discards/blends the key color; that is the `/xr` WebGL path (including the Quest AV1 blit when the browser exposes a tile atlas).
 
+**Fullscreen vs Chroma:** the playback bar **Fullscreen** button always uses the `<video>` in the browser player, even with Chroma on, so keying does not apply there and a green-screen clip shows its green. The keyed preview pauses until you exit. Chroma still applies to the flat preview, AR and VR.
+
 **AR/VR exit vs flat playback:** immersive and the flat player share one `#chroma-stream` `<video>`. Leaving AR/VR suspends the AV1 blit and defers RT dispose. After an AV1 blit in the session (`sawAv1Tex`), exit **pauses** and keeps flat on the **canvas** path — a poisoned VideoTexture was killing Quest Browser on exit. Otherwise exit does not pause, so flat keeps playing. **Files** (home overlay) hard-stops (`pause` + clear `src`). Tip: pause in AR before exit on heavy AV1 when you can.
 
 **Quest VR SBS:** **Enter VR** puts the left dome on layer 1 and the right dome on layer 2 (build 406+). **Enter AR** stays mono (left half both eyes).
