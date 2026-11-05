@@ -4941,7 +4941,9 @@ enum ExportLANServer {
                     }
                   } else {
                     var showKeyed = quest && !!this.data.chroma;
-                    var showVideo = quest && !showKeyed && __xrDs.av1Known && __xrDs.av1 === true;
+                    // A fullscreen <video> takes the AV1 preview path: a WebGL upload would blank it.
+                    var videoFull = document.fullscreenElement === this.video;
+                    var showVideo = quest && !showKeyed && (videoFull || (__xrDs.av1Known && __xrDs.av1 === true));
                     flatOverlay = !!(showKeyed || showVideo);
                     if (!showKeyed) {
                       var offKeyed = document.getElementById("xr-ds-canvas");
@@ -6198,6 +6200,12 @@ enum ExportLANServer {
               left: 0; top: 0; width: 100vw; height: calc(100vh - 6.5rem); max-height: none;
               opacity: 1; z-index: 2; object-fit: contain; background: #111; border: 0; border-radius: 0;
             }
+            /* Fullscreen preview. The base rules keep these 16px and nearly invisible for WebGL. */
+            #chroma-stream:fullscreen,
+            #xr-ds-canvas:fullscreen {
+              width: 100vw !important; height: 100vh !important; max-height: none !important;
+              opacity: 1 !important; pointer-events: auto; object-fit: contain; background: #000;
+            }
             a-scene { z-index: 1; }
             /* Hide gaze fuse reticle (center donut) if A-Frame / Quest re-injects it. */
             a-cursor, .a-cursor, [cursor] {
@@ -6267,6 +6275,7 @@ enum ExportLANServer {
               <button type="button" id="xr-playpause" title="Play / Pause">Play</button>
               <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
               <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
+              <button type="button" id="xr-fullscreen" title="Fullscreen preview. Chroma on shows the keyed picture. Chroma off uses the browser video player.">Fullscreen</button>
               <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
               <span id="xr-time">0:00 / 0:00</span>
               <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Key
@@ -6419,6 +6428,7 @@ enum ExportLANServer {
             var playPauseBtn = document.getElementById("xr-playpause");
             var seekEl = document.getElementById("xr-seek");
             var seekBackBtn = document.getElementById("xr-seek-back");
+            var fullscreenBtn = document.getElementById("xr-fullscreen");
             var seekFwdBtn = document.getElementById("xr-seek-fwd");
             var timeEl = document.getElementById("xr-time");
             var chromaToggle = document.getElementById("xr-chroma-toggle");
@@ -7198,6 +7208,41 @@ enum ExportLANServer {
                 syncPlayPauseLabel();
               }
             }
+            // Keyed canvas when it is the preview. Otherwise the <video>, which gets the browser
+            // player (screen size, brightness, 180/3D menu) but no chroma.
+            function fullscreenTarget() {
+              var keyed = document.getElementById("xr-ds-canvas");
+              if (keyed && keyed.classList.contains("xr-keyed-preview")) return keyed;
+              return video;
+            }
+            function toggleFullscreen() {
+              if (document.fullscreenElement) {
+                document.exitFullscreen();
+                return;
+              }
+              if (xrIsPresenting()) return;
+              var target = fullscreenTarget();
+              var request = target.requestFullscreen || target.webkitRequestFullscreen;
+              if (!request) return;
+              var result = request.call(target);
+              if (result && result.catch) {
+                result.catch(function (e) {
+                  try { xrLog("fullscreen-failed", { target: target.id, error: String(e) }); } catch (eLog) {}
+                });
+              }
+            }
+            function onFullscreenChange() {
+              var full = document.fullscreenElement;
+              video.controls = full === video;
+              if (fullscreenBtn) fullscreenBtn.textContent = full ? "Exit Fullscreen" : "Fullscreen";
+              try { xrLog("fullscreen", { target: full ? full.id : "" }); } catch (eLog) {}
+              // Back to the normal preview: rebind, or the plane stays on the fullscreen path.
+              if (!full) {
+                try { xrClearComponentModes(); } catch (eModes) {}
+                try { refreshSphereShader(); } catch (eShader) {}
+              }
+            }
+            document.addEventListener("fullscreenchange", onFullscreenChange);
             function isXrChromeTarget(el) {
               if (!el || !el.closest) return false;
               return !!el.closest(
@@ -7210,6 +7255,8 @@ enum ExportLANServer {
             document.addEventListener("click", function (e) {
               if (overlay && overlay.style.display !== "none") return;
               if (isXrChromeTarget(e.target)) return;
+              // The fullscreen <video> has native controls. A tap here would toggle twice.
+              if (document.fullscreenElement === video) return;
               togglePlayPause();
             });
             // Quest controller trigger (WebXR select) toggles play/pause in AR/VR.
@@ -7250,6 +7297,7 @@ enum ExportLANServer {
                 sceneEl.addEventListener("exit-vr", unbind);
               }
             })();
+            if (fullscreenBtn) fullscreenBtn.onclick = toggleFullscreen;
             if (seekBackBtn) seekBackBtn.onclick = function () { seekBy(-10); };
             if (seekFwdBtn) seekFwdBtn.onclick = function () { seekBy(10); };
             if (seekEl) {

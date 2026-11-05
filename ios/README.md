@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 411 (1.3.1):** `/xr` playback bar adds **Fullscreen**. With Chroma on it shows the keyed canvas. With Chroma off it uses the browser video player, with its screen size, brightness and 180/3D controls.
+
 **Build 410 (1.3.1):** `/xr` **Chroma** is on by default. Untick it for a plain clip; the choice is not saved across page loads.
 
 **Build 409 (1.3.1):** A plain clip after Chroma could show a black preview and a white AR/VR dome until you opened it again. The shared canvas grows from 1280 to 4096, and three keeps a canvas texture at its first size. `/xr` now releases the texture when the canvas size changes and logs `canvas-tex-reset`.
