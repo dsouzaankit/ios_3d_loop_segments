@@ -4771,7 +4771,9 @@ enum ExportLANServer {
 
             /**
              * eye: "left" | "right" | "both"
-             * SBS on Quest: two hemispheres on WebXR layers 1/2 (onBeforeRender eye detect is unreliable in AR).
+             * SBS VR (Quest and PC): left dome on layer 1, right dome on layer 2. three.js WebXR
+             * renders layer 1 only in the left eye and layer 2 only in the right eye, so no
+             * per-draw eye detection is needed. AR and mono stay on layer 0 (left dome only).
              */
             AFRAME.registerComponent("chroma-stereo-sbs", {
               schema: {
@@ -4797,12 +4799,6 @@ enum ExportLANServer {
                   var self = this;
                   self._yawLocked = false;
                   self._poseFrames = 0;
-                  __xrDs._eyeLog = "";
-                  __xrDs._eyeLogs = 0;
-                  __xrDs._eyeCams = [];
-                  __xrDs._eyeClaimed = [false, false];
-                  __xrDs._passCacheId = -1;
-                  __xrDs._passCacheIdx = null;
                   __xrDs.disposeToken = (__xrDs.disposeToken || 0) + 1;
                   __xrDs.exiting = false;
                   __xrDs.suspendBlit = false;
@@ -4865,7 +4861,6 @@ enum ExportLANServer {
                   this._poseFrames = 0;
                   this._mode = "";
                   this._gpuSig = "";
-                  this.clearQuestEyeCull();
                   // Pause only through teardown. The blit stays alive for the next Enter VR.
                   if (__xrDs.sawAv1Tex && this.video && !this.video.paused) {
                     __xrDs.resumeAfterExit = true;
@@ -5053,11 +5048,8 @@ enum ExportLANServer {
                     this.el.object3D.visible = !(keyedOn || videoOn);
                   }
                 } catch (eTick) {}
-                if (!quest || this.isDesktopRole()) this.syncEyeLayers();
-                else {
-                  this._layerTick = (this._layerTick || 0) + 1;
-                  if (this._layerTick === 1 || this._layerTick % 8 === 0) this.syncEyeLayers();
-                }
+                // Eye layers change only with the session, a material bind, or the dome mesh.
+                // Those paths call syncEyeLayers; it is not polled here.
               },
               followHead: function () {
                 if (this.isDesktopRole() || !this.isImmersiveStereo()) return;
@@ -5383,83 +5375,6 @@ enum ExportLANServer {
                 try { xrLog("post-av1-canvas", { role: this.data.role, eye: this.data.eye, w: canvas.width, h: canvas.height }); } catch (eL) {}
                 return true;
               },
-              clearQuestEyeCull: function () {
-                var mesh = this.el.getObject3D("mesh");
-                if (!mesh) return;
-                mesh.traverse(function (node) {
-                  if (!node.isMesh) return;
-                  // null is not the THREE noop. The renderer still invokes it and the
-                  // throw kills the animation loop — black preview on PC and Quest, and black AR.
-                  try { delete node.onBeforeRender; } catch (eHook) {}
-                  node.visible = true;
-                });
-              },
-              wireQuestEyeCull: function (eyeIndex) {
-                var mesh = this.el.getObject3D("mesh");
-                if (!mesh) return;
-                var selfEye = eyeIndex;
-                mesh.traverse(function (node) {
-                  if (!node.isMesh) return;
-                  node.onBeforeRender = function (renderer, scene, camera) {
-                    var idx = -1;
-                    try {
-                      var xr = renderer && renderer.xr;
-                      var frame = xr && xr.getFrame && xr.getFrame();
-                      var ref = xr && xr.getReferenceSpace && xr.getReferenceSpace();
-                      var pose = null;
-                      try { pose = frame && ref && frame.getViewerPose && frame.getViewerPose(ref); } catch (ePose) {}
-                      var layer = frame && frame.session && frame.session.renderState && frame.session.renderState.baseLayer;
-                      var passId = (renderer.info && renderer.info.render && renderer.info.render.frame) || 0;
-                      var camKey = (camera && (camera.uuid || camera.id)) || "";
-                      var passKey = passId + ":" + camKey;
-                      if (__xrDs._passCacheId === passKey && __xrDs._passCacheIdx !== undefined && __xrDs._passCacheIdx !== null) {
-                        idx = __xrDs._passCacheIdx;
-                      } else {
-                        var stamp = (frame && frame.predictedDisplayTime) || 0;
-                        var nowMs = Date.now();
-                        if ((stamp > 0 && __xrDs._eyeStamp !== stamp) || (!(stamp > 0) && __xrDs._eyeNow && (nowMs - __xrDs._eyeNow) > 4)) {
-                          __xrDs._eyeClaimed = [false, false];
-                        }
-                        __xrDs._eyeStamp = stamp;
-                        __xrDs._eyeNow = nowMs;
-                        if (!__xrDs._eyeClaimed) __xrDs._eyeClaimed = [false, false];
-                        var matches = [];
-                        if (pose && pose.views && layer && layer.getViewport && camera && camera.viewport) {
-                          var vp = camera.viewport;
-                          var vpW = vp.z || vp.width || 0;
-                          for (var vi = 0; vi < pose.views.length; vi++) {
-                            var view = pose.views[vi];
-                            var xvp = null;
-                            try { xvp = layer.getViewport(view); } catch (eVp) { xvp = null; }
-                            if (!xvp) continue;
-                            if (vp.x === xvp.x && Math.abs(vpW - xvp.width) < 2) matches.push(view);
-                          }
-                        }
-                        if (matches.length === 1) idx = matches[0].eye === "right" ? 1 : 0;
-                        // After AR both passes match the left view. The second pass must
-                        // take the eye that this frame has not already shown.
-                        if (idx >= 0 && __xrDs._eyeClaimed[idx]) idx = idx === 0 ? 1 : 0;
-                        if (idx < 0) idx = __xrDs._eyeClaimed[0] ? 1 : 0;
-                        __xrDs._eyeClaimed[idx] = true;
-                        __xrDs._passCacheId = passKey;
-                        __xrDs._passCacheIdx = idx;
-                      }
-                      if (selfEye === 0) {
-                        var tag = String(idx);
-                        if (__xrDs._eyeLog !== tag && (__xrDs._eyeLogs || 0) < 6) {
-                          __xrDs._eyeLog = tag;
-                          __xrDs._eyeLogs = (__xrDs._eyeLogs || 0) + 1;
-                          try { xrLog("eye-pick", { idx: idx, views: pose && pose.views ? pose.views.length : 0 }); } catch (eLog) {}
-                        }
-                      }
-                      if (idx < 0) { this.visible = selfEye === 0; return; }
-                      this.visible = idx === selfEye;
-                    } catch (e) {
-                      this.visible = selfEye === 0;
-                    }
-                  };
-                });
-              },
               applyAv1Resolve: function (tex) {
                 this.ensureDomeGeometry();
                 var zoom = this.isDesktopRole() ? 1 : this.domeZoom();
@@ -5594,93 +5509,54 @@ enum ExportLANServer {
                 }
               },
               syncEyeLayers: function () {
+                // Stereo VR: left dome on layer 1, right dome on layer 2. three.js WebXR enables
+                // layer 1 only on the left eye camera and layer 2 only on the right one, so each
+                // eye draws its own dome. The XR cameras are never edited here; their defaults
+                // are what makes this work, and nothing carries over from an AR session.
+                // AR, mono and not-yet-presenting: layer 0, left dome only (left half, both eyes).
                 var mesh = this.el.getObject3D("mesh");
-                var layer = this.eyeLayer();
-                var sbs = !!this.data.sbs;
                 var immersive = this.isImmersiveStereo();
                 var desktop = this.isDesktopRole();
                 var isAR = this.isArMode();
-                var sceneEl = this.el.sceneEl;
-                var xrCam = null;
                 var presenting = false;
-                var hasStereoCams = false;
-                if (sceneEl && sceneEl.renderer && sceneEl.renderer.xr) {
-                  try {
-                    presenting = !!sceneEl.renderer.xr.isPresenting;
-                    xrCam = sceneEl.renderer.xr.getCamera();
-                    hasStereoCams = !!(presenting && xrCam && xrCam.cameras && xrCam.cameras.length >= 2);
-                  } catch (e0) {}
-                }
-                // Quest never shows WebGL layers 1/2, so layer bits stay black.
-                // PC VR can use layers. Quest VR SBS uses onBeforeRender eye culling on layer 0.
-                // Quest AR stays mono (left half both eyes) — stereo + passthrough is harsher.
-                var useEyeLayers = !this.isQuestBrowser() && !desktop && !isAR && sbs && immersive && layer > 0 && hasStereoCams;
-                var useQuestEyeSplit = this.isQuestBrowser() && !desktop && !isAR && sbs && immersive && presenting;
-                function setNodeLayer(node, layerBit) {
-                  if (!node || (!node.isMesh && !node.isObject3D)) return;
-                  node.layers.set(layerBit);
-                }
+                try {
+                  var sceneEl = this.el.sceneEl;
+                  presenting = !!(sceneEl && sceneEl.renderer && sceneEl.renderer.xr && sceneEl.renderer.xr.isPresenting);
+                } catch (e0) {}
+                var stereo = !desktop && immersive && presenting && !isAR && !!this.data.sbs;
+                var layerBit = stereo ? this.eyeLayer() : 0;
                 if (mesh) {
                   mesh.traverse(function (node) {
-                    setNodeLayer(node, useEyeLayers ? layer : 0);
+                    if (node && node.layers) node.layers.set(layerBit);
                   });
                 }
-                if (this.el.object3D) setNodeLayer(this.el.object3D, useEyeLayers ? layer : 0);
-                // Flat a-video: PC / magic-window only. Domes: immersive only
-                // (left dome always-on caused spherical overlay noise on top of the flat screen).
+                if (this.el.object3D) this.el.object3D.layers.set(layerBit);
+                var show;
                 if (desktop) {
-                  this.clearQuestEyeCull();
-                  // The HTML preview covers the page except the bottom strip. Leaving the
-                  // plane on paints a second copy of the frame in that strip.
-                  var showPlane = !immersive;
-                  if (showPlane && this.isQuestBrowser()) {
+                  // Flat a-video: PC / magic-window only. The HTML preview covers the page except
+                  // the bottom strip; leaving the plane on paints a second copy in that strip.
+                  show = !immersive;
+                  if (show && this.isQuestBrowser()) {
                     var flatVid = !!(this.video && this.video.classList.contains("xr-flat-preview"));
                     var keyedPrev = false;
                     try {
                       var keyedNode = document.getElementById("xr-ds-canvas");
                       keyedPrev = !!(keyedNode && keyedNode.classList.contains("xr-keyed-preview"));
                     } catch (ePlane) {}
-                    if (flatVid || keyedPrev) showPlane = false;
+                    if (flatVid || keyedPrev) show = false;
                   }
-                  if (this.el.object3D) this.el.object3D.visible = showPlane;
                 } else if (this.data.eye === "right") {
-                  if (useQuestEyeSplit) {
-                    if (this.el.object3D) this.el.object3D.visible = true;
-                    this.wireQuestEyeCull(1);
-                  } else {
-                    this.clearQuestEyeCull();
-                    if (this.el.object3D) this.el.object3D.visible = !!useEyeLayers;
-                  }
-                } else if (this.el.object3D) {
-                  this.el.object3D.visible = !!immersive;
-                  if (useQuestEyeSplit) this.wireQuestEyeCull(0);
-                  else this.clearQuestEyeCull();
+                  show = stereo;
+                } else {
+                  // Domes are immersive only (an always-on left dome overlays the flat screen).
+                  show = immersive;
                 }
-                try {
-                  if (sceneEl && sceneEl.camera) sceneEl.camera.layers.enable(0);
-                } catch (eCam) {}
-                if (!xrCam || !hasStereoCams) return;
-                try {
-                  // Always keep layer 0 on XR cams — required for Quest AR video.
-                  xrCam.layers.enable(0);
-                  xrCam.cameras[0].layers.enable(0);
-                  xrCam.cameras[1].layers.enable(0);
-                  if (useEyeLayers) {
-                    xrCam.layers.enable(1);
-                    xrCam.layers.enable(2);
-                    xrCam.cameras[0].layers.enable(1);
-                    xrCam.cameras[0].layers.disable(2);
-                    xrCam.cameras[1].layers.enable(2);
-                    xrCam.cameras[1].layers.disable(1);
-                  } else {
-                    xrCam.layers.disable(1);
-                    xrCam.layers.disable(2);
-                    xrCam.cameras[0].layers.disable(1);
-                    xrCam.cameras[0].layers.disable(2);
-                    xrCam.cameras[1].layers.disable(1);
-                    xrCam.cameras[1].layers.disable(2);
-                  }
-                } catch (e) {}
+                if (this.el.object3D) this.el.object3D.visible = show;
+                var sig = layerBit + "|" + (show ? 1 : 0) + "|" + (isAR ? 1 : 0);
+                if (!desktop && this._eyeLayerSig !== sig) {
+                  this._eyeLayerSig = sig;
+                  try { xrLog("eye-layers", { eye: this.data.eye, layer: layerBit, visible: show, ar: isAR }); } catch (eLog) {}
+                }
               },
               bindMaterial: function (mat) {
                 var mesh = this.el.getObject3D("mesh");

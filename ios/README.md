@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 406 (1.3.1):** Quest VR SBS now uses three.js eye layers: left dome on layer 1, right dome on layer 2. The `onBeforeRender` eye hook and its per-pass cache are gone. Setting `visible` inside that hook never stopped the current draw, so each eye drew both domes and the result depended on state left from the previous frame (and from AR). `syncEyeLayers` no longer edits the XR cameras or runs every tick. AR and mono still show the left dome on layer 0.
+
 **Build 405 (1.3.1):** The first Enter VR after AR was giving both eyes the left dome. A second pass that matches the left view again takes the right dome.
 
 **Build 404 (1.3.1):** The first Enter VR after AR picks each eye from the WebXR view, not from the previous session's camera. If the eye is still unknown, only the left dome shows, so the session is not black and not wall-eyed.
