@@ -6317,7 +6317,7 @@ enum ExportLANServer {
               <label>Vol
                 <input type="range" id="xr-volume-launch" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
               </label>
-              <label><input type="checkbox" id="xr-chroma-toggle"> Chroma</label>
+              <label><input type="checkbox" id="xr-chroma-toggle" checked> Chroma</label>
               <label>Key
                 <input type="color" id="xr-chroma-key" value="#00ff00" aria-label="Chroma key color">
               </label>
