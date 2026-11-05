@@ -4800,6 +4800,9 @@ enum ExportLANServer {
                   __xrDs._eyeLog = "";
                   __xrDs._eyeLogs = 0;
                   __xrDs._eyeCams = [];
+                  __xrDs._eyeClaimed = [false, false];
+                  __xrDs._passCacheId = -1;
+                  __xrDs._passCacheIdx = null;
                   __xrDs.disposeToken = (__xrDs.disposeToken || 0) + 1;
                   __xrDs.exiting = false;
                   __xrDs.suspendBlit = false;
@@ -5406,33 +5409,40 @@ enum ExportLANServer {
                       var pose = null;
                       try { pose = frame && ref && frame.getViewerPose && frame.getViewerPose(ref); } catch (ePose) {}
                       var layer = frame && frame.session && frame.session.renderState && frame.session.renderState.baseLayer;
-                      if (pose && pose.views && layer && layer.getViewport && camera && camera.viewport) {
-                        var vp = camera.viewport;
-                        for (var vi = 0; vi < pose.views.length; vi++) {
-                          var view = pose.views[vi];
-                          var xvp = null;
-                          try { xvp = layer.getViewport(view); } catch (eVp) { xvp = null; }
-                          if (!xvp) continue;
+                      var passId = (renderer.info && renderer.info.render && renderer.info.render.frame) || 0;
+                      var camKey = (camera && (camera.uuid || camera.id)) || "";
+                      var passKey = passId + ":" + camKey;
+                      if (__xrDs._passCacheId === passKey && __xrDs._passCacheIdx !== undefined && __xrDs._passCacheIdx !== null) {
+                        idx = __xrDs._passCacheIdx;
+                      } else {
+                        var stamp = (frame && frame.predictedDisplayTime) || 0;
+                        var nowMs = Date.now();
+                        if ((stamp > 0 && __xrDs._eyeStamp !== stamp) || (!(stamp > 0) && __xrDs._eyeNow && (nowMs - __xrDs._eyeNow) > 4)) {
+                          __xrDs._eyeClaimed = [false, false];
+                        }
+                        __xrDs._eyeStamp = stamp;
+                        __xrDs._eyeNow = nowMs;
+                        if (!__xrDs._eyeClaimed) __xrDs._eyeClaimed = [false, false];
+                        var matches = [];
+                        if (pose && pose.views && layer && layer.getViewport && camera && camera.viewport) {
+                          var vp = camera.viewport;
                           var vpW = vp.z || vp.width || 0;
-                          if (vp.x === xvp.x && Math.abs(vpW - xvp.width) < 2) {
-                            idx = view.eye === "right" ? 1 : 0;
-                            break;
+                          for (var vi = 0; vi < pose.views.length; vi++) {
+                            var view = pose.views[vi];
+                            var xvp = null;
+                            try { xvp = layer.getViewport(view); } catch (eVp) { xvp = null; }
+                            if (!xvp) continue;
+                            if (vp.x === xvp.x && Math.abs(vpW - xvp.width) < 2) matches.push(view);
                           }
                         }
-                      }
-                      if (idx < 0 && frame && camera) {
-                        var stamp = frame.predictedDisplayTime || 0;
-                        if (__xrDs._eyeStamp !== stamp) {
-                          __xrDs._eyeStamp = stamp;
-                          __xrDs._eyeCams = [];
-                        }
-                        if (!__xrDs._eyeCams) __xrDs._eyeCams = [];
-                        var slot = __xrDs._eyeCams.indexOf(camera);
-                        if (slot < 0 && __xrDs._eyeCams.length < 2) {
-                          __xrDs._eyeCams.push(camera);
-                          slot = __xrDs._eyeCams.length - 1;
-                        }
-                        if (slot === 0 || slot === 1) idx = slot;
+                        if (matches.length === 1) idx = matches[0].eye === "right" ? 1 : 0;
+                        // After AR both passes match the left view. The second pass must
+                        // take the eye that this frame has not already shown.
+                        if (idx >= 0 && __xrDs._eyeClaimed[idx]) idx = idx === 0 ? 1 : 0;
+                        if (idx < 0) idx = __xrDs._eyeClaimed[0] ? 1 : 0;
+                        __xrDs._eyeClaimed[idx] = true;
+                        __xrDs._passCacheId = passKey;
+                        __xrDs._passCacheIdx = idx;
                       }
                       if (selfEye === 0) {
                         var tag = String(idx);
@@ -5442,8 +5452,6 @@ enum ExportLANServer {
                           try { xrLog("eye-pick", { idx: idx, views: pose && pose.views ? pose.views.length : 0 }); } catch (eLog) {}
                         }
                       }
-                      // Unknown: left dome only. Both domes read as far left/right;
-                      // hiding both is the black first session after AR.
                       if (idx < 0) { this.visible = selfEye === 0; return; }
                       this.visible = idx === selfEye;
                     } catch (e) {

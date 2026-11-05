@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 405 (1.3.1):** The first Enter VR after AR was giving both eyes the left dome. A second pass that matches the left view again takes the right dome.
+
 **Build 404 (1.3.1):** The first Enter VR after AR picks each eye from the WebXR view, not from the previous session's camera. If the eye is still unknown, only the left dome shows, so the session is not black and not wall-eyed.
 
 **Build 403 (1.3.1):** Quest flat preview no longer leaves the WebGL plane visible under the picture. Chroma keeps the full preview until the keyed canvas is actually sized. Enter VR after AR waits for the stereo pose before locking the dome, and an unidentified eye hides its dome instead of showing both.
