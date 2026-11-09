@@ -80,7 +80,7 @@ enum URLMediaDownload {
 
         let destination = destinationURL(saveName: safeName)
         let rel = ExportPaths.pathRelativeToExports(destination)
-        log("URL download — \(remoteURL.absoluteString) → \(rel)")
+        log("URL download — \(remoteURL.redactedForLog) → \(rel)")
 
         do {
             try await downloadWholeFile(

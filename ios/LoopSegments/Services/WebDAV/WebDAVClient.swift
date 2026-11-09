@@ -90,7 +90,7 @@ final class WebDAVClient {
         }
         guard (200 ... 299).contains(http.statusCode) else {
             if context == .signIn {
-                SearchDebugLog.log("sign-in: HTTP \(http.statusCode) \(listingURL.absoluteString)")
+                SearchDebugLog.log("sign-in: HTTP \(http.statusCode) \(listingURL.redactedForLog)")
             }
             throw WebDAVError.httpStatus(http.statusCode, context: context)
         }

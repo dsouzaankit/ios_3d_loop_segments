@@ -112,7 +112,7 @@ final class ExportCoordinator {
         if isExternal {
             let absolute = item.mediaURL(credentials: credentials)
             authProvider = WebDAVAuth.providerForExternalURL(absolute)
-            logHandler("External HTTP(S) export source — \(absolute.absoluteString)")
+            logHandler("External HTTP(S) export source — \(absolute.redactedForLog)")
         } else {
             authProvider = WebDAVAuth.provider(fallback: credentials)
         }
@@ -123,7 +123,7 @@ final class ExportCoordinator {
             authorization: authProvider,
             log: logHandler
         )
-        logHandler("Media URL: \(resolvedURL.absoluteString)")
+        logHandler("Media URL: \(resolvedURL.redactedForLog)")
         if resolvedItem.fileKey != item.fileKey || resolvedItem.href != item.href {
             logHandler("pCloud path updated after rename — exporting \(resolvedItem.name)")
         }
