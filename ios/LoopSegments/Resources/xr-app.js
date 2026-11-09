@@ -54,11 +54,6 @@
       document.getElementById("chroma-sphere-right")
     ].filter(Boolean);
   }
-  function sphereComponent() {
-    var sphere = document.getElementById("chroma-screen")
-      || document.getElementById("chroma-sphere");
-    return sphere && sphere.components && sphere.components["chroma-stereo-sbs"];
-  }
   function refreshSphereShader() {
     sphereEls().forEach(function (el) {
       var comp = el.components && el.components["chroma-stereo-sbs"];

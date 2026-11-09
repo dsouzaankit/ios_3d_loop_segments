@@ -29,7 +29,7 @@
   window.__xrZoomSteps = [0.5, 0.6, 0.7, 0.8, 0.9, 1];
   // Skybox-style: meters to push the dome along world -Z (session forward). 0 = centered.
   window.__xrDist = 0;
-  var __xrDs = { canvas: null, ctx: null, stamp: "", codecSrc: "", av1: false, suspendBlit: false, exiting: false, sawAv1Tex: false };
+  var __xrDs = { canvas: null, ctx: null, codecSrc: "", av1: false, suspendBlit: false, exiting: false, sawAv1Tex: false };
   // Player script (second IIFE) must see these — bare refs otherwise throw and leave
   // "Checking WebXR…" / "Loading playlists…" stuck (PC + Quest).
   window.__xrDs = __xrDs;
@@ -102,7 +102,6 @@
     __xrDs.codecRetryAfter = 0;
     __xrDs.resolved = null;
     __xrDs.resolvedSrc = "";
-    __xrDs.stamp = "";
   }
   function xrClearComponentModes() {
     try {
@@ -115,7 +114,6 @@
         comp._uvZoom = null;
         comp._uvEyeApplied = null;
         comp._domeGeoReady = false;
-        comp._rebuiltFor = "";
       });
     } catch (eComp) {}
   }
@@ -132,23 +130,6 @@
     if (__xrVideoTex) {
       try { __xrVideoTex.needsUpdate = false; } catch (eStop) {}
     }
-  }
-  // Quest only feeds one WebGL consumer per <video>. The AV1 blit texture
-  // keeps taking frames after the next clip is HEVC, so A-Frame's map stays black.
-  function xrReleaseLiveVideoTexture() {
-    var tex = __xrVideoTex;
-    __xrVideoTex = null;
-    if (!tex) return;
-    try { tex.needsUpdate = false; } catch (e0) {}
-    try {
-      if (!__xrDs.blankCanvas) {
-        __xrDs.blankCanvas = document.createElement("canvas");
-        __xrDs.blankCanvas.width = 2;
-        __xrDs.blankCanvas.height = 2;
-      }
-      tex.image = __xrDs.blankCanvas;
-    } catch (e1) {}
-    try { tex.dispose(); } catch (e2) {}
   }
   function xrScheduleDisposeAv1Gpu() {
     var token = (__xrDs.disposeToken || 0) + 1;
@@ -673,54 +654,6 @@
     return canvas;
   }
 
-  function xrMakeChromaMaterial(videoTex, data, uvOffsetX) {
-    return new THREE.ShaderMaterial({
-      uniforms: {
-        textureMap: { value: videoTex },
-        uvOffset: { value: new THREE.Vector2(uvOffsetX || 0, 0) },
-        keyColor: { value: new THREE.Color(data.keyColor) },
-        similarity: { value: data.similarity },
-        smoothness: { value: data.smoothness },
-        chromaEnabled: { value: data.chroma ? 1.0 : 0.0 },
-        sbsEnabled: { value: data.sbs ? 1.0 : 0.0 }
-      },
-      vertexShader: [
-        "varying vec2 vUv;",
-        "void main() {",
-        "  vUv = uv;",
-        "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
-        "}"
-      ].join("\n"),
-      fragmentShader: [
-        "uniform sampler2D textureMap;",
-        "uniform vec2 uvOffset;",
-        "uniform vec3 keyColor;",
-        "uniform float similarity;",
-        "uniform float smoothness;",
-        "uniform float chromaEnabled;",
-        "uniform float sbsEnabled;",
-        "varying vec2 vUv;",
-        "void main() {",
-        "  vec2 eyeUv = (sbsEnabled > 0.5) ? (vUv * vec2(0.5, 1.0) + uvOffset) : vUv;",
-        "  vec4 videoColor = texture2D(textureMap, eyeUv);",
-        "  float blend = 1.0;",
-        "  if (chromaEnabled > 0.5) {",
-        "    float chromaSCr = 0.5000 * videoColor.r - 0.4187 * videoColor.g - 0.0813 * videoColor.b;",
-        "    float chromasCb = -0.1687 * videoColor.r - 0.3313 * videoColor.g + 0.5000 * videoColor.b;",
-        "    float keyCr = 0.5000 * keyColor.r - 0.4187 * keyColor.g - 0.0813 * keyColor.b;",
-        "    float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5000 * keyColor.b;",
-        "    float distance = sqrt(pow(chromaSCr - keyCr, 2.0) + pow(chromasCb - keyCb, 2.0));",
-        "    blend = smoothstep(similarity, similarity + smoothness, distance);",
-        "  }",
-        "  gl_FragColor = vec4(videoColor.rgb, videoColor.a * blend);",
-        "}"
-      ].join("\n"),
-      transparent: !!data.chroma,
-      depthWrite: !data.chroma,
-      side: THREE.DoubleSide,
-      toneMapped: false
-    });
-  }
 
   /**
    * GPU chroma key. A-Frame owns the video texture (a hand-made VideoTexture shader stays black on Quest).
@@ -792,10 +725,7 @@
     },
     init: function () {
       this.video = document.querySelector("#chroma-stream");
-      this.shaderMaterial = null;
-      this._canvasMat = null;
       this._dsCanvas = null;
-      this._dsCtx = null;
       this._dsTex = null;
       this._retries = 0;
       this._onApply = this.applyMaterial.bind(this);
@@ -866,7 +796,6 @@
         xrSuspendAv1Pipeline();
         __xrDs.exiting = true;
         __xrDs.suspendBlit = true;
-        this._seated = false;
         this._yawLocked = false;
         this._poseFrames = 0;
         this._mode = "";
@@ -1153,10 +1082,6 @@
         return false;
       }
     },
-    wantsShader: function () {
-      // Custom VideoTexture shader goes black on Quest, including chroma. Key on the canvas instead.
-      return false;
-    },
     domeZoom: function () {
       var z = Number(window.__xrZoom);
       if (!(z > 0)) z = 1;
@@ -1218,7 +1143,6 @@
         try { this.el.setAttribute("scale", "-1 1 1"); } catch (eAttr) {}
         this._domeGeoReady = true;
         this._domeZoom = zoom;
-        this._seated = false;
         mesh.traverse(function (node) {
           if (node.geometry && node.geometry.userData) {
             delete node.geometry.userData._xrBaseUv;
@@ -1707,48 +1631,6 @@
       try { if (mat.map) mat.map.needsUpdate = true; } catch (eMap) {}
       return this.bindMaterial(mat);
     },
-    // New VideoTexture after AV1. Reusing the pre-AV1 map stays black on Quest.
-    rebuildLiveVideoMaterial: function () {
-      var srcNow = (this.video && (this.video.currentSrc || this.video.src)) || "";
-      var chromaOn = !!this.data.chroma;
-      var key = "#00ff00";
-      try { key = "#" + new THREE.Color(this.data.keyColor).getHexString(); } catch (eK) {}
-      try { this.el.removeAttribute("material"); } catch (eRm) {}
-      try {
-        if (chromaOn) {
-          this.el.setAttribute("material", {
-            shader: "xr-chroma",
-            src: "#chroma-stream",
-            keyColor: key,
-            similarity: this.data.similarity,
-            smoothness: this.data.smoothness,
-            side: "double",
-            transparent: true,
-            opacity: 1,
-            depthWrite: false,
-            alphaTest: 0.08,
-            npot: true
-          });
-        } else {
-          this.el.setAttribute("material", {
-            shader: "flat",
-            src: "#chroma-stream",
-            color: "#ffffff",
-            side: "double",
-            transparent: false,
-            npot: true
-          });
-        }
-      } catch (eSet) {}
-      var comp = this.el.components && this.el.components.material;
-      var mat = comp && comp.material;
-      if (!mat) return false;
-      try { if (mat.map) mat.map.needsUpdate = true; } catch (eMap) {}
-      this._mode = chromaOn ? "gpu" : "native";
-      this._gpuSig = "";
-      this._rebuiltFor = srcNow;
-      return this.bindMaterial(mat);
-    },
     applyNativeVideo: function () {
       this._mode = "native";
       this._gpuSig = "";
@@ -1819,27 +1701,6 @@
       }
       this.syncEyeLayers();
       return true;
-    },
-    applyShaderVideo: function (videoTex) {
-      var data = this.data;
-      var uvX = data.eye === "right" ? 0.5 : 0;
-      if (this.isDesktopRole()) uvX = 0;
-      var sbsOn = !!(data.sbs && !this.isDesktopRole());
-      if (!this.shaderMaterial) {
-        this.shaderMaterial = xrMakeChromaMaterial(videoTex, data, uvX);
-      } else {
-        this.shaderMaterial.uniforms.textureMap.value = videoTex;
-        this.shaderMaterial.uniforms.uvOffset.value.set(uvX, 0);
-        this.shaderMaterial.uniforms.keyColor.value.set(data.keyColor);
-        this.shaderMaterial.uniforms.similarity.value = data.similarity;
-        this.shaderMaterial.uniforms.smoothness.value = data.smoothness;
-        this.shaderMaterial.uniforms.chromaEnabled.value = data.chroma ? 1.0 : 0.0;
-        this.shaderMaterial.uniforms.sbsEnabled.value = sbsOn ? 1.0 : 0.0;
-        this.shaderMaterial.transparent = !!data.chroma;
-        this.shaderMaterial.depthWrite = !data.chroma;
-      }
-      this._mode = "shader";
-      return this.bindMaterial(this.shaderMaterial);
     },
     applyMaterial: function () {
       // Domes must not touch A-Frame's shared video material until immersive.
@@ -1925,17 +1786,7 @@
         this.applyCanvasVideo();
         return;
       }
-      if (!this.wantsShader()) {
-        this.applyNativeVideo();
-        return;
-      }
-      var videoTex = xrEnsureVideoTexture(this.video);
-      if (!videoTex) {
-        this.applyNativeVideo();
-        if (this._retries++ < 100) setTimeout(this._onApply, 100);
-        return;
-      }
-      this.applyShaderVideo(videoTex);
+      this.applyNativeVideo();
     },
     applyShader: function () {
       this.applyMaterial();
