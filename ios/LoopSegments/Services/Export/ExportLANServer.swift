@@ -2246,6 +2246,7 @@ enum ExportLANServer {
             }
             let escaped = htmlEscape(name)
             var note = ""
+            var deleteButton = ""
             if name.hasPrefix("\(ExportPaths.mediaExportFolderName)/_vanilla_download.")
                 || name == ExportPaths.pathRelativeToExports(ExportPaths.vanillaFastStartURL) {
                 let startSec = ExportPlaybackState.shared.frozenPlaybackStartSecondsInt
@@ -2288,15 +2289,16 @@ enum ExportLANServer {
                 note = " — ~60s segment in loop/ (Range supported)"
             } else if name.hasPrefix(archivePlaybackPrefix) {
                 note = " — retained export (archive/)"
+                deleteButton = " <button type=\"button\" class=\"lan-archive-delete\" data-path=\"\(escaped)\">Delete</button>"
             } else if name.hasSuffix(".mp4") {
                 note = " — sparse in-progress source (seek in player to export start)"
             }
             if lanMediaListUsesClickOnly(relativePath: name) {
                 items.append(
-                    "<li>\(lanMediaClickAnchor(relativePath: name, innerHTML: escaped))\(sizeNote)\(note)</li>"
+                    "<li>\(lanMediaClickAnchor(relativePath: name, innerHTML: escaped))\(sizeNote)\(note)\(deleteButton)</li>"
                 )
             } else {
-            items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)</li>")
+            items.append("<li><a href=\"\(escaped)\">\(escaped)</a>\(sizeNote)\(note)\(deleteButton)</li>")
             }
         }
         if capped {
@@ -2629,6 +2631,37 @@ enum ExportLANServer {
                   .finally(function () { queueAllPaused.disabled = false; });
               });
             }
+          }
+          // Per-file Delete on archive/ rows. Delegated, because the file list is re-rendered on refresh.
+          if (!window.__lanArchiveDeleteBound) {
+            window.__lanArchiveDeleteBound = true;
+            document.addEventListener("click", function (e) {
+              var btn = e.target && e.target.closest ? e.target.closest("button.lan-archive-delete") : null;
+              if (!btn) return;
+              e.preventDefault();
+              var path = btn.getAttribute("data-path") || "";
+              if (path.indexOf("/archive/") < 0) return;
+              var name = path.split("/").pop();
+              if (!confirm("Permanently delete " + name + " from the phone? This cannot be undone.")) return;
+              btn.disabled = true;
+              btn.textContent = "Deleting…";
+              var url = "/" + path.split("/").map(encodeURIComponent).join("/");
+              fetch(url, { method: "DELETE", headers: { "Authorization": QUEUE_AUTH } })
+                .then(function (r) {
+                  // 404 = already gone. Either way the row should go.
+                  if (r.status === 204 || r.status === 200 || r.status === 404) {
+                    var li = btn.closest("li");
+                    if (li && li.parentNode) li.parentNode.removeChild(li);
+                    return;
+                  }
+                  throw new Error("HTTP " + r.status);
+                })
+                .catch(function (err) {
+                  btn.disabled = false;
+                  btn.textContent = "Delete";
+                  alert("Could not delete " + name + ": " + err.message);
+                });
+            });
           }
         """
     }
