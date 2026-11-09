@@ -1,9 +1,14 @@
 ﻿# Entry may start under Windows PowerShell 5.1; re-launch with pwsh.
 <#
 .SYNOPSIS
-  Start a Cloudflare quick tunnel to the configured phone LAN page (:8765).
+  DEPRECATED. Start a Cloudflare quick tunnel to the configured phone LAN page (:8765).
 
 .DESCRIPTION
+  Deprecated 2026-11-08. While it runs, anyone with the URL reaches the whole phone server:
+  media, pCloud folder listing and export controls, and the LAN password is public in this repo.
+  Prefer the Quest insecure-origin flag, which needs no tunnel. The script asks you to type YES
+  before starting, or takes -AcceptPublicExposure; without either it does not start.
+
   Reads phoneLanHost + lanPort from loop-segments-windows.json (or -PhoneHost / -Port).
   Runs: cloudflared tunnel --url http://<phone>:<port>
 
@@ -21,6 +26,10 @@
 
 .EXAMPLE
   .\lan\Start-LoopSegmentsCloudflareTunnel.ps1 -PhoneHost 10.0.100.10 -SkipLanProbe
+
+.EXAMPLE
+  .\lan\Start-LoopSegmentsCloudflareTunnel.ps1 -AcceptPublicExposure -NoWaitEnter
+  Non-interactive start. Without -AcceptPublicExposure a non-interactive run refuses.
 #>
 [CmdletBinding()]
 param(
@@ -29,7 +38,8 @@ param(
     [string] $CloudflaredExe = '',
     [switch] $SkipLanProbe,
     [switch] $NoClipboard,
-    [switch] $NoWaitEnter
+    [switch] $NoWaitEnter,
+    [switch] $AcceptPublicExposure
 )
 
 Set-StrictMode -Version Latest
@@ -125,6 +135,25 @@ function Test-LoopSegmentsPhoneLanReachable {
         return $true
     } catch {
         return $false
+    }
+}
+
+# Deprecated: confirm before anything opens a public URL.
+Write-Host ''
+Write-Host 'DEPRECATED: Cloudflare quick tunnel' -ForegroundColor Red
+Write-Host '  While it runs, anyone with the URL reaches the whole phone server: media,' -ForegroundColor Yellow
+Write-Host '  pCloud folder listing and export controls. The LAN password is public in this repo.' -ForegroundColor Yellow
+Write-Host '  Prefer the Quest insecure-origin flag, which needs no tunnel. Close this window when done.' -ForegroundColor Yellow
+Write-Host ''
+if (-not $AcceptPublicExposure) {
+    if ($NoWaitEnter -or [Console]::IsInputRedirected) {
+        throw 'Refusing to start the deprecated tunnel without confirmation. Pass -AcceptPublicExposure to start it anyway.'
+    }
+    $answer = Read-Host 'Type YES to start the tunnel anyway'
+    if ($answer -ne 'YES') {
+        Write-Host '[cf-tunnel] Not started.' -ForegroundColor DarkGray
+        Wait-EnterToClose
+        return
     }
 }
 

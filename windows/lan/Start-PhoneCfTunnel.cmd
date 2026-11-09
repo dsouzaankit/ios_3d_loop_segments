@@ -1,5 +1,5 @@
 @echo off
-REM Day-to-day: Cloudflare quick tunnel → phone LAN page (loop-segments-windows.json).
+REM Deprecated (asks for confirmation): Cloudflare quick tunnel → phone LAN page (loop-segments-windows.json).
 setlocal
 set "SCRIPT=%~dp0Start-LoopSegmentsCloudflareTunnel.ps1"
 where pwsh >nul 2>&1
