@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 419 (1.3.1):** `/xr` loads A-Frame 1.6.0 from the phone (`/xr-assets/aframe.min.js`) instead of `aframe.io`, so the player works without internet and no longer depends on that site. The bundled file is the one `aframe.io` serves (identical code to the npm package); licenses are in `Resources/aframe-LICENSE.txt`. Export and sign-in logs now drop user info, query strings and fragments from URLs (`URL.redactedForLog`), since logs are served on the LAN without a login and a pasted link can carry a token.
+
 **Build 418 (1.3.1):** The LAN server now recognises a WebDAV client by its `Depth:` header, not only by its user agent. The old check searched the headers for a newline followed by `depth:`, which never matched, because Swift treats a CRLF line break as one character. Found by the new unit tests.
 
 **Build 417 (1.3.1):** `/xr` drops the `xr-probe` diagnostic added in build 407. It found the first-VR-after-AR fault, which build 408 fixed. `xr-enabled-fixed` stays, so the debug log still shows when that repair runs. The probe's one cost, a GPU pixel read twice per session, is gone.

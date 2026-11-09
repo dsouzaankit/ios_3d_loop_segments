@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           grep -q 'KeepAlive_silence.mp3' LoopSegments.xcodeproj/project.pbxproj
           echo "OK: KeepAlive_silence.mp3 in Xcode project"
-          for f in xr-player.html xr-components.js xr-app.js; do
+          for f in xr-player.html xr-components.js xr-app.js aframe.min.js; do
             grep -q "$f" LoopSegments.xcodeproj/project.pbxproj
           done
           echo "OK: /xr player files in Xcode project"
@@ -145,7 +145,7 @@ jobs:
           set -euo pipefail
           grep -q 'KeepAlive_silence.mp3' LoopSegments.xcodeproj/project.pbxproj
           echo "OK: KeepAlive_silence.mp3 in Xcode project"
-          for f in xr-player.html xr-components.js xr-app.js; do
+          for f in xr-player.html xr-components.js xr-app.js aframe.min.js; do
             grep -q "$f" LoopSegments.xcodeproj/project.pbxproj
           done
           echo "OK: /xr player files in Xcode project"
@@ -213,7 +213,7 @@ jobs:
             fi
             local app_dir
             app_dir="$(dirname "$plist_path")"
-            for f in xr-player.html xr-components.js xr-app.js; do
+            for f in xr-player.html xr-components.js xr-app.js aframe.min.js; do
               if [[ ! -s "$app_dir/$f" ]]; then
                 echo "ERROR: $f missing from IPA (/xr would not load)."
                 exit 1

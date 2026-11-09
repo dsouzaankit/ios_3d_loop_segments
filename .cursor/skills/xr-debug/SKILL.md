@@ -56,7 +56,7 @@ curl.exe -s -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: app
 
 ## Fix rules
 
-- `/xr` lives in `ios/LoopSegments/Resources/`: `xr-player.html` (markup, CSS), `xr-components.js` (A-Frame components) and `xr-app.js` (page logic). Prefer narrow patches there. Swift only fills `{{XR_...}}` placeholders and serves `/xr-assets/*.js`.
+- `/xr` lives in `ios/LoopSegments/Resources/`: `xr-player.html` (markup, CSS), `xr-components.js` (A-Frame components) and `xr-app.js` (page logic), plus the vendored `aframe.min.js` (A-Frame 1.6.0, served from the phone; do not edit it). Prefer narrow patches there. Swift only fills `{{XR_...}}` placeholders and serves `/xr-assets/*.js`.
 - Check a change with `node --check` on the edited script before a build.
 - Quest VR uses WebGL layers 1/2 (build 406+). Do not edit the XR cameras' layers.
 - Do not set `visible` in `onBeforeRender`: three reads it before the hook, and a hidden mesh never runs the hook again.

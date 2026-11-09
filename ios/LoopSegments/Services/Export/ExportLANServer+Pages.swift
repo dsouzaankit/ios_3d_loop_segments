@@ -2096,6 +2096,8 @@ extension ExportLANServer {
         static let html = load("xr-player", "html")
         static let componentsJS = load("xr-components", "js")
         static let appJS = load("xr-app", "js")
+        /// A-Frame 1.6.0, bundled so /xr works without internet (see aframe-LICENSE.txt).
+        static let aframeJS = load("aframe.min", "js")
         /// Script URLs carry the build so the headset fetches fresh files after an app update.
         static let version = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "0"
 
@@ -2109,6 +2111,7 @@ extension ExportLANServer {
         switch path {
         case "xr-assets/xr-components.js": return XRPlayerAssets.componentsJS
         case "xr-assets/xr-app.js": return XRPlayerAssets.appJS
+        case "xr-assets/aframe.min.js": return XRPlayerAssets.aframeJS
         default: return nil
         }
     }
