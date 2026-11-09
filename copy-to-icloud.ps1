@@ -178,8 +178,9 @@ Write-Host "Build: $BuildNumber"
 Write-Host ''
 Write-Host 'Next on iPhone:'
 Write-Host '  Wait for iCloud to sync Downloads (new filename triggers Files refresh)'
-Write-Host "  SideStore or AltStore → My Apps → + → $DestIpaName"
-Write-Host '  Or Files → iCloud Drive → Downloads → Share → SideStore / AltStore'
+Write-Host '  Force-quit Loop Segments first (App Switcher -> swipe away); updates often hang while it runs'
+Write-Host "  SideStore or AltStore -> My Apps -> + -> $DestIpaName"
+Write-Host '  Or Files -> iCloud Drive -> Downloads -> Share -> SideStore / AltStore'
 Write-Host ''
 Invoke-ProjectAltStoreDeployPrep
 Exit-WithEnter 0

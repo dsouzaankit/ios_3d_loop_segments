@@ -10,7 +10,8 @@
   Deploy workflow:
     1. Run:  .\deploy.ps1   (build/fetch + iCloud paste via copy-to-icloud.ps1)
     2. Wait for iCloud sync on the iPhone (no cloud badge on the IPA)
-    3. SideStore or AltStore → My Apps → + → LoopSegments.ipa (or Files → Share)
+    3. Force-quit Loop Segments (App Switcher → swipe away); installs over it often hang while it runs
+    4. SideStore or AltStore → My Apps → + → LoopSegments.ipa (or Files → Share)
 
   Re-paste only (stamped IPA name, no build): .\copy-to-icloud.ps1
 
@@ -198,7 +199,8 @@ Write-Host 'Deploy workflow:'
 Write-Host '  [PC]  1. This script (GitHub Actions IPA -> local + iCloud Downloads)'
 Write-Host '  [PC]     AltServer tray skipped by default. Pass -EnsureAltStorePrep for AltStore.'
 Write-Host '  [YOU] 2. Wait for iCloud sync on iPhone (no cloud badge)'
-Write-Host '  [YOU] 3. SideStore or AltStore -> My Apps -> + -> LoopSegments.ipa'
+Write-Host '  [YOU] 3. Force-quit Loop Segments (App Switcher -> swipe away); updates often hang while it runs'
+Write-Host '  [YOU] 4. SideStore or AltStore -> My Apps -> + -> LoopSegments.ipa'
 Write-Host ''
 
 $resolvedRunId = $RunId.Trim()
