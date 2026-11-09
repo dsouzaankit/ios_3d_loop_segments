@@ -210,12 +210,43 @@ async function loadLanConfig() {
     phoneLanHost,
     lanPort: Number(cfg.lanPort) > 0 ? Number(cfg.lanPort) : 8765,
     webdavUser: String(cfg.webdavUser || "admin"),
-    webdavPassword: String(cfg.webdavPassword || "iosadmin"),
+    webdavPassword: String(cfg.webdavPassword || ""),
   };
 }
 
 function lanBaseUrl(cfg) {
   return `http://${cfg.phoneLanHost}:${cfg.lanPort}`;
+}
+
+// The phone's LAN pages (/, /browse) ask for the WebDAV login, and their scripts rely on the
+// browser resending it. Answer the prompt here so the companion's LAN tab never stalls on it.
+// Only for the configured phone, and once per request: a wrong password then falls through to
+// the normal browser prompt instead of looping.
+const lanAuthAnswered = new Set();
+chrome.webRequest.onAuthRequired.addListener(
+  (details, callback) => {
+    if (details.isProxy || lanAuthAnswered.has(details.requestId)) {
+      callback({});
+      return;
+    }
+    loadLanConfig()
+      .then((cfg) => {
+        const phone = new URL(lanBaseUrl(cfg));
+        const asked = new URL(details.url);
+        if (asked.host !== phone.host || !cfg.webdavPassword) {
+          callback({});
+          return;
+        }
+        lanAuthAnswered.add(details.requestId);
+        callback({ authCredentials: { username: cfg.webdavUser, password: cfg.webdavPassword } });
+      })
+      .catch(() => callback({}));
+  },
+  { urls: ["http://*:8765/*"] },
+  ["asyncBlocking"]
+);
+for (const ev of [chrome.webRequest.onCompleted, chrome.webRequest.onErrorOccurred]) {
+  ev.addListener((details) => lanAuthAnswered.delete(details.requestId), { urls: ["http://*:8765/*"] });
 }
 
 /** Clash/TUN often proxies RFC1918 phone LAN; surface a hint when fetch dies. */

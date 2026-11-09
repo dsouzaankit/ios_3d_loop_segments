@@ -334,7 +334,7 @@ extension ExportLANServer {
 
     static func sendUnauthorized(connection: NWConnection, done: @escaping () -> Void) {
         let body = Data(
-            "Basic auth required — username \(lanWebDAVUsername), password \(lanWebDAVPassword)."
+            "Basic auth required: use the Loop Segments LAN WebDAV login."
                 .utf8
         )
         var lines = [

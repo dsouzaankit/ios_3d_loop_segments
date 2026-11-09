@@ -135,12 +135,14 @@ Each launch:
   "phoneLanHost": "10.0.100.10",
   "lanPort": 8765,
   "webdavUser": "admin",
-  "webdavPassword": "iosadmin",
+  "webdavPassword": "<the WebDAV password shown on the app's Export screen>",
   "phoneLanHostSource": "config",
   "preferUsbPhoneLanHost": false,
   "webCompanionMediaListFile": "P:\\p_cld_media\\web_compann_plst\\media_files.txt"
 }
 ```
+
+The phone's LAN pages (`/`, `/browse`) ask for the WebDAV login. The extension answers that prompt itself with `webdavUser` / `webdavPassword` above, only for the configured phone and port 8765, so the LAN tab opens without a dialog. If the password is wrong, the normal browser prompt appears instead. The launcher copies the password from `windows/loop-segments-windows.json`; there is no built-in default.
 
 `webCompanionMediaListFile` is optional — default is `{SyncDrive}\p_cld_media\web_compann_plst\media_files.txt` from registry. Env `WEB_COMPANION_MEDIA_LIST` overrides both.
 

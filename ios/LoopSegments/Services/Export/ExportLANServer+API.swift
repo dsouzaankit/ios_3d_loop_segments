@@ -297,7 +297,7 @@ extension ExportLANServer {
             [
                 "endpoint": "/lan_throughput.json",
                 "methods": ["GET", "POST"],
-                "auth": "Basic \(lanWebDAVUsername):\(lanWebDAVPassword) (POST)",
+                "auth": "Basic (LAN WebDAV login), POST only",
                 "schema": LANThroughputSidecar.schema,
                 "notes": [
                     "GET returns last recommendation sidecar (same JSON as Measure-LoopSegmentsLanThroughput.ps1).",
@@ -449,7 +449,7 @@ extension ExportLANServer {
             [
                 "endpoint": "/export_from_url.json",
                 "methods": ["PUT", "POST"],
-                "auth": "Basic admin:iosadmin",
+                "auth": "Basic (LAN WebDAV login)",
                 "body": [
                     "url": "https://example.com/video.mp4",
                     "saveName": "video.mp4",
@@ -472,7 +472,7 @@ extension ExportLANServer {
             [
                 "endpoint": "/export_from_folder.json",
                 "methods": ["PUT", "POST"],
-                "auth": "Basic admin:iosadmin",
+                "auth": "Basic (LAN WebDAV login)",
                 "body": [
                     "folderPath": "/Videos/MyFolder/",
                     "displayName": "clip.mp4",

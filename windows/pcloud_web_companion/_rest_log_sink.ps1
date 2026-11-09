@@ -712,7 +712,7 @@ function Write-LanConfigFiles {
         [Parameter(Mandatory = $true)][string] $HostName,
         [int] $Port = 8765,
         [string] $User = 'admin',
-        [string] $Password = 'iosadmin',
+        [string] $Password = '',
         [bool] $PreferUsb = $false,
         [string] $ConfigPhoneLanHost = ''
     )

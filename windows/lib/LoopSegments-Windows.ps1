@@ -45,7 +45,7 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         skyboxExe               = ''
         virtualDesktopStreamerExe = ''
         webdavUser              = 'admin'
-        webdavPassword          = 'iosadmin'
+        webdavPassword          = ''
         iCloudDownloads         = ''
         notes                   = ''
     }
@@ -121,7 +121,9 @@ function Get-LoopSegmentsWebDAVCredentials {
     } elseif ($null -ne $settings.webdavPassword -and [string]$settings.webdavPassword.Length -gt 0) {
         [string]$settings.webdavPassword
     } else {
-        'iosadmin'
+        # No built-in fallback: the password lives only in this PC's private json (copy it from the app's Export screen).
+        Write-Warning 'webdavPassword is missing in windows\loop-segments-windows.json; phone WebDAV calls will be refused.'
+        ''
     }
     return @{ User = $user; Password = $password }
 }
@@ -1594,7 +1596,7 @@ function Show-LoopSegmentsWindowsDiagnostics {
     Write-Host "  Min LAN Mbps:    $(Get-LoopSegmentsMinLanThroughputMbps) (other-router Wi-Fi reboot + re-check if probe below this)"
     Write-Host "  rclone remote:   $(Get-LoopSegmentsRcloneRemoteName)"
     $creds = Get-LoopSegmentsWebDAVCredentials
-    Write-Host "  WebDAV auth:     $($creds.User) / (password in json or default iosadmin)"
+    Write-Host "  WebDAV auth:     $($creds.User) / (password from loop-segments-windows.json)"
     try {
         $inv = Get-RcloneInvocation
         Write-Host "  rclone.exe:      $($inv.Exe)"

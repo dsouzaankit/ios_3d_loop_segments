@@ -557,10 +557,7 @@ extension ExportLANServer {
 
     /// JS helpers for queue list + Remove/Clear and paused Clear / Move to queued (Basic auth).
     static func htmlPendingQueueClientHelpersJS() -> String {
-        let user = lanWebDAVUsername
-        let pass = lanWebDAVPassword
         return """
-          var QUEUE_AUTH = "Basic " + btoa("\(user):\(pass)");
           function applyPendingQueue(q) {
             var ul = document.getElementById("lan-pending-queue");
             var heading = document.getElementById("lan-pending-queue-heading");
@@ -599,7 +596,7 @@ extension ExportLANServer {
           function postQueueAction(body) {
             return fetch("export_queue.json", {
               method: "POST",
-              headers: { "Authorization": QUEUE_AUTH, "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify(body),
               cache: "no-store"
             }).then(function (r) {
@@ -611,7 +608,7 @@ extension ExportLANServer {
           function postPausedAction(body) {
             return fetch("paused_exports.json", {
               method: "POST",
-              headers: { "Authorization": QUEUE_AUTH, "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify(body),
               cache: "no-store"
             }).then(function (r) {
@@ -706,7 +703,7 @@ extension ExportLANServer {
               btn.disabled = true;
               btn.textContent = "Deleting…";
               var url = "/" + path.split("/").map(encodeURIComponent).join("/");
-              fetch(url, { method: "DELETE", headers: { "Authorization": QUEUE_AUTH } })
+              fetch(url, { method: "DELETE" })
                 .then(function (r) {
                   // 404 = already gone. Either way the row should go.
                   if (r.status === 204 || r.status === 200 || r.status === 404) {
@@ -869,8 +866,6 @@ extension ExportLANServer {
     ) -> String {
         let minBytes = LANThroughputSidecar.minCandidateBytes
         let maxBytes = LANThroughputSidecar.maxTransferBytes
-        let user = lanWebDAVUsername
-        let pass = lanWebDAVPassword
         let resultIdJS = resultElementId.map { "\"\($0)\"" } ?? "null"
         let buttonIdJS = buttonId.map { "\"\($0)\"" } ?? "null"
         return """
@@ -881,7 +876,6 @@ extension ExportLANServer {
           /// 10×64 MB ≈ one ~640 MB dense VR window; median damps Wi‑Fi noise.
           var RUN_COUNT = 10;
           var MIN_OK_RUNS = 5;
-          var DEFAULT_AUTH = "Basic " + btoa("\(user):\(pass)");
           function isMediaName(name) {
             return /\\.(mp4|m4v|mov|mkv|webm)$/i.test(String(name || ""));
           }
@@ -972,7 +966,6 @@ extension ExportLANServer {
           }
           async function runLANSpeedTest(opts) {
             opts = opts || {};
-            var auth = opts.authHeader || DEFAULT_AUTH;
             var btn = opts.buttonId ? document.getElementById(opts.buttonId) : null;
             if (btn) btn.disabled = true;
             reportLANSpeed("LAN speed test: picking media (≥8 MB)…", false, opts);
@@ -1022,7 +1015,6 @@ extension ExportLANServer {
               var post = await fetch("lan_throughput.json", {
                 method: "POST",
                 headers: {
-                  "Authorization": auth,
                   "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
@@ -1075,8 +1067,7 @@ extension ExportLANServer {
           if (autoButtonId) {
             window.bindLANSpeedTestButton({
               buttonId: autoButtonId,
-              resultElementId: autoResultId,
-              authHeader: DEFAULT_AUTH
+              resultElementId: autoResultId
             });
           }
         })();
@@ -1193,10 +1184,9 @@ extension ExportLANServer {
             var el = document.getElementById("lan-wifi-www-probe-result");
             if (btn) btn.disabled = true;
             if (el) el.textContent = "Probing Phone Wi‑Fi → www (cellular blocked)…";
-            var auth = "Basic " + btoa("\(lanWebDAVUsername):\(lanWebDAVPassword)");
             return fetch("wifi_www_probe.json", {
               method: "POST",
-              headers: { "Authorization": auth, "Content-Type": "application/json", "Content-Length": "2" },
+              headers: { "Content-Type": "application/json", "Content-Length": "2" },
               body: "{}",
               cache: "no-store"
             })
@@ -1629,13 +1619,10 @@ extension ExportLANServer {
     /// Paste Cloudflare quick-tunnel host; rewrite `[data-lan-tunnel-path]` links to `https://host…`.
     /// Persists to phone `xr_tunnel.json` so Quest refresh sees the same host after a PC Update links.
     static func htmlLANTunnelDomainScript() -> String {
-        let user = lanWebDAVUsername
-        let pass = lanWebDAVPassword
         return """
         <script>
         (function () {
           var ENDPOINT = "xr_tunnel.json";
-          var AUTH = "Basic " + btoa("\(user):\(pass)");
           var input = document.getElementById("lan-tunnel-domain");
           var applyBtn = document.getElementById("lan-tunnel-apply");
           var clearBtn = document.getElementById("lan-tunnel-clear");
@@ -1687,7 +1674,6 @@ extension ExportLANServer {
             return fetch(ENDPOINT, {
               method: "POST",
               headers: {
-                "Authorization": AUTH,
                 "Content-Type": "application/json"
               },
               body: JSON.stringify({ host: host || "" }),
@@ -2255,8 +2241,6 @@ extension ExportLANServer {
     }
 
     static func htmlURLDownloadPanel() -> String {
-        let user = htmlEscape(lanWebDAVUsername)
-        let pass = htmlEscape(lanWebDAVPassword)
         return """
         <div class="panel">
         <h2>Export from URL</h2>
@@ -2276,7 +2260,6 @@ extension ExportLANServer {
         </div>
         <script>
         (function () {
-          var AUTH = "Basic " + btoa("\(user):\(pass)");
           var exportUrlApi = "/export_from_url.json";
           var ackUrl = "/\(LANExportTriggerControl.ackRelativePath)";
           function uuid() {
@@ -2335,7 +2318,7 @@ extension ExportLANServer {
               };
               var r = await fetch(exportUrlApi, {
                 method: "POST",
-                headers: { "Authorization": AUTH, "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body)
               });
               var j = null;
@@ -2357,7 +2340,7 @@ extension ExportLANServer {
               for (var i = 0; i < 8; i++) {
                 await new Promise(function (res) { setTimeout(res, 500); });
                 try {
-                  var ack = await fetch(ackUrl, { headers: { "Authorization": AUTH } });
+                  var ack = await fetch(ackUrl, { cache: "no-store" });
                   if (ack.ok) {
                     var a = await ack.json();
                     if (j && j.triggerId && a.triggerId && a.triggerId !== j.triggerId) continue;
@@ -2390,8 +2373,6 @@ extension ExportLANServer {
     }
 
     static func htmlExportControlPanel() -> String {
-        let user = htmlEscape(lanWebDAVUsername)
-        let pass = htmlEscape(lanWebDAVPassword)
         return """
         <div class="panel">
         <h2>Start export (pCloud → phone)</h2>
@@ -2431,7 +2412,6 @@ extension ExportLANServer {
         </div>
         <script>
         (function () {
-          var AUTH = "Basic " + btoa("\(user):\(pass)");
           var triggerUrl = "/\(LANExportTriggerControl.triggerRelativePath)";
           var ackUrl = "/\(LANExportTriggerControl.ackRelativePath)";
           var pcloudPath = "/";
@@ -2494,7 +2474,7 @@ extension ExportLANServer {
             var norm = normalizePath(path);
             var r = await fetch("/pcloud_bookmarks.json", {
               method: "PUT",
-              headers: { "Authorization": AUTH, "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "toggle",
                 listingPath: norm,
@@ -2672,7 +2652,7 @@ extension ExportLANServer {
             }
             var r = await fetch(triggerUrl, {
               method: "PUT",
-              headers: { "Authorization": AUTH, "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify(body)
             });
             if (!r.ok) {
@@ -2683,7 +2663,7 @@ extension ExportLANServer {
             for (var i = 0; i < 8; i++) {
               await new Promise(function (res) { setTimeout(res, 500); });
               try {
-                var ack = await fetch(ackUrl, { headers: { "Authorization": AUTH } });
+                var ack = await fetch(ackUrl, { cache: "no-store" });
                 if (ack.ok) {
                   var j = await ack.json();
                   setStatus((j.status || "?") + ": " + (j.message || ""), j.status === "rejected");
@@ -2783,8 +2763,7 @@ extension ExportLANServer {
           if (window.bindLANSpeedTestButton) {
             window.bindLANSpeedTestButton({
               buttonId: "export-lan-speed-test",
-              setStatus: setStatus,
-              authHeader: AUTH
+              setStatus: setStatus
             });
           }
           document.getElementById("pcloud-sort").onchange = function (ev) {

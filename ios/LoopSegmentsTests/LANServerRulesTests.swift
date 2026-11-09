@@ -125,14 +125,24 @@ final class LANServerRulesTests: XCTestCase {
         XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "POST", path: "/xr_debug.json?x=1", requestHeaders: headers()))
     }
 
-    /// Media GETs are open by design (Skybox often sends no Authorization), and so is the root page for browsers.
-    func testGETNeedsAuthOnlyForTheRootFromNonBrowsers() {
-        let browser = headers("User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+    /// The LAN pages need the login for everyone (audit S3: their scripts no longer carry the password).
+    func testLANPagesNeedAuthForEveryone() {
+        let browser = headers("User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36", "Accept: text/html")
         let skybox = headers("User-Agent: Skybox/1.0")
-        XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: "/", requestHeaders: browser))
-        XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: "/", requestHeaders: skybox))
-        XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "HEAD", path: "/", requestHeaders: headers()))
-        XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: "/pcld_ios_media/archive/a.mp4", requestHeaders: skybox))
+        for path in ["/", "/browse", "/browse?x=1"] {
+            XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: path, requestHeaders: browser), path)
+            XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: path, requestHeaders: skybox), path)
+            XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "HEAD", path: path, requestHeaders: headers()), path)
+        }
+    }
+
+    /// Media, the /xr player and the status JSON stay open: Skybox often sends no Authorization,
+    /// and /xr plus several PC scripts read them without a login.
+    func testMediaXRAndStatusStayOpen() {
+        let browser = headers("User-Agent: Mozilla/5.0", "Accept: text/html")
+        for path in ["/pcld_ios_media/archive/a.mp4", "/xr", "/xr-assets/aframe.min.js", "/status.json", "/status_lists.json"] {
+            XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: path, requestHeaders: browser), path)
+        }
         XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "PATCH", path: "/", requestHeaders: headers()))
     }
 

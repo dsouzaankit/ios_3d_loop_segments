@@ -623,7 +623,10 @@ enum ExportLANServer {
             if normalizedGETPath(path) == "xr_debug.json" { return false }
             return true
         case "GET", "HEAD":
-            return normalizedGETPath(path).isEmpty && !isBrowserLikeRequest(requestHeaders: requestHeaders)
+            // The LAN pages (/, /browse) need the login too. Their scripts rely on the browser
+            // resending it, so the password is never written into a page. Media and JSON stay open.
+            let route = normalizedGETPath(path)
+            return route.isEmpty || route == "browse"
         default:
             return false
         }

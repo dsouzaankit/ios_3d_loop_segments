@@ -441,7 +441,8 @@ function Sync-LanConfigFromLoopSegments {
         $user = [string]$settings.webdavUser
     }
 
-    $password = "iosadmin"
+    # No built-in fallback: the password comes only from this PC's private json.
+    $password = ""
     if (-not [string]::IsNullOrWhiteSpace([string]$settings.webdavPassword)) {
         $password = [string]$settings.webdavPassword
     }
