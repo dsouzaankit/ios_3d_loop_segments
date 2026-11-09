@@ -624,13 +624,27 @@ enum ExportLANServer {
             if normalizedGETPath(path) == "xr_debug.json" { return false }
             return true
         case "GET", "HEAD":
-            // The LAN pages (/, /browse) need the login too. Their scripts rely on the browser
-            // resending it, so the password is never written into a page. Media and JSON stay open.
+            // Pages, status/tunnel/debug JSON and export logs need the login (audit S3, S8, A2).
+            // Page scripts rely on the browser resending it, so no page carries the password.
+            // Media and the /xr-assets scripts stay open (Skybox often sends no Authorization).
             let route = normalizedGETPath(path)
-            return route.isEmpty || route == "browse"
+            return lanLoginGETRoutes.contains(route) || isLANLogRoute(route)
         default:
             return false
         }
+    }
+
+    /// GET/HEAD routes behind the LAN login, besides the export logs.
+    static let lanLoginGETRoutes: Set<String> = [
+        "", "browse", "xr", "chroma",
+        "status.json", "status_lists.json", "xr_tunnel.json", "xr_debug.json"
+    ]
+
+    /// Export logs under `pcld_ios_media/logs/`, including legacy aliases like `/export_latest.txt`.
+    static func isLANLogRoute(_ route: String) -> Bool {
+        let prefix = "\(ExportPaths.exportLogsLANPrefix)/"
+        let resolved = ExportPaths.canonicalLANLogRelativePath(route) ?? route
+        return lanMediaRelativePathCandidates(resolved).contains { $0.hasPrefix(prefix) }
     }
 
     @discardableResult

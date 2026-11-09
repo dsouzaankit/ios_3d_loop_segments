@@ -136,13 +136,27 @@ final class LANServerRulesTests: XCTestCase {
         }
     }
 
-    /// Media, the /xr player and the status JSON stay open: Skybox often sends no Authorization,
-    /// and /xr plus several PC scripts read them without a login.
-    func testMediaXRAndStatusStayOpen() {
+    /// Audit #6: the /xr page, status/tunnel/debug JSON and export logs (with legacy aliases) need the login.
+    func testXRStatusAndLogsNeedAuth() {
         let browser = headers("User-Agent: Mozilla/5.0", "Accept: text/html")
-        for path in ["/pcld_ios_media/archive/a.mp4", "/xr", "/xr-assets/aframe.min.js", "/status.json", "/status_lists.json"] {
-            XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: path, requestHeaders: browser), path)
+        let paths = [
+            "/xr", "/xr?mode=archive", "/chroma", "/status.json", "/status_lists.json", "/xr_tunnel.json", "/xr_debug.json",
+            "/export_latest.txt", "/export_progress.txt", "/search_debug.txt", "/logs/export_1.txt",
+            "/pcld_ios_media/logs/export_latest.txt", "/pcld_ios_media/logs/export_1700000000.txt"
+        ]
+        for path in paths {
+            XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: path, requestHeaders: browser), path)
         }
+        XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "HEAD", path: "/status.json", requestHeaders: headers()))
+    }
+
+    /// Media and the /xr scripts stay open (Skybox often sends no Authorization); /xr still posts its debug ring.
+    func testMediaAndXRAssetsStayOpen() {
+        let skybox = headers("User-Agent: Skybox/1.0")
+        for path in ["/pcld_ios_media/archive/a.mp4", "/pcld_ios_media/_working.mp4", "/xr-assets/aframe.min.js", "/wifi_www_probe.json"] {
+            XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: path, requestHeaders: skybox), path)
+        }
+        XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "POST", path: "/xr_debug.json", requestHeaders: headers()))
         XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "PATCH", path: "/", requestHeaders: headers()))
     }
 
