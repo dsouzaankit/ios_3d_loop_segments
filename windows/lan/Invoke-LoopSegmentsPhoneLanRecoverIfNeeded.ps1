@@ -121,6 +121,10 @@ function Invoke-DirectHttpGet {
     try {
         $resp = $req.GetResponse()
         return @{ StatusCode = [int]$resp.StatusCode }
+    } catch [System.Net.WebException] {
+        # 401 = server up but login refused; callers only check reachability.
+        if ($null -ne $_.Exception.Response) { return @{ StatusCode = [int]$_.Exception.Response.StatusCode } }
+        throw
     } finally {
         if ($null -ne $resp) {
             try { $resp.Close() } catch {}

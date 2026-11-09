@@ -814,6 +814,11 @@ function Invoke-DirectHttpGet {
     $req.AllowAutoRedirect = $true
     # Empty proxy = do not use WinINET/Clash system proxy (PS 5.1 has no -NoProxy).
     $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+    # Phone URLs only: status.json and the LAN pages need the WebDAV login.
+    if (Get-Command Get-LoopSegmentsPhoneWebDavAuthHeader -ErrorAction SilentlyContinue) {
+        $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
+        foreach ($key in $auth.Keys) { $req.Headers[$key] = [string]$auth[$key] }
+    }
     $resp = $null
     try {
         $resp = $req.GetResponse()
@@ -827,6 +832,10 @@ function Invoke-DirectHttpGet {
             StatusCode = [int]$resp.StatusCode
             Body       = $body
         }
+    } catch [System.Net.WebException] {
+        # 401 = server up but login refused (wrong webdavPassword); reachable, no body.
+        if ($null -ne $_.Exception.Response) { return @{ StatusCode = [int]$_.Exception.Response.StatusCode; Body = $null } }
+        throw
     } finally {
         if ($null -ne $resp) {
             try { $resp.Close() } catch {}

@@ -500,6 +500,7 @@ function Test-LoopSegmentsLanHttpLooksLikeApp {
     }
     if ([string]::IsNullOrWhiteSpace($hostClean) -or $Port -le 0) { return $false }
 
+    $lanAuth = Get-LoopSegmentsPhoneWebDavAuthHeader
     $paths = @('/status.json', '/')
     foreach ($path in $paths) {
         $resp = $null
@@ -511,6 +512,7 @@ function Test-LoopSegmentsLanHttpLooksLikeApp {
             $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
             $req.UserAgent = 'LoopSegments-LanDiscover/1.0'
             $req.KeepAlive = $false
+            foreach ($key in $lanAuth.Keys) { $req.Headers[$key] = [string]$lanAuth[$key] }
             if ($path -eq '/') {
                 $req.Accept = 'text/html,application/xhtml+xml'
             }
@@ -1231,9 +1233,10 @@ function ConvertTo-LoopSegmentsPhoneHostEntry {
     }
 
     return @{
-        Host  = $hostText
-        Label = $label.Trim()
-        Port  = $port
+        Host     = $hostText
+        Label    = $label.Trim()
+        Port     = $port
+        Password = [string]$Raw.webdavPassword
     }
 }
 
@@ -1311,7 +1314,8 @@ function Invoke-LoopSegmentsPhoneLANJson {
     $path = $RelativePath.Trim().TrimStart('/')
     $uri = "$base/$path"
     try {
-        $response = Invoke-WebRequest -Uri $uri -TimeoutSec $TimeoutSec -UseBasicParsing
+        $auth = Get-LoopSegmentsPhoneWebDavAuthHeader -PasswordOverride ([string]$Entry.Password)
+        $response = Invoke-WebRequest -Uri $uri -Headers $auth -TimeoutSec $TimeoutSec -UseBasicParsing
         if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) {
             throw "HTTP $($response.StatusCode)"
         }
@@ -1505,7 +1509,10 @@ function ConvertTo-LoopSegmentsUnifiedLANHtml {
 }
 
 function Get-LoopSegmentsPhoneWebDavAuthHeader {
-    $creds = Get-LoopSegmentsWebDAVCredentials
+    param(
+        [string] $PasswordOverride = ''
+    )
+    $creds = Get-LoopSegmentsWebDAVCredentials -PasswordOverride $PasswordOverride
     $pair = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($creds.User):$($creds.Password)"))
     return @{ Authorization = "Basic $pair" }
 }

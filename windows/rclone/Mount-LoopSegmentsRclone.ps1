@@ -199,14 +199,14 @@ function Test-PhoneLANExport {
 
     Write-Host "Checking $base ..."
     try {
-        $r = Invoke-WebRequest -Uri ($base + 'status.json') -TimeoutSec 15 -UseBasicParsing
+        $r = Invoke-WebRequest -Uri ($base + 'status.json') -Headers $headers -TimeoutSec 15 -UseBasicParsing
         Write-Host "  GET status.json -> $($r.StatusCode)"
     } catch {
         throw "Phone not reachable at $base (same Wi-Fi? LAN server on? app in foreground?). $($_.Exception.Message)"
     }
 
     try {
-        $r = Invoke-WebRequest -Uri $base -TimeoutSec 15 -UseBasicParsing
+        $r = Invoke-WebRequest -Uri $base -Headers $headers -TimeoutSec 15 -UseBasicParsing
         Write-Host "  GET / (HTML index) -> $($r.StatusCode)"
     } catch {
         Write-Warning "  GET / failed: $($_.Exception.Message)"
@@ -458,6 +458,10 @@ function Test-PhoneLanAlive {
         $resp = $req.GetResponse()
         $code = [int]$resp.StatusCode
         return ($code -ge 200 -and $code -lt 500)
+    } catch [System.Net.WebException] {
+        # 401 = server up but login refused; still reachable.
+        $r = $_.Exception.Response
+        return ($null -ne $r -and [int]$r.StatusCode -lt 500)
     } catch {
         return $false
     } finally {
