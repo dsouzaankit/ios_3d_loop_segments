@@ -56,7 +56,7 @@ Large files on cellular: first segment waits for index + dense window (`Download
 3. On the PC:
 
 ```powershell
-cd P:\all_scripts\ios_3d_loop_segments\windows
+cd "P:\all_scripts\iOS apps\ios_3d_loop_segments\windows"
 Copy-Item loop-segments-windows.example.json loop-segments-windows.json   # first time on this PC
 .\setup\Set-LoopSegmentsWindows.ps1 -PhoneHost 192.168.x.x
 .\rclone\Mount-LoopSegmentsRclone.ps1 -TestOnly   # optional HTTP check
