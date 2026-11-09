@@ -171,7 +171,7 @@ Default **on**. Loops bundled `KeepAlive_silence.mp3` so export + LAN + trigger 
 
 ## LAN API (`:8765`)
 
-Basic auth for WebDAV and sensitive JSON: **`admin` / `iosadmin`** (same as Quest Skybox). Media GET often unauthenticated for PC sync convenience.
+Basic auth for WebDAV and sensitive JSON: **`admin`** / the per-install password from the app's Export screen (same as Quest Skybox). Media GET often unauthenticated for PC sync convenience.
 
 | Endpoint | Role |
 |----------|------|

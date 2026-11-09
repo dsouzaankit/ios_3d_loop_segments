@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 420 (1.3.1):** The LAN pages (`/`, `/browse`) now ask for the WebDAV login in every browser, and no page, 401 reply or usage help contains the password any more (audit S3). The page scripts rely on the browser resending the login it was given once per session. `/xr`, media, `status.json` and `status_lists.json` stay open, so Skybox and the Quest player need no login. The PC companion extension (1.7.28) answers the login prompt itself from `lan_config.json`; reload the extension after updating. The fixed `iosadmin` password is gone (audit #4): each install makes a random password on first launch and keeps it in the Keychain (this device only, not in backups), so it stays the same across launches and SideStore updates. The Export screen shows it, copies it, lets you set your own (8–64 characters) or make a new one. After updating, put it once in `windows/loop-segments-windows.json` (`webdavPassword`), Skybox's WebDAV entry and the rclone remote. PC scripts no longer fall back to a built-in password.
+
 **Build 419 (1.3.1):** `/xr` loads A-Frame 1.6.0 from the phone (`/xr-assets/aframe.min.js`) instead of `aframe.io`, so the player works without internet and no longer depends on that site. The bundled file is the one `aframe.io` serves (identical code to the npm package); licenses are in `Resources/aframe-LICENSE.txt`. Export and sign-in logs now drop user info, query strings and fragments from URLs (`URL.redactedForLog`), since logs are served on the LAN without a login and a pasted link can carry a token.
 
 **Build 418 (1.3.1):** The LAN server now recognises a WebDAV client by its `Depth:` header, not only by its user agent. The old check searched the headers for a newline followed by `depth:`, which never matched, because Swift treats a CRLF line break as one character. Found by the new unit tests.
@@ -379,7 +381,7 @@ No ffmpeg SPM dependency in [project.yml](project.yml).
 
 - WebDAV: `WebDAVResourceLoader` + Basic auth on `AVURLAsset`
 - Passthrough to MP4 when supported: H.264, HEVC (hvc1/hev1) + **AAC audio** when the source has aac/mp4a (manual path was video-only before build 133; export session kept both tracks)
-- 60s segments when source is **at/above** the Mbps cutoff (and codec allows); phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. Below cutoff: LAN preload to EOF only (no segments). **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND for Skybox and other clients). **Quest Skybox:** WebDAV **`admin` / `iosadmin`**. PC sync/mount: [../windows/README.md](../windows/README.md). **Dense fill** per minute when segments run.
+- 60s segments when source is **at/above** the Mbps cutoff (and codec allows); phone alternates **`pcld_ios_media/loop/op_00.mp4`** / **`pcld_ios_media/loop/op_01.mp4`**; sparse in-progress copy **`pcld_ios_media/_working.mp4`**. Below cutoff: LAN preload to EOF only (no segments). **LAN:** **`http://<phone-ip>:8765/`** serves **HTTP** (files, index, Range) **and WebDAV** (PROPFIND for Skybox and other clients). **Quest Skybox:** WebDAV **`admin`** / the app's password (Export screen). PC sync/mount: [../windows/README.md](../windows/README.md). **Dense fill** per minute when segments run.
 
 ### On-disk layout (Files app vs LAN)
 
@@ -409,7 +411,7 @@ On first launch after upgrade, existing **`Documents/Exports/pcld_ios_media/`** 
 - Runs until end of file, **Pause** (checkpoint + files kept), or **Stop** (clears paused state, removes `op_*.mp4`); **per-minute failsafe** skips a failed minute and continues dense-filling **`_working.mp4`**
 - **In-app while exporting:** orange **Exporting** bar pinned at the top of **Browse**, **Queued**, **Paused**, and **Export** (export keeps running if you leave Export); **Starting…** while a companion/LAN file is still resolving; row badge **Exporting** on the active file. Paused mid-run files are listed on the **Paused** tab (not in Browse).
 - **Keep Alive (default on):** Export tab → **Keep Alive** (above **Exports folder**) → **Keep Alive (lock screen)**. Loops **`KeepAlive_silence.mp3`** from [anars/blank-audio](https://github.com/anars/blank-audio) (see **`KeepAlive_silence-credits.txt`**). **Mix mode** (default) or **Prefer lock screen controls** (exclusive). **Build 225+:** **60-minute** sessions when foregrounded and after export stops; LAN stays up while the loop runs. See **Keep Alive: mix vs lock screen** and **Background / lock screen** below. Not reliable in Low Power Mode.
-  - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin` / `iosadmin`**), since they expose pCloud folder/file names.
+  - **LAN auth note:** The pCloud LAN proxy endpoints **`/pcloud_list.json`** and **`/pcloud_bookmarks.json`** now require the same Basic auth as WebDAV (**`admin`** / the app's password (Export screen)), since they expose pCloud folder/file names.
 
 ### Keep Alive: mix vs lock screen
 
@@ -465,17 +467,17 @@ Implementation: `LoopSegments/Services/Export/SegmentExporter.swift`
 
 1. On the phone: **LAN server on Wi‑Fi** (export screen; app open on LAN). **Switch file:** **Export random file** / **Choose file…** (Export tab → **Export another file**, above **Exports folder**) — picks another pCloud video at **0:00** from **this folder** (parent of current file) or **bookmarked folders**; starts a **new** export (not an in-run playlist).
 2. **URLs:** **`http://<phone-ip>:8765/`** — **light monitor** (playback, logs, resume when paused; **manual refresh only**). **`http://<phone-ip>:8765/browse`** — full page with pCloud folder browser (auto-refresh **60 s** / **120 s** when idle). Also **`status.json`**, **`status_lists.json`**, **GET**/**HEAD** with **Range**, plus **WebDAV** (PROPFIND, PUT/MKCOL/DELETE/**MOVE** under writable `pcld_ios_media/` paths, LOCK, etc.). Use monitor **`/`** during large exports; open **`/browse`** only when you need LAN export-from-folder. Direct **`/export_latest.txt`** is always safe. mDNS: **`http://<iphone-name>.local:8765/`** (Bonjour **`loopsegments._http._tcp`**).
-3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin` / `iosadmin`** (same as in code). PC DLNA/copy/mount options: [../windows/README.md](../windows/README.md).
+3. **Skybox on Quest:** WebDAV root above, Basic auth **`admin`** / the per-install password shown on the app's Export screen. PC DLNA/copy/mount options: [../windows/README.md](../windows/README.md).
 
 Unattended **pCloud → PC** (no phone LAN): **`Run-SegmentCopy.ps1`** in the sibling **`3d_loop_segments`** repo.
 
 LAN serves **`pcld_ios_media/**`** automatically (all video extensions on disk — `op_*.mp4`, `_working*.mp4`, `_vanilla_*`, WMV/MKV, etc.). **Excluded:** `*.staging.*`, `*.sparse.json`, hidden/temp remux files. **`_vanilla_download.<ext>`** is listed and served **while the WebDAV download runs** (growing file). Export logs live in **`pcld_ios_media/logs/`** (`export_latest.txt`, history, **`search_debug.txt`** when search has run); the LAN index lists **`search_debug.txt`** when on disk (legacy **`/search_debug.txt`** URL still works). Legacy root **`/export_latest.txt`** URLs still resolve. Port **8765**. **Browser / Pigasus / Skybox WebDAV:** same tree (WebDAV hrefs are path-only). On the HTML index, each vanilla / `_working` row has a **plain** link (WebDAV, PotPlayer) and, when export seek **> 0**, a separate **browser #t=** link for Quest-style resume — do not copy the `#t=` URL into PotPlayer or other WebDAV clients.
 
-**PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** / **MOVE** (Basic auth **`admin` / `iosadmin`**) can create nested folders, small files (≤ 2 MB per PUT), and rename/relocate on the phone (local **`MOVE`** — no download). Typical homes: **`scripts/`** or **`archive/*.ps1`** (robocopy helpers that use `$PSScriptRoot` next to retained videos). **No server `COPY` yet** — same-folder Explorer paste still GET+PUT over LAN. **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, **`parked/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
+**PC scripts under `pcld_ios_media/` (WebDAV write):** authenticated **PUT** / **MKCOL** / **DELETE** / **MOVE** (Basic auth **`admin`** / the app's password (Export screen)) can create nested folders, small files (≤ 2 MB per PUT), and rename/relocate on the phone (local **`MOVE`** — no download). Typical homes: **`scripts/`** or **`archive/*.ps1`** (robocopy helpers that use `$PSScriptRoot` next to retained videos). **No server `COPY` yet** — same-folder Explorer paste still GET+PUT over LAN. **Read-only:** `_working.mp4`, `_working.sparse.json`, `_vanilla_*`, `_working_pcloud_transcode*`, everything under **`pcld_ios_media/loop/`**, **`parked/`**, staging/hidden artifacts, and the **`pcld_ios_media`** / **`loop`** folder roots. Example (PowerShell, replace IP):
 
 ```powershell
 $base = "http://10.0.0.42:8765/pcld_ios_media"
-$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
+$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:<password from the app's Export screen>"))
 $hdr = @{ Authorization = "Basic $cred" }
 Invoke-WebRequest -Method MKCOL -Uri "$base/scripts" -Headers $hdr
 Invoke-WebRequest -Method PUT -Uri "$base/scripts/ping.ps1" -Headers $hdr `
@@ -586,7 +588,7 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 #### Export trigger protocol
 
-**PUT** `pcld_ios_media/scripts/export_trigger.json` with Basic auth **`admin` / `iosadmin`**. The phone deletes the file after reading it and writes an ack.
+**PUT** `pcld_ios_media/scripts/export_trigger.json` with Basic auth **`admin`** / the app's password (Export screen). The phone deletes the file after reading it and writes an ack.
 
 ```json
 {
@@ -629,7 +631,7 @@ Example (PowerShell) — **Export from folder** via REST (preferred for pCloud):
 
 ```powershell
 $base = "http://10.0.0.42:8765"
-$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
+$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:<password from the app's Export screen>"))
 $body = @{
   folderPath = "/Videos/MyFolder/"
   displayName = "clip.mp4"
@@ -646,7 +648,7 @@ Example (PowerShell) — **Export from URL** via REST:
 
 ```powershell
 $base = "http://10.0.0.42:8765"
-$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
+$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:<password from the app's Export screen>"))
 $body = @{
   url = "https://example.com/clip.mp4"
   saveName = "clip.mp4"
@@ -663,7 +665,7 @@ Example (PowerShell) — pCloud **start_export** via trigger file:
 
 ```powershell
 $base = "http://10.0.0.42:8765"
-$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:iosadmin"))
+$cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:<password from the app's Export screen>"))
 $body = @{
   version = 1
   command = "start_export"
@@ -754,16 +756,16 @@ Implementation: `ExportMediaArchive.swift`, `ExportRetentionSourceCatalog.swift`
 |--------|----------------------------------------|------------------------|
 | **Pigasus** (direct URL / network file) | **Works** — uses HTTP **Range** | Should work |
 | **Skybox (WebDAV to phone)** | Often **works** for LAN export (app serves WebDAV + Basic auth) | **5K+ HEVC** may still show “too large to decode”; try segments or Pigasus |
-| **PotPlayer (WebDAV / open URL)** | Use **`http://<ip>:8765/pcld_ios_media/_working.mp4`** (not `/_working.mp4` alone on older builds). WebDAV root **`http://<ip>:8765/`** · **`admin` / `iosadmin`**. Ignore **`?WithCaption`** (player-added). Sparse holes may still break decode — prefer **`loop/op_00.mp4`**. |
+| **PotPlayer (WebDAV / open URL)** | Use **`http://<ip>:8765/pcld_ios_media/_working.mp4`** (not `/_working.mp4` alone on older builds). WebDAV root **`http://<ip>:8765/`** · **`admin`** / the app's password (Export screen). Ignore **`?WithCaption`** (player-added). Sparse holes may still break decode — prefer **`loop/op_00.mp4`**. |
 | **Quest browser** (index **browser #t=** link when seek > 0) | Works for dense-filled regions | Works (**build 173+** — skip broken faststart remux from 171–172) |
 
-**In-progress export on Quest:** **Skybox** → Add WebDAV server → `http://<ip>:8765/` · **`admin` / `iosadmin`**, or **Pigasus** / browser with direct URLs.
+**In-progress export on Quest:** **Skybox** → Add WebDAV server → `http://<ip>:8765/` · **`admin`** / the app's password (Export screen), or **Pigasus** / browser with direct URLs.
 
 ### Skybox (Quest) and the phone LAN
 
 **pCloud** in Skybox uses **pCloud WebDAV** (unchanged).
 
-**Phone** in Skybox: add **WebDAV** with base URL **`http://<ip>:8765/`** and **`admin` / `iosadmin`**. That uses the app’s **LAN WebDAV** implementation (not plain SMB).
+**Phone** in Skybox: add **WebDAV** with base URL **`http://<ip>:8765/`** and **`admin`** / the app's password (Export screen). That uses the app’s **LAN WebDAV** implementation (not plain SMB).
 
 **Reliable paths:**
 
@@ -891,7 +893,7 @@ After the primary pipeline is sparse + segments, each ~60s window uses **one** o
 
 Manual QA checklist for export + LAN playback. Defaults unless noted: **LAN server on**, **60s segments at/above 35 Mbps**, **vanilla download first on**, seek **0:00**, phone **unlocked / foreground / screen on**.
 
-**How to verify LAN:** open **`http://<phone-ip>:8765/`** (or Skybox WebDAV **`admin` / `iosadmin`**). Watch **`LAN playable till`**, **`status.json`**, and **`export_latest.txt`**. “Near-instant” = playback starts within **~10–30 s** of export start (after HEAD + prefetch + first dense bytes), not after the full file is on disk.
+**How to verify LAN:** open **`http://<phone-ip>:8765/`** (or Skybox WebDAV **`admin`** / the app's password (Export screen)). Watch **`LAN playable till`**, **`status.json`**, and **`export_latest.txt`**. “Near-instant” = playback starts within **~10–30 s** of export start (after HEAD + prefetch + first dense bytes), not after the full file is on disk.
 
 ##### A. Regular bitrate (~10–25 Mbps est.), seek **0:00**
 

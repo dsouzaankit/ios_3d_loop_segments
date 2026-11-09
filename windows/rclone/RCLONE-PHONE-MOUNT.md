@@ -1,6 +1,6 @@
 # rclone drive letter mount of the iPhone LAN export (optional PC workflow)
 
-The phone’s LAN server (**`http://<ip>:8765/`**) implements **HTTP + WebDAV** (PROPFIND, PUT/MKCOL/DELETE/**MOVE** under writable `pcld_ios_media/` paths, Basic auth **`admin` / `iosadmin`**) so clients like **Quest Skybox** can add it as a **WebDAV** library directly — **no PC rclone step required**. Media files live in **Application Support** on the phone (hidden from the Files app); **rclone still maps `L:`** via WebDAV — not via USB. If `pcld_ios_media/` exists on the phone, the mount **starts there** (`L:\loop`, `L:\archive`); otherwise Explorer shows `L:\pcld_ios_media\`.
+The phone’s LAN server (**`http://<ip>:8765/`**) implements **HTTP + WebDAV** (PROPFIND, PUT/MKCOL/DELETE/**MOVE** under writable `pcld_ios_media/` paths, Basic auth **`admin`** / the app's password (Export screen)) so clients like **Quest Skybox** can add it as a **WebDAV** library directly — **no PC rclone step required**. Media files live in **Application Support** on the phone (hidden from the Files app); **rclone still maps `L:`** via WebDAV — not via USB. If `pcld_ios_media/` exists on the phone, the mount **starts there** (`L:\loop`, `L:\archive`); otherwise Explorer shows `L:\pcld_ios_media\`.
 
 On **Windows**, you can map the same URL with **`rclone mount`** (WinFsp + `type = webdav` in `rclone.conf`) to get a **drive letter** for Explorer. After the letter attaches, the mount script notifies Explorer so **This PC** shows it without F5; it notifies again when the letter is unmapped (Ctrl+C / console X / LAN-watch / `-Remove`). That path can feel **sluggish**, show **VFS/listing quirks**, or hang compared to **Skybox → phone WebDAV** or **plain HTTP** downloads.
 
@@ -48,7 +48,7 @@ DLNA is the companion default because it is the only route that both plays in Sk
 | Route | Plays in Skybox VR | Setup |
 |---|---|---|
 | **`rclone serve dlna`** (companion default) | Yes | None on the headset: Skybox finds **Loop Segments** under **Network** by itself |
-| **WebDAV direct to the phone** (`http://<phone>:8765/`, `admin` / `iosadmin`) | Yes, one hop fewer (no PC in the middle) | Add it once by hand under Skybox **Network**. Scripts cannot do this: the only Skybox API, `http://127.0.0.1:8018` (used by `Skybox_vr_pc`), belongs to the PC app and only manages AirScreen folders. With a static phone IP the saved entry keeps working |
+| **WebDAV direct to the phone** (`http://<phone>:8765/`, `admin` / the app's password (Export screen)) | Yes, one hop fewer (no PC in the middle) | Add it once by hand under Skybox **Network**. Scripts cannot do this: the only Skybox API, `http://127.0.0.1:8018` (used by `Skybox_vr_pc`), belongs to the PC app and only manages AirScreen folders. With a static phone IP the saved entry keeps working |
 | **AirScreen folder of the `L:` mount** | **No**: it lists in Add-folders but never streams | Automatable through the PC app, but pointless. The companion no longer maps it |
 
 **Do not map `L:` into Skybox AirScreen** for phone media. Quest Browser (`/xr`) is a separate path and cannot play WMV.
@@ -60,7 +60,7 @@ DLNA is the companion default because it is the only route that both plays in Sk
 Phone WebDAV → PC `rclone serve dlna` → Quest is an extra hop. When that stutters or buffers:
 
 1. Prefer **[3d_playlist_local](https://github.com/dsouzaankit/3d_playlist_local)** — transcode/output to the **`3d_fullsbs_trans`** AirScreen share (mapped via `Skybox_vr_pc` / `skybox_vr_pc.config.json`) and play that share on Quest.
-2. Or add the phone as **WebDAV** directly in Skybox Network (`http://<phone>:8765/`, `admin` / `iosadmin`) — no PC rclone.
+2. Or add the phone as **WebDAV** directly in Skybox Network (`http://<phone>:8765/`, `admin` / the app's password (Export screen)) — no PC rclone.
 3. Check LAN Mbps (`..\lan\Measure-LoopSegmentsLanThroughput.ps1` / companion probe) and keep segment bitrate under the recommended sidecar; avoid Virtual Desktop streaming during the probe or heavy play.
 
 `p_cld_media` AirScreen remains for local pCloud folder media; it is not a substitute for phone `L:` / DLNA.

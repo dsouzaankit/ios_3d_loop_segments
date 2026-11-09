@@ -36,6 +36,65 @@ struct ExportView: View {
     @State private var showAlternateFilePicker = false
     @State private var switchExportTarget: ExportSwitchTarget?
     @State private var didAutoStartExport = false
+    @State private var lanPassword = LANPasswordStore.current
+    @State private var copiedLANPassword = false
+    @State private var showSetLANPassword = false
+    @State private var showNewLANPasswordConfirm = false
+    @State private var lanPasswordDraft = ""
+    @State private var lanPasswordError: String?
+
+    /// LAN WebDAV login (user `admin`, per-install password from the Keychain).
+    @ViewBuilder private var lanPasswordRows: some View {
+        LabeledContent("WebDAV login") {
+            Text("\(ExportLANServer.lanWebDAVUsername) / \(lanPassword)")
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+        }
+        Button(copiedLANPassword ? "Copied" : "Copy password") {
+            UIPasteboard.general.string = lanPassword
+            copiedLANPassword = true
+        }
+        Button("Set password…") {
+            lanPasswordDraft = ""
+            lanPasswordError = nil
+            showSetLANPassword = true
+        }
+        .alert("Set LAN password", isPresented: $showSetLANPassword) {
+            TextField("Password", text: $lanPasswordDraft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Save") {
+                if let problem = LANPasswordStore.set(lanPasswordDraft) {
+                    lanPasswordError = problem
+                } else {
+                    lanPassword = LANPasswordStore.current
+                    copiedLANPassword = false
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(LANPasswordStore.minimumLength)–\(LANPasswordStore.maximumLength) characters. Update the PC json, Skybox and rclone afterwards.")
+        }
+        Button("New random password", role: .destructive) {
+            showNewLANPasswordConfirm = true
+        }
+        .confirmationDialog("Replace the LAN password?", isPresented: $showNewLANPasswordConfirm, titleVisibility: .visible) {
+            Button("Replace", role: .destructive) {
+                lanPassword = LANPasswordStore.regenerate()
+                copiedLANPassword = false
+            }
+        } message: {
+            Text("Skybox, rclone, the PC json and saved browser logins stop working until you enter the new one.")
+        }
+        if let lanPasswordError {
+            Text("Password not saved: \(lanPasswordError)")
+                .font(.footnote)
+                .foregroundStyle(.red)
+        }
+        Text("Kept in this phone's Keychain; it stays the same across launches and updates. Put it in windows/loop-segments-windows.json (webdavPassword), Skybox and rclone.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+    }
 
     var body: some View {
         Form {
@@ -127,9 +186,7 @@ struct ExportView: View {
                             .textSelection(.enabled)
                     }
                 }
-                Text("WebDAV auth: \(ExportLANServer.lanWebDAVUsername) / \(ExportLANServer.lanWebDAVPassword)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                lanPasswordRows
                 Text("PC: windows/rclone/Mount-PhoneL.cmd (or Mount-LoopSegmentsRclone.ps1) maps pcld_ios_media/ over Wi‑Fi; use the LAN IP above.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)

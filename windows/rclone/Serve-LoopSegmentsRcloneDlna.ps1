@@ -4,7 +4,7 @@
   Expose the phone LAN WebDAV tree as an rclone DLNA media server (Quest / Skybox Network).
 
 .DESCRIPTION
-  Loop Segments on the phone serves HTTP + WebDAV on port 8765 (Basic auth admin/iosadmin).
+  Loop Segments on the phone serves HTTP + WebDAV on port 8765 (Basic auth admin / the per-install password from the app's Export screen).
   This script writes/updates a [loopsegments] block in rclone.conf and runs:
     rclone serve dlna loopsegments:pcld_ios_media  (or remote root if that folder is missing)
 

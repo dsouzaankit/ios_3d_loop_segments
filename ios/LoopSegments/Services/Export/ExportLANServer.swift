@@ -13,7 +13,8 @@ enum ExportLANServer {
     static let maxWebDAVPutBytes: Int = 2 * 1024 * 1024
     /// LAN WebDAV Basic auth (Skybox, mapped drives). GET without auth still works for PC sync.
     static let lanWebDAVUsername = "admin"
-    static let lanWebDAVPassword = "iosadmin"
+    /// Per-install, from the Keychain (`LANPasswordStore`); shown on the Export screen.
+    static var lanWebDAVPassword: String { LANPasswordStore.current }
     static let lanWebDAVRealm = "Loop Segments LAN"
     static let enabledKey = "serveExportsOnLAN"
     static let backgroundCutoffKey = "lanBackgroundPrefetchCutoffMbps"

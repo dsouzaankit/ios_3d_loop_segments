@@ -4,7 +4,7 @@
   Mount the phone LAN export folder as a Windows drive via rclone WebDAV (or test connectivity).
 
 .DESCRIPTION
-  Loop Segments on the phone serves HTTP + WebDAV on port 8765 (PROPFIND, GET, Basic auth admin/iosadmin).
+  Loop Segments on the phone serves HTTP + WebDAV on port 8765 (PROPFIND, GET, Basic auth admin / the per-install password from the app's Export screen).
   This script writes/updates a [loopsegments] block in rclone.conf and runs rclone mount (WinFsp).
   If the phone has pcld_ios_media/, the mount start directory is that folder (L:\loop, L:\archive);
   otherwise the WebDAV root is mounted (L:\pcld_ios_media\...).
