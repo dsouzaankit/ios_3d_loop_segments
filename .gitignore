@@ -52,3 +52,7 @@ windows/pcloud_web_companion/rest.log
 windows/pcloud_web_companion/logs/
 
 windows/rclone/loopsegments-rclone-mount.log
+
+# Debug logs pulled from the phone. They list private clip names, and this repo is public.
+xr_debug*.json
+search_debug_pull*.txt
