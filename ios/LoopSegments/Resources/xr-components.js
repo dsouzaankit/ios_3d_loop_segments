@@ -781,10 +781,8 @@
         setTimeout(kick, 250);
         setTimeout(kick, 800);
         if (self.data.eye === "left") {
-          __xrDs._probeTicks = 0;
+          __xrDs._sessionTicks = 0;
           __xrDs._xrFixes = 0;
-          setTimeout(function () { self.logXrProbe("1.5s"); }, 1500);
-          setTimeout(function () { self.logXrProbe("4s"); }, 4000);
         }
       }.bind(this);
       this._onExitVr = function () {
@@ -853,7 +851,7 @@
     },
     tick: function () {
       if (this.data.eye === "left") {
-        __xrDs._probeTicks = (__xrDs._probeTicks || 0) + 1;
+        __xrDs._sessionTicks = (__xrDs._sessionTicks || 0) + 1;
         this.ensureXrEnabled();
       }
       var quest = this.isQuestBrowser();
@@ -1354,66 +1352,9 @@
       __xrDs._xrFixes = (__xrDs._xrFixes || 0) + 1;
       if (__xrDs._xrFixes <= 3) {
         try {
-          xrLog("xr-enabled-fixed", { ticks: __xrDs._probeTicks || 0, n: __xrDs._xrFixes, ar: this.isArMode() });
+          xrLog("xr-enabled-fixed", { ticks: __xrDs._sessionTicks || 0, n: __xrDs._xrFixes, ar: this.isArMode() });
         } catch (eLog) {}
       }
-    },
-    logXrProbe: function (tag) {
-      var sceneEl = this.el.sceneEl;
-      var renderer = sceneEl && sceneEl.renderer;
-      var xr = renderer && renderer.xr;
-      if (!xr || !xr.isPresenting) return;
-      var out = { at: tag, ticks: __xrDs._probeTicks || 0, xrOn: !!xr.enabled, fixes: __xrDs._xrFixes || 0 };
-      try {
-        var session = xr.getSession && xr.getSession();
-        var state = session && session.renderState;
-        out.blend = session && session.environmentBlendMode;
-        out.vis = session && session.visibilityState;
-        out.base = !!(state && state.baseLayer);
-        out.projLayers = state && state.layers ? state.layers.length : 0;
-        var xrCam = xr.getCamera();
-        var cams = (xrCam && xrCam.cameras) || [];
-        out.masks = [xrCam ? xrCam.layers.mask : 0].concat(cams.map(function (c) { return c.layers.mask; }));
-        out.clearA = renderer.getClearAlpha();
-        var bg = sceneEl.object3D.background;
-        out.bg = bg && bg.getHexString ? bg.getHexString() : null;
-        var sky = document.getElementById("virtual-sky");
-        out.sky = !!(sky && sky.object3D && sky.object3D.visible);
-      } catch (eSession) { out.sessionErr = String(eSession); }
-      out.domes = ["chroma-sphere", "chroma-sphere-right"].map(function (id) {
-        var el = document.getElementById(id);
-        var comp = el && el.components && el.components["chroma-stereo-sbs"];
-        var mesh = el && el.getObject3D("mesh");
-        var mat = mesh && mesh.material;
-        var tex = mat && (mat.map || (mat.uniforms && mat.uniforms.tex && mat.uniforms.tex.value));
-        var img = tex && tex.image;
-        return {
-          obj: !!(el && el.object3D.visible),
-          mesh: !!(mesh && mesh.visible),
-          mask: mesh ? mesh.layers.mask : 0,
-          mode: (comp && comp._mode) || "",
-          mat: mat ? mat.type : "",
-          op: mat ? mat.opacity : -1,
-          tr: !!(mat && mat.transparent),
-          tex: !!tex,
-          img: img ? (img.videoWidth || img.width || 0) : 0,
-          verts: mesh && mesh.geometry && mesh.geometry.attributes.position ? mesh.geometry.attributes.position.count : 0,
-          pos: el ? el.object3D.position.toArray().map(function (n) { return Math.round(n * 10) / 10; }) : []
-        };
-      });
-      var video = this.video;
-      if (video) {
-        out.video = { paused: !!video.paused, ready: video.readyState, t: Math.round((video.currentTime || 0) * 10) / 10 };
-      }
-      out.blitT = __xrDs.lastBlitTime;
-      try {
-        if (__xrDs.rt && __xrDs.resolved) {
-          var px = new Uint8Array(4);
-          renderer.readRenderTargetPixels(__xrDs.rt, Math.floor(__xrDs.rtW / 4), Math.floor(__xrDs.rtH / 2), 1, 1, px);
-          out.rtPx = Array.prototype.slice.call(px);
-        }
-      } catch (ePx) { out.rtPxErr = String(ePx); }
-      try { xrLog("xr-probe", out); } catch (eLog) {}
     },
     applyAv1Resolve: function (tex) {
       this.ensureDomeGeometry();
