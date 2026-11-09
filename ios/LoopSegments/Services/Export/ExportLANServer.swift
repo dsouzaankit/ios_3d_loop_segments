@@ -594,7 +594,10 @@ enum ExportLANServer {
         let lower = requestHeaders.lowercased()
         if lower.contains("microsoft-webdav") { return true }
         if lower.contains("translate: f") { return true }
-        if lower.contains("\ndepth:") || lower.hasPrefix("depth:") { return true }
+        // Check each header line. "\r\n" is one Character in Swift, so searching the text for
+        // "\ndepth:" never matched after a CRLF line break.
+        let lines = lower.split(whereSeparator: { $0 == "\r\n" || $0 == "\n" })
+        if lines.contains(where: { $0.hasPrefix("depth:") }) { return true }
         if lower.contains("user-agent:") {
             for token in ["skybox", "webdav", "okhttp", "dalvik", "unity"] {
                 if lower.contains(token) { return true }

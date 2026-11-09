@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 418 (1.3.1):** The LAN server now recognises a WebDAV client by its `Depth:` header, not only by its user agent. The old check searched the headers for a newline followed by `depth:`, which never matched, because Swift treats a CRLF line break as one character. Found by the new unit tests.
+
 **Build 417 (1.3.1):** `/xr` drops the `xr-probe` diagnostic added in build 407. It found the first-VR-after-AR fault, which build 408 fixed. `xr-enabled-fixed` stays, so the debug log still shows when that repair runs. The probe's one cost, a GPU pixel read twice per session, is gone.
 
 **Build 416 (1.3.1):** No behaviour change. `ExportLANServer.swift` (6,167 lines) is split into four files of the same type: the core server, `+Files` (file index, PROPFIND, WebDAV writes), `+Pages` (LAN page HTML/JS and the `/xr` loader) and `+API` (JSON endpoints). Members shared across files lost `private`.
