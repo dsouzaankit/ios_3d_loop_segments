@@ -56,7 +56,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.loopsegments.app
         MARKETING_VERSION: "1.3.1"
-        CURRENT_PROJECT_VERSION: "420"
+        CURRENT_PROJECT_VERSION: "421"
         TARGETED_DEVICE_FAMILY: "1,2"
   # Unit tests for pure logic (auth, paths, request parsing). CI runs them on the simulator.
   LoopSegmentsTests:
