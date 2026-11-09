@@ -924,7 +924,7 @@ final class SegmentExporter {
     }
 
     /// Size-only guess before index is readable — scales assumed Mbps with file size (avoids 10 Mbps on ~300 MB WMV).
-    private static func vanillaDurationFallbackAssumedMbps(fileBytes: Int64) -> Double {
+    static func vanillaDurationFallbackAssumedMbps(fileBytes: Int64) -> Double {
         let gb = Double(fileBytes) / (1024 * 1024 * 1024)
         let mb = Double(fileBytes) / (1024 * 1024)
         let cutoff = ExportLANServer.backgroundPrefetchCutoffMbps
@@ -944,7 +944,7 @@ final class SegmentExporter {
         }
     }
 
-    private static func estimatedVanillaDurationFromFileBytes(_ fileBytes: Int64) -> (seconds: Double, assumedMbps: Double) {
+    static func estimatedVanillaDurationFromFileBytes(_ fileBytes: Int64) -> (seconds: Double, assumedMbps: Double) {
         guard fileBytes > 0 else { return (0, 10) }
         let assumedMbps = vanillaDurationFallbackAssumedMbps(fileBytes: fileBytes)
         let seconds = Double(fileBytes) * 8.0 / (assumedMbps * 1_000_000.0)
@@ -2667,7 +2667,7 @@ final class SegmentExporter {
         return (asset, loader)
     }
 
-    private static func shouldTryExportSessionAfterHTTPSManualFailure(_ error: Error) -> Bool {
+    static func shouldTryExportSessionAfterHTTPSManualFailure(_ error: Error) -> Bool {
         if case SegmentExporterError.cancelled = error { return false }
         if case SegmentExporterError.readerInterrupted = error { return false }
         return true
@@ -3068,7 +3068,7 @@ final class SegmentExporter {
     }
 
     /// Per-minute failsafe: keep dense-filling the sparse temp and serving it on LAN; do not abort the whole export.
-    private static func shouldSkipMinuteAndContinue(after error: Error) -> Bool {
+    static func shouldSkipMinuteAndContinue(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {
             switch exportError {
             case .cancelled, .paused, .readerInterrupted, .seekPastEnd, .noVideoTrack,
@@ -3083,7 +3083,7 @@ final class SegmentExporter {
         return true
     }
 
-    private static func shouldStreamFallback(after error: Error) -> Bool {
+    static func shouldStreamFallback(after error: Error) -> Bool {
         if let exportError = error as? SegmentExporterError {
             switch exportError {
             case .readerSetupFailed, .segmentOutputTooSmall:
@@ -3548,7 +3548,7 @@ enum CodecSupport {
         return String(bytes: chars, encoding: .ascii) ?? String(format: "0x%08x", codec)
     }
 
-    private static func fourCC(_ string: String) -> FourCharCode {
+    static func fourCC(_ string: String) -> FourCharCode {
         var value: FourCharCode = 0
         for byte in string.utf8.prefix(4) {
             value = (value << 8) + FourCharCode(byte)
