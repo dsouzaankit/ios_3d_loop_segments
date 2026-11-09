@@ -74,6 +74,28 @@ jobs:
             -configuration Debug \
             build CODE_SIGNING_ALLOWED=NO
 
+      - name: Unit tests (simulator)
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          # Newest available iPhone simulator; names change with each Xcode release.
+          SIM_ID="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          runtimes = sorted(k for k in devices if "iOS" in k)
+          ids = [d["udid"] for k in runtimes for d in devices[k] if d.get("isAvailable") and d["name"].startswith("iPhone")]
+          print(ids[-1] if ids else "")')"
+          if [[ -z "$SIM_ID" ]]; then
+            echo "ERROR: no available iPhone simulator"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Testing on simulator $SIM_ID"
+          xcodebuild test -project LoopSegments.xcodeproj \
+            -scheme LoopSegments \
+            -destination "id=$SIM_ID" \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: Verify KeepAlive_silence.mp3 in app bundle
         working-directory: ios
         run: |

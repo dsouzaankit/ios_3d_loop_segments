@@ -1058,6 +1058,8 @@ Until a token is saved, treat **Search**, **HLS transcode**, and **REST-backed m
 
 [BUILD-WITHOUT-MAC.md](BUILD-WITHOUT-MAC.md) — GitHub Actions / Codemagic.
 
+**Unit tests:** `ios/LoopSegmentsTests/` (target `LoopSegmentsTests`) covers pure logic: LAN auth rules, Basic auth parsing, `Range` and query parsing, and which `pcld_ios_media/` paths WebDAV may write or delete. CI runs them on the newest iPhone simulator in the push job (step **Unit tests (simulator)**); deploy runs skip them. Two tests pin known gaps on purpose: a missing `Authorization` header passes the basic check, and a name containing `..` cannot be written. Expected values use `ExportLANServer.lanWebDAVUsername` / `lanWebDAVPassword` and `ExportPaths.mediaExportFolderName`, so they survive a password change.
+
 ## Getting media off the phone
 
 On-device paths stay under Application Support; clients use LAN:
