@@ -1,13 +1,13 @@
 # Workflow: iPhone cellular → PC DLNA (WLAN)
 
-> **Feasibility:** Manual **Apple Devices → Save to PC** does **not** automate updating the DLNA folder while segments rotate. See **[FEASIBILITY.md](FEASIBILITY.md)** — production automation is either **PC `Run-SegmentCopy.ps1`** (pCloud → PC) or a **future Wi‑Fi pull** from the phone; USB copy is at best **once per export session**.
+> **Feasibility:** USB cannot reach the segments at all: they live in the app's private storage, which **Apple Devices** and the **Files** app cannot see. Copying runs over Wi‑Fi. See **[FEASIBILITY.md](FEASIBILITY.md)** — production automation is either **PC `Run-SegmentCopy.ps1`** (pCloud → PC) or a **future Wi‑Fi pull** from the phone; USB copy is at best **once per export session**.
 
 Three separate networks. **No Personal Hotspot** required for the iPhone path below.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  iPhone (cellular LTE/5G for pCloud; Wi‑Fi for LAN serve)        │
-│    Loop Segments → pCloud WebDAV → Exports/op_00.mp4              │
+│    Loop Segments → pCloud WebDAV → pcld_ios_media/loop/op_00.mp4  │
 └────────────────────────────┬────────────────────────────────────┘
                              │ Wi‑Fi (HTTP :8765 — copy files; see §3)
                              ▼
@@ -19,7 +19,7 @@ Three separate networks. **No Personal Hotspot** required for the iPhone path be
 | Step | Where | Network |
 |------|--------|---------|
 | 1. Browse pCloud, run export | iPhone | **Cellular** (or Wi‑Fi if you prefer) |
-| 2. Copy segment MP4s | iPhone → PC | **Wi‑Fi** (or manual USB via Apple Devices) |
+| 2. Copy segment MP4s | iPhone → PC | **Wi‑Fi** (USB cannot reach them) |
 | 3. LAN playback | PC + TV | **WLAN** (Ethernet to router also fine) |
 
 The PC never pulls from pCloud and never runs ffmpeg for this workflow. The phone never serves DLNA.
@@ -40,7 +40,7 @@ Install via **TestFlight** or sideload (**SideStore nightly** preferred when Alt
 2. Optional: turn **Wi‑Fi off** to force cellular-only pCloud access (no hotspot).
 3. Open **Loop Segments** → sign in to pCloud (US/EU).
 4. Browse to a video → set seek (presets 0/10/15/30/45 min) → **Start export**.
-5. Keep the app in the foreground. On phone: **Files → Loop Segments → Exports** should show `op_00.mp4` updating each ~60s of **media** time (first segment can take several minutes on large moov-at-end HEVC while the minute **dense-downloads**).
+5. Keep the app in the foreground. Over Wi‑Fi (step 6), the LAN page **`http://<ip>:8765/`** shows `pcld_ios_media/loop/op_00.mp4` updating each ~60s of **media** time (first segment can take several minutes on large moov-at-end HEVC while the minute **dense-downloads**).
 6. On the phone: enable **LAN server on Wi‑Fi** so the PC can reach **`http://<ip>:8765/`**. Photos library export is **off** by default — see [ios/README.md](ios/README.md).
 
 Large files on cellular: first segment waits for index + dense window (`Downloading window … (dense fill)` → `Window on disk` in `export_latest.txt`). Later minutes reuse the same sparse temp shell; export does not keep up with live TV wall clock on slow LTE — OK if the DLNA player **loops** the PC pair.
@@ -68,7 +68,7 @@ Copy segment MP4s into your DLNA folder (or use **`Run-SegmentCopy.ps1`** from t
 
 ### Manual (USB / Apple Devices)
 
-Apple Devices does **not** expose a scriptable phone path. Save **Loop Segments → Exports → op_00.mp4** directly to your DLNA folder (e.g. `F:\f1_media\3d_fullsbs_trans`) when prompted.
+Not available. Segments live in the app's private storage (`Library/Application Support/pcld_ios_media/`), which Apple Devices cannot see. Use the Wi‑Fi copy above.
 
 ---
 
@@ -80,22 +80,17 @@ Apple Devices does **not** expose a scriptable phone path. Save **Loop Segments 
 
 ---
 
-## Finding **Loop Segments → Exports** on Windows
+## Where the files are
 
-**`Internal Storage` with folders like `202605_a`, `202604_b`, …** = **Photos** (camera roll by month). That is normal. Your segment MP4s are **not** there.
+Media and logs live in the app's private storage, **`Library/Application Support/pcld_ios_media/`**. The **Files** app, **Apple Devices** and Explorer cannot see that folder, so reach it over Wi‑Fi.
 
-| Where to look | What you should see |
-|---------------|---------------------|
-| **iPhone → Files → On My iPhone → Loop Segments → Exports** | `op_00.mp4`, `export_latest.txt`, `loop_segments_ok.txt` (always check here first) |
-| **Apple Devices** → **Loop Segments** → **Exports** → **Save to PC** (you pick the Windows folder) | **Manual USB path** — save to `F:\f1_media\...` or use **LAN sync** above |
-| **Explorer → This PC → Apple iPhone → Internal Storage** | Often **only** Photos (`202605_a`, …) — not the app |
+| What | Where to get it |
+|------|-----------------|
+| Loop segments `op_00.mp4`, `op_01.mp4` | `http://<phone-ip>:8765/pcld_ios_media/loop/`, or the LAN page file list |
+| Export log | `http://<phone-ip>:8765/pcld_ios_media/logs/export_latest.txt` |
+| Archived exports | `http://<phone-ip>:8765/browse` → **On phone (playback)**; each `archive/` file has **Delete** |
 
-If Explorer never shows **Loop Segments**:
-
-1. Install/update **[Apple Devices](https://apps.microsoft.com/detail/9NP83LWLPZ9K)** (or iTunes for drivers).
-2. Open the **Apple Devices** app → select iPhone → look for **Files** or apps list → **Loop Segments**.
-3. On the phone, confirm exports exist in **Files** (step above).
-4. Copy files manually: in **Files**, select `op_*.mp4` → **Share** → save to **iCloud Drive** / **OneDrive** / email to PC (workaround when USB app folders don’t mount).
+**Files → On My iPhone → Loop Segments → Exports** is left over from older builds and is normally empty. **Explorer → Apple iPhone → Internal Storage** shows only Photos (folders like `202605_a`), never the app.
 
 ---
 
@@ -103,13 +98,13 @@ If Explorer never shows **Loop Segments**:
 
 | Issue | Fix |
 |-------|-----|
-| Internal Storage only `202605_a` folders | Those are **Photos**, not the app. Use **Files → On My iPhone → Loop Segments → Exports** on the phone; try **Apple Devices** app on PC for File Sharing |
-| PC can’t see iPhone | Unlock phone, replug USB, open **Apple Devices** app; if Exports vanished during export, **stop export**, unlock, then browse again. Copy path from Explorer → `-SourceRoot` |
-| Network timed out on export | Strong cellular; keep app foreground; try Wi‑Fi; read `Exports/export_latest.txt` |
+| Internal Storage only `202605_a` folders | Those are **Photos**. The app's files are not visible over USB; use the LAN page `http://<phone-ip>:8765/` |
+| PC can’t see iPhone | USB is not used here. Check the phone and PC are on the same Wi‑Fi, and **LAN server on Wi‑Fi** is on |
+| Network timed out on export | Strong cellular; keep app foreground; try Wi‑Fi; read the export log at `http://<phone-ip>:8765/pcld_ios_media/logs/export_latest.txt` |
 | LAN sync fails | Same Wi‑Fi; Local Network allowed for Loop Segments; IP in `windows/loop-segments-windows.json` (`phoneLanHost`); wait for `DLNA slot published` in `export_latest.txt` |
 | DLNA empty | Confirm `op_00.mp4` and `op_01.mp4` in `F:\f1_media\3d_fullsbs_trans` |
 | pCloud fails on phone | Approve WebDAV 2FA email; check cellular permission. **Authenticated WebDAV 404** (even on `/p_cld_media/`) while unauth still **401** is usually a **pCloud outage** — same 404 in browser/Cyberduck on `webdav.pcloud.com`; wait it out (see [ios/README.md](ios/README.md#pcloud-webdav-404-accountservice)). Europe API **1022** is wrong datacenter, not 2FA |
-| Export fails on phone | **Files → Loop Segments → Exports → export_latest.txt** on the phone |
+| Export fails on phone | Read `http://<phone-ip>:8765/pcld_ios_media/logs/export_latest.txt` |
 
 ---
 

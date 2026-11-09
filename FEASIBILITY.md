@@ -33,7 +33,7 @@ This repo’s iPhone app is optional (e.g. export when the PC is off).
 
 ### B. **iPhone export + PC pulls over Wi‑Fi** (built)
 
-While export runs, the app serves `Exports/` on the **LAN** (`http://<phone-ip>:8765/`); **`windows\Sync-FromPhoneLAN.ps1 -Watch`** copies into the DLNA folder every ~60s.
+While export runs, the app serves `pcld_ios_media/` on the **LAN** (`http://<phone-ip>:8765/`); **`windows\archive\Sync-FromPhoneLAN.ps1 -Watch`** copies into the DLNA folder every ~60s.
 
 - Same phone cellular export you wanted; **Wi‑Fi/LAN** only for phone ↔ PC
 - No USB, no Apple Devices, no Photos required

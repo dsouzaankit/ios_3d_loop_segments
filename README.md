@@ -16,7 +16,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 | Step | Device | Connection |
 |------|--------|------------|
 | Export from pCloud | iPhone | Cellular (Wi‑Fi off OK) |
-| Expose `Exports/` on PC | iPhone → PC | Browser / download on `http://<ip>:8765/`, or manual USB |
+| Expose `pcld_ios_media/` on PC | iPhone → PC | Browser / download on `http://<ip>:8765/` (USB cannot reach it) |
 | Play on TV | PC → LAN | WLAN (DLNA server on Windows) |
 
 Full guide: **[WORKFLOW.md](WORKFLOW.md)**

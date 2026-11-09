@@ -14,7 +14,8 @@ enum ExportPaths {
     /// Two slots rotating under `pcld_ios_media/loop/` — PC sees both via rclone mount (`Mount-LoopSegmentsRclone.ps1`).
     static let segmentFileCount = 2
 
-    /// Shared logs + USB-visible files (`UIFileSharingEnabled`).
+    /// `Documents/Exports`, visible in the Files app (`UIFileSharingEnabled`). Logs and media used to live here;
+    /// launch moves them to `pcld_ios_media/` (see `mediaExportDirectory`), so it is normally empty.
     static var exportsDirectory: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let dir = docs.appendingPathComponent("Exports", isDirectory: true)
@@ -27,8 +28,26 @@ enum ExportPaths {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent(mediaExportFolderName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        _ = mediaExcludedFromBackup
         return dir
     }
+
+    /// Runs once per launch (a lazy static is initialised exactly once, thread-safely). Media and logs are
+    /// re-downloadable or disposable and can run to several GB, so keep the whole folder out of iCloud and
+    /// computer backups. Setting it on the folder covers everything inside, including files added later.
+    private static let mediaExcludedFromBackup: Bool = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        var dir = base.appendingPathComponent(mediaExportFolderName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        do {
+            try dir.setResourceValues(values)
+            return true
+        } catch {
+            return false
+        }
+    }()
 
     /// User-named HTTP(S) downloads from the LAN page — `pcld_ios_media/downloads/`.
     static var downloadsDirectory: URL {
