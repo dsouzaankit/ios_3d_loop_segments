@@ -41,13 +41,19 @@ If Explorer instead shows **`L:\pcld_ios_media\`**, the mount is WebDAV root (fo
 
 Preferred **`mountDriveLetter`** in `loop-segments-windows.json` is tried first (default `L`). If that letter is already taken (Koofr, etc.), the mount script picks a **random free D–Z** and writes it back to json.
 
-## When to skip rclone mount / how Quest plays phone media
+## Getting phone media into Skybox on Quest
 
-- **Quest Skybox + `rclone serve dlna`** (companion default) — phone WebDAV advertised as DLNA; no AirScreen of `L:`.
-- **Quest Skybox + WebDAV** direct to the phone (`http://<ip>:8765/`) — no PC rclone step.
-- **Explorer / scripts** — optional **`rclone mount`** to `L:` (still started by companion unless `-SkipRcloneMount`).
+DLNA is the companion default because it is the only route that both plays in Skybox VR and needs no setup on the headset.
 
-**Do not map `L:` into Skybox AirScreen** for phone media — that path **never played** in Skybox VR (WinFsp/`L:` may list in Add-folders but does not stream). Companion no longer maps it.
+| Route | Plays in Skybox VR | Setup |
+|---|---|---|
+| **`rclone serve dlna`** (companion default) | Yes | None on the headset: Skybox finds **Loop Segments** under **Network** by itself |
+| **WebDAV direct to the phone** (`http://<phone>:8765/`, `admin` / `iosadmin`) | Yes, one hop fewer (no PC in the middle) | Add it once by hand under Skybox **Network**. Scripts cannot do this: the only Skybox API, `http://127.0.0.1:8018` (used by `Skybox_vr_pc`), belongs to the PC app and only manages AirScreen folders. With a static phone IP the saved entry keeps working |
+| **AirScreen folder of the `L:` mount** | **No**: it lists in Add-folders but never streams | Automatable through the PC app, but pointless. The companion no longer maps it |
+
+**Do not map `L:` into Skybox AirScreen** for phone media. Quest Browser (`/xr`) is a separate path and cannot play WMV.
+
+**Explorer / scripts:** the optional **`rclone mount`** to `L:` is for PC use only (still started by the companion unless `-SkipRcloneMount`).
 
 ### If rclone DLNA playback stutters
 
