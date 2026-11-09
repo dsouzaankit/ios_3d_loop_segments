@@ -44,6 +44,16 @@ jobs:
           set -euo pipefail
           grep -q 'KeepAlive_silence.mp3' LoopSegments.xcodeproj/project.pbxproj
           echo "OK: KeepAlive_silence.mp3 in Xcode project"
+          for f in xr-player.html xr-components.js xr-app.js; do
+            grep -q "$f" LoopSegments.xcodeproj/project.pbxproj
+          done
+          echo "OK: /xr player files in Xcode project"
+
+      - name: Check /xr player scripts parse
+        working-directory: ios/LoopSegments/Resources
+        run: |
+          node --check xr-components.js
+          node --check xr-app.js
 
       - name: Resolve Swift packages
         working-directory: ios
@@ -110,6 +120,16 @@ jobs:
           set -euo pipefail
           grep -q 'KeepAlive_silence.mp3' LoopSegments.xcodeproj/project.pbxproj
           echo "OK: KeepAlive_silence.mp3 in Xcode project"
+          for f in xr-player.html xr-components.js xr-app.js; do
+            grep -q "$f" LoopSegments.xcodeproj/project.pbxproj
+          done
+          echo "OK: /xr player files in Xcode project"
+
+      - name: Check /xr player scripts parse
+        working-directory: ios/LoopSegments/Resources
+        run: |
+          node --check xr-components.js
+          node --check xr-app.js
 
       - name: Resolve Swift packages
         working-directory: ios
@@ -166,6 +186,15 @@ jobs:
             else
               echo "OK: no Frameworks/ embedded (iOS 26 launch-safe)."
             fi
+            local app_dir
+            app_dir="$(dirname "$plist_path")"
+            for f in xr-player.html xr-components.js xr-app.js; do
+              if [[ ! -s "$app_dir/$f" ]]; then
+                echo "ERROR: $f missing from IPA (/xr would not load)."
+                exit 1
+              fi
+            done
+            echo "OK: /xr player files in IPA."
             rm -rf ipa-verify
           }
 

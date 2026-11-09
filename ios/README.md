@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 414 (1.3.1):** The `/xr` player moved out of `ExportLANServer.swift` into bundled files: `Resources/xr-player.html` (markup and CSS), `xr-components.js` (A-Frame components) and `xr-app.js` (page logic). The page is unchanged: the files were checked to rebuild it byte for byte. Scripts load from `/xr-assets/` with `?v=<build>`, and CI checks they parse and are in the IPA.
+
 **Build 413 (1.3.1):** `/xr` **Fullscreen** on a PC browser now hides the WebGL plane and stops video uploads too, as on Quest, so the preview is not updated behind the fullscreen video.
 
 **Build 412 (1.3.1):** `/xr` **Fullscreen** always uses the browser video player, even with Chroma on, so a green-screen clip shows its green there. The keyed preview pauses until you exit. AR and VR still key.

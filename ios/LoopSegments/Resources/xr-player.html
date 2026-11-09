@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loop Segments — XR chroma player</title>
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+  <script src="/xr-assets/xr-components.js?v={{XR_BUILD}}"></script>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; }
+    .play-overlay {
+      position: fixed; inset: 0; background: #111; color: #fff;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      z-index: 9999; padding: 1.25rem; text-align: center; box-sizing: border-box;
+    }
+    .play-overlay h1 { margin: 0 0 0.35rem; font-size: 1.35rem; }
+    .play-overlay .muted { color: #aaa; margin: 0 0 0.75rem; max-width: 36rem; line-height: 1.4; }
+    .play-overlay .warn {
+      color: #fbbf24; max-width: 36rem; margin: 0 0 1rem; font-size: 0.92rem; line-height: 1.4;
+    }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: center; margin: 0.5rem 0 0.75rem; }
+    .play-btn {
+      padding: 0.9rem 1.6rem; font-size: 1.15rem; background: #22c55e; border: none;
+      border-radius: 999px; color: #fff; cursor: pointer; font-weight: 700;
+    }
+    .toolbar button, .toolbar select {
+      padding: 0.45rem 0.75rem; font-size: 0.95rem; border-radius: 6px; border: 1px solid #444;
+      background: #222; color: #eee;
+    }
+    #xr-label { font-size: 0.9rem; color: #9ca3af; word-break: break-all; max-width: 40rem; }
+    a.back { color: #93c5fd; margin-top: 0.75rem; }
+    .toolbar button.active { background: #166534; border-color: #22c55e; }
+    .xr-file-panel {
+      width: min(40rem, 100%); max-height: min(42vh, 22rem); overflow: auto;
+      text-align: left; border: 1px solid #333; border-radius: 8px; background: #1a1a1a;
+      margin: 0.25rem 0 0.75rem;
+    }
+    .xr-file-group {
+      padding: 0.45rem 0.75rem 0.2rem; font-size: 0.75rem; letter-spacing: 0.04em;
+      text-transform: uppercase; color: #9ca3af; position: sticky; top: 0; background: #1a1a1a;
+    }
+    .xr-file-item {
+      display: block; width: 100%; box-sizing: border-box; text-align: left;
+      padding: 0.55rem 0.75rem; border: 0; border-top: 1px solid #2a2a2a;
+      background: transparent; color: #eee; cursor: pointer; font-size: 0.9rem;
+    }
+    .xr-file-item:hover { background: #262626; }
+    .xr-file-item.selected { background: #14532d; }
+    .xr-file-item .xr-file-name { display: block; word-break: break-all; }
+    .xr-file-item .xr-file-meta { display: block; color: #9ca3af; font-size: 0.78rem; margin-top: 0.15rem; }
+    .xr-file-empty { padding: 0.85rem 0.75rem; color: #9ca3af; font-size: 0.9rem; }
+    /* Archive: compact current-selection chip → centered top dropdown (above a-scene). */
+    .xr-archive-pick-wrap {
+      width: min(40rem, 100%); margin: 0.25rem 0 0.75rem; text-align: left;
+    }
+    .xr-archive-pick {
+      display: flex; align-items: center; gap: 0.5rem; width: 100%; box-sizing: border-box;
+      padding: 0.7rem 0.85rem; border-radius: 10px; border: 1px solid #3f3f46;
+      background: #14532d; color: #f8fafc; font: inherit; font-size: 0.95rem;
+      cursor: pointer; text-align: left;
+    }
+    .xr-archive-pick .xr-archive-pick-label {
+      flex: 1 1 auto; min-width: 0; word-break: break-all;
+    }
+    .xr-archive-pick .xr-archive-pick-chevron { flex: 0 0 auto; opacity: 0.85; }
+    #xr-archive-dd {
+      display: none; position: fixed; inset: 0; z-index: 10060;
+      align-items: flex-start; justify-content: center;
+      padding: max(0.75rem, env(safe-area-inset-top, 0px) + 0.5rem) 0.75rem 1rem;
+      box-sizing: border-box;
+      background: rgba(0, 0, 0, 0.55);
+    }
+    #xr-archive-dd.open { display: flex; }
+    #xr-archive-dd .xr-archive-dd-panel {
+      width: min(36rem, 100%); max-height: min(70vh, 28rem);
+      overflow: auto; border-radius: 12px; border: 1px solid #334155;
+      background: #0f172a; box-shadow: 0 16px 48px rgba(0,0,0,0.55);
+      margin-top: 0.25rem;
+    }
+    #xr-archive-dd .xr-archive-dd-head {
+      position: sticky; top: 0; z-index: 1;
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.65rem 0.75rem; background: #0f172a; border-bottom: 1px solid #1e293b;
+      font-size: 0.8rem; letter-spacing: 0.04em; text-transform: uppercase; color: #94a3b8;
+    }
+    #xr-archive-dd .xr-archive-dd-close {
+      margin-left: auto; padding: 0.35rem 0.65rem; border-radius: 6px;
+      border: 1px solid #475569; background: #1e293b; color: #f8fafc; cursor: pointer; font: inherit;
+    }
+    #xr-archive-dd .xr-file-item { border-top-color: #1e293b; }
+    #xr-archive-float {
+      display: none; position: fixed; left: 50%; top: max(0.65rem, env(safe-area-inset-top, 0px) + 0.35rem);
+      transform: translateX(-50%); z-index: 10040; width: min(36rem, calc(100vw - 1.5rem));
+    }
+    #xr-archive-float .xr-archive-pick {
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+    }
+    #xr-reopen {
+      display: none; position: fixed; right: 1rem; bottom: 1rem; z-index: 10000;
+      padding: 0.7rem 1rem; border-radius: 999px; border: 1px solid #444;
+      background: #166534; color: #fff; font-weight: 700; cursor: pointer;
+    }
+    #xr-transport {
+      /* Same bottom row as Enter AR / Enter VR. Stop short of that column
+         (AR sits near right: 60px, about 15rem wide with VR). A full-width
+         bar paints over the buttons because a-scene is its own stacking context. */
+      display: none; position: fixed; left: 0.75rem; right: 15.5rem; bottom: 0.45rem;
+      z-index: 10050; width: auto; overflow: hidden;
+      padding: 0.55rem 0.75rem; border-radius: 12px; border: 1px solid #333;
+      background: rgba(15, 23, 42, 0.92); color: #f8fafc;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45); backdrop-filter: blur(6px);
+      pointer-events: auto;
+    }
+    #xr-transport .xr-transport-row {
+      display: flex; flex-wrap: nowrap; gap: 0.45rem; align-items: center;
+    }
+    #xr-transport .xr-transport-row + .xr-transport-row { margin-top: 0.45rem; }
+    #xr-transport .xr-view-row label {
+      flex: 1 1 0; min-width: 0;
+      display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;
+    }
+    #xr-transport .xr-view-row input[type="range"] {
+      flex: 1 1 auto; width: auto; min-width: 0; height: 1.65rem;
+    }
+    #xr-transport button {
+      padding: 0.4rem 0.65rem; border-radius: 6px; border: 1px solid #444;
+      background: #1e293b; color: #f8fafc; cursor: pointer; font: inherit;
+      pointer-events: auto;
+    }
+    #xr-transport #xr-seek {
+      flex: 1 1 auto; width: 1px; min-width: 6rem; height: 1.65rem;
+      accent-color: #22c55e; touch-action: none; pointer-events: auto; cursor: pointer;
+    }
+    #xr-transport #xr-time {
+      font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #cbd5e1;
+      min-width: 7.5rem; text-align: right;
+    }
+    #xr-transport #xr-tex-note {
+      width: 100%; font-size: 0.75rem; color: #fbbf24; margin: 0.35rem 0 0;
+    }
+    /* Texture source — must stay in layout with tiny opacity (opacity:0 / display:none → black VideoTexture on Quest/PC). */
+    #chroma-stream {
+      position: fixed; left: 0; top: 0; width: 16px; height: 16px;
+      opacity: 0.01; pointer-events: none; z-index: 0; overflow: hidden;
+    }
+    /* Last-resort PC preview when even canvas downscale fails (rare). */
+    #xr-ds-canvas, #xr-ds-ar {
+      position: fixed; left: 0; top: 0; width: 16px; height: 16px;
+      opacity: 0.01; pointer-events: none; z-index: 0;
+    }
+    #chroma-stream.xr-pip {
+      left: auto; right: 1rem; top: auto; bottom: 5.5rem; z-index: 10045;
+      width: min(480px, 46vw); height: auto; max-height: 36vh;
+      opacity: 1; background: #000; border: 2px solid #22c55e; border-radius: 8px;
+    }
+    /* Quest flat preview. One full picture, above the Enter AR / Enter VR row.
+       The WebGL plane stays hidden so it does not tile a second copy in that gap. */
+    #chroma-stream.xr-flat-preview,
+    #xr-ds-canvas.xr-keyed-preview {
+      left: 0; top: 0; width: 100vw; height: calc(100vh - 6.5rem); max-height: none;
+      opacity: 1; z-index: 2; object-fit: contain; background: #111; border: 0; border-radius: 0;
+    }
+    /* Fullscreen preview. The base rule keeps the video 16px and nearly invisible for WebGL. */
+    #chroma-stream:fullscreen {
+      width: 100vw !important; height: 100vh !important; max-height: none !important;
+      opacity: 1 !important; pointer-events: auto; object-fit: contain; background: #000;
+    }
+    a-scene { z-index: 1; }
+    /* Hide gaze fuse reticle (center donut) if A-Frame / Quest re-injects it. */
+    a-cursor, .a-cursor, [cursor] {
+      display: none !important;
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    /* A-Frame HTTPS / sensor gate — default white-on-light is unreadable on Quest. */
+    .a-dialog,
+    .a-modal,
+    .a-enter-vr-modal {
+      background: #0f172a !important;
+      border: 2px solid #fbbf24 !important;
+      border-radius: 12px !important;
+      color: #f8fafc !important;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.75) !important;
+      max-width: min(92vw, 28rem) !important;
+      padding: 1.25rem 1.35rem !important;
+      z-index: 10050 !important;
+    }
+    .a-dialog-text-container,
+    .a-dialog-text,
+    .a-dialog p,
+    .a-modal p,
+    .a-enter-vr-modal p {
+      color: #f8fafc !important;
+      font-size: 1.2rem !important;
+      line-height: 1.45 !important;
+      font-weight: 600 !important;
+      text-shadow: 0 1px 2px #000 !important;
+    }
+    .a-dialog-ok-button,
+    .a-dialog-allow-button,
+    .a-dialog-deny-button,
+    .a-dialog button,
+    .a-modal button {
+      background: #22c55e !important;
+      color: #052e16 !important;
+      border: none !important;
+      border-radius: 8px !important;
+      font-weight: 700 !important;
+      font-size: 1.05rem !important;
+      padding: 0.55rem 1.1rem !important;
+      margin: 0.35rem !important;
+    }
+    .a-dialog-deny-button {
+      background: #334155 !important;
+      color: #f8fafc !important;
+    }
+  </style>
+</head>
+<body>
+  <button type="button" id="xr-reopen" aria-label="Show file list">Files</button>
+  <div id="xr-archive-float" hidden></div>
+  <div id="xr-archive-dd" aria-hidden="true">
+    <div class="xr-archive-dd-panel" role="listbox" aria-label="Archive folder videos">
+      <div class="xr-archive-dd-head">
+        <span>Archive folder</span>
+        <button type="button" class="xr-archive-dd-close" id="xr-archive-dd-close">Close</button>
+      </div>
+      <div id="xr-archive-dd-list"></div>
+    </div>
+  </div>
+  <div id="xr-transport" role="group" aria-label="Playback controls" hidden>
+    <div class="xr-transport-row">
+      <button type="button" id="xr-playpause" title="Play / Pause">Play</button>
+      <button type="button" id="xr-seek-back" title="Back 10 seconds">−10s</button>
+      <button type="button" id="xr-seek-fwd" title="Forward 10 seconds">+10s</button>
+      <button type="button" id="xr-fullscreen" title="Fullscreen in the browser video player. Chroma is not applied here.">Fullscreen</button>
+      <input type="range" id="xr-seek" min="0" max="0" step="0.1" value="0" aria-label="Seek">
+      <span id="xr-time">0:00 / 0:00</span>
+      <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Key
+        <input type="color" id="xr-chroma-key-play" value="#00ff00" aria-label="Chroma key color">
+      </label>
+      <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem">Vol
+        <input type="range" id="xr-volume" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
+      </label>
+    </div>
+    <div class="xr-transport-row xr-view-row">
+      <label title="How many degrees the shell covers (180° → 90°). Packs the full frame onto a shorter arc.">FOV
+        <input type="range" id="xr-zoom" min="0.5" max="1" step="0.1" value="1" aria-label="Field of view degrees">
+      </label>
+      <label title="Skybox / PLAY’A style. Left = zoom in (dome closer). Right = zoom out (dome farther, face smaller).">Zoom
+        <span>In</span>
+        <input type="range" id="xr-dist" min="0" max="12" step="0.5" value="0" aria-label="Zoom: in on the left, out on the right">
+        <span>Out</span>
+      </label>
+    </div>
+    <p id="xr-tex-note" hidden></p>
+  </div>
+  <div id="overlay" class="play-overlay">
+    <h1>3D Chroma Key 180° Player</h1>
+    <p class="muted">Three playlists: <strong>Loop</strong> = <code>{{XR_MEDIA_ROOT_HTML}}loop/op_*.mp4</code> · <strong>Working</strong> = any playable file in the media root next to <code>_working.mp4</code> · <strong>Archive</strong> = <code>{{XR_MEDIA_ROOT_HTML}}archive/</code> folder</p>
+    <p class="warn">Quest WebXR needs a <strong>secure context</strong>: prefer Quest <code>chrome://flags</code> insecure-origin + LAN <code>http://</code> (see LAN page). Cloudflare tunnel is optional (slow). Passthrough = <strong>Enter AR</strong> (not Enter VR). A-Frame CDN needs internet on the headset once.</p>
+    <p id="xr-webxr-status" class="muted" style="font-size:0.85rem;max-width:36rem" role="status">Checking WebXR…</p>
+    <div class="toolbar" role="group" aria-label="Playlist">
+      <button type="button" id="xr-mode-loop" class="active">Loop</button>
+      <button type="button" id="xr-mode-working">Working</button>
+      <button type="button" id="xr-mode-archive">Archive folder</button>
+      <button type="button" id="xr-refresh-list">Refresh list</button>
+    </div>
+    <div id="xr-file-list" class="xr-file-panel" role="listbox" aria-label="Media files"></div>
+    <div class="toolbar">
+      <button type="button" id="xr-prev">Prev</button>
+      <button type="button" id="xr-next">Next</button>
+      <label>Speed
+        <select id="xr-rate" aria-label="Playback speed">
+          <option value="0.7">0.7×</option>
+          <option value="0.8">0.8×</option>
+          <option value="0.9">0.9×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.1">1.1×</option>
+          <option value="1.2">1.2×</option>
+          <option value="1.3">1.3×</option>
+        </select>
+      </label>
+      <label>Vol
+        <input type="range" id="xr-volume-launch" min="0" max="1" step="0.1" value="1" style="width:7rem" aria-label="Volume">
+      </label>
+      <label><input type="checkbox" id="xr-chroma-toggle" checked> Chroma</label>
+      <label>Key
+        <input type="color" id="xr-chroma-key" value="#00ff00" aria-label="Chroma key color">
+      </label>
+      <label><input type="checkbox" id="xr-sbs-toggle" checked> SBS 3D (VR180)</label>
+    </div>
+    <p class="muted" style="font-size:0.85rem;max-width:36rem">After Launch: <strong>180° hemisphere</strong> + SBS eye-split (left/right halves). PC: mouse look / WASD. Prefer <strong>Loop</strong> for tests — <code>_working.mp4</code> is often huge/sparse/6K HEVC. Enable <strong>Chroma</strong> for green-screen over passthrough.</p>
+    <p id="xr-label" role="status">Loading playlists…</p>
+    <p style="margin: 1rem 0 0">
+      <button type="button" class="play-btn" id="xr-launch">Launch Engine</button>
+    </p>
+    <p class="muted" style="margin-top:1rem;font-size:0.85rem">
+      Chroma key color is the picker next to <strong>Chroma</strong>. Similarity 0.3, smoothness 0.08.
+    </p>
+    <a class="back" href="/">← LAN monitor</a>
+    ·
+    <a class="back" href="/browse">LAN browse</a>
+  </div>
+
+  <!-- Outside a-assets; tiny opacity — feeds VideoTexture (avoid display:none / opacity:0). -->
+  <video id="chroma-stream" playsinline webkit-playsinline preload="auto"></video>
+  <canvas id="xr-ds-canvas" width="16" height="16"></canvas>
+
+  <a-scene
+    background="color: #0a0a0a"
+    no-gaze-cursor
+    webxr="requiredFeatures: local-floor; optionalFeatures: bounded-floor, layers"
+    xr-mode-ui="enabled: true; XRMode: xr; enterVREnabled: true; enterAREnabled: true"
+    device-orientation-permission-ui="enabled: true; httpsMessage: Use Quest chrome://flags insecure-origin for this LAN http:// origin (see LAN page), or optional Cloudflare tunnel at page bottom; cancelButtonText: OK">
+    <!-- PC / magic-window: native flat a-video (custom VideoTexture shader was black on desktop). -->
+    <a-video
+      id="chroma-screen"
+      src="#chroma-stream"
+      width="16"
+      height="9"
+      position="0 1.6 -4"
+      material="shader: flat; src: #chroma-stream; side: double; npot: true"
+      chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: both; role: desktop">
+    </a-video>
+    <!-- Immersive VR180: placeholder sphere; chroma-stereo-sbs replaces BufferGeometry with a true
+         THREE hemisphere (A-Frame phiLength / a-videosphere still stretch 180→360). Hidden until XR. -->
+    <a-entity
+      id="chroma-sphere"
+      visible="false"
+      geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 40; phiStart: 180; phiLength: 180; thetaLength: 180"
+      scale="-1 1 1"
+      position="0 1.6 0"
+      material="shader: flat; color: #ffffff; side: double"
+      chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: left; role: dome">
+    </a-entity>
+    <a-entity
+      id="chroma-sphere-right"
+      visible="false"
+      geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 40; phiStart: 180; phiLength: 180; thetaLength: 180"
+      scale="-1 1 1"
+      position="0 1.6 0"
+      material="shader: flat; color: #ffffff; side: double"
+      chroma-stereo-sbs="keyColor: #00ff00; similarity: 0.3; smoothness: 0.08; chroma: false; sbs: true; eye: right; role: dome">
+    </a-entity>
+
+    <a-sky id="virtual-sky" color="#0a0a0a"></a-sky>
+    <!-- No gaze button. Enter AR still clears the sky so keyed pixels show the room. -->
+    <a-entity env-toggle visible="false"></a-entity>
+
+    <a-entity camera look-controls wasd-controls position="0 1.6 0"></a-entity>
+  </a-scene>
+
+  <script>window.__XR_CONFIG__ = {{XR_CONFIG_JSON}};</script>
+  <script src="/xr-assets/xr-app.js?v={{XR_BUILD}}"></script>
+</body>
+</html>

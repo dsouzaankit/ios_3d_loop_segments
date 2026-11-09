@@ -22,6 +22,13 @@ targets:
         buildPhase: resources
       - path: LoopSegments/Resources/PrivacyInfo.xcprivacy
         buildPhase: resources
+      # /xr WebXR player, served by ExportLANServer from the bundle.
+      - path: LoopSegments/Resources/xr-player.html
+        buildPhase: resources
+      - path: LoopSegments/Resources/xr-components.js
+        buildPhase: resources
+      - path: LoopSegments/Resources/xr-app.js
+        buildPhase: resources
     preBuildScripts:
       - name: Copy KeepAlive silence into app bundle
         basedOnDependencyAnalysis: false
@@ -32,6 +39,7 @@ targets:
           mkdir -p "$DEST"
           cp "${RES}/KeepAlive_silence.mp3" "${DEST}/"
           cp "${RES}/KeepAlive_silence-credits.txt" "${DEST}/"
+          cp "${RES}/xr-player.html" "${RES}/xr-components.js" "${RES}/xr-app.js" "${DEST}/"
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -41,5 +49,5 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.loopsegments.app
         MARKETING_VERSION: "1.3.1"
-        CURRENT_PROJECT_VERSION: "413"
+        CURRENT_PROJECT_VERSION: "414"
         TARGETED_DEVICE_FAMILY: "1,2"
