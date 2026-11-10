@@ -48,9 +48,11 @@ final class LANPasswordStoreTests: XCTestCase {
         if let problem = LANPasswordStore.set("chosen-pass-123") {
             // CI's unsigned simulator host has no Keychain (OSStatus -34018), so nothing can be saved.
             XCTAssertEqual(LANPasswordStore.current, before, "a failed save keeps the old password")
+            XCTAssertFalse(LANPasswordStore.isSaved, "the Export screen says this password is not saved (A9)")
             throw XCTSkip("Keychain not available here: \(problem)")
         }
         defer { LANPasswordStore.set(before) }
+        XCTAssertTrue(LANPasswordStore.isSaved)
         XCTAssertEqual(LANPasswordStore.current, "chosen-pass-123")
         XCTAssertNotNil(LANPasswordStore.set("bad"))
         XCTAssertEqual(LANPasswordStore.current, "chosen-pass-123", "a refused password changes nothing")

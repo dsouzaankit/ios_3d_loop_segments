@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 426 (1.3.1):** If the LAN password could not be read from or saved to the Keychain, the Export screen now says so in orange: it only lasts until the app quits, so don't put it in Skybox, rclone or the PC json (audit A9). Quit and reopen the app to try again. Normally the usual "Kept in this phone's Keychain" note shows.
+
 **Build 425 (1.3.1):** Fixes 423's Keychain handling. Only the "phone still locked after a restart" error makes the server refuse logins and read again. Any other read error (a Keychain the app can't use at all) now uses a password kept in memory for this launch, as before 423, so logins still work; it is never saved, so a stored password is not replaced. 423 and 424 had refused every login in that case, which failed 7 unit tests on CI's simulator, which has no Keychain.
 
 **Build 424 (1.3.1):** The `/xr` debug POST (`xr_debug.json`) now needs the LAN login too (audit S9), so other devices on the Wi-Fi can no longer write to the debug log. The Quest browser already sends the login it gave `/xr`. If it doesn't, the 401 leaves out `WWW-Authenticate`, so no login sheet pops up (the AR-exit problem build 392 worked around) and those debug lines are dropped. Scripts that clear the ring need `-u admin:<password>`.

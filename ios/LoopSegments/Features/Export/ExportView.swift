@@ -37,6 +37,8 @@ struct ExportView: View {
     @State private var switchExportTarget: ExportSwitchTarget?
     @State private var didAutoStartExport = false
     @State private var lanPassword = LANPasswordStore.current
+    /// Read after `lanPassword`, which loads it (declaration order).
+    @State private var lanPasswordSaved = LANPasswordStore.isSaved
     @State private var copiedLANPassword = false
     @State private var showSetLANPassword = false
     @State private var showNewLANPasswordConfirm = false
@@ -68,6 +70,7 @@ struct ExportView: View {
                     lanPasswordError = problem
                 } else {
                     lanPassword = LANPasswordStore.current
+                    lanPasswordSaved = LANPasswordStore.isSaved
                     copiedLANPassword = false
                 }
             }
@@ -82,6 +85,7 @@ struct ExportView: View {
             Button("Replace", role: .destructive) {
                 if let fresh = LANPasswordStore.regenerate() {
                     lanPassword = fresh
+                    lanPasswordSaved = LANPasswordStore.isSaved
                     lanPasswordError = nil
                     copiedLANPassword = false
                 } else {
@@ -96,9 +100,16 @@ struct ExportView: View {
                 .font(.footnote)
                 .foregroundStyle(.red)
         }
-        Text("Kept in this phone's Keychain; it stays the same across launches and updates. Put it in windows/loop-segments-windows.json (webdavPassword), Skybox and rclone.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+        if lanPasswordSaved {
+            Text("Kept in this phone's Keychain; it stays the same across launches and updates. Put it in windows/loop-segments-windows.json (webdavPassword), Skybox and rclone.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        } else {
+            // Audit A9: the Keychain could not be read or saved, so this one ends when the app quits.
+            Text("Not saved: the Keychain can't be used right now, so this password only lasts until the app quits. Don't put it in Skybox, rclone or the PC json; quit and reopen the app to try again.")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+        }
     }
 
     var body: some View {

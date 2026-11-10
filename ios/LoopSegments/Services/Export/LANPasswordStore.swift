@@ -9,6 +9,15 @@ enum LANPasswordStore {
     private static let account = "admin"
     private static let lock = NSLock()
     private static var cached: String?
+    private static var saved = true
+
+    /// False when `current` is not the password stored in the Keychain (it could not be read or
+    /// saved), so it only lasts until the app quits. The Export screen says so (audit A9).
+    static var isSaved: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return saved
+    }
 
     static let minimumLength = 8
     static let maximumLength = 64
@@ -56,10 +65,12 @@ enum LANPasswordStore {
         switch decide(stored) {
         case .use(let password):
             cached = password
+            saved = true
             return password
         case .createNew:
             let fresh = makeRandomPassword()
             let status = writeKeychain(fresh)
+            saved = status == errSecSuccess
             if status != errSecSuccess {
                 // Still serve it this session, but it will not survive a relaunch.
                 SearchDebugLog.log("LAN password: could not save a new password to the Keychain (OSStatus \(status))")
@@ -71,6 +82,7 @@ enum LANPasswordStore {
                 SearchDebugLog.log("LAN password: Keychain unreadable (OSStatus \(status)); refusing logins until it can be read")
             }
             // Not cached: no client can match it, and the next request reads the Keychain again.
+            saved = false
             return makeRandomPassword()
         case .sessionOnly:
             if case .unreadable(let status) = stored {
@@ -78,6 +90,7 @@ enum LANPasswordStore {
             }
             let fresh = makeRandomPassword()
             cached = fresh
+            saved = false
             return fresh
         }
     }
@@ -91,6 +104,7 @@ enum LANPasswordStore {
         let status = writeKeychain(password)
         guard status == errSecSuccess else { return saveFailureMessage(status) }
         cached = password
+        saved = true
         return nil
     }
 
@@ -105,6 +119,7 @@ enum LANPasswordStore {
             return nil
         }
         cached = fresh
+        saved = true
         return fresh
     }
 
