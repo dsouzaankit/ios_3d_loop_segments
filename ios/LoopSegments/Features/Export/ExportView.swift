@@ -80,8 +80,13 @@ struct ExportView: View {
         }
         .confirmationDialog("Replace the LAN password?", isPresented: $showNewLANPasswordConfirm, titleVisibility: .visible) {
             Button("Replace", role: .destructive) {
-                lanPassword = LANPasswordStore.regenerate()
-                copiedLANPassword = false
+                if let fresh = LANPasswordStore.regenerate() {
+                    lanPassword = fresh
+                    lanPasswordError = nil
+                    copiedLANPassword = false
+                } else {
+                    lanPasswordError = "could not save a new one to the Keychain; the old password is kept."
+                }
             }
         } message: {
             Text("Skybox, rclone, the PC json and saved browser logins stop working until you enter the new one.")

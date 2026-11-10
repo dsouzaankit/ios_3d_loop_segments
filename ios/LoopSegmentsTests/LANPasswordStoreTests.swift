@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import LoopSegments
 
@@ -23,6 +24,20 @@ final class LANPasswordStoreTests: XCTestCase {
         XCTAssertNotNil(LANPasswordStore.validationProblem(" leading-space"))
         XCTAssertNotNil(LANPasswordStore.validationProblem("trailing-space "))
         XCTAssertNotNil(LANPasswordStore.validationProblem("émoji-pass😀"))
+    }
+
+    /// Audit A8: only a missing password is replaced; a Keychain error keeps the stored one.
+    func testKeychainReadResults() {
+        let good = Data("abcd-efgh-jkmn-pqrs".utf8)
+        XCTAssertEqual(LANPasswordStore.storedPassword(status: errSecSuccess, data: good), .found("abcd-efgh-jkmn-pqrs"))
+        XCTAssertEqual(LANPasswordStore.storedPassword(status: errSecItemNotFound, data: nil), .missing)
+        XCTAssertEqual(LANPasswordStore.storedPassword(status: errSecSuccess, data: Data("bad".utf8)), .missing, "unusable item")
+        XCTAssertEqual(LANPasswordStore.storedPassword(status: errSecInteractionNotAllowed, data: nil), .unreadable(errSecInteractionNotAllowed))
+
+        XCTAssertEqual(LANPasswordStore.decide(.found("abcd-efgh-jkmn-pqrs")), .use("abcd-efgh-jkmn-pqrs"))
+        XCTAssertEqual(LANPasswordStore.decide(.missing), .createNew)
+        XCTAssertEqual(LANPasswordStore.decide(.unreadable(errSecInteractionNotAllowed)), .retryLater)
+        XCTAssertEqual(LANPasswordStore.decide(.unreadable(errSecNotAvailable)), .retryLater)
     }
 
     func testPasswordStaysTheSameAndSetReplacesIt() {

@@ -15,41 +15,88 @@ enum LANPasswordStore {
     /// No 0/o, 1/l/i: easy to read off the phone and type on a Quest keyboard.
     private static let alphabet = Array("abcdefghjkmnpqrstuvwxyz23456789")
 
+    /// What a Keychain read found.
+    enum StoredPassword: Equatable {
+        case found(String)
+        /// No item yet (first launch), or an item that is not a usable password.
+        case missing
+        /// The Keychain could not be read right now (for example locked before first unlock).
+        case unreadable(OSStatus)
+    }
+
+    /// What `current` does with a read result.
+    enum ReadDecision: Equatable {
+        case use(String)
+        case createNew
+        /// Refuse logins for now and read again on the next request. Never replaces the stored one.
+        case retryLater
+    }
+
+    /// Audit A8: only a missing password is replaced. A read error must not change it.
+    static func decide(_ stored: StoredPassword) -> ReadDecision {
+        switch stored {
+        case .found(let password): return .use(password)
+        case .missing: return .createNew
+        case .unreadable: return .retryLater
+        }
+    }
+
     /// The password the server checks. Read from the Keychain once, then from memory.
     static var current: String {
         lock.lock()
         defer { lock.unlock() }
         if let cached { return cached }
-        if let stored = readKeychain() {
-            cached = stored
-            return stored
+        let stored = readKeychain()
+        switch decide(stored) {
+        case .use(let password):
+            cached = password
+            return password
+        case .createNew:
+            let fresh = makeRandomPassword()
+            let status = writeKeychain(fresh)
+            if status != errSecSuccess {
+                // Still serve it this session, but it will not survive a relaunch.
+                SearchDebugLog.log("LAN password: could not save a new password to the Keychain (OSStatus \(status))")
+            }
+            cached = fresh
+            return fresh
+        case .retryLater:
+            if case .unreadable(let status) = stored {
+                SearchDebugLog.log("LAN password: Keychain unreadable (OSStatus \(status)); refusing logins until it can be read")
+            }
+            // Not cached: no client can match it, and the next request reads the Keychain again.
+            return makeRandomPassword()
         }
-        let fresh = makeRandomPassword()
-        writeKeychain(fresh)
-        cached = fresh
-        return fresh
     }
 
-    /// Saves a password the user chose. Returns an error message when it is not allowed.
+    /// Saves a password the user chose. Returns an error message when it is not saved.
     @discardableResult
     static func set(_ password: String) -> String? {
         if let problem = validationProblem(password) { return problem }
         lock.lock()
         defer { lock.unlock() }
-        writeKeychain(password)
+        let status = writeKeychain(password)
+        guard status == errSecSuccess else { return saveFailureMessage(status) }
         cached = password
         return nil
     }
 
-    /// Replaces the password with a new random one and returns it.
-    @discardableResult
-    static func regenerate() -> String {
+    /// Replaces the password with a new random one. Returns nil (old one kept) when it cannot be saved.
+    static func regenerate() -> String? {
         let fresh = makeRandomPassword()
         lock.lock()
         defer { lock.unlock() }
-        writeKeychain(fresh)
+        let status = writeKeychain(fresh)
+        guard status == errSecSuccess else {
+            SearchDebugLog.log("LAN password: \(saveFailureMessage(status))")
+            return nil
+        }
         cached = fresh
         return fresh
+    }
+
+    static func saveFailureMessage(_ status: OSStatus) -> String {
+        "Could not save to the Keychain (OSStatus \(status)); the old password is kept."
     }
 
     /// Printable ASCII only (Basic auth, rclone and Skybox handle it), no spaces at the ends.
@@ -69,6 +116,21 @@ enum LANPasswordStore {
         return stride(from: 0, to: 16, by: 4).map { String(chars[$0..<$0 + 4]) }.joined(separator: "-")
     }
 
+    /// Maps a Keychain read status and data to what was found.
+    static func storedPassword(status: OSStatus, data: Data?) -> StoredPassword {
+        switch status {
+        case errSecSuccess:
+            guard let data, let text = String(data: data, encoding: .utf8), validationProblem(text) == nil else {
+                return .missing
+            }
+            return .found(text)
+        case errSecItemNotFound:
+            return .missing
+        default:
+            return .unreadable(status)
+        }
+    }
+
     private static var baseQuery: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -77,26 +139,26 @@ enum LANPasswordStore {
         ]
     }
 
-    private static func readKeychain() -> String? {
+    private static func readKeychain() -> StoredPassword {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
-              let text = String(data: data, encoding: .utf8),
-              validationProblem(text) == nil
-        else { return nil }
-        return text
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        return storedPassword(status: status, data: item as? Data)
     }
 
-    private static func writeKeychain(_ password: String) {
-        SecItemDelete(baseQuery as CFDictionary)
+    /// Updates in place, or adds when there is no item, so a failed save never deletes the old one.
+    private static func writeKeychain(_ password: String) -> OSStatus {
+        let data = Data(password.utf8)
+        let update: [String: Any] = [kSecValueData as String: data]
+        let status = SecItemUpdate(baseQuery as CFDictionary, update as CFDictionary)
+        guard status == errSecItemNotFound else { return status }
         var add = baseQuery
-        add[kSecValueData as String] = Data(password.utf8)
+        add[kSecValueData as String] = data
         // The LAN server runs while the phone is locked (Keep Alive), so allow reads after first unlock.
         // ThisDeviceOnly: not copied into iCloud or device backups.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        return SecItemAdd(add as CFDictionary, nil)
     }
 }
