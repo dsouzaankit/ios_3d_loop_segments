@@ -129,7 +129,7 @@ function Add-LoopSegmentsLANWebDAVAuthHeader {
     param(
         $Request,
         [string] $User = 'admin',
-        [string] $Password = 'iosadmin'
+        [string] $Password = ''
     )
     $bytes = [Text.Encoding]::ASCII.GetBytes("${User}:${Password}")
     $Request.Headers['Authorization'] = 'Basic ' + [Convert]::ToBase64String($bytes)
@@ -317,7 +317,7 @@ function Test-LoopSegmentsWebDAV {
 
     if (-not (Test-LoopSegmentsWebDAVRootForNetUse -RootUrl $RootUrl)) {
         $msg = @(
-            'GET / as WebDAV client failed (need 200 XML with admin/iosadmin — build 169+ on phone).',
+            'GET / as WebDAV client failed (need 200 XML with the LAN login — build 169+ on phone).',
             'Skybox/Windows WebDAV still need the IPA from GitHub Actions ios-build.',
             'Until drive mapping works: .\Sync-FromPhoneLAN.ps1 -Watch'
         ) -join [Environment]::NewLine
