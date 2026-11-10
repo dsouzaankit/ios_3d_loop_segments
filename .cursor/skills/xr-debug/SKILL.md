@@ -16,8 +16,10 @@ Quest Browser `/xr` issues: blank HEVC after AV1, browser disappear on AR exit, 
 
 Phone + PC on same Wi‑Fi; Loop Segments LAN on `:8765`.
 
+Both calls need the LAN login (`admin` / the password on the app's Export screen; GET since build 422, POST since 424). Don't print the password.
+
 ```powershell
-curl.exe -s "http://<phone-ip>:8765/xr_debug.json" -o xr_debug_live.json
+curl.exe -s -u "admin:<password>" "http://<phone-ip>:8765/xr_debug.json" -o xr_debug_live.json
 ```
 
 Or open `http://<phone-ip>:8765/xr_debug.json` in a browser. Optional file on phone: `pcld_ios_media/scripts/xr_debug.log`.
@@ -25,8 +27,10 @@ Or open `http://<phone-ip>:8765/xr_debug.json` in a browser. Optional file on ph
 Clear ring (optional):
 
 ```powershell
-curl.exe -s -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: application/json" -d "{\"action\":\"clear\"}"
+curl.exe -s -u "admin:<password>" -X POST "http://<phone-ip>:8765/xr_debug.json" -H "Content-Type: application/json" -d "{\"action\":\"clear\"}"
 ```
+
+An empty ring after a Quest session can mean the `/xr` debug POST was refused (401 without a login prompt): reload `/xr` so the browser logs in again.
 
 ## What to read
 

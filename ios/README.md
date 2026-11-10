@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 424 (1.3.1):** The `/xr` debug POST (`xr_debug.json`) now needs the LAN login too (audit S9), so other devices on the Wi-Fi can no longer write to the debug log. The Quest browser already sends the login it gave `/xr`. If it doesn't, the 401 leaves out `WWW-Authenticate`, so no login sheet pops up (the AR-exit problem build 392 worked around) and those debug lines are dropped. Scripts that clear the ring need `-u admin:<password>`.
+
 **Build 423 (1.3.1):** The LAN password only changes when you change it (audit A8). Before, any Keychain read error, not just "no password yet", made the app create and save a new one, so Skybox, rclone and the PC stopped working. Now a read error refuses logins until the Keychain can be read, and the stored password is kept. Saves update the existing item in place, and a failed save keeps the old password and says so on the Export screen. Restarting the phone keeps the password; until the first unlock after a restart iOS blocks Keychain reads, and that is the read error this fixes. A new password is made only on first launch, when you ask for one on the Export screen, or when the app is re-signed under a different Apple ID or team (iOS then gives it a separate Keychain). In that last case, put the new password in Skybox, the rclone remote and `windows/loop-segments-windows.json`.
 
 **Build 422 (1.3.1):** The Quest player (`/xr`, `/chroma`), `status.json`, `status_lists.json`, `xr_tunnel.json`, `xr_debug.json` (GET) and the export logs (`pcld_ios_media/logs/…` and legacy `/export_latest.txt` etc.) now need the WebDAV login too (audit #6). On Quest, `/xr` asks once per browser session when the page opens, before entering VR; let the browser save it. Media files, `/xr-assets/` scripts and the `/xr` debug POST stay open, so Skybox playback is unchanged. PC scripts send the login from `windows/loop-segments-windows.json`; their "is the phone up?" probes count a 401 as reachable. With several iPhones, add `webdavPassword` per entry in `phoneLanHosts` when a phone's password differs.
@@ -550,7 +552,7 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 **Quest VR SBS:** **Enter VR** puts the left dome on layer 1 and the right dome on layer 2 (build 406+). **Enter AR** stays mono (left half both eyes).
 
-**`/xr` debug:** the page POSTs a ring buffer to **`/xr_debug.json`** (also under monitor quick links). `GET /xr_debug.json` returns `{ lines, snapshot }`. Skill: `.cursor/skills/xr-debug/`.
+**`/xr` debug:** the page POSTs a ring buffer to **`/xr_debug.json`** (LAN login, build 424+) (also under monitor quick links). `GET /xr_debug.json` returns `{ lines, snapshot }`. Skill: `.cursor/skills/xr-debug/`.
 
 **Why no pCloud browser on `/`?** **`/`** is kept lightweight during export (no auto-poll, no `pcloud_list.json` traffic). Media rows use normal **`href`** links (new tab during export) for **HTTP GET** of files on the phone. **WebDAV folder browsing** in a **browser** is not implemented at **`/`** — use **`/browse`** for pick-export-from-folder, or point **PotPlayer / Skybox** at **`http://<ip>:8765/`** (those clients send WebDAV headers and get **PROPFIND** XML at **`GET /`**, not the monitor HTML).
 

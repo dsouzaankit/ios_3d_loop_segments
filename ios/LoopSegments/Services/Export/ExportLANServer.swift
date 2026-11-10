@@ -619,9 +619,8 @@ enum ExportLANServer {
         case "OPTIONS", "PROPFIND", "LOCK", "PUT", "MKCOL", "DELETE", "MOVE":
             return true
         case "POST":
-            // Quest /xr posts xr_debug.json with no Basic auth. A 401 here pops the browser
-            // login sheet (seen on AR exit) and drops the debug ring.
-            if normalizedGETPath(path) == "xr_debug.json" { return false }
+            // Includes xr_debug.json (audit S9). /xr needs the login, so the Quest browser already
+            // sends it on the page's debug POST; a refusal there never prompts (see below).
             return true
         case "GET", "HEAD":
             // Pages, status/tunnel/debug JSON and export logs need the login (audit S3, S8, A2).
@@ -658,15 +657,23 @@ enum ExportLANServer {
         guard requiresLANWebDAVAuth(method: method, path: path, requestHeaders: requestHeaders) else {
             return true
         }
+        let prompt = !refusesWithoutLoginPrompt(method: method, path: path)
         guard headerValue(named: "Authorization", in: requestHeaders) != nil else {
-            sendUnauthorized(connection: connection, done: done)
+            sendUnauthorized(connection: connection, prompt: prompt, done: done)
             return false
         }
         guard lanWebDAVAuthorizationOK(requestHeaders: requestHeaders) else {
-            sendUnauthorized(connection: connection, done: done)
+            sendUnauthorized(connection: connection, prompt: prompt, done: done)
             return false
         }
         return true
+    }
+
+    /// The /xr debug POST fires in the background (often on AR exit). Its 401 leaves out
+    /// `WWW-Authenticate`, so the browser never shows a login sheet for it (build 392's problem);
+    /// the debug lines are just dropped.
+    static func refusesWithoutLoginPrompt(method: String, path: String) -> Bool {
+        method == "POST" && normalizedGETPath(path) == "xr_debug.json"
     }
 
     /// Protect LAN proxy endpoints (pCloud list + bookmarks) with the same Basic auth as WebDAV.

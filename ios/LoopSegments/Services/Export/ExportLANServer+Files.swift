@@ -332,7 +332,8 @@ extension ExportLANServer {
         return formatter.string(from: date)
     }
 
-    static func sendUnauthorized(connection: NWConnection, done: @escaping () -> Void) {
+    /// `prompt: false` leaves out `WWW-Authenticate`, so browsers refuse without a login sheet.
+    static func sendUnauthorized(connection: NWConnection, prompt: Bool = true, done: @escaping () -> Void) {
         let body = Data(
             "Basic auth required: use the Loop Segments LAN WebDAV login."
                 .utf8
@@ -342,7 +343,9 @@ extension ExportLANServer {
             "Content-Type: text/plain; charset=utf-8",
             "Content-Length: \(body.count)",
         ]
-        lines.append(contentsOf: lanWebDAVAuthHeaderLines())
+        if prompt {
+            lines.append(contentsOf: lanWebDAVAuthHeaderLines())
+        }
         lines.append("Connection: close")
         var data = Data((lines.joined(separator: "\r\n") + "\r\n\r\n").utf8)
         data.append(body)

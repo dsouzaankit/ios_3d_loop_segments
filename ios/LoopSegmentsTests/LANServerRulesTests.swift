@@ -119,10 +119,15 @@ final class LANServerRulesTests: XCTestCase {
         }
     }
 
-    func testPOSTNeedsAuthExceptTheXRDebugLog() {
-        XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "POST", path: "/export_queue.json", requestHeaders: headers()))
-        XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "POST", path: "/xr_debug.json", requestHeaders: headers()))
-        XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "POST", path: "/xr_debug.json?x=1", requestHeaders: headers()))
+    /// Audit S9: every POST needs the login; only the /xr debug POST is refused without a login prompt.
+    func testEveryPOSTNeedsAuth() {
+        for path in ["/export_queue.json", "/xr_debug.json", "/xr_debug.json?x=1"] {
+            XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "POST", path: path, requestHeaders: headers()), path)
+        }
+        XCTAssertTrue(ExportLANServer.refusesWithoutLoginPrompt(method: "POST", path: "/xr_debug.json"))
+        XCTAssertTrue(ExportLANServer.refusesWithoutLoginPrompt(method: "POST", path: "/xr_debug.json?x=1"))
+        XCTAssertFalse(ExportLANServer.refusesWithoutLoginPrompt(method: "GET", path: "/xr_debug.json"))
+        XCTAssertFalse(ExportLANServer.refusesWithoutLoginPrompt(method: "POST", path: "/export_queue.json"))
     }
 
     /// The LAN pages need the login for everyone (audit S3: their scripts no longer carry the password).
@@ -150,13 +155,12 @@ final class LANServerRulesTests: XCTestCase {
         XCTAssertTrue(ExportLANServer.requiresLANWebDAVAuth(method: "HEAD", path: "/status.json", requestHeaders: headers()))
     }
 
-    /// Media and the /xr scripts stay open (Skybox often sends no Authorization); /xr still posts its debug ring.
+    /// Media and the /xr scripts stay open (Skybox often sends no Authorization).
     func testMediaAndXRAssetsStayOpen() {
         let skybox = headers("User-Agent: Skybox/1.0")
         for path in ["/pcld_ios_media/archive/a.mp4", "/pcld_ios_media/_working.mp4", "/xr-assets/aframe.min.js", "/wifi_www_probe.json"] {
             XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: path, requestHeaders: skybox), path)
         }
-        XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "POST", path: "/xr_debug.json", requestHeaders: headers()))
         XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "PATCH", path: "/", requestHeaders: headers()))
     }
 
