@@ -36,16 +36,21 @@ final class LANPasswordStoreTests: XCTestCase {
 
         XCTAssertEqual(LANPasswordStore.decide(.found("abcd-efgh-jkmn-pqrs")), .use("abcd-efgh-jkmn-pqrs"))
         XCTAssertEqual(LANPasswordStore.decide(.missing), .createNew)
-        XCTAssertEqual(LANPasswordStore.decide(.unreadable(errSecInteractionNotAllowed)), .retryLater)
-        XCTAssertEqual(LANPasswordStore.decide(.unreadable(errSecNotAvailable)), .retryLater)
+        XCTAssertEqual(LANPasswordStore.decide(.unreadable(errSecInteractionNotAllowed)), .retryLater, "locked after restart")
+        XCTAssertEqual(LANPasswordStore.decide(.unreadable(errSecNotAvailable)), .sessionOnly)
+        XCTAssertEqual(LANPasswordStore.decide(.unreadable(errSecMissingEntitlement)), .sessionOnly, "unsigned test host")
     }
 
-    func testPasswordStaysTheSameAndSetReplacesIt() {
+    func testPasswordStaysTheSameAndSetReplacesIt() throws {
         let before = LANPasswordStore.current
         XCTAssertEqual(LANPasswordStore.current, before, "reads do not make a new one")
         XCTAssertEqual(ExportLANServer.lanWebDAVPassword, before)
+        if let problem = LANPasswordStore.set("chosen-pass-123") {
+            // CI's unsigned simulator host has no Keychain (OSStatus -34018), so nothing can be saved.
+            XCTAssertEqual(LANPasswordStore.current, before, "a failed save keeps the old password")
+            throw XCTSkip("Keychain not available here: \(problem)")
+        }
         defer { LANPasswordStore.set(before) }
-        XCTAssertNil(LANPasswordStore.set("chosen-pass-123"))
         XCTAssertEqual(LANPasswordStore.current, "chosen-pass-123")
         XCTAssertNotNil(LANPasswordStore.set("bad"))
         XCTAssertEqual(LANPasswordStore.current, "chosen-pass-123", "a refused password changes nothing")

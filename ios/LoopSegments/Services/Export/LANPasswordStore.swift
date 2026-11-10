@@ -28,8 +28,11 @@ enum LANPasswordStore {
     enum ReadDecision: Equatable {
         case use(String)
         case createNew
-        /// Refuse logins for now and read again on the next request. Never replaces the stored one.
+        /// Locked before the first unlock: refuse logins for now and read again on the next request.
         case retryLater
+        /// The Keychain cannot be used at all (for example a missing entitlement): use a password
+        /// kept in memory for this launch only, and never write it, so a stored one is not replaced.
+        case sessionOnly
     }
 
     /// Audit A8: only a missing password is replaced. A read error must not change it.
@@ -37,7 +40,10 @@ enum LANPasswordStore {
         switch stored {
         case .found(let password): return .use(password)
         case .missing: return .createNew
-        case .unreadable: return .retryLater
+        case .unreadable(let status):
+            // Only the "still locked" error clears up by itself; retrying any other error would
+            // refuse every login until the app is relaunched.
+            return status == errSecInteractionNotAllowed ? .retryLater : .sessionOnly
         }
     }
 
@@ -66,6 +72,13 @@ enum LANPasswordStore {
             }
             // Not cached: no client can match it, and the next request reads the Keychain again.
             return makeRandomPassword()
+        case .sessionOnly:
+            if case .unreadable(let status) = stored {
+                SearchDebugLog.log("LAN password: Keychain unusable (OSStatus \(status)); using a password for this launch only, not saved")
+            }
+            let fresh = makeRandomPassword()
+            cached = fresh
+            return fresh
         }
     }
 
