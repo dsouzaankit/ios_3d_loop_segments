@@ -19,6 +19,7 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 | `sideload/` | AltServer logon task; Sideloadly fallback |
 | `lan/` | Multi-phone unified listing / PC index on `:8766`; gateway Wi‑Fi reboot (wrong-subnet / other-router / off-subnet); LAN throughput |
 | `rclone/` | Optional WinFsp `L:` mount + `rclone serve dlna` for Quest |
+| `quest/` | adb helper behind the LAN page **Open on Quest** button: opens the phone LAN page in Quest Browser |
 | `pcloud_web_companion/` | Chromium MV3 companion + `Run-PCloudWebCompanion.ps1` |
 | `archive/` | Legacy `net use` / sync scripts |
 
@@ -238,6 +239,9 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `rcloneDlnaName` | DLNA friendly name advertised on LAN (default `Loop Segments`) |
 | `skyboxExe` | Optional full path to **SKYBOX.exe** if auto-detect misses (companion starts SKYBOX VR desktop when idle and hides it to the tray) |
 | `virtualDesktopStreamerExe` | Optional full path to **VirtualDesktop.Streamer.exe** if auto-detect misses (companion starts Streamer when idle, starts the service if stopped, and hides Streamer to the tray) |
+| `questAdbHost` / `questAdbPort` | Quest Wi‑Fi IP and adb port (default `5555`) for the LAN page **Open on Quest** button. Empty host = only an already-connected or mDNS-paired headset |
+| `questAdbSerial` | Optional: pick this adb serial when several Android devices are connected |
+| `questAdbExe` | **Empty** = `adb` on PATH / winget / Android SDK / MQDH |
 | `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
 
 ## Koofr + Loop Segments on one PC
@@ -287,6 +291,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `%TEMP%\loopsegments-rclone-mount.log` | live rclone mount log (copied to `rclone\loopsegments-rclone-mount.log` on quit) |
 | `%TEMP%\loopsegments-rclone-dlna.log` | live rclone DLNA serve log |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: gateway subnet check/reboot, USB-launch Loop Segments, sync profile, start browser |
+| `quest\Watch-LoopSegmentsQuestLanTab.ps1` | Opens the phone LAN page in Quest Browser over adb (incognito requested, likely ignored). The companion sink runs it with `-Once` when you click **Open on Quest** on the PC LAN page; without `-Once` it keeps polling and opens the page on each asleep→**Awake** (manual use only). Wireless adb across reboots needs [adb-auto-enable](https://github.com/project-SIMPLE/adb-auto-enable). Log `%TEMP%\loopsegments-quest-lantab.log` |
 | `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); DVT `--userspace --no-kill-existing` first; skips if already foreground; exit **3** if phone locked |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish if it is still foreground (skip when backgrounded or lock screen; DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); no USB → skip. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` (**in-process**, throws `HOME_USB_EXIT:<code>`) and companion pauses itself after a Home fail |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |

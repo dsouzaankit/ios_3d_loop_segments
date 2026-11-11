@@ -13,6 +13,9 @@ const LOCAL_LOG_URL = "http://127.0.0.1:18765/log";
 const LOCAL_LAN_RELAY_URL = "http://127.0.0.1:18765/phone-lan";
 const LOCAL_FOCUS_CONSOLE_URL = "http://127.0.0.1:18765/focus-console";
 const LOCAL_OPEN_EXPLORER_URL = "http://127.0.0.1:18765/open-explorer";
+const LOCAL_QUEST_OPEN_URL = "http://127.0.0.1:18765/quest-open-lan-tab";
+const QUEST_OPEN_POLL_MS = 1000;
+const QUEST_OPEN_TIMEOUT_MS = 60000;
 const LOCAL_WRITE_HYBRID_MEDIA_LIST_URL =
   "http://127.0.0.1:18765/write-hybrid-media-list";
 /** Coalesce Ctrl+Shift+H when both chrome.commands and the page hook fire. */
@@ -3151,7 +3154,78 @@ chrome.webRequest.onBeforeRequest.addListener(
   ["requestBody"]
 );
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+/** Private-LAN http origin of the LAN page the button was clicked on (never a URL from the page). */
+function questOpenUrlFromSender(sender) {
+  let u;
+  try {
+    u = new URL(sender?.tab?.url || sender?.url || "");
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:") return null;
+  const h = u.hostname;
+  const isPrivate =
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h) ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(h);
+  if (!isPrivate) return null;
+  return `${u.origin}/`;
+}
+
+async function questOpenFetch(method, body) {
+  const res = await fetch(LOCAL_QUEST_OPEN_URL, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      "X-LoopSegments-Companion": "1",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+  const raw = await res.text();
+  let payload = null;
+  try {
+    payload = raw ? JSON.parse(raw) : null;
+  } catch {
+    payload = null;
+  }
+  if (!payload) throw new Error(raw || `quest-open HTTP ${res.status}`);
+  return payload;
+}
+
+/** Ask the companion sink to run adb once, then wait for it to finish. */
+async function openLanPageOnQuest(sender) {
+  const url = questOpenUrlFromSender(sender);
+  if (!url) return { ok: false, message: "Not a private-LAN http:// page." };
+  try {
+    let st = await questOpenFetch("POST", { url });
+    const deadline = Date.now() + QUEST_OPEN_TIMEOUT_MS;
+    while (st?.state === "running" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, QUEST_OPEN_POLL_MS));
+      st = await questOpenFetch("GET");
+    }
+    if (st?.state === "running") {
+      return { ok: false, message: "Still waiting on adb - see loopsegments-quest-lantab.log in %TEMP%." };
+    }
+    void appendRestLog({
+      type: "quest_open",
+      endpoint: "quest-open-lan-tab",
+      url,
+      ok: !!st?.ok,
+      message: st?.message || st?.detail || "",
+      silent: true,
+    });
+    return st;
+  } catch (err) {
+    return { ok: false, message: openExplorerFetchErrorMessage(err) };
+  }
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "quest-open-lan-tab") {
+    void (async () => sendResponse(await openLanPageOnQuest(sender)))();
+    return true;
+  }
   if (message?.type === "pcloud-selected-fileids") {
     const payload = message.payload || {};
     void (async () => {

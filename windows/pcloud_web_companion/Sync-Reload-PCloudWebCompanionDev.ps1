@@ -138,7 +138,7 @@ os.replace(tmp, prefs_path)
 }
 
 $files = @(
-    'manifest.json', 'background.js', 'pcloud_fileid_hook_main.js', 'pcloud_folder_tracker.js',
+    'manifest.json', 'background.js', 'pcloud_fileid_hook_main.js', 'pcloud_folder_tracker.js', 'lan_quest_button.js',
     'offscreen.html', 'offscreen.js', 'logs.html', 'logs.js', 'icon.png', 'lan_config.json'
 )
 

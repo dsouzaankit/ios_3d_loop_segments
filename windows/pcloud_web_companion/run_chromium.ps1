@@ -474,6 +474,7 @@ function Sync-ExtensionToLocalDisk {
         "background.js"
         "pcloud_fileid_hook_main.js"
         "pcloud_folder_tracker.js"
+        "lan_quest_button.js"
         "offscreen.html"
         "offscreen.js"
         "logs.html"

@@ -181,6 +181,7 @@ function Read-HttpRequest {
         $requestLine = ($headerText -split "`r`n")[0]
         return [pscustomobject]@{
             RequestLine = $requestLine
+            HeaderText  = $headerText
             Body        = $body
             Stream      = $stream
         }
@@ -741,6 +742,81 @@ function Write-LanConfigFiles {
     return $payload
 }
 
+# --- Open the phone LAN page in Quest Browser (button on the PC LAN page) ---
+# Runs ..\quest\Watch-LoopSegmentsQuestLanTab.ps1 -Once in a hidden child so adb waits
+# (connect / mDNS, up to ~30 s) never block this single-threaded sink.
+$script:QuestOpenProc = $null
+$script:QuestOpenUrl = ''
+$script:QuestOpenStartedAt = $null
+$script:QuestOpenLogPath = Join-Path $env:TEMP 'loopsegments-quest-lantab.log'
+
+function Test-CompanionHeader {
+    # Extension service worker sends this; a web page cannot without a CORS preflight,
+    # which this sink never approves.
+    param([string]$HeaderText)
+    return ($HeaderText -match '(?im)^X-LoopSegments-Companion:\s*1\s*$')
+}
+
+function Get-QuestOpenLastLogLine {
+    try {
+        $tail = @(Get-Content -LiteralPath $script:QuestOpenLogPath -Tail 1 -ErrorAction Stop)
+        if ($tail.Count -gt 0) { return ([string]$tail[-1] -replace '^\S+ \S+ ', '') }
+    } catch {}
+    return ''
+}
+
+function Get-QuestOpenStatus {
+    if ($null -eq $script:QuestOpenProc) {
+        return [ordered]@{ ok = $true; state = 'idle' }
+    }
+    if (-not $script:QuestOpenProc.HasExited) {
+        return [ordered]@{ ok = $true; state = 'running'; url = $script:QuestOpenUrl }
+    }
+    $code = $script:QuestOpenProc.ExitCode
+    $message = switch ($code) {
+        0 { 'Opened on Quest.' }
+        1 { 'Quest not reachable or asleep - wake the headset and check adb (see log).' }
+        2 { 'adb not found on this PC (winget install Google.PlatformTools).' }
+        default { "Quest open failed (exit $code)." }
+    }
+    return [ordered]@{
+        ok       = ($code -eq 0)
+        state    = 'done'
+        exitCode = $code
+        url      = $script:QuestOpenUrl
+        message  = $message
+        detail   = (Get-QuestOpenLastLogLine)
+    }
+}
+
+function Start-QuestOpen {
+    param([string]$JsonBody)
+    if ($null -ne $script:QuestOpenProc -and -not $script:QuestOpenProc.HasExited) {
+        return (Get-QuestOpenStatus)
+    }
+    $obj = if ([string]::IsNullOrWhiteSpace($JsonBody)) { [pscustomobject]@{} } else { $JsonBody | ConvertFrom-Json }
+    $url = [string]$obj.url
+    if (-not (Test-IsPrivateLanHttpUrl -Url $url)) {
+        throw "url must be a private-LAN http:// URL (got '$url')"
+    }
+    $watcher = Join-Path (Split-Path -Parent $PSScriptRoot) 'quest\Watch-LoopSegmentsQuestLanTab.ps1'
+    if (-not (Test-Path -LiteralPath $watcher)) {
+        throw "Missing $watcher"
+    }
+    $pwshExe = (Get-Process -Id $PID).Path
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $pwshExe
+    foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', $watcher, '-Url', $url, '-Once')) { [void]$psi.ArgumentList.Add($a) }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $script:QuestOpenProc = [System.Diagnostics.Process]::Start($psi)
+    $script:QuestOpenUrl = $url
+    $script:QuestOpenStartedAt = Get-Date
+    Write-LogLine "$(Get-Date -Format o) QUEST_OPEN_START $url (pid $($script:QuestOpenProc.Id))"
+    return (Get-QuestOpenStatus)
+}
+
 function Get-CompanionLoopSegmentsLib {
     $windowsDir = Split-Path -Parent $PSScriptRoot
     $lib = Join-Path $windowsDir 'lib\LoopSegments-Windows.ps1'
@@ -778,6 +854,22 @@ while ($true) {
             } catch {
                 Write-LogLine "$(Get-Date -Format o) PHONE_LAN_RELAY_ERROR $_"
                 Write-HttpResponse -Stream $req.Stream -StatusCode 502 -Body '{"ok":false,"status":502,"body":"relay exception"}'
+            }
+        } elseif ($line -match '^(GET|POST)\s+/quest-open-lan-tab\b') {
+            if (-not (Test-CompanionHeader -HeaderText $req.HeaderText)) {
+                Write-HttpResponse -Stream $req.Stream -StatusCode 400 -Body '{"ok":false,"error":"missing X-LoopSegments-Companion header"}'
+            } else {
+                try {
+                    $result = if ($line -match '^POST') { Start-QuestOpen -JsonBody $req.Body } else { Get-QuestOpenStatus }
+                    if ($result.state -eq 'done') {
+                        Write-LogLine "$(Get-Date -Format o) QUEST_OPEN_DONE exit=$($result.exitCode) $($result.detail)"
+                    }
+                    Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body ($result | ConvertTo-Json -Compress)
+                } catch {
+                    $msg = "$_"
+                    Write-LogLine "$(Get-Date -Format o) QUEST_OPEN_ERROR $msg"
+                    Write-HttpResponse -Stream $req.Stream -StatusCode 400 -Body (@{ ok = $false; state = 'error'; message = $msg } | ConvertTo-Json -Compress)
+                }
             }
         } elseif ($line -match '^GET\s+/health\b') {
             Write-HttpResponse -Stream $req.Stream -StatusCode 200 -Body '{"ok":true,"phoneLanRelay":true}'

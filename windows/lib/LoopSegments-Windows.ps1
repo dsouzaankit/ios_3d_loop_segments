@@ -44,6 +44,12 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         rcloneDlnaName          = 'Loop Segments'
         skyboxExe               = ''
         virtualDesktopStreamerExe = ''
+        # LAN page "Open on Quest" (quest\Watch-LoopSegmentsQuestLanTab.ps1): adb over Wi-Fi target.
+        # Empty questAdbHost = only already-connected / mDNS-paired headsets. Empty questAdbExe = auto.
+        questAdbHost            = ''
+        questAdbPort            = 5555
+        questAdbSerial          = ''
+        questAdbExe             = ''
         webdavUser              = 'admin'
         webdavPassword          = ''
         iCloudDownloads         = ''
