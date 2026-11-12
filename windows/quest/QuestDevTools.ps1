@@ -56,7 +56,7 @@ function Get-QuestLanTabs {
     if ($os.Count -eq 0) { return @() }
     return @(Get-QuestTabs | Where-Object {
             $b = (ConvertTo-QuestBareUrl $_.url).ToLowerInvariant()
-            @($os | Where-Object { $b -eq $_ -or $b.StartsWith("$_/") -or $b.StartsWith("$_#") -or $b.StartsWith("$_?") }).Count -gt 0
+            @($os | Where-Object { $b -eq $_ -or $b.StartsWith("${_}/") -or $b.StartsWith("${_}#") -or $b.StartsWith("${_}?") }).Count -gt 0
         })
 }
 
