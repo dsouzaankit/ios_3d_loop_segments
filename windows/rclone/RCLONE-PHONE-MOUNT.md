@@ -65,6 +65,12 @@ Phone WebDAV → PC `rclone serve dlna` → Quest is an extra hop. When that stu
 
 `p_cld_media` AirScreen remains for local pCloud folder media; it is not a substitute for phone `L:` / DLNA.
 
+### AirScreen shares are not DLNA
+
+SKYBOX AirScreen shares (`p_cld_media`, `3d_fullsbs_trans`, ...) use SKYBOX's own protocol, not DLNA. TVs, VLC, Kodi and other DLNA clients do not see them; only the Skybox app on the Quest does. Checked on this PC: an SSDP search for DLNA media servers gets no answer from SKYBOX.
+
+They are still reachable from the network: SKYBOX's backend (`airscreen-backend.exe`) listens on all interfaces (TCP 8018 control API, TCP 41338, UDP 1900; `SKYBOX.exe` on TCP 41001), its installer's firewall rule allows inbound on Private and Public networks, and the API answers without credentials (`GET /ping`, `POST /node_info` from the PC's LAN address returned 200). `/node` adds or removes a shared folder (what `Skybox_vr_pc` uses); it was not tried from the LAN, but it is likely just as open. The firewall is left as installed on purpose. To lock it down later, allow inbound to `SKYBOX.exe` and `airscreen-backend.exe` only from `127.0.0.1` and the Quest's IP (fixed with a DHCP reservation), and narrow the existing allow rules, since any matching allow rule wins.
+
 ## Scripts
 
 | Script | Role |
