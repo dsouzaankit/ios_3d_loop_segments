@@ -89,6 +89,8 @@ adb shell settings get secure accessibility_enabled
 adb shell settings get global adb_wifi_enabled
 ```
 
+**After a reboot you do not need to open the app.** Android starts its accessibility service by itself at boot (on Quest 3: 13 s after boot), the service switches wireless adb back on, and the PC reconnects through mDNS before anyone opens the app. This depends on the accessibility service staying enabled: if a Horizon OS update or a settings reset turns it off, open **ADB Auto-Enable** once or rerun the `settings put secure enabled_accessibility_services ...` command above.
+
 Wireless adb gives full shell access to the headset: keep it on your home LAN only, and never port-forward it.
 
 ### 5. How the PC finds the headset
@@ -99,10 +101,9 @@ The script tries, in order:
 2. `adb connect <questAdbHost>:<questAdbPort>` (default `5555`) when `questAdbHost` is set;
 3. `adb mdns services` → the wireless-debugging TLS port (random, e.g. `10.0.100.238:37275`).
 
-Pick one:
+**Use wireless debugging (mDNS); leave `questAdbHost` empty.** It needs no config and keeps working across reboots. It works once this PC is paired: if `adb mdns services` lists the headset but `adb connect` fails with an auth error, pair once: on the headset, Settings → System → Developer → **Wireless debugging** → *Pair device with pairing code*, then `adb pair <ip>:<pairing-port>` and type the code.
 
-- **Wireless debugging (mDNS, no config):** works once this PC is paired. If `adb mdns services` lists the headset but `adb connect` fails with an auth error, pair once: on the headset, Settings → System → Developer → **Wireless debugging** → *Pair device with pairing code*, then `adb pair <ip>:<pairing-port>` and type the code.
-- **Fixed port 5555:** with the Quest on USB run `adb tcpip 5555`, then set `"questAdbHost": "<headset Wi‑Fi IP>"` in `windows\loop-segments-windows.json` (a DHCP reservation on the router keeps the IP stable). The ADB Auto-Enable status screen shows which ports are active after a reboot.
+**Optional fallback, fixed port 5555.** Only needed if mDNS discovery does not reach this PC (for example a VPN or Clash/mihomo TUN swallowing the multicast announcement, or the PC and Quest on different subnets), or if another tool insists on `IP:5555`. With the Quest on USB run `adb tcpip 5555`, then set `"questAdbHost": "<headset Wi‑Fi IP>"` in `windows\loop-segments-windows.json` (a DHCP reservation on the router keeps the IP stable). Limits: **a reboot closes 5555 again** (ADB Auto-Enable restores only the wireless-debugging port, and keeping 5555 needs root: `setprop persist.adb.tcp.port 5555` is refused on a stock Quest), and 5555 traffic is not encrypted (wireless debugging is). The script still falls back to mDNS when `IP:5555` does not answer.
 
 ### 6. Test
 
