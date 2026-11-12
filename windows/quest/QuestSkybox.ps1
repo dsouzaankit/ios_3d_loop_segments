@@ -123,28 +123,51 @@ function Copy-QuestSkyboxDb {
     return $true
 }
 
+# SQL condition for the DeviceDataTable rows to delete (never the -DavUrl row being written), or ''.
+#   -RemoveUrls       : these exact server URLs
+#   -RemoveNamedWebDav: any WebDAV server named 'Loop Segments' (whatever address it points at)
+#   -RemoveDlnaName   : the companion's rclone DLNA server - a dlna:// entry with that name that
+#                       rclone announced (Manufacturer 'rclone (rclone.org)'); other DLNA servers stay
+function Get-QuestSkyboxRemoveWhere {
+    param([string] $DavUrl, [string[]] $RemoveUrls, [switch] $RemoveNamedWebDav, [string] $RemoveDlnaName)
+    $parts = @()
+    $urls = @($RemoveUrls | Where-Object { $_ -and $_ -ne $DavUrl } | Select-Object -Unique)
+    if ($urls.Count -gt 0) { $parts += "Url IN ($((@($urls | ForEach-Object { ConvertTo-QuestSqlText $_ })) -join ','))" }
+    if ($RemoveNamedWebDav) { $parts += "(Url LIKE 'webdav%' AND FileName=$(ConvertTo-QuestSqlText $script:SkyboxServerName))" }
+    if ($RemoveDlnaName) { $parts += "(Url LIKE 'dlna://%' AND FileName=$(ConvertTo-QuestSqlText $RemoveDlnaName) AND Manufacturer LIKE 'rclone%')" }
+    if ($parts.Count -eq 0) { return '' }
+    $w = '(' + ($parts -join ' OR ') + ')'
+    if ($DavUrl) { $w += " AND Url<>$(ConvertTo-QuestSqlText $DavUrl)" }
+    return $w
+}
+
 # What the edit would do to the local copy: 'added' / 'updated' / 'unchanged' (with -DavUrl),
-# 'removed' / 'absent' (only -RemoveUrls), or 'failed' when the copy cannot be read.
+# 'removed' / 'absent' (only -RemoveWhere), or 'failed' when the copy cannot be read.
+# Sets $script:SkyboxMatched to the URLs -RemoveWhere matches (for the log; no passwords).
 function Get-QuestSkyboxChange {
-    param([string] $Sqlite, [string] $DbFile, [string] $DavUrl, [string] $Want, [string[]] $RemoveUrls)
+    param([string] $Sqlite, [string] $DbFile, [string] $DavUrl, [string] $Want, [string] $RemoveWhere, [switch] $OnlyIfPresent)
     $sql = ''
     if ($DavUrl) {
         $sql += "SELECT 'row:'||COALESCE(FileName,'')||'|'||COALESCE(Username,'')||'|'||COALESCE(Password,'')||'|'||COALESCE(Status,'') FROM DeviceDataTable WHERE Url=$(ConvertTo-QuestSqlText $DavUrl);`n"
     }
-    $old = @($RemoveUrls | Where-Object { $_ -and $_ -ne $DavUrl })
-    if ($old.Count -gt 0) {
-        $sql += "SELECT 'old:'||count(*) FROM DeviceDataTable WHERE Url IN ($((@($old | ForEach-Object { ConvertTo-QuestSqlText $_ })) -join ','));`n"
+    if ($RemoveWhere) {
+        $sql += "SELECT 'old:'||Url FROM DeviceDataTable WHERE $RemoveWhere;`n"
     }
+    $script:SkyboxMatched = @()
     if (-not $sql) { return 'absent' }
     $r = Invoke-QuestSqlite -Exe $Sqlite -DbFile $DbFile -Sql $sql
     if ($r.Code -ne 0) { Write-QuestLog "SKYBOX: database read failed: $($r.Err)"; return 'failed' }
     $row = $null
-    $oldCount = 0
+    $matched = [System.Collections.Generic.List[string]]::new()
     foreach ($l in @($r.Out -split "`r?`n")) {
         if ($l.StartsWith('row:')) { $row = $l.Substring(4) }
-        elseif ($l -match '^old:(\d+)$') { $oldCount = [int]$Matches[1] }
+        elseif ($l.StartsWith('old:')) { $matched.Add($l.Substring(4)) }
     }
+    $script:SkyboxMatched = @($matched)
+    $oldCount = $matched.Count
     if ($DavUrl) {
+        # -OnlyIfPresent (Update): change nothing unless a server this PC added is there already.
+        if ($OnlyIfPresent -and $null -eq $row -and $oldCount -eq 0) { return 'absent' }
         if ($null -eq $row) { return 'added' }
         if ($row -ne $Want -or $oldCount -gt 0) { return 'updated' }
         return 'unchanged'
@@ -170,7 +193,8 @@ function Remove-QuestSkyboxLeftovers {
 }
 
 # With -DavUrl (webdav://host:port/): add or update server 'Loop Segments' there with -User /
-# -Password, and delete -RemoveUrls rows in the same edit. Without -DavUrl: only delete -RemoveUrls.
+# -Password, and delete the rows -RemoveUrls / -RemoveNamedWebDav / -RemoveDlnaName match (see
+# Get-QuestSkyboxRemoveWhere) in the same edit. Without -DavUrl: only delete those.
 # Returns 'added', 'updated', 'unchanged', 'removed', 'absent', 'not installed', or 'failed'.
 # SKYBOX is stopped only when something has to change (and started again after an add/update if it
 # was open).
@@ -180,7 +204,11 @@ function Invoke-QuestSkyboxWebDav {
         [string] $DavUrl = '',
         [string] $User = '',
         [string] $Password = '',
-        [string[]] $RemoveUrls = @()
+        [string[]] $RemoveUrls = @(),
+        [switch] $RemoveNamedWebDav,
+        [string] $RemoveDlnaName = '',
+        # Update: only change a server that is already there (else 'absent', nothing touched).
+        [switch] $OnlyIfPresent
     )
     $sqlite = Find-QuestSqliteExe
     if (-not $sqlite) { Write-QuestLog 'SKYBOX: sqlite3.exe not found (it ships with adb in platform-tools) - skipped.'; return 'failed' }
@@ -192,7 +220,7 @@ function Invoke-QuestSkyboxWebDav {
         Write-QuestLog 'SKYBOX: no database yet (open SKYBOX once) - skipped.'
         return 'failed'
     }
-    $remove = @($RemoveUrls | Where-Object { $_ -and $_ -ne $DavUrl } | Select-Object -Unique)
+    $where = Get-QuestSkyboxRemoveWhere -DavUrl $DavUrl -RemoveUrls $RemoveUrls -RemoveNamedWebDav:$RemoveNamedWebDav -RemoveDlnaName $RemoveDlnaName
     $want = '{0}|{1}|{2}|Status_Online' -f $script:SkyboxServerName, $User, $Password
     $wasRunning = $false
     $stopped = $false
@@ -203,7 +231,7 @@ function Invoke-QuestSkyboxWebDav {
         [void](New-Item -ItemType Directory -Path $work -Force)
         # 1. Copy and check while SKYBOX keeps running: runs that need nothing end here.
         if (-not (Copy-QuestSkyboxDb -DeviceSerial $DeviceSerial -LocalPath $local)) { return 'failed' }
-        $result = Get-QuestSkyboxChange -Sqlite $sqlite -DbFile $local -DavUrl $DavUrl -Want $want -RemoveUrls $remove
+        $result = Get-QuestSkyboxChange -Sqlite $sqlite -DbFile $local -DavUrl $DavUrl -Want $want -RemoveWhere $where -OnlyIfPresent:$OnlyIfPresent
         if ($result -in @('added', 'updated', 'removed')) {
             # 2. A change is needed: stop SKYBOX (it holds the file open). Copy again only if the
             #    file moved since the first copy (same size and modified time = reuse it).
@@ -221,14 +249,16 @@ function Invoke-QuestSkyboxWebDav {
             if ((Get-QuestSkyboxDbStat -DeviceSerial $DeviceSerial) -ne $stat) {
                 Remove-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue
                 if (-not (Copy-QuestSkyboxDb -DeviceSerial $DeviceSerial -LocalPath $local)) { return 'failed' }
-                $result = Get-QuestSkyboxChange -Sqlite $sqlite -DbFile $local -DavUrl $DavUrl -Want $want -RemoveUrls $remove
+                $result = Get-QuestSkyboxChange -Sqlite $sqlite -DbFile $local -DavUrl $DavUrl -Want $want -RemoveWhere $where -OnlyIfPresent:$OnlyIfPresent
             }
         }
         if ($result -eq 'failed') { return 'failed' }
         if ($result -in @('added', 'updated', 'removed')) {
             $sql = ''
-            if ($remove.Count -gt 0) {
-                $sql += "DELETE FROM DeviceDataTable WHERE Url IN ($((@($remove | ForEach-Object { ConvertTo-QuestSqlText $_ })) -join ','));`n"
+            # Delete exactly the rows the check listed (Url is unique in DeviceDataTable).
+            $matched = @($script:SkyboxMatched)
+            if ($matched.Count -gt 0) {
+                $sql += "DELETE FROM DeviceDataTable WHERE Url IN ($((@($matched | ForEach-Object { ConvertTo-QuestSqlText $_ })) -join ','));`n"
             }
             if ($DavUrl) {
                 $ticks = [DateTime]::Now.Ticks
@@ -247,11 +277,18 @@ function Invoke-QuestSkyboxWebDav {
                 return 'failed'
             }
         }
-        $what = if ($DavUrl) { "'{0}' ({1})" -f $script:SkyboxServerName, $DavUrl } else { "'{0}' ({1})" -f $script:SkyboxServerName, ($remove -join ', ') }
-        $verb = @{ added = 'added'; updated = 'updated'; unchanged = 'already up to date'; removed = 'removed'; absent = 'was not there' }[$result]
-        if ($DavUrl -and $remove.Count -gt 0 -and $result -in @('added', 'updated')) { $verb += " (old address(es) removed: $($remove -join ', '))" }
+        # For the log: WebDAV URLs as they are, the rclone DLNA entry by name (its URL is long).
+        $shown = @($script:SkyboxMatched | ForEach-Object { if ($_ -like 'dlna://*') { "rclone DLNA '$RemoveDlnaName'" } else { $_ } })
         $note = if ($stopped) { '' } else { ', SKYBOX not touched' }
-        Write-QuestLog ("SKYBOX: WebDAV server {0} {1}{2}." -f $what, $verb, $note)
+        if ($DavUrl) {
+            $verb = @{ added = 'added'; updated = 'updated'; unchanged = 'already up to date'; absent = 'was not there' }[$result]
+            if ($shown.Count -gt 0 -and $result -in @('added', 'updated')) { $verb += " (also removed: $($shown -join ', '))" }
+            Write-QuestLog ("SKYBOX: WebDAV server '{0}' ({1}) {2}{3}." -f $script:SkyboxServerName, $DavUrl, $verb, $note)
+        } elseif ($result -eq 'removed') {
+            Write-QuestLog ("SKYBOX: removed {0} Loop Segments entr{1}: {2}{3}." -f $shown.Count, $(if ($shown.Count -eq 1) { 'y' } else { 'ies' }), ($shown -join ', '), $note)
+        } else {
+            Write-QuestLog "SKYBOX: no Loop Segments entries in SKYBOX$note."
+        }
         return $result
     } finally {
         # The local copy holds SKYBOX's library and saved logins: never leave it behind.

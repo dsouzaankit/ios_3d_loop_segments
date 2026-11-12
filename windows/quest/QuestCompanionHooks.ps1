@@ -3,9 +3,9 @@
 # hidden pwsh; log lines go to %TEMP%\loopsegments-quest-lantab.log.
 #   startup : -EnsureFlags  (background, never blocks)  - questEnsureInsecureOriginFlag (default true)
 #   startup : -KeepAwakeSession (background, until the companion exits) - questKeepAwakeDuringSession
-#   startup : -SkyboxWebDavSession (background, until the companion exits; follows lan_config.json
-#             and the LAN login) - questSkyboxWebDav
-#   close   : stop keep-awake and the SKYBOX job, then ONE background process: close LAN tabs,
+#   startup : Serve-QuestControlPage.ps1 (background, until the companion exits): the Quest control
+#             page with SKYBOX Push / Update / Clear - questControlPage / questSkyboxWebDav
+#   close   : stop keep-awake, the control page and any SKYBOX action, then ONE background process: close LAN tabs,
 #             clear history (~30 s), remove the SKYBOX WebDAV server, proximity sensor on -
 #             questCloseLanTabsOnExit / questClearHistoryOnExit / questSkyboxWebDav /
 #             questKeepAwakeDuringSession. Start-QuestCleanupOnExit starts it, Wait-QuestCleanupOnExit
@@ -80,7 +80,7 @@ $script:QuestCleanupStartedAt = $null
 function Start-QuestCleanupOnExit {
     param([string] $LanUrl)
     Stop-QuestKeepAwake
-    Stop-QuestSkyboxWebDavJob
+    Stop-QuestControlPage
     $script:QuestCleanupProc = $null
     $clear = Get-QuestCompanionSetting -Name 'questClearHistoryOnExit'
     $close = Get-QuestCompanionSetting -Name 'questCloseLanTabsOnExit'
@@ -141,50 +141,62 @@ function Wait-QuestCleanupOnExit {
     }
 }
 
-# ---- SKYBOX: add the phone as a WebDAV server for the session (removed again at cleanup) ----
+# ---- Quest control page (quest\Serve-QuestControlPage.ps1): SKYBOX Push / Update / Clear ----
 
-$script:QuestSkyboxProc = $null
+$script:QuestControlProc = $null
 $script:QuestCleanupTimeoutSec = 40
+$script:QuestControlScript = Join-Path $PSScriptRoot 'Serve-QuestControlPage.ps1'
 
-# Startup: a hidden job, until the companion exits, keeps 'Loop Segments' in SKYBOX's Network list
-# on the phone address in lan_config.json and the LAN login in loop-segments-windows.json (both
-# re-read every ~20 s; applied whenever the headset is on adb).
-function Start-QuestSkyboxWebDavInBackground {
+# Startup: serve the Quest control page on this PC's LAN address (port questControlPort, signed in
+# with the phone LAN login) until the companion exits. Open on Quest opens it on the headset.
+function Start-QuestControlPageInBackground {
     param([string] $ExtensionDir, [int] $CompanionPid = $PID)
-    if (-not (Get-QuestCompanionSetting -Name 'questSkyboxWebDav')) {
-        Write-Host '[quest] Not adding the phone to SKYBOX (questSkyboxWebDav=false)'
+    if (-not (Get-QuestCompanionSetting -Name 'questControlPage')) {
+        Write-Host '[quest] Quest control page off (questControlPage=false)'
         return
     }
-    if (-not (Test-Path -LiteralPath $script:QuestWatchScript)) { return }
-    Stop-QuestSkyboxWebDavJob
+    if (-not (Test-Path -LiteralPath $script:QuestControlScript)) { return }
+    Stop-QuestControlPage
+    $port = 18766
+    try { $p = [int](Get-LoopSegmentsWindowsSettings).questControlPort; if ($p -gt 0) { $port = $p } } catch {}
     try {
-        $qa = @('-LanConfig', (Join-Path $ExtensionDir 'lan_config.json'), '-SkyboxWebDavSession', '-ParentPid', "$CompanionPid")
-        $script:QuestSkyboxProc = Start-QuestWatchProcess -Arguments $qa
-        Write-Host "[quest] Keeping the phone in SKYBOX as a WebDAV server (follows lan_config.json and the LAN login; PID $($script:QuestSkyboxProc.Id))"
+        $pwsh = if (Get-Command Get-LoopSegmentsPwshExe -ErrorAction SilentlyContinue) { Get-LoopSegmentsPwshExe } else { (Get-Process -Id $PID).Path }
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $pwsh
+        foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script:QuestControlScript,
+                '-Port', "$port", '-LanConfig', (Join-Path $ExtensionDir 'lan_config.json'), '-CompanionPid', "$CompanionPid")) { [void]$psi.ArgumentList.Add($a) }
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $script:QuestControlProc = [System.Diagnostics.Process]::Start($psi)
+        Write-Host "[quest] Quest control page on port $port (SKYBOX Push / Update / Clear; opened on the Quest with Open on Quest; PID $($script:QuestControlProc.Id))"
     } catch {
-        Write-Warning "[quest] Could not start the SKYBOX WebDAV job: $($_.Exception.Message)"
+        Write-Warning "[quest] Could not start the Quest control page: $($_.Exception.Message)"
     }
 }
 
-# Stop the startup job (this session's, or one left running) so it cannot add the server back
-# after the cleanup removed it.
-function Stop-QuestSkyboxWebDavJob {
+# Close: stop the control page and any SKYBOX action it started (this session's, or ones left
+# running), whole process trees, so nothing re-adds the server after the cleanup removed it and no
+# adb pull/push keeps writing.
+function Stop-QuestControlPage {
     $ids = [System.Collections.Generic.List[int]]::new()
-    if ($script:QuestSkyboxProc -and -not $script:QuestSkyboxProc.HasExited) { $ids.Add($script:QuestSkyboxProc.Id) }
+    if ($script:QuestControlProc -and -not $script:QuestControlProc.HasExited) { $ids.Add($script:QuestControlProc.Id) }
     try {
         Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and $_.CommandLine -like '*Watch-LoopSegmentsQuestLanTab.ps1*' -and $_.CommandLine -like '*-SkyboxWebDavSession*' } |
+            Where-Object {
+                $c = $_.CommandLine
+                $c -and (($c -like '*Serve-QuestControlPage.ps1*') -or
+                    ($c -like '*Watch-LoopSegmentsQuestLanTab.ps1*' -and ($c -like '*-SkyboxPush*' -or $c -like '*-SkyboxUpdate*' -or $c -like '*-SkyboxWebDavSession*' -or ($c -like '*-ClearSkyboxWebDav*' -and $c -like '*-StatusFile*'))))
+            } |
             ForEach-Object { $ids.Add([int]$_.ProcessId) }
     } catch {}
     foreach ($id in ($ids | Select-Object -Unique)) {
-        # Whole tree: an adb pull/push it started must not keep writing after the job is gone.
         try {
             $p = [System.Diagnostics.Process]::GetProcessById($id)
             $p.Kill($true)
             [void]$p.WaitForExit(5000)
         } catch {}
     }
-    $script:QuestSkyboxProc = $null
+    $script:QuestControlProc = $null
 }
 
 # ---- Keep the headset awake during the session, so the close-time history clear can reach it ----

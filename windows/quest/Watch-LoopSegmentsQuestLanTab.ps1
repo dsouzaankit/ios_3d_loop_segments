@@ -29,10 +29,14 @@
                    kept; the dialog's previous ticks are restored). Companion runs it on close.
   -EnableProximity : turn the proximity sensor back on (undoes a `prox_close` override, so the
                    headset sleeps again when taken off). Companion runs it on close. Needs no -Url.
-  -SkyboxWebDavSession : until -ParentPid exits, keep WebDAV server 'Loop Segments' in SKYBOX's
-                   Network list on the phone's current address (-LanConfig lan_config.json, else
-                   -Url) with the current LAN login; re-checked every ~20 s, applied once the
-                   headset is on adb (QuestSkybox.ps1; stops SKYBOX only when the row changes).
+  -DisableProximity : hold the proximity sensor off (`prox_close`; headset stays awake when taken
+                   off). -ToggleProximity flips it. Both need no -Url; quest\Set-QuestProximitySensor.ps1
+                   wraps all three.
+  -SkyboxPush    : put WebDAV server 'Loop Segments' in SKYBOX's Network list at the phone's current
+                   address (-LanConfig lan_config.json, else -Url) with the current LAN login, and drop
+                   the ones this PC added at older addresses (QuestSkybox.ps1; stops SKYBOX only when
+                   the row changes). The Quest control page's Push button.
+  -SkyboxUpdate  : the same, only if such a server is already there (Update button).
   -ClearSkyboxWebDav : remove every SKYBOX server this PC added (with -ClearHistory: after the
                    history step). Needs no -Url.
   -KeepAwakeSession : until -ParentPid exits, every ~20 s: when the headset is on adb and the
@@ -109,10 +113,17 @@ param(
     [switch] $NoFlags,
     # Only turn the proximity sensor back on (am broadcast ...vrpowermanager.automation_disable).
     [switch] $EnableProximity,
+    # Only hold the proximity sensor off (am broadcast ...vrpowermanager.prox_close): headset stays awake.
+    [switch] $DisableProximity,
+    # Only flip the proximity sensor: off if it is on, on if it is held off.
+    [switch] $ToggleProximity,
     # Keep the headset awake (prox_close) while -ParentPid runs.
     [switch] $KeepAwakeSession,
-    # Add the phone (-Url) as a WebDAV server in SKYBOX once the headset is on adb (-ParentPid).
-    [switch] $SkyboxWebDavSession,
+    # Quest control page: put the phone in SKYBOX as WebDAV server 'Loop Segments' (current address
+    # and login), dropping older addresses this PC added.
+    [switch] $SkyboxPush,
+    # Same, but only if such a server is already in SKYBOX.
+    [switch] $SkyboxUpdate,
     # Remove that SKYBOX WebDAV server (alone, or with -ClearHistory after the history step).
     [switch] $ClearSkyboxWebDav,
     # The companion's lan_config.json: phone address for the SKYBOX steps (re-read every poll).
@@ -381,6 +392,74 @@ function Invoke-QuestFlagSync {
     } finally { Close-QuestDevTools }
 }
 
+# ---- Quest control page (quest\Serve-QuestControlPage.ps1, on this PC) ----
+
+function Get-QuestControlPort {
+    $p = 18766
+    try { if ($script:Cfg -and [int]$script:Cfg.questControlPort -gt 0) { $p = [int]$script:Cfg.questControlPort } } catch {}
+    return $p
+}
+
+# This PC's IPv4 address on the route to the headset (or, for a USB serial, to the phone): the
+# address the Quest reaches the control page on. UDP "connect" sends nothing.
+function Get-QuestControlPcAddress {
+    param([string] $DeviceSerial)
+    $target = $null
+    if ($DeviceSerial -match '^(\d{1,3}(?:\.\d{1,3}){3}):\d+$') { $target = $Matches[1] }
+    elseif ($QuestHost -match '^\d{1,3}(\.\d{1,3}){3}$') { $target = $QuestHost }
+    else { try { $target = ([Uri]$Url).Host } catch {} }
+    if (-not $target) { return $null }
+    $u = [System.Net.Sockets.UdpClient]::new()
+    try {
+        $u.Connect($target, 9)
+        return ([System.Net.IPEndPoint]$u.Client.LocalEndPoint).Address.ToString()
+    } catch { return $null } finally { $u.Dispose() }
+}
+
+function Get-QuestControlOrigin {
+    param([string] $DeviceSerial)
+    $ip = Get-QuestControlPcAddress -DeviceSerial $DeviceSerial
+    if (-not $ip) { return $null }
+    return ('http://{0}:{1}' -f $ip, (Get-QuestControlPort))
+}
+
+# Is the companion's control page server running? (it writes %TEMP%\loopsegments-quest-control.json)
+function Test-QuestControlPageRunning {
+    $state = Join-Path $env:TEMP 'loopsegments-quest-control.json'
+    if (-not (Test-Path -LiteralPath $state)) { return $false }
+    try { $c = Get-Content -LiteralPath $state -Raw | ConvertFrom-Json; return [bool](Get-Process -Id ([int]$c.pid) -ErrorAction SilentlyContinue) } catch { return $false }
+}
+
+# Open on Quest: also open the control page in its own normal tab, signed in with the LAN login
+# (reused if already open). Needs an open DevTools session. Never fails the LAN page.
+function Open-QuestControlTab {
+    param([string] $DeviceSerial)
+    if ($script:Cfg -and $script:Cfg.Contains('questControlPageOnQuest') -and $script:Cfg.questControlPageOnQuest -eq $false) { return }
+    if (-not (Test-QuestControlPageRunning)) { Write-QuestLog 'Control page: not running on this PC - not opened.'; return }
+    $origin = Get-QuestControlOrigin -DeviceSerial $DeviceSerial
+    if (-not $origin) { Write-QuestLog 'Control page: no PC address on the route to the headset - not opened.'; return }
+    $plain = "$origin/"
+    $loginUrl = $plain
+    if ($script:SendLanLogin) {
+        try {
+            $l = Get-QuestLanLogin
+            if (-not [string]::IsNullOrEmpty($l.Password)) {
+                $loginUrl = ('http://{0}:{1}@{2}/' -f [Uri]::EscapeDataString($l.User), [Uri]::EscapeDataString($l.Password), ([Uri]$plain).Authority)
+            }
+        } catch {}
+    }
+    try {
+        if (Open-QuestSignedInTab -DeviceSerial $DeviceSerial -PlainUrl $plain -LoginUrl $loginUrl -Origins @($origin)) {
+            $which = if ($script:QuestReusedTab) { 'reused open tab' } else { 'new tab' }
+            Write-QuestLog "Control page: opened $plain in Quest browser ($which)."
+        } else {
+            Write-QuestLog "Control page: $plain did not load on the Quest (Windows Firewall blocking port $(Get-QuestControlPort)? see quest\README.md)."
+        }
+    } catch {
+        Write-QuestLog "Control page: $($_.Exception.Message)"
+    }
+}
+
 function Open-QuestNormalTab {
     param([string] $DeviceSerial)
     $plain = ($Url -replace "'", '')
@@ -394,6 +473,8 @@ function Open-QuestNormalTab {
         return $false
     }
     try {
+        # Quest control page first (its own tab), so the LAN page below ends up in front.
+        Open-QuestControlTab -DeviceSerial $DeviceSerial
         if (-not (Open-QuestSignedInTab -DeviceSerial $DeviceSerial -PlainUrl $plain -LoginUrl $login -Origins (Get-QuestLanOrigins))) { return $false }
         $how = if ($login -ne $plain) { 'signed in' } else { 'not signed in' }
         $which = if ($script:QuestReusedTab) { 'reused open tab' } else { 'new tab' }
@@ -530,6 +611,37 @@ function Get-QuestVirtualProximity {
     return $null
 }
 
+# Hold the proximity sensor off (`prox_close`, virtual state CLOSE): the headset acts as worn and
+# does not sleep when taken off. Undone by -EnableProximity or a headset reboot.
+function Invoke-QuestDisableProximity {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-QuestLog 'Proximity: headset not reachable over adb - skipped.'; return 1 }
+    $before = Get-QuestVirtualProximity -DeviceSerial $dev
+    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $dev, 'shell', 'am', 'broadcast', '-a', 'com.oculus.vrpowermanager.prox_close')
+    if ($r.Code -ne 0 -or ($r.Out -notmatch 'Broadcast completed')) {
+        Write-QuestLog "Proximity: broadcast failed (code $($r.Code)): $(Get-AdbMessage $r)"
+        return 3
+    }
+    Start-Sleep -Milliseconds 500
+    $after = Get-QuestVirtualProximity -DeviceSerial $dev
+    if ($after -and $after -ne 'CLOSE') {
+        Write-QuestLog "Proximity: override is '$after' after switching the sensor off (was '$before')."
+        return 3
+    }
+    Write-QuestLog ("Proximity: sensor off, headset stays awake (override was '{0}', now '{1}')." -f $(if ($before) { $before } else { '?' }), $(if ($after) { $after } else { '?' }))
+    return 0
+}
+
+# Flip it: CLOSE (held off) -> on, anything else -> off.
+function Invoke-QuestToggleProximity {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-QuestLog 'Proximity: headset not reachable over adb - skipped.'; return 1 }
+    if ((Get-QuestVirtualProximity -DeviceSerial $dev) -eq 'CLOSE') { return (Invoke-QuestEnableProximity) }
+    return (Invoke-QuestDisableProximity)
+}
+
 function Invoke-QuestEnableProximity {
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
@@ -591,70 +703,66 @@ function Get-QuestSkyboxCurrentLanUrl {
     return $null
 }
 
-# Companion session, until -ParentPid exits: about every 20 s re-read the phone address
-# (lan_config.json) and the LAN login (loop-segments-windows.json). Whenever they differ from what
-# was last put in SKYBOX (and at the start), and the headset is on adb, add/update server
-# 'Loop Segments' and delete the ones this PC added at older addresses. Local files only between
-# changes: adb is used only when something has to be applied.
-function Invoke-QuestSkyboxWebDavSession {
-    if ($ParentPid -le 0) { Write-QuestLog 'SKYBOX: -ParentPid is required.'; return 2 }
-    $applied = $null
-    $lastNote = ''
-    while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-        $note = ''
-        try {
-            $lan = Get-QuestSkyboxCurrentLanUrl
-            $login = if ($lan) { Get-QuestLanLogin -ForUrl $lan } else { $null }
-            if (-not $lan) {
-                $note = 'no phone LAN address in lan_config.json - waiting'
-            } elseif ([string]::IsNullOrEmpty($login.Password)) {
-                $note = 'no LAN password in loop-segments-windows.json - waiting'
-            } else {
-                $dav = Get-QuestSkyboxWebDavUrl -LanUrl $lan
-                $key = '{0}|{1}|{2}' -f $dav, $login.User, $login.Password
-                if ($key -ne $applied) {
-                    $dev = Get-OnlineQuestSerial
-                    if (-not $dev) { $dev = Connect-Quest }
-                    if (-not $dev) {
-                        $note = "headset not on adb - $dav goes in when it shows up"
-                    } else {
-                        if ($applied) { Write-QuestLog "SKYBOX: phone address or LAN login changed - updating the server ($dav)." }
-                        $old = @(Get-QuestSkyboxAddedUrls)
-                        # Record the URL before the edit, so a kill mid-way still leaves it for the clear.
-                        Set-QuestSkyboxAddedUrls -Urls (@($old) + $dav)
-                        $res = Invoke-QuestSkyboxWebDav -DeviceSerial $dev -DavUrl $dav -User $login.User -Password $login.Password -RemoveUrls $old
-                        if ($res -eq 'not installed') { return 0 }
-                        if ($res -eq 'failed') {
-                            $note = 'update failed - retrying'
-                        } else {
-                            Set-QuestSkyboxAddedUrls -Urls @($dav)
-                            $applied = $key
-                            $note = "server up to date ($dav)"
-                        }
-                    }
-                }
-            }
-        } catch {
-            $note = "error: $($_.Exception.Message)"
-        }
-        if ($note -and $note -ne $lastNote) { if ($note -notlike 'server up to date*') { Write-QuestLog "SKYBOX: $note" }; $lastNote = $note }
-        for ($i = 0; $i -lt 20 -and (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
-    }
-    Write-QuestLog 'SKYBOX: companion gone - stopping (the server is removed by the companion cleanup).'
-    return 0
+# Quest control page Push / Update (one run each): put server 'Loop Segments' in SKYBOX at the phone's
+# current address (-LanConfig lan_config.json, else -Url) with the current LAN login, and delete the
+# servers this PC added at older addresses. -OnlyIfPresent (Update): only if one is there already.
+# Returns 'added' / 'updated' / 'unchanged' / 'absent' / 'not installed' / 'unreachable' / 'failed'.
+function Invoke-QuestSkyboxWebDavPush {
+    param([switch] $OnlyIfPresent)
+    $lan = Get-QuestSkyboxCurrentLanUrl
+    if (-not $lan) { Write-QuestLog 'SKYBOX: no phone LAN address (lan_config.json / -Url) - nothing pushed.'; return 'failed' }
+    $login = Get-QuestLanLogin -ForUrl $lan
+    if ([string]::IsNullOrEmpty($login.Password)) { Write-QuestLog 'SKYBOX: no LAN password in loop-segments-windows.json - nothing pushed.'; return 'failed' }
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-QuestLog 'SKYBOX: headset not reachable over adb - nothing pushed.'; return 'unreachable' }
+    $dav = Get-QuestSkyboxWebDavUrl -LanUrl $lan
+    $old = @(Get-QuestSkyboxAddedUrls)
+    # Record the URL before the edit, so a kill mid-way still leaves it for the clear.
+    Set-QuestSkyboxAddedUrls -Urls (@($old) + $dav)
+    $res = Invoke-QuestSkyboxWebDav -DeviceSerial $dev -DavUrl $dav -User $login.User -Password $login.Password -RemoveUrls $old -OnlyIfPresent:$OnlyIfPresent
+    if ($res -in @('added', 'updated', 'unchanged')) { Set-QuestSkyboxAddedUrls -Urls @($dav) }
+    else { Set-QuestSkyboxAddedUrls -Urls $old }
+    return $res
 }
 
-# Remove every server this PC added (state file) plus the one at the current address.
+# Clear button and companion close: remove every SKYBOX Network entry of this app, in one edit:
+#   - WebDAV servers this PC added (state file), and any WebDAV server at a phone address the
+#     companion knows (current lan_config.json, phoneLanHost, phoneLanHosts[]; also ones added by hand)
+#   - any WebDAV server named 'Loop Segments'
+#   - the companion's rclone DLNA server (name rcloneDlnaName, announced by rclone)
 function Invoke-QuestSkyboxWebDavClear {
     param([string] $DeviceSerial)
-    $urls = @(Get-QuestSkyboxAddedUrls)
+    $urls = [System.Collections.Generic.List[string]]::new()
+    foreach ($u in @(Get-QuestSkyboxAddedUrls)) { $urls.Add($u) }
     $lan = Get-QuestSkyboxCurrentLanUrl
-    if ($lan) { $urls += (Get-QuestSkyboxWebDavUrl -LanUrl $lan) }
-    $urls = @($urls | Where-Object { $_ } | Select-Object -Unique)
-    if ($urls.Count -eq 0) { Write-QuestLog 'SKYBOX: no server address known - nothing to remove.'; return 'absent' }
-    $res = Invoke-QuestSkyboxWebDav -DeviceSerial $DeviceSerial -RemoveUrls $urls
+    if ($lan) { $urls.Add((Get-QuestSkyboxWebDavUrl -LanUrl $lan)) }
+    $port = 8765
+    $dlnaName = 'Loop Segments'
+    if ($script:Cfg) {
+        try { if ([int]$script:Cfg.lanPort -gt 0) { $port = [int]$script:Cfg.lanPort } } catch {}
+        if (-not [string]::IsNullOrWhiteSpace([string]$script:Cfg.rcloneDlnaName)) { $dlnaName = ([string]$script:Cfg.rcloneDlnaName).Trim() }
+        $hostsRaw = @()
+        if (-not [string]::IsNullOrWhiteSpace([string]$script:Cfg.phoneLanHost)) { $hostsRaw += [string]$script:Cfg.phoneLanHost }
+        foreach ($raw in @($script:Cfg.phoneLanHosts)) { if ($null -ne $raw) { $hostsRaw += $raw } }
+        foreach ($raw in $hostsRaw) {
+            try {
+                $e = ConvertTo-LoopSegmentsPhoneHostEntry -Raw $raw -DefaultPort $port
+                if ($e -and $e.Host) { $urls.Add(('webdav://{0}:{1}/' -f $e.Host, $e.Port)) }
+            } catch {}
+        }
+    }
+    $list = @($urls | Where-Object { $_ } | Select-Object -Unique)
+    $res = Invoke-QuestSkyboxWebDav -DeviceSerial $DeviceSerial -RemoveUrls $list -RemoveNamedWebDav -RemoveDlnaName $dlnaName
     if ($res -in @('removed', 'absent', 'not installed')) { Set-QuestSkyboxAddedUrls -Urls @() }
     return $res
+}
+
+# -StatusFile: progress / result word for the caller (companion sink, Quest control page).
+function Set-QuestOpenStatus {
+    param([string] $Value)
+    if ([string]::IsNullOrWhiteSpace($StatusFile)) { return }
+    try { Set-Content -LiteralPath $StatusFile -Value $Value -Encoding ascii } catch {}
 }
 
 $script:Adb = Find-QuestAdbExe
@@ -666,14 +774,23 @@ $script:LastConnectMsg = ''
 $script:SendLanLogin = (-not $NoLanLogin) -and [bool](Get-Command Get-LoopSegmentsWebDAVCredentials -ErrorAction SilentlyContinue)
 if ($ProbeIncognito) { exit (Invoke-QuestIncognitoProbe) }
 if ($EnableProximity) { exit (Invoke-QuestEnableProximity) }
+if ($DisableProximity) { exit (Invoke-QuestDisableProximity) }
+if ($ToggleProximity) { exit (Invoke-QuestToggleProximity) }
 if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession) }
-if ($SkyboxWebDavSession) { exit (Invoke-QuestSkyboxWebDavSession) }
+if ($SkyboxPush -or $SkyboxUpdate) {
+    $res = Invoke-QuestSkyboxWebDavPush -OnlyIfPresent:$SkyboxUpdate
+    Set-QuestOpenStatus $res
+    if ($res -eq 'unreachable') { exit 1 }
+    if ($res -eq 'failed') { exit 3 }
+    exit 0
+}
 if ($ClearSkyboxWebDav -and -not $ClearHistory) {
     # Companion close without a LAN URL, or a manual run; -EnableProximityAfter still applies.
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
-    if (-not $dev) { Write-QuestLog 'SKYBOX: headset not reachable over adb - skipped.'; exit 1 }
+    if (-not $dev) { Write-QuestLog 'SKYBOX: headset not reachable over adb - skipped.'; Set-QuestOpenStatus 'unreachable'; exit 1 }
     $sky = Invoke-QuestSkyboxWebDavClear -DeviceSerial $dev
+    Set-QuestOpenStatus $sky
     $prox = if ($EnableProximityAfter) { if ((Invoke-QuestEnableProximity) -eq 0) { 'on' } else { 'failed' } } else { 'skipped' }
     if ($sky -eq 'failed' -or $prox -eq 'failed') { exit 3 }
     exit 0
@@ -701,9 +818,11 @@ if ($EnsureFlags -or $ClearHistory) {
                 try {
                     if ($CloseLanTabs) {
                         $t0 = [DateTime]::UtcNow
-                        $lan = @(Get-QuestLanTabs -Origins (Get-QuestLanOrigins))
+                        # Phone LAN page tabs, plus the Quest control page on this PC.
+                        $origins = @(Get-QuestLanOrigins) + @(Get-QuestControlOrigin -DeviceSerial $dev)
+                        $lan = @(Get-QuestLanTabs -Origins $origins)
                         foreach ($t in $lan) { Close-QuestTab -Id $t.id }
-                        Write-QuestLog ("Tabs: closed {0} Quest Browser tab(s) on the phone LAN page ({1:0.0} s)." -f $lan.Count, ([DateTime]::UtcNow - $t0).TotalSeconds)
+                        Write-QuestLog ("Tabs: closed {0} Quest Browser tab(s) on the phone LAN page / control page ({1:0.0} s)." -f $lan.Count, ([DateTime]::UtcNow - $t0).TotalSeconds)
                     }
                     if (-not $SkipHistoryClear) {
                         $t0 = [DateTime]::UtcNow
@@ -740,11 +859,6 @@ if ($EnsureFlags -or $ClearHistory) {
 }
 Write-QuestLog ("Watcher start: url={0} adb={1} host={2} port={3} serial={4} parent={5}" -f $Url, $script:Adb, $QuestHost, $Port, $Serial, $ParentPid)
 
-function Set-QuestOpenStatus {
-    param([string] $Value)
-    if ([string]::IsNullOrWhiteSpace($StatusFile)) { return }
-    try { Set-Content -LiteralPath $StatusFile -Value $Value -Encoding ascii } catch {}
-}
 
 $wasAwake = $false
 $lastState = ''

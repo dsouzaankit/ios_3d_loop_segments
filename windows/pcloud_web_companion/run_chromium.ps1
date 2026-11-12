@@ -2503,8 +2503,8 @@ if (-not $DetachChromium) {
     if (Get-Command Start-QuestKeepAwakeInBackground -ErrorAction SilentlyContinue) {
         Start-QuestKeepAwakeInBackground -CompanionPid $PID
     }
-    if (Get-Command Start-QuestSkyboxWebDavInBackground -ErrorAction SilentlyContinue) {
-        Start-QuestSkyboxWebDavInBackground -ExtensionDir $ExtensionDir -CompanionPid $PID
+    if (Get-Command Start-QuestControlPageInBackground -ErrorAction SilentlyContinue) {
+        Start-QuestControlPageInBackground -ExtensionDir $ExtensionDir -CompanionPid $PID
     }
 }
 
