@@ -773,8 +773,13 @@ function Get-QuestOpenStatus {
         return [ordered]@{ ok = $true; state = 'running'; url = $script:QuestOpenUrl }
     }
     $code = $script:QuestOpenProc.ExitCode
+    $detail = Get-QuestOpenLastLogLine
     $message = switch ($code) {
-        0 { 'Opened on Quest.' }
+        0 {
+            if ($detail -match 'private tab') { 'Opened on Quest (private tab).' }
+            elseif ($detail -match 'normal tab') { 'Opened on Quest (normal tab).' }
+            else { 'Opened on Quest.' }
+        }
         1 { 'Quest not reachable or asleep - wake the headset and check adb (see log).' }
         2 { 'adb not found on this PC (winget install Google.PlatformTools).' }
         default { "Quest open failed (exit $code)." }
@@ -785,7 +790,7 @@ function Get-QuestOpenStatus {
         exitCode = $code
         url      = $script:QuestOpenUrl
         message  = $message
-        detail   = (Get-QuestOpenLastLogLine)
+        detail   = $detail
     }
 }
 

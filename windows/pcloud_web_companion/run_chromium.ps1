@@ -142,6 +142,11 @@ $WindowsLib = Join-Path $LibDir 'LoopSegments-Windows.ps1'
 if (Test-Path -LiteralPath $WindowsLib) {
     . $WindowsLib
 }
+# Quest Browser hooks: insecure-origin flag check at startup, history clear on finish.
+$QuestHooks = Join-Path $WindowsDir 'quest\QuestCompanionHooks.ps1'
+if (Test-Path -LiteralPath $QuestHooks) {
+    . $QuestHooks
+}
 
 # Machine-local only (never on pCloud P:). Repo .venv is legacy and ignored.
 $CompanionLocalRoot = Join-Path $env:LOCALAPPDATA "pcloud_web_companion"
@@ -2145,9 +2150,16 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): clear Quest Browser history, Quest proximity sensor on, close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
 
     try {
+        # Quest first: if Quest Browser is closed, clearing opens it on a phone page, so the phone LAN must still be up.
+        if (Get-Command Invoke-QuestHistoryClearOnExit -ErrorAction SilentlyContinue) {
+            try { Invoke-QuestHistoryClearOnExit -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $ExtensionDir) } catch {}
+        }
+        if (Get-Command Invoke-QuestProximityOnExit -ErrorAction SilentlyContinue) {
+            try { Invoke-QuestProximityOnExit } catch {}
+        }
         Stop-ProfileChromium -ProfileDir $UserDataDir
         try { Remove-LoopSegmentsSkyboxRcloneFolderMapping } catch {}
         try { Stop-LoopSegmentsSkybox -OnlyIfCompanionStarted } catch {}
@@ -2480,6 +2492,9 @@ $script:CompanionBrowserStarted = $true
 if (-not $DetachChromium) {
     Register-CompanionCancelHandler
     Start-CompanionExitWatchdog
+    if (Get-Command Start-QuestFlagSyncInBackground -ErrorAction SilentlyContinue) {
+        Start-QuestFlagSyncInBackground -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $ExtensionDir)
+    }
 }
 
 if (-not $script:CompanionShutdownRequested) {

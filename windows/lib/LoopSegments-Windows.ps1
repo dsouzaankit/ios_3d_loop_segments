@@ -50,6 +50,16 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questAdbPort            = 5555
         questAdbSerial          = ''
         questAdbExe             = ''
+        # Open on Quest: false (default) = normal tab (WebXR works); true = private tab (no immersive WebXR).
+        questIncognito          = $false
+        # Private tab URL carries admin:<webdavPassword>@ so the LAN page opens signed in.
+        questSendLanLogin       = $true
+        # Companion startup: keep Quest Browser's insecure-origin chrome://flags entry on the phone LAN origin(s).
+        questEnsureInsecureOriginFlag = $true
+        # Companion close: clear Quest Browser history (History only, All time).
+        questClearHistoryOnExit = $true
+        # Companion close: turn the Quest proximity sensor back on (undo a prox_close override).
+        questEnableProximityOnExit = $true
         webdavUser              = 'admin'
         webdavPassword          = ''
         iCloudDownloads         = ''

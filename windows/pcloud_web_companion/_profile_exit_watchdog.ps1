@@ -37,6 +37,10 @@ $WindowsSettingsLib = Join-Path $WindowsLib "LoopSegments-Windows.ps1"
 if (Test-Path -LiteralPath $WindowsSettingsLib) {
     . $WindowsSettingsLib
 }
+$QuestHooks = Join-Path (Split-Path -Parent $PSScriptRoot) "quest\QuestCompanionHooks.ps1"
+if (Test-Path -LiteralPath $QuestHooks) {
+    . $QuestHooks
+}
 $ProfileSyncHelper = Join-Path $PSScriptRoot "_chromium_profile_sync.ps1"
 if (Test-Path -LiteralPath $ProfileSyncHelper) {
     . $ProfileSyncHelper
@@ -113,7 +117,13 @@ if (Test-Path -LiteralPath $GracefulMarkerPath) {
 }
 
 # Ungraceful close (console X, kill, crash): finish the companion session.
-Write-Host "[watchdog] Parent gone without graceful marker - closing Chromium, dropping Skybox shares, quitting Skybox if we started it, syncing profile"
+Write-Host "[watchdog] Parent gone without graceful marker - clearing Quest Browser history, turning the Quest proximity sensor on, closing Chromium, dropping Skybox shares, quitting Skybox if we started it, syncing profile"
+if (Get-Command Invoke-QuestHistoryClearOnExit -ErrorAction SilentlyContinue) {
+    try { Invoke-QuestHistoryClearOnExit -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $PSScriptRoot) } catch {}
+}
+if (Get-Command Invoke-QuestProximityOnExit -ErrorAction SilentlyContinue) {
+    try { Invoke-QuestProximityOnExit } catch {}
+}
 Stop-ProfileChrome -Dir $ProfileDir
 if (Get-Command Remove-LoopSegmentsSkyboxRcloneFolderMapping -ErrorAction SilentlyContinue) {
     try { Remove-LoopSegmentsSkyboxRcloneFolderMapping } catch {}
