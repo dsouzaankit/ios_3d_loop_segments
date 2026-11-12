@@ -12,9 +12,9 @@
   Enter if still wrong); then
   prints phone LAN status, USB-launches Loop Segments to foreground the app
   (unless -SkipUsbLaunch), then attempts an rclone WebDAV mount (unless
-  -SkipRcloneMount) and rclone serve dlna for phone WebDAV (unless
-  -SkipRcloneDlna) in separate windows when LAN is up — Quest Skybox uses DLNA,
-  not AirScreen of L:. Then probes LAN throughput off the mount (unless
+  -SkipRcloneMount) when LAN is up. rclone serve dlna for phone WebDAV (Quest
+  Skybox Network; never AirScreen of L:) is off by default because DLNA has no
+  password: pass -EnableRcloneDlna to start it. Then probes LAN throughput off the mount (unless
   -SkipLanThroughput). If throughput is below
   minLanThroughputMbps (default 40), reboots Wi-Fi on other known routers (not the
   current gateway), waits to settle, and re-measures - up to 2 retries. Chromium
@@ -41,7 +41,7 @@
   .\Run-PCloudWebCompanion.ps1 -SkipRcloneMount
 
 .EXAMPLE
-  .\Run-PCloudWebCompanion.ps1 -SkipRcloneDlna
+  .\Run-PCloudWebCompanion.ps1 -EnableRcloneDlna
 
 .EXAMPLE
   .\Run-PCloudWebCompanion.ps1 -SkipGatewayReboot
@@ -85,6 +85,7 @@ param(
     [switch] $UsbLaunchMount,
     [switch] $SkipRcloneMount,
     [switch] $SkipRcloneDlna,
+    [switch] $EnableRcloneDlna,
     [switch] $SkipGatewayReboot,
     [switch] $SkipLanThroughput,
     [switch] $SkipLowThroughputGatewayReboot,
@@ -139,6 +140,7 @@ try {
         UsbLaunchMount                  = $UsbLaunchMount
         SkipRcloneMount                 = $SkipRcloneMount
         SkipRcloneDlna                  = $SkipRcloneDlna
+        EnableRcloneDlna                = $EnableRcloneDlna
         SkipGatewayReboot               = $SkipGatewayReboot
         SkipLanThroughput               = $SkipLanThroughput
         SkipLowThroughputGatewayReboot  = $SkipLowThroughputGatewayReboot

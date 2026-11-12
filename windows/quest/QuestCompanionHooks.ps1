@@ -3,8 +3,10 @@
 # hidden pwsh; log lines go to %TEMP%\loopsegments-quest-lantab.log.
 #   startup : -EnsureFlags  (background, never blocks)  - questEnsureInsecureOriginFlag (default true)
 #   startup : -KeepAwakeSession (background, until the companion exits) - questKeepAwakeDuringSession
-#   close   : stop keep-awake, then -ClearHistory (at most 30 s) - questClearHistoryOnExit (default true)
-#   close   : then -EnableProximity (waits up to ~30 s)  - questKeepAwakeDuringSession (default true)
+#   close   : stop keep-awake, then ONE background process: close LAN tabs, clear history (~30 s),
+#             proximity sensor on - questCloseLanTabsOnExit / questClearHistoryOnExit /
+#             questKeepAwakeDuringSession. Start-QuestCleanupOnExit starts it, Wait-QuestCleanupOnExit
+#             (at most 40 s from its start) waits before anything drops the Wi-Fi.
 
 $script:QuestWatchScript = Join-Path $PSScriptRoot 'Watch-LoopSegmentsQuestLanTab.ps1'
 
@@ -65,26 +67,65 @@ function Start-QuestFlagSyncInBackground {
     }
 }
 
-# Close: clear Quest Browser history (History only, All time). Waits so it finishes before exit.
-function Invoke-QuestHistoryClearOnExit {
-    param([string] $LanUrl, [int] $TimeoutSec = 30)
-    if (-not (Get-QuestCompanionSetting -Name 'questClearHistoryOnExit')) { return }
-    if ([string]::IsNullOrWhiteSpace($LanUrl) -or -not (Test-Path -LiteralPath $script:QuestWatchScript)) { return }
+# ---- Close: one background cleanup process (LAN tabs -> history -> proximity sensor) ----
+
+$script:QuestCleanupProc = $null
+$script:QuestCleanupStartedAt = $null
+
+# Start the close-time Quest cleanup without waiting, so the companion can close Chromium and sync
+# the profile meanwhile. Wait-QuestCleanupOnExit must run before anything that drops the Wi-Fi.
+function Start-QuestCleanupOnExit {
+    param([string] $LanUrl)
+    Stop-QuestKeepAwake
+    $script:QuestCleanupProc = $null
+    $clear = Get-QuestCompanionSetting -Name 'questClearHistoryOnExit'
+    $close = Get-QuestCompanionSetting -Name 'questCloseLanTabsOnExit'
+    $prox = Get-QuestCompanionSetting -Name 'questKeepAwakeDuringSession'
+    if (-not ($clear -or $close -or $prox)) { return }
+    if (-not (Test-Path -LiteralPath $script:QuestWatchScript)) { return }
+    $what = @()
+    if ($close) { $what += 'close LAN tabs' }
+    if ($clear) { $what += 'clear history' }
+    if ($prox) { $what += 'proximity sensor on' }
+    if ([string]::IsNullOrWhiteSpace($LanUrl)) {
+        if (-not $prox) { return }
+        $qa = @('-EnableProximity')
+        $what = @('proximity sensor on')
+    } else {
+        $qa = @('-Url', $LanUrl, '-ClearHistory')
+        if ($close) { $qa += '-CloseLanTabs' }
+        if (-not $clear) { $qa += '-SkipHistoryClear' }
+        if ($prox) { $qa += '-EnableProximityAfter' }
+    }
     try {
-        Write-Host '[quest] Clearing Quest Browser history (History only, All time)...'
-        $p = Start-QuestWatchProcess -Arguments @('-Url', $LanUrl, '-ClearHistory')
-        if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-            try { $p.Kill($true) } catch {}
-            Write-Warning "[quest] Quest history clear timed out after ${TimeoutSec}s"
-            return
-        }
-        switch ($p.ExitCode) {
-            0 { Write-Host '[quest] Quest Browser history cleared.' -ForegroundColor Green }
-            1 { Write-Host '[quest] Quest not on adb - history not cleared.' -ForegroundColor DarkYellow }
-            default { Write-Warning "[quest] Quest history clear failed (exit $($p.ExitCode)); see %TEMP%\loopsegments-quest-lantab.log" }
-        }
+        $script:QuestCleanupStartedAt = [DateTime]::UtcNow
+        $script:QuestCleanupProc = Start-QuestWatchProcess -Arguments $qa
+        $script:QuestCleanupWhat = $what -join ', '
+        Write-Host ("[quest] Quest cleanup running in the background: {0} (PID {1})" -f $script:QuestCleanupWhat, $script:QuestCleanupProc.Id)
     } catch {
-        Write-Warning "[quest] Quest history clear: $($_.Exception.Message)"
+        Write-Warning "[quest] Could not start Quest cleanup: $($_.Exception.Message)"
+        $script:QuestCleanupProc = $null
+    }
+}
+
+# Wait for the background cleanup, at most -TimeoutSec counted from its start. Safe to call twice.
+function Wait-QuestCleanupOnExit {
+    param([int] $TimeoutSec = 40)
+    $p = $script:QuestCleanupProc
+    if (-not $p) { return }
+    $script:QuestCleanupProc = $null
+    $leftMs = [int][Math]::Max(0, ($TimeoutSec - ([DateTime]::UtcNow - $script:QuestCleanupStartedAt).TotalSeconds) * 1000)
+    if (-not $p.HasExited) { Write-Host '[quest] Waiting for the Quest cleanup to finish...' }
+    if (-not $p.WaitForExit($leftMs)) {
+        try { $p.Kill($true) } catch {}
+        Write-Warning "[quest] Quest cleanup stopped after ${TimeoutSec}s; see %TEMP%\loopsegments-quest-lantab.log"
+        return
+    }
+    $took = ([DateTime]::UtcNow - $script:QuestCleanupStartedAt).TotalSeconds
+    switch ($p.ExitCode) {
+        0 { Write-Host ("[quest] Quest cleanup done ({0}) within {1:0.0} s." -f $script:QuestCleanupWhat, $took) -ForegroundColor Green }
+        1 { Write-Host '[quest] Quest not on adb - cleanup skipped (a headset reboot also resets the proximity sensor).' -ForegroundColor DarkYellow }
+        default { Write-Warning "[quest] Quest cleanup incomplete (exit $($p.ExitCode)); see %TEMP%\loopsegments-quest-lantab.log" }
     }
 }
 
@@ -124,27 +165,4 @@ function Stop-QuestKeepAwake {
         try { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch {}
     }
     $script:QuestKeepAwakeProc = $null
-}
-
-# Close (after the history clear): turn the proximity sensor back on.
-function Invoke-QuestProximityOnExit {
-    param([int] $TimeoutSec = 30)
-    Stop-QuestKeepAwake
-    if (-not (Get-QuestCompanionSetting -Name 'questKeepAwakeDuringSession')) { return }
-    if (-not (Test-Path -LiteralPath $script:QuestWatchScript)) { return }
-    try {
-        $p = Start-QuestWatchProcess -Arguments @('-EnableProximity')
-        if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-            try { $p.Kill($true) } catch {}
-            Write-Warning "[quest] Quest proximity re-enable timed out after ${TimeoutSec}s"
-            return
-        }
-        switch ($p.ExitCode) {
-            0 { Write-Host '[quest] Quest proximity sensor back on.' -ForegroundColor Green }
-            1 { Write-Host '[quest] Quest not on adb - proximity sensor not changed (a headset reboot also resets it).' -ForegroundColor DarkYellow }
-            default { Write-Warning "[quest] Quest proximity re-enable failed (exit $($p.ExitCode)); see %TEMP%\loopsegments-quest-lantab.log" }
-        }
-    } catch {
-        Write-Warning "[quest] Quest proximity re-enable: $($_.Exception.Message)"
-    }
 }

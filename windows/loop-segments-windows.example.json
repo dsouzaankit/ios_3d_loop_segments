@@ -27,6 +27,7 @@
   "questSendLanLogin": true,
   "questEnsureInsecureOriginFlag": true,
   "questClearHistoryOnExit": true,
+  "questCloseLanTabsOnExit": true,
   "questKeepAwakeDuringSession": true,
   "webdavUser": "admin",
   "webdavPassword": "<password from the app's Export screen>",

@@ -7,7 +7,10 @@ param(
     [switch]$UsbLaunchMount,
     # Do not open rclone WebDAV mount (default: attempt after USB launch when LAN is up).
     [switch]$SkipRcloneMount,
-    # Do not open rclone serve dlna for phone WebDAV (default: attempt after mount when LAN is up).
+    # Start rclone serve dlna for phone WebDAV (Quest Skybox Network). Off by default: DLNA has no
+    # password and lists the phone's folders to anyone on the LAN.
+    [switch]$EnableRcloneDlna,
+    # Kept for old shortcuts; DLNA is already off unless -EnableRcloneDlna.
     [switch]$SkipRcloneDlna,
     # Do not check/reboot the LAN gateway when it is off the phone LAN page subnet.
     [switch]$SkipGatewayReboot,
@@ -1341,8 +1344,8 @@ function Invoke-AttemptRcloneDlnaServe {
 }
 
 function Invoke-AttemptRcloneDlnaServeCore {
-    if ($SkipRcloneDlna) {
-        Write-Host '[rclone-dlna] Skipping phone DLNA serve (-SkipRcloneDlna)'
+    if ($SkipRcloneDlna -or -not $EnableRcloneDlna) {
+        Write-Host '[rclone-dlna] Phone DLNA serve off (default; -EnableRcloneDlna to start it for Skybox Network)'
         return $false
     }
 
@@ -2150,18 +2153,13 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): clear Quest Browser history, Quest proximity sensor back on, close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): Quest cleanup in the background (LAN tabs, history, proximity sensor), close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
 
     try {
-        # Quest first: if Quest Browser is closed, clearing opens it on a phone page, so the phone LAN must still be up.
-        # Order: stop keep-awake (it would switch the sensor off again), clear history while the
-        # headset is still awake, then turn the proximity sensor back on.
-        if (Get-Command Stop-QuestKeepAwake -ErrorAction SilentlyContinue) { try { Stop-QuestKeepAwake } catch {} }
-        if (Get-Command Invoke-QuestHistoryClearOnExit -ErrorAction SilentlyContinue) {
-            try { Invoke-QuestHistoryClearOnExit -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $ExtensionDir) } catch {}
-        }
-        if (Get-Command Invoke-QuestProximityOnExit -ErrorAction SilentlyContinue) {
-            try { Invoke-QuestProximityOnExit } catch {}
+        # Quest cleanup (LAN tabs, history, proximity sensor) runs in the background while Chromium
+        # closes and the profile syncs; it needs the Wi-Fi, so it is waited for before the probe below.
+        if (Get-Command Start-QuestCleanupOnExit -ErrorAction SilentlyContinue) {
+            try { Start-QuestCleanupOnExit -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $ExtensionDir) } catch {}
         }
         Stop-ProfileChromium -ProfileDir $UserDataDir
         try { Remove-LoopSegmentsSkyboxRcloneFolderMapping } catch {}
@@ -2180,6 +2178,8 @@ function Invoke-CompanionGracefulFinish {
         try { Stop-CompanionPhoneRcloneMountForFinish } catch {
             Write-Warning "[rclone] Pre-finish mount stop: $($_.Exception.Message)"
         }
+        # The Wi-Fi probe can restart the router (drops the Quest's adb): finish the Quest cleanup first.
+        if (Get-Command Wait-QuestCleanupOnExit -ErrorAction SilentlyContinue) { try { Wait-QuestCleanupOnExit } catch {} }
         # Probe while Loop Segments is still foreground (Home/background can kill :8765 if Keep Alive is off).
         Invoke-PhoneWifiWwwProbeBeforeHome
         Invoke-GoIphoneHome
@@ -2198,6 +2198,8 @@ function Invoke-CompanionGracefulFinish {
     } catch {
         Write-Warning "[run] Finish had errors: $($_.Exception.Message)"
     } finally {
+        # If finish failed before the probe, still let the Quest cleanup finish (no-op if already waited).
+        if (Get-Command Wait-QuestCleanupOnExit -ErrorAction SilentlyContinue) { try { Wait-QuestCleanupOnExit } catch {} }
         try { Stop-CompanionConsoleTranscript } catch {}
         # Marker only after finish attempt so a killed-mid-sync console X still lets the watchdog upload.
         try {

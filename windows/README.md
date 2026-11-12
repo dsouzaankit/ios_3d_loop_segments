@@ -112,7 +112,7 @@ Chromium + MV3 extension lives in **`windows\pcloud_web_companion\`**. On start 
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipUsbLaunch   # Chromium only (still tries rclone if LAN up)
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -EnsureAltServer # AltStore path: start AltServer if idle (default skips)
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipRcloneMount # no drive-letter mount window
-# .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipRcloneDlna   # no rclone serve dlna for Quest
+# .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -EnableRcloneDlna # also start rclone serve dlna for Quest Skybox (off by default: no password)
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLanThroughput # no media copy Mbps probe
 # .\pcloud_web_companion\Run-PCloudWebCompanion.ps1 -SkipLowThroughputGatewayReboot # keep going even if below minLanThroughputMbps
 # Profile: full sync to P:; local AppData cleared after companion finishes (gitignored)
@@ -246,6 +246,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `questSendLanLogin` | `true` (default) = the tab is signed in with the LAN login (login URL, then reloaded plain) |
 | `questEnsureInsecureOriginFlag` | `true` (default) = companion startup / Open on Quest keep Quest's `unsafely-treat-insecure-origin-as-secure` flag on the phone origin(s); restarts Quest Browser when it changes the flag |
 | `questClearHistoryOnExit` | `true` (default) = companion close clears Quest Browser history (History only, All time) |
+| `questCloseLanTabsOnExit` | `true` (default) = companion close first closes Quest Browser tabs on the phone LAN page |
 | `questKeepAwakeDuringSession` | `true` (default) = while the companion runs, the Quest proximity sensor is held off (`prox_close`) so the headset stays awake on adb; cleanup clears history first, then turns the sensor back on |
 | `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
 

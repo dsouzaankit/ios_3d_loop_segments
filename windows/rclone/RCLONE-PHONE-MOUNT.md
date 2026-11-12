@@ -43,11 +43,11 @@ Preferred **`mountDriveLetter`** in `loop-segments-windows.json` is tried first 
 
 ## Getting phone media into Skybox on Quest
 
-DLNA is the companion default because it is the only route that both plays in Skybox VR and needs no setup on the headset.
+DLNA is the only route that both plays in Skybox VR and needs no setup on the headset, but the companion no longer starts it by default: `rclone serve dlna` has no password option and lists the phone's folders to anyone who can reach the PC. Start it with `Run-PCloudWebCompanion.ps1 -EnableRcloneDlna` (or `Serve-PhoneDlna.cmd`), or use WebDAV direct below.
 
 | Route | Plays in Skybox VR | Setup |
 |---|---|---|
-| **`rclone serve dlna`** (companion default) | Yes | None on the headset: Skybox finds **Loop Segments** under **Network** by itself |
+| **`rclone serve dlna`** (companion `-EnableRcloneDlna`) | Yes | None on the headset: Skybox finds **Loop Segments** under **Network** by itself |
 | **WebDAV direct to the phone** (`http://<phone>:8765/`, `admin` / the app's password (Export screen)) | Yes, one hop fewer (no PC in the middle) | Add it once by hand under Skybox **Network**. Scripts cannot do this: the only Skybox API, `http://127.0.0.1:8018` (used by `Skybox_vr_pc`), belongs to the PC app and only manages AirScreen folders. With a static phone IP the saved entry keeps working |
 | **AirScreen folder of the `L:` mount** | **No**: it lists in Add-folders but never streams | Automatable through the PC app, but pointless. The companion no longer maps it |
 

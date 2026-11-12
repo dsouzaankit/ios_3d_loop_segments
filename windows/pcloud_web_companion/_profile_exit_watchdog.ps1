@@ -118,12 +118,8 @@ if (Test-Path -LiteralPath $GracefulMarkerPath) {
 
 # Ungraceful close (console X, kill, crash): finish the companion session.
 Write-Host "[watchdog] Parent gone without graceful marker - clearing Quest Browser history, turning the Quest proximity sensor back on, closing Chromium, dropping Skybox shares, quitting Skybox if we started it, syncing profile"
-if (Get-Command Stop-QuestKeepAwake -ErrorAction SilentlyContinue) { try { Stop-QuestKeepAwake } catch {} }
-if (Get-Command Invoke-QuestHistoryClearOnExit -ErrorAction SilentlyContinue) {
-    try { Invoke-QuestHistoryClearOnExit -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $PSScriptRoot) } catch {}
-}
-if (Get-Command Invoke-QuestProximityOnExit -ErrorAction SilentlyContinue) {
-    try { Invoke-QuestProximityOnExit } catch {}
+if (Get-Command Start-QuestCleanupOnExit -ErrorAction SilentlyContinue) {
+    try { Start-QuestCleanupOnExit -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $PSScriptRoot) } catch {}
 }
 Stop-ProfileChrome -Dir $ProfileDir
 if (Get-Command Remove-LoopSegmentsSkyboxRcloneFolderMapping -ErrorAction SilentlyContinue) {
@@ -138,6 +134,9 @@ if (Get-Command Stop-LoopSegmentsPhoneRcloneMount -ErrorAction SilentlyContinue)
 Start-Sleep -Milliseconds 500
 Sync-Upload -Src $ProfileDir -Dst $RepoProfileDir
 Clear-Local -Dir $ProfileDir
+
+# Quest cleanup ran in the background during the profile sync; finish it before exiting.
+if (Get-Command Wait-QuestCleanupOnExit -ErrorAction SilentlyContinue) { try { Wait-QuestCleanupOnExit } catch {} }
 
 $homePs1 = Join-Path (Split-Path -Parent $PSScriptRoot) "usb\Go-IphoneHomeViaUsb.ps1"
 if (-not $SkipGoHome -and (Test-Path -LiteralPath $homePs1)) {

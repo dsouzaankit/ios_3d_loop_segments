@@ -49,6 +49,24 @@ function Close-QuestTab {
 
 function ConvertTo-QuestBareUrl { param([string] $U) (([string]$U) -replace '^(https?://)[^/@]*@', '$1').TrimEnd('/') }
 
+# Open page tabs on any of -Origins (http://host:port), login in the URL ignored.
+function Get-QuestLanTabs {
+    param([string[]] $Origins)
+    $os = @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/').ToLowerInvariant() })
+    if ($os.Count -eq 0) { return @() }
+    return @(Get-QuestTabs | Where-Object {
+            $b = (ConvertTo-QuestBareUrl $_.url).ToLowerInvariant()
+            @($os | Where-Object { $b -eq $_ -or $b.StartsWith("$_/") -or $b.StartsWith("$_#") -or $b.StartsWith("$_?") }).Count -gt 0
+        })
+}
+
+# Bring Quest Browser to the front (starts it if it is closed) and switch to a tab.
+function Show-QuestBrowserTab {
+    param([string] $DeviceSerial, [string] $Id)
+    [void](Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'monkey', '-p', $BrowserPackage, '-c', 'android.intent.category.LAUNCHER', '1'))
+    if ($Id) { try { [void](Invoke-WebRequest -Uri "http://127.0.0.1:$($script:QuestCdpPort)/json/activate/$Id" -TimeoutSec 4 -NoProxy) } catch {} }
+}
+
 # One CDP call on a tab's websocket; waits for the matching id (events are skipped).
 function Invoke-QuestCdp {
     param($Tab, [string] $Method, [hashtable] $Params = @{}, [int] $TimeoutSec = 15)
@@ -128,12 +146,29 @@ function Wait-QuestTabUrl {
 # Normal tab, signed in: VIEW intent (plain URL) -> Page.navigate login URL (caches the HTTP
 # login) -> Page.navigate plain URL (a page whose URL has user:pass@ cannot fetch()) ->
 # drop the tab's back/forward entries. LoginUrl may equal PlainUrl (no login).
+# -Origins: reuse an already open tab on one of these origins (and close the other ones) instead of
+# opening a new tab on every click. Sets $script:QuestReusedTab.
 function Open-QuestSignedInTab {
-    param([string] $DeviceSerial, [string] $PlainUrl, [string] $LoginUrl)
-    $tab = New-QuestViewTab -DeviceSerial $DeviceSerial -PlainUrl $PlainUrl
-    if (-not $tab) { Write-QuestLog 'Normal tab: VIEW intent never opened a tab.'; return $false }
-    if ($LoginUrl -eq $PlainUrl) { return $true }
+    param([string] $DeviceSerial, [string] $PlainUrl, [string] $LoginUrl, [string[]] $Origins = @())
     $want = ConvertTo-QuestBareUrl $PlainUrl
+    $script:QuestReusedTab = $false
+    $existing = @(Get-QuestLanTabs -Origins $Origins)
+    if ($existing.Count -gt 0) {
+        $tab = ($existing | Where-Object { (ConvertTo-QuestBareUrl $_.url) -eq $want } | Select-Object -First 1)
+        if (-not $tab) { $tab = $existing[0] }
+        foreach ($t in $existing) { if ($t.id -ne $tab.id) { Close-QuestTab -Id $t.id } }
+        if ($existing.Count -gt 1) { Write-QuestLog "Normal tab: closed $($existing.Count - 1) extra LAN tab(s)." }
+        Show-QuestBrowserTab -DeviceSerial $DeviceSerial -Id $tab.id
+        $script:QuestReusedTab = $true
+        if ($LoginUrl -eq $PlainUrl) {
+            [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $PlainUrl })
+            return $true
+        }
+    } else {
+        $tab = New-QuestViewTab -DeviceSerial $DeviceSerial -PlainUrl $PlainUrl
+        if (-not $tab) { Write-QuestLog 'Normal tab: VIEW intent never opened a tab.'; return $false }
+        if ($LoginUrl -eq $PlainUrl) { return $true }
+    }
     [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $LoginUrl })
     $signed = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 10 -Match { param($u) $u -match '^https?://[^/@]*@' -and (ConvertTo-QuestBareUrl $u) -eq $want }
     if (-not $signed) { Write-QuestLog 'Normal tab: signed-in load not seen - reloading without the login anyway.' }
@@ -148,6 +183,26 @@ function Open-QuestSignedInTab {
     }
     # Back must not lead to the URL with the login in it.
     try { [void](Invoke-QuestCdp -Tab $plainTab -Method 'Page.resetNavigationHistory') } catch {}
+    # The tab list keeps the requested URL even when loading failed; check the real document.
+    if (-not (Test-QuestTabLoaded -Tab $plainTab)) {
+        Write-QuestLog 'Normal tab: the phone LAN page did not load (phone app closed or off Wi-Fi?).'
+        return $false
+    }
+    return $true
+}
+
+# $false when the tab shows Chromium's error page (server down / unreachable) instead of the page.
+function Test-QuestTabLoaded {
+    param($Tab, [int] $TimeoutSec = 8)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $s = [string](Invoke-QuestEval -Tab $Tab -TimeoutSec 4 -Expression 'JSON.stringify({ href: location.href, ready: document.readyState })' | ConvertFrom-Json | ForEach-Object { "$($_.ready)|$($_.href)" })
+            if ($s -match '\|chrome-error://') { return $false }
+            if ($s -match '^complete\|') { return $true }
+        } catch {}
+        Start-Sleep -Milliseconds 400
+    }
     return $true
 }
 

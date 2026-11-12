@@ -58,6 +58,8 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questEnsureInsecureOriginFlag = $true
         # Companion close: clear Quest Browser history (History only, All time).
         questClearHistoryOnExit = $true
+        # Companion close: close Quest Browser tabs on the phone LAN page (before the history clear).
+        questCloseLanTabsOnExit = $true
         # Companion session: hold the Quest proximity sensor off (headset stays awake and on adb), turn it back on at cleanup.
         questKeepAwakeDuringSession = $true
         webdavUser              = 'admin'

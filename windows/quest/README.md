@@ -7,7 +7,7 @@ The PC companion drives **Quest Browser** over **adb over Wi-Fi** and the browse
 | **Open on Quest** click (PC LAN page) | Check the flag (below), then open the LAN page in a **normal tab, signed in** | `questSendLanLogin`, `questIncognito` |
 | Companion **startup** | Hidden, in the background: make sure the insecure-origin flag lists the phone LAN origin(s) | `questEnsureInsecureOriginFlag` |
 | Companion **startup**, until close | Keep the headset **awake**: proximity sensor held off once the headset is on adb | `questKeepAwakeDuringSession` |
-| Companion **close** (normal finish and the console-X watchdog) | Clear Quest Browser **history** (History only, All time), then turn the **proximity sensor back on** | `questClearHistoryOnExit`, `questKeepAwakeDuringSession` |
+| Companion **close** (normal finish and the console-X watchdog) | Close Quest Browser **tabs on the phone LAN page**, clear **history** (History only, All time), then turn the **proximity sensor back on** | `questCloseLanTabsOnExit`, `questClearHistoryOnExit`, `questKeepAwakeDuringSession` |
 
 Startup and close steps are skipped (and logged) when the headset is not on adb. **Open on Quest** waits instead (below).
 
@@ -15,9 +15,9 @@ Startup and close steps are skipped (and logged) when the headset is not on adb.
 
 ## Open on Quest: normal tab, signed in
 
-1. VIEW intent for `http://<phone>:8765/` (retried: the browser sometimes drops the first one) opens a new normal tab at the login prompt.
+1. **One tab:** if a tab on the phone LAN page is already open (LAN page or `/xr`), the browser is brought to the front and that tab is reused; extra LAN tabs are closed. Otherwise a VIEW intent for `http://<phone>:8765/` (retried: the browser sometimes drops the first one) opens a new normal tab at the login prompt. Reusing an `/xr` tab replaces the XR player with the LAN page.
 2. Over DevTools, that tab is sent to `http://admin:<password>@<phone>:8765/` (the browser caches the LAN login), then back to the plain URL, and its back/forward list is reset so **Back** never leads to the URL with the password.
-3. The page is signed in, its URL has no password, `fetch()` works (`status_lists.json`), and **WebXR immersive VR/AR is available**.
+3. The page is signed in, its URL has no password, `fetch()` works (`status_lists.json`), and **WebXR immersive VR/AR is available**. If the tab ends on Chromium's error page (phone app closed or phone off Wi-Fi), the button reports a failure instead of "Opened".
 
 Why not a private tab: **Quest Browser disables immersive WebXR in private tabs** (`isSessionSupported("immersive-vr")` is false there and true in a normal tab), so the XR player cannot enter VR from one. `"questIncognito": true` (or `-PrivateTab`) still opens a private tab instead (Chromium `IncognitoTabLauncher` + typed URL; falls back to a normal tab). Why the reload: a page whose URL contains `user:pass@` cannot `fetch()` (Chromium refuses URLs with credentials).
 
@@ -31,9 +31,13 @@ Quest WebXR over LAN `http://` needs `chrome://flags/#unsafely-treat-insecure-or
 
 A history clear at quit only works if the headset is on adb, and an asleep Quest usually is not. So while the companion runs, a hidden job holds the **proximity sensor off** (`am broadcast -a com.oculus.vrpowermanager.prox_close`: the headset acts as if worn and does not sleep when you take it off). It checks about every 20 s and applies the override as soon as the headset shows up on adb, and again after a headset reboot (a reboot clears it).
 
-Cleanup, on a normal quit and on console X (the watchdog), runs in this order: stop that job, **clear history** (the headset is still awake), then **turn the sensor back on** (`am broadcast -a com.oculus.vrpowermanager.automation_disable`, checked against `dumpsys vrpowermanager`: `Virtual proximity state: DISABLED`).
+Cleanup, on a normal quit and on console X (the watchdog), stops that job and starts **one background process** that closes the LAN tabs, **clears history** (the headset is still awake), then **turns the sensor back on**. The companion closes Chromium and syncs the profile meanwhile, and waits for that process (at most 40 s from its start) before the Wi-Fi probe / router restart, which would drop the Quest's adb. Each step logs its duration (`Tabs: ... (0.4 s)`, `History step: ...`, `Proximity step: ...`, `Cleanup: finished ... s after start`). The sensor is turned back on even if the history clear failed (`am broadcast -a com.oculus.vrpowermanager.automation_disable`, checked against `dumpsys vrpowermanager`: `Virtual proximity state: DISABLED`).
 
 Things this does not cover: pressing the power button or a flat battery still sleeps the headset. If the PC crashes or both companion processes are killed, nothing turns the sensor back on: run `-EnableProximity`, or reboot the headset. While the override is on, the display stays lit when the headset is off your head (battery, and keep the lenses out of direct sunlight). `"questKeepAwakeDuringSession": false` turns both halves off.
+
+## Close LAN tabs on companion close
+
+Before the history clear, every Quest Browser tab whose address is a phone LAN origin (the LAN page, `/xr`, ...) is closed over DevTools; other tabs stay. `"questCloseLanTabsOnExit": false` keeps them open.
 
 ## Clear history on companion close
 
@@ -127,4 +131,5 @@ Log: `%TEMP%\loopsegments-quest-lantab.log`.
 | `questSendLanLogin` | `true` | Sign the tab in with the LAN login (`false` = sign in on the headset) |
 | `questEnsureInsecureOriginFlag` | `true` | Startup and each Open on Quest: keep the insecure-origin flag on the phone origin(s); may restart Quest Browser |
 | `questClearHistoryOnExit` | `true` | Companion close: clear Quest Browser history (History only, All time) |
+| `questCloseLanTabsOnExit` | `true` | Companion close: close Quest Browser tabs on the phone LAN page (before the history clear) |
 | `questKeepAwakeDuringSession` | `true` | Hold the proximity sensor off while the companion runs (headset stays awake for the close-time history clear); turned back on at cleanup |

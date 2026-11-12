@@ -23,7 +23,8 @@
                    for up to N minutes and open the page when it wakes (the button uses 7).
                    -StatusFile gets 'queued' / 'opening' so the companion sink can report it.
   -EnsureFlags   : only step 1 (companion runs it hidden at startup).
-  -ClearHistory  : clear Quest Browser history - History only, All time - through the browser's
+  -ClearHistory  : (-CloseLanTabs first closes every tab on a phone LAN origin; -SkipHistoryClear
+                   then stops there) clear Quest Browser history - History only, All time - through the browser's
                    own "Clear browsing data" dialog (cookies, cache, passwords, forms, settings are
                    kept; the dialog's previous ticks are restored). Companion runs it on close.
   -EnableProximity : turn the proximity sensor back on (undoes a `prox_close` override, so the
@@ -92,6 +93,12 @@ param(
     [switch] $EnsureFlags,
     # Only clear Quest Browser history (History only, All time).
     [switch] $ClearHistory,
+    # With -ClearHistory: first close every tab on a phone LAN origin.
+    [switch] $CloseLanTabs,
+    # With -ClearHistory -CloseLanTabs: close the tabs but keep history.
+    [switch] $SkipHistoryClear,
+    # With -ClearHistory: afterwards turn the proximity sensor back on (companion close, one process).
+    [switch] $EnableProximityAfter,
     # Do not touch chrome://flags before opening the tab.
     [switch] $NoFlags,
     # Only turn the proximity sensor back on (am broadcast ...vrpowermanager.automation_disable).
@@ -363,9 +370,10 @@ function Open-QuestNormalTab {
         return $false
     }
     try {
-        if (-not (Open-QuestSignedInTab -DeviceSerial $DeviceSerial -PlainUrl $plain -LoginUrl $login)) { return $false }
+        if (-not (Open-QuestSignedInTab -DeviceSerial $DeviceSerial -PlainUrl $plain -LoginUrl $login -Origins (Get-QuestLanOrigins))) { return $false }
         $how = if ($login -ne $plain) { 'signed in' } else { 'not signed in' }
-        Write-QuestLog "Opened $Url in Quest browser, normal tab, $how ($DeviceSerial)"
+        $which = if ($script:QuestReusedTab) { 'reused open tab' } else { 'new tab' }
+        Write-QuestLog "Opened $Url in Quest browser, normal tab, $how, $which ($DeviceSerial)"
         return $true
     } catch {
         Write-QuestLog "Normal tab: $($_.Exception.Message)"
@@ -573,11 +581,42 @@ if ($EnsureFlags -or $ClearHistory) {
         exit 1
     }
     if ($ClearHistory) {
-        if (-not (Open-QuestDevTools -DeviceSerial $dev)) { exit 3 }
-        # Whole run (pwsh start, adb connect, clear) must finish within ~30 s; keep ~2 s for exit.
-        $budget = 28 - ([DateTime]::UtcNow - $script:StartedAt).TotalSeconds
-        try { $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -BudgetSec $budget } finally { Close-QuestDevTools }
-        if ($res -eq 'cleared') { exit 0 } else { exit 3 }
+        # Companion close, in this order: LAN tabs, history (both within ~30 s of start), then the
+        # proximity sensor. Each step logs its duration.
+        $since = { ([DateTime]::UtcNow - $script:StartedAt).TotalSeconds }
+        Write-QuestLog ("Cleanup: headset on adb after {0:0.0} s." -f (& $since))
+        $res = 'skipped'
+        if ($CloseLanTabs -or -not $SkipHistoryClear) {
+            if (Open-QuestDevTools -DeviceSerial $dev) {
+                try {
+                    if ($CloseLanTabs) {
+                        $t0 = [DateTime]::UtcNow
+                        $lan = @(Get-QuestLanTabs -Origins (Get-QuestLanOrigins))
+                        foreach ($t in $lan) { Close-QuestTab -Id $t.id }
+                        Write-QuestLog ("Tabs: closed {0} Quest Browser tab(s) on the phone LAN page ({1:0.0} s)." -f $lan.Count, ([DateTime]::UtcNow - $t0).TotalSeconds)
+                    }
+                    if (-not $SkipHistoryClear) {
+                        $t0 = [DateTime]::UtcNow
+                        $budget = 28 - (& $since)
+                        $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -BudgetSec $budget
+                        Write-QuestLog ("History step: {0} ({1:0.0} s)." -f $res, ([DateTime]::UtcNow - $t0).TotalSeconds)
+                    }
+                } finally { Close-QuestDevTools }
+            } else {
+                $res = 'failed'
+            }
+        }
+        $prox = 'skipped'
+        if ($EnableProximityAfter) {
+            # Always after the history clear: once the sensor is on, an unworn headset may sleep.
+            $t0 = [DateTime]::UtcNow
+            $prox = if ((Invoke-QuestEnableProximity) -eq 0) { 'on' } else { 'failed' }
+            Write-QuestLog ("Proximity step: {0} ({1:0.0} s)." -f $prox, ([DateTime]::UtcNow - $t0).TotalSeconds)
+        }
+        Write-QuestLog ("Cleanup: finished {0:0.0} s after start (history {1}, proximity {2})." -f (& $since), $res, $prox)
+        $historyBad = ($res -eq 'failed') -or (($res -eq 'skipped') -and (-not $SkipHistoryClear))
+        if ($historyBad -or ($prox -eq 'failed')) { exit 3 }
+        exit 0
     }
     $res = Invoke-QuestFlagSync -DeviceSerial $dev
     if ($res -eq 'failed') { exit 3 } else { exit 0 }
