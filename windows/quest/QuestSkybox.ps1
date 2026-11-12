@@ -192,6 +192,18 @@ function Remove-QuestSkyboxLeftovers {
     }
 }
 
+# Headset shell command for the final check + swap: prints busy:running / busy:journal /
+# busy:changed (and leaves -Db alone) unless SKYBOX is stopped, no -wal / -journal sits next to -Db,
+# and -Db still has -Stat ("<size> <mtime>" of the copy that was edited); else moves -Tmp over -Db
+# and prints done.
+function Get-QuestSkyboxSwapCommand {
+    param([string] $Db, [string] $Tmp, [string] $Stat)
+    return "if pidof $($script:SkyboxPackage) >/dev/null; then echo busy:running; " +
+           "elif [ -e '$Db-wal' ] || [ -e '$Db-journal' ]; then echo busy:journal; " +
+           "elif [ `"`$(stat -c '%s %Y' '$Db')`" != '$Stat' ]; then echo busy:changed; " +
+           "else mv -f '$Tmp' '$Db' && chmod 660 '$Db' && echo done; fi"
+}
+
 # With -DavUrl (webdav://host:port/): add or update server 'Loop Segments' there with -User /
 # -Password, and delete the rows -RemoveUrls / -RemoveNamedWebDav / -RemoveDlnaName match (see
 # Get-QuestSkyboxRemoveWhere) in the same edit. Without -DavUrl: only delete those.
@@ -246,7 +258,9 @@ function Invoke-QuestSkyboxWebDav {
                 Write-QuestLog ("SKYBOX: database has a journal file next to it ({0}) - not editing it (see quest\README.md, 'If SKYBOX changes')." -f (([string]$j.Out).Trim() -replace '.*/', '' -replace '\s+', ', '))
                 return 'failed'
             }
-            if ((Get-QuestSkyboxDbStat -DeviceSerial $DeviceSerial) -ne $stat) {
+            $stat2 = Get-QuestSkyboxDbStat -DeviceSerial $DeviceSerial
+            if ($stat2 -ne $stat) {
+                $stat = $stat2
                 Remove-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue
                 if (-not (Copy-QuestSkyboxDb -DeviceSerial $DeviceSerial -LocalPath $local)) { return 'failed' }
                 $result = Get-QuestSkyboxChange -Sqlite $sqlite -DbFile $local -DavUrl $DavUrl -Want $want -RemoveWhere $where -OnlyIfPresent:$OnlyIfPresent
@@ -270,7 +284,19 @@ function Invoke-QuestSkyboxWebDav {
             $tmp = $script:SkyboxDbPath + '.loopsegments-new'
             $push = Invoke-Adb -TimeoutSec 90 -Arguments @('-s', $DeviceSerial, 'push', $local, $tmp)
             if ($push.Code -ne 0) { Write-QuestLog "SKYBOX: could not copy the database to the headset: $(Get-AdbMessage $push)"; return 'failed' }
-            $mv = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', "mv -f '$tmp' '$($script:SkyboxDbPath)' && chmod 660 '$($script:SkyboxDbPath)' && echo done")
+            # Last check and swap in ONE headset shell command (milliseconds apart): only if SKYBOX
+            # is still stopped, no -wal / -journal appeared, and the database is still the copy we
+            # edited (same size and modified time). Someone may have opened SKYBOX during the copy,
+            # edit and push; its saves must not be overwritten.
+            $guard = Get-QuestSkyboxSwapCommand -Db $script:SkyboxDbPath -Tmp $tmp -Stat $stat
+            $mv = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', $guard)
+            if ($mv.Out -match 'busy:(\w+)') {
+                $why = @{ running = 'SKYBOX was opened'; journal = 'a journal file appeared'; changed = 'SKYBOX saved to it' }[$Matches[1]]
+                Write-QuestLog "SKYBOX: not replacing the database: $why while the change was being prepared - nothing changed, press the button again."
+                [void](Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'rm', '-f', $tmp))
+                $wasRunning = $false
+                return 'failed'
+            }
             if ($mv.Out -notmatch 'done') {
                 Write-QuestLog "SKYBOX: could not replace the database: $(Get-AdbMessage $mv)"
                 [void](Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'rm', '-f', $tmp))
