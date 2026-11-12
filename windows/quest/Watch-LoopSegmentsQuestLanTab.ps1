@@ -29,6 +29,12 @@
                    kept; the dialog's previous ticks are restored). Companion runs it on close.
   -EnableProximity : turn the proximity sensor back on (undoes a `prox_close` override, so the
                    headset sleeps again when taken off). Companion runs it on close. Needs no -Url.
+  -SkyboxWebDavSession : until -ParentPid exits, keep WebDAV server 'Loop Segments' in SKYBOX's
+                   Network list on the phone's current address (-LanConfig lan_config.json, else
+                   -Url) with the current LAN login; re-checked every ~20 s, applied once the
+                   headset is on adb (QuestSkybox.ps1; stops SKYBOX only when the row changes).
+  -ClearSkyboxWebDav : remove every SKYBOX server this PC added (with -ClearHistory: after the
+                   history step). Needs no -Url.
   -KeepAwakeSession : until -ParentPid exits, every ~20 s: when the headset is on adb and the
                    proximity override is not CLOSE, send `prox_close` (headset acts as worn and does
                    not sleep, so it stays on adb). Re-applies after a headset reboot. Never re-enables
@@ -104,7 +110,13 @@ param(
     # Only turn the proximity sensor back on (am broadcast ...vrpowermanager.automation_disable).
     [switch] $EnableProximity,
     # Keep the headset awake (prox_close) while -ParentPid runs.
-    [switch] $KeepAwakeSession
+    [switch] $KeepAwakeSession,
+    # Add the phone (-Url) as a WebDAV server in SKYBOX once the headset is on adb (-ParentPid).
+    [switch] $SkyboxWebDavSession,
+    # Remove that SKYBOX WebDAV server (alone, or with -ClearHistory after the history step).
+    [switch] $ClearSkyboxWebDav,
+    # The companion's lan_config.json: phone address for the SKYBOX steps (re-read every poll).
+    [string] $LanConfig = ''
 )
 
 Set-StrictMode -Version Latest
@@ -143,6 +155,7 @@ if (Test-Path -LiteralPath $WindowsLib) {
 if ($Port -le 0) { $Port = 5555 }
 if ($NoIncognito) { $PrivateTab = $false }
 . (Join-Path $PSScriptRoot 'QuestDevTools.ps1')
+. (Join-Path $PSScriptRoot 'QuestSkybox.ps1')
 
 function Find-QuestAdbExe {
     if (-not [string]::IsNullOrWhiteSpace($AdbExe)) {
@@ -257,20 +270,31 @@ function Test-QuestBrowserResumed {
     return (@($resumed | Where-Object { $_ -match [regex]::Escape($BrowserPackage) }).Count -gt 0)
 }
 
-# LAN URL with the per-phone login (phoneLanHosts[].webdavPassword, else webdavPassword) as
-# percent-encoded userinfo. Returns -Url unchanged when sending the login is off or none is set.
+# The phone's LAN login for -ForUrl (default -Url): webdavUser + per-phone
+# phoneLanHosts[].webdavPassword, else webdavPassword. Re-reads loop-segments-windows.json on every
+# call. Never logged.
+function Get-QuestLanLogin {
+    param([string] $ForUrl = $Url)
+    $u = [Uri]$ForUrl
+    $cred = Get-LoopSegmentsWebDAVCredentials
+    $pass = [string]$cred.Password
+    foreach ($raw in @((Get-LoopSegmentsWindowsSettings).phoneLanHosts)) {
+        if ($null -eq $raw) { continue }
+        $e = ConvertTo-LoopSegmentsPhoneHostEntry -Raw $raw
+        if ($e -and $e.Host -eq $u.Host -and -not [string]::IsNullOrWhiteSpace([string]$e.Password)) { $pass = [string]$e.Password }
+    }
+    return [pscustomobject]@{ User = [string]$cred.User; Password = $pass }
+}
+
+# LAN URL with the login (Get-QuestLanLogin) as percent-encoded userinfo. Returns -Url unchanged
+# when sending the login is off or none is set.
 function Get-QuestTypedUrl {
     if (-not $script:SendLanLogin) { return ($Url -replace "'", '') }
     try {
         $u = [Uri]$Url
-        $cred = Get-LoopSegmentsWebDAVCredentials
-        $user = [string]$cred.User
-        $pass = [string]$cred.Password
-        foreach ($raw in @((Get-LoopSegmentsWindowsSettings).phoneLanHosts)) {
-            if ($null -eq $raw) { continue }
-            $e = ConvertTo-LoopSegmentsPhoneHostEntry -Raw $raw
-            if ($e -and $e.Host -eq $u.Host -and -not [string]::IsNullOrWhiteSpace([string]$e.Password)) { $pass = [string]$e.Password }
-        }
+        $login = Get-QuestLanLogin
+        $user = $login.User
+        $pass = $login.Password
         if ([string]::IsNullOrEmpty($pass)) {
             Write-QuestLog 'No LAN password in loop-segments-windows.json - opening without the login.'
             return ($Url -replace "'", '')
@@ -558,6 +582,81 @@ function Invoke-QuestKeepAwakeSession {
     return 0
 }
 
+# The phone LAN URL to use now: from -LanConfig (the companion's lan_config.json, re-read each call)
+# when given, else -Url.
+function Get-QuestSkyboxCurrentLanUrl {
+    $fromCfg = Get-QuestSkyboxLanUrlFromConfig -Path $LanConfig
+    if ($fromCfg) { return $fromCfg }
+    if (-not [string]::IsNullOrWhiteSpace($Url)) { return $Url }
+    return $null
+}
+
+# Companion session, until -ParentPid exits: about every 20 s re-read the phone address
+# (lan_config.json) and the LAN login (loop-segments-windows.json). Whenever they differ from what
+# was last put in SKYBOX (and at the start), and the headset is on adb, add/update server
+# 'Loop Segments' and delete the ones this PC added at older addresses. Local files only between
+# changes: adb is used only when something has to be applied.
+function Invoke-QuestSkyboxWebDavSession {
+    if ($ParentPid -le 0) { Write-QuestLog 'SKYBOX: -ParentPid is required.'; return 2 }
+    $applied = $null
+    $lastNote = ''
+    while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
+        $note = ''
+        try {
+            $lan = Get-QuestSkyboxCurrentLanUrl
+            $login = if ($lan) { Get-QuestLanLogin -ForUrl $lan } else { $null }
+            if (-not $lan) {
+                $note = 'no phone LAN address in lan_config.json - waiting'
+            } elseif ([string]::IsNullOrEmpty($login.Password)) {
+                $note = 'no LAN password in loop-segments-windows.json - waiting'
+            } else {
+                $dav = Get-QuestSkyboxWebDavUrl -LanUrl $lan
+                $key = '{0}|{1}|{2}' -f $dav, $login.User, $login.Password
+                if ($key -ne $applied) {
+                    $dev = Get-OnlineQuestSerial
+                    if (-not $dev) { $dev = Connect-Quest }
+                    if (-not $dev) {
+                        $note = "headset not on adb - $dav goes in when it shows up"
+                    } else {
+                        if ($applied) { Write-QuestLog "SKYBOX: phone address or LAN login changed - updating the server ($dav)." }
+                        $old = @(Get-QuestSkyboxAddedUrls)
+                        # Record the URL before the edit, so a kill mid-way still leaves it for the clear.
+                        Set-QuestSkyboxAddedUrls -Urls (@($old) + $dav)
+                        $res = Invoke-QuestSkyboxWebDav -DeviceSerial $dev -DavUrl $dav -User $login.User -Password $login.Password -RemoveUrls $old
+                        if ($res -eq 'not installed') { return 0 }
+                        if ($res -eq 'failed') {
+                            $note = 'update failed - retrying'
+                        } else {
+                            Set-QuestSkyboxAddedUrls -Urls @($dav)
+                            $applied = $key
+                            $note = "server up to date ($dav)"
+                        }
+                    }
+                }
+            }
+        } catch {
+            $note = "error: $($_.Exception.Message)"
+        }
+        if ($note -and $note -ne $lastNote) { if ($note -notlike 'server up to date*') { Write-QuestLog "SKYBOX: $note" }; $lastNote = $note }
+        for ($i = 0; $i -lt 20 -and (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
+    }
+    Write-QuestLog 'SKYBOX: companion gone - stopping (the server is removed by the companion cleanup).'
+    return 0
+}
+
+# Remove every server this PC added (state file) plus the one at the current address.
+function Invoke-QuestSkyboxWebDavClear {
+    param([string] $DeviceSerial)
+    $urls = @(Get-QuestSkyboxAddedUrls)
+    $lan = Get-QuestSkyboxCurrentLanUrl
+    if ($lan) { $urls += (Get-QuestSkyboxWebDavUrl -LanUrl $lan) }
+    $urls = @($urls | Where-Object { $_ } | Select-Object -Unique)
+    if ($urls.Count -eq 0) { Write-QuestLog 'SKYBOX: no server address known - nothing to remove.'; return 'absent' }
+    $res = Invoke-QuestSkyboxWebDav -DeviceSerial $DeviceSerial -RemoveUrls $urls
+    if ($res -in @('removed', 'absent', 'not installed')) { Set-QuestSkyboxAddedUrls -Urls @() }
+    return $res
+}
+
 $script:Adb = Find-QuestAdbExe
 if (-not $script:Adb) {
     Write-QuestLog 'adb not found (winget install Google.PlatformTools, or set questAdbExe) - Quest LAN tab disabled.'
@@ -568,6 +667,17 @@ $script:SendLanLogin = (-not $NoLanLogin) -and [bool](Get-Command Get-LoopSegmen
 if ($ProbeIncognito) { exit (Invoke-QuestIncognitoProbe) }
 if ($EnableProximity) { exit (Invoke-QuestEnableProximity) }
 if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession) }
+if ($SkyboxWebDavSession) { exit (Invoke-QuestSkyboxWebDavSession) }
+if ($ClearSkyboxWebDav -and -not $ClearHistory) {
+    # Companion close without a LAN URL, or a manual run; -EnableProximityAfter still applies.
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-QuestLog 'SKYBOX: headset not reachable over adb - skipped.'; exit 1 }
+    $sky = Invoke-QuestSkyboxWebDavClear -DeviceSerial $dev
+    $prox = if ($EnableProximityAfter) { if ((Invoke-QuestEnableProximity) -eq 0) { 'on' } else { 'failed' } } else { 'skipped' }
+    if ($sky -eq 'failed' -or $prox -eq 'failed') { exit 3 }
+    exit 0
+}
 if ([string]::IsNullOrWhiteSpace($Url)) {
     Write-QuestLog '-Url is required (unless -ProbeIncognito).'
     exit 2
@@ -606,6 +716,13 @@ if ($EnsureFlags -or $ClearHistory) {
                 $res = 'failed'
             }
         }
+        $sky = 'skipped'
+        if ($ClearSkyboxWebDav) {
+            # After the history clear (it has a time budget), before the sensor goes back on.
+            $t0 = [DateTime]::UtcNow
+            $sky = Invoke-QuestSkyboxWebDavClear -DeviceSerial $dev
+            Write-QuestLog ("SKYBOX step: {0} ({1:0.0} s)." -f $sky, ([DateTime]::UtcNow - $t0).TotalSeconds)
+        }
         $prox = 'skipped'
         if ($EnableProximityAfter) {
             # Always after the history clear: once the sensor is on, an unworn headset may sleep.
@@ -613,9 +730,9 @@ if ($EnsureFlags -or $ClearHistory) {
             $prox = if ((Invoke-QuestEnableProximity) -eq 0) { 'on' } else { 'failed' }
             Write-QuestLog ("Proximity step: {0} ({1:0.0} s)." -f $prox, ([DateTime]::UtcNow - $t0).TotalSeconds)
         }
-        Write-QuestLog ("Cleanup: finished {0:0.0} s after start (history {1}, proximity {2})." -f (& $since), $res, $prox)
+        Write-QuestLog ("Cleanup: finished {0:0.0} s after start (history {1}, SKYBOX {2}, proximity {3})." -f (& $since), $res, $sky, $prox)
         $historyBad = ($res -eq 'failed') -or (($res -eq 'skipped') -and (-not $SkipHistoryClear))
-        if ($historyBad -or ($prox -eq 'failed')) { exit 3 }
+        if ($historyBad -or ($prox -eq 'failed') -or ($sky -eq 'failed')) { exit 3 }
         exit 0
     }
     $res = Invoke-QuestFlagSync -DeviceSerial $dev

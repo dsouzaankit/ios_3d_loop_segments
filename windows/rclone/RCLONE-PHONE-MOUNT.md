@@ -48,7 +48,7 @@ DLNA is the only route that both plays in Skybox VR and needs no setup on the he
 | Route | Plays in Skybox VR | Setup |
 |---|---|---|
 | **`rclone serve dlna`** (companion `-EnableRcloneDlna`) | Yes | None on the headset: Skybox finds **Loop Segments** under **Network** by itself |
-| **WebDAV direct to the phone** (`http://<phone>:8765/`, `admin` / the app's password (Export screen)) | Yes, one hop fewer (no PC in the middle) | Add it once by hand under Skybox **Network**. Scripts cannot do this: the only Skybox API, `http://127.0.0.1:8018` (used by `Skybox_vr_pc`), belongs to the PC app and only manages AirScreen folders. With a static phone IP the saved entry keeps working |
+| **WebDAV direct to the phone** (`http://<phone>:8765/`, `admin` / the app's password (Export screen)) | Yes, one hop fewer (no PC in the middle) | None: the companion adds it over adb at startup as **Loop Segments** (signed in) and removes it at close (`questSkyboxWebDav`, [../quest/README.md](../quest/README.md#skybox-phone-as-a-webdav-server-for-the-session)). By hand: Skybox **Network** → Add → Add WebDAV server |
 | **AirScreen folder of the `L:` mount** | **No**: it lists in Add-folders but never streams | Automatable through the PC app, but pointless. The companion no longer maps it |
 
 **Do not map `L:` into Skybox AirScreen** for phone media. Quest Browser (`/xr`) is a separate path and cannot play WMV.

@@ -771,13 +771,13 @@ Implementation: `ExportMediaArchive.swift`, `ExportRetentionSourceCatalog.swift`
 | **PotPlayer (WebDAV / open URL)** | Use **`http://<ip>:8765/pcld_ios_media/_working.mp4`** (not `/_working.mp4` alone on older builds). WebDAV root **`http://<ip>:8765/`** · **`admin`** / the app's password (Export screen). Ignore **`?WithCaption`** (player-added). Sparse holes may still break decode — prefer **`loop/op_00.mp4`**. |
 | **Quest browser** (index **browser #t=** link when seek > 0) | Works for dense-filled regions | Works (**build 173+** — skip broken faststart remux from 171–172) |
 
-**In-progress export on Quest:** **Skybox** → Add WebDAV server → `http://<ip>:8765/` · **`admin`** / the app's password (Export screen), or **Pigasus** / browser with direct URLs.
+**In-progress export on Quest:** **Skybox** → Add WebDAV server → `http://<ip>:8765/` · **`admin`** / the app's password (Export screen), or **Pigasus** / browser with direct URLs. While the PC companion runs it adds this server itself (**Loop Segments**, signed in) and removes it on quit: [../windows/quest/README.md](../windows/quest/README.md#skybox-phone-as-a-webdav-server-for-the-session).
 
 ### Skybox (Quest) and the phone LAN
 
 **pCloud** in Skybox uses **pCloud WebDAV** (unchanged).
 
-**Phone** in Skybox: add **WebDAV** with base URL **`http://<ip>:8765/`** and **`admin`** / the app's password (Export screen). That uses the app’s **LAN WebDAV** implementation (not plain SMB).
+**Phone** in Skybox: add **WebDAV** with base URL **`http://<ip>:8765/`** and **`admin`** / the app's password (Export screen). That uses the app’s **LAN WebDAV** implementation (not plain SMB). The PC companion does this for you over adb while it runs (`questSkyboxWebDav`), following the phone address and LAN login in `windows\loop-segments-windows.json`.
 
 **Reliable paths:**
 

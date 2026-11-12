@@ -2153,7 +2153,7 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): Quest cleanup in the background (LAN tabs, history, proximity sensor), close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): Quest cleanup in the background (LAN tabs, history, SKYBOX WebDAV server, proximity sensor), close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
 
     try {
         # Quest cleanup (LAN tabs, history, proximity sensor) runs in the background while Chromium
@@ -2502,6 +2502,9 @@ if (-not $DetachChromium) {
     }
     if (Get-Command Start-QuestKeepAwakeInBackground -ErrorAction SilentlyContinue) {
         Start-QuestKeepAwakeInBackground -CompanionPid $PID
+    }
+    if (Get-Command Start-QuestSkyboxWebDavInBackground -ErrorAction SilentlyContinue) {
+        Start-QuestSkyboxWebDavInBackground -ExtensionDir $ExtensionDir -CompanionPid $PID
     }
 }
 

@@ -62,6 +62,8 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questCloseLanTabsOnExit = $true
         # Companion session: hold the Quest proximity sensor off (headset stays awake and on adb), turn it back on at cleanup.
         questKeepAwakeDuringSession = $true
+        # Companion session: add the phone to SKYBOX on the Quest as WebDAV server 'Loop Segments' (with the LAN login), removed at cleanup.
+        questSkyboxWebDav       = $true
         webdavUser              = 'admin'
         webdavPassword          = ''
         iCloudDownloads         = ''

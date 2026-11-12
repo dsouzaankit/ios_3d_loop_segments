@@ -29,6 +29,7 @@
   "questClearHistoryOnExit": true,
   "questCloseLanTabsOnExit": true,
   "questKeepAwakeDuringSession": true,
+  "questSkyboxWebDav": true,
   "webdavUser": "admin",
   "webdavPassword": "<password from the app's Export screen>",
   "iCloudDownloads": "",

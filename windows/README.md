@@ -19,7 +19,7 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 | `sideload/` | AltServer logon task; Sideloadly fallback |
 | `lan/` | Multi-phone unified listing / PC index on `:8766`; gateway Wi‑Fi reboot (wrong-subnet / other-router / off-subnet); LAN throughput |
 | `rclone/` | Optional WinFsp `L:` mount + `rclone serve dlna` for Quest |
-| `quest/` | Quest Browser over adb: **Open on Quest** (signed-in normal tab), insecure-origin flag at companion startup, keep the headset awake during the session, history clear on companion close. Setup: [quest/README.md](quest/README.md) |
+| `quest/` | Quest Browser over adb: **Open on Quest** (signed-in normal tab), insecure-origin flag at companion startup, keep the headset awake during the session, the phone as a signed-in **SKYBOX** WebDAV server for the session (follows the phone address and LAN login), history clear on companion close. Setup: [quest/README.md](quest/README.md) |
 | `pcloud_web_companion/` | Chromium MV3 companion + `Run-PCloudWebCompanion.ps1` |
 | `archive/` | Legacy `net use` / sync scripts |
 
@@ -248,6 +248,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `questClearHistoryOnExit` | `true` (default) = companion close clears Quest Browser history (History only, All time) |
 | `questCloseLanTabsOnExit` | `true` (default) = companion close first closes Quest Browser tabs on the phone LAN page |
 | `questKeepAwakeDuringSession` | `true` (default) = while the companion runs, the Quest proximity sensor is held off (`prox_close`) so the headset stays awake on adb; cleanup clears history first, then turns the sensor back on |
+| `questSkyboxWebDav` | `true` (default) = while the companion runs, SKYBOX on the Quest has the phone as WebDAV server **Loop Segments**, signed in, on the address in `lan_config.json` and the LAN login (re-checked every ~20 s); removed at close. Edits SKYBOX's database over adb and restarts SKYBOX (if open) only when the server changes |
 | `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
 
 ## Koofr + Loop Segments on one PC
@@ -297,7 +298,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `%TEMP%\loopsegments-rclone-mount.log` | live rclone mount log (copied to `rclone\loopsegments-rclone-mount.log` on quit) |
 | `%TEMP%\loopsegments-rclone-dlna.log` | live rclone DLNA serve log |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: gateway subnet check/reboot, USB-launch Loop Segments, sync profile, start browser |
-| `quest\Watch-LoopSegmentsQuestLanTab.ps1` | Quest Browser over adb + DevTools: `-Once` (the **Open on Quest** button, with `-WaitMinutes 7` so a click on an asleep headset opens the page when it wakes) opens the phone LAN page in a signed-in **normal tab**; `-EnsureFlags` keeps the insecure-origin flag on the phone origin(s) (companion startup); `-ClearHistory` clears history, history only, all time (companion close); `-KeepAwakeSession` holds the proximity sensor off while the companion runs; `-EnableProximity` turns it back on (companion close); `-ProbeIncognito` read-only. Without a mode it polls and opens on each asleep->**Awake**. Setup: [quest/README.md](quest/README.md). Log `%TEMP%\loopsegments-quest-lantab.log` |
+| `quest\Watch-LoopSegmentsQuestLanTab.ps1` | Quest Browser over adb + DevTools: `-Once` (the **Open on Quest** button, with `-WaitMinutes 7` so a click on an asleep headset opens the page when it wakes) opens the phone LAN page in a signed-in **normal tab**; `-EnsureFlags` keeps the insecure-origin flag on the phone origin(s) (companion startup); `-ClearHistory` clears history, history only, all time (companion close); `-KeepAwakeSession` holds the proximity sensor off while the companion runs; `-EnableProximity` turns it back on (companion close); `-SkyboxWebDavSession` keeps the phone in SKYBOX as a WebDAV server while the companion runs and `-ClearSkyboxWebDav` removes it (companion close; both via `quest\QuestSkybox.ps1`); `-ProbeIncognito` read-only. Without a mode it polls and opens on each asleep->**Awake**. Setup: [quest/README.md](quest/README.md). Log `%TEMP%\loopsegments-quest-lantab.log` |
 | `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); DVT `--userspace --no-kill-existing` first; skips if already foreground; exit **3** if phone locked |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish if it is still foreground (skip when backgrounded or lock screen; DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); no USB → skip. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` (**in-process**, throws `HOME_USB_EXIT:<code>`) and companion pauses itself after a Home fail |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |
