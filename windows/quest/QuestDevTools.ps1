@@ -293,8 +293,12 @@ function Sync-QuestInsecureOriginFlag {
 $script:QuestClearHistoryJs = @'
 (async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const findStore = () => { for (const el of [document.body, ...document.body.children]) { const k = Object.keys(el).find(k => k.startsWith("__reactContainer") || k.startsWith("__reactFiber")); if (!k) continue; let s = [el[k]], n = 0; while (s.length && n++ < 20000) { const f = s.pop(); if (!f) continue; const p = f.memoizedProps; if (p && p.store && p.store.getState) return p.store; if (f.child) s.push(f.child); if (f.sibling) s.push(f.sibling); } } return null; };
-  const store = findStore(); if (!store) return JSON.stringify({ ok: false, error: "browser UI store not found" });
+  const findStore = () => { if (!document.body) return null; for (const el of [document.body, ...document.body.children]) { const k = Object.keys(el).find(k => k.startsWith("__reactContainer") || k.startsWith("__reactFiber")); if (!k) continue; let s = [el[k]], n = 0; while (s.length && n++ < 20000) { const f = s.pop(); if (!f) continue; const p = f.memoizedProps; if (p && p.store && p.store.getState) return p.store; if (f.child) s.push(f.child); if (f.sibling) s.push(f.sibling); } } return null; };
+  // Right after the browser comes to the front its UI page may still be loading (no body yet).
+  const t0 = Date.now();
+  let store = findStore();
+  while (!store && Date.now() - t0 < __OPTIONS_WAIT_MS__) { await sleep(200); store = findStore(); }
+  if (!store) return JSON.stringify({ ok: false, error: "browser UI store not found" });
   const st = () => store.getState().clearData;
   const close = () => { if (store.getState().modal.modalId === "clear") store.dispatch({ type: "modal/hideModal", payload: "clear" }); };
   const fb = !!(store.getState().facebookLogin || {}).isLoggedIn;
@@ -303,7 +307,7 @@ $script:QuestClearHistoryJs = @'
   const restore = () => { for (const [id, sel] of Object.entries(prevItems)) store.dispatch({ type: "clearData/setItemSelected", payload: { id, selected: sel } }); store.dispatch({ type: "clearData/setSelectedTimeIndex", payload: { selectedTimeIndex: prevTime, isFBLoggedIn: fb } }); };
   store.dispatch({ type: "modal/showModal", payload: "clear" });
   // The browser fills the time options in asynchronously (slower right after a cold start).
-  const t0 = Date.now();
+  // One wait for both: the store wait above and this one share __OPTIONS_WAIT_MS__ from t0.
   while (!(st().subtitles || []).length && Date.now() - t0 < __OPTIONS_WAIT_MS__) await sleep(200);
   const subs = st().subtitles || [];
   const allIdx = subs.findIndex(s => s.id === "all");
@@ -325,11 +329,21 @@ $script:QuestClearHistoryJs = @'
 })()
 '@
 
-function Test-QuestBrowserInFront {
+# The front activity's component (com.pkg/.Activity), or '' if unknown.
+function Get-QuestFrontActivity {
     param([string] $DeviceSerial)
     $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'activity', 'activities')
     $top = @(([string]$r.Out) -split "`r?`n" | Where-Object { $_ -match 'topResumedActivity=' } | Select-Object -First 1)
-    return ($top.Count -gt 0 -and $top[0] -match [regex]::Escape($BrowserPackage))
+    if ($top.Count -gt 0 -and $top[0] -match '\s(\S+/\S+)\s') { return $Matches[1] }
+    return ''
+}
+
+# True only for the browser's 2D window (BrowserActivity), where the clear-data dialog lives.
+# Immersive WebXR/video (WebVRActivity, VideoImmersiveActivity, ...) is the same package but a
+# separate task: while it is in front the 2D window is hidden and the dialog never fills in.
+function Test-QuestBrowserInFront {
+    param([string] $DeviceSerial)
+    return ((Get-QuestFrontActivity -DeviceSerial $DeviceSerial) -like "$BrowserPackage/*.BrowserActivity")
 }
 
 # Returns 'cleared' or 'failed'. Everything fits in -BudgetSec (one deadline, not per-step
@@ -341,13 +355,27 @@ function Clear-QuestBrowserHistory {
     $left = { [Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalSeconds) }
     # Keep this much for running the clear in the dialog itself.
     $reserve = 6
-    if (-not (Test-QuestBrowserInFront -DeviceSerial $DeviceSerial)) {
-        # Launcher intent: starts the browser if needed and brings it to the front. A VIEW intent
-        # on a cold start only opened a new-tab page, so no helper tab is used.
-        [void](Invoke-Adb -TimeoutSec ([int][Math]::Max(2, [Math]::Min(8, (& $left) - $reserve))) -Arguments @('-s', $DeviceSerial, 'shell', 'monkey', '-p', $BrowserPackage, '-c', 'android.intent.category.LAUNCHER', '1'))
+    $was = Get-QuestFrontActivity -DeviceSerial $DeviceSerial
+    if ($was -notlike "$BrowserPackage/*.BrowserActivity") {
+        # Launcher intent: starts the browser if needed and brings its 2D window to the front (also
+        # out of an immersive /xr session). A VIEW intent on a cold start only opened a new-tab
+        # page, so no helper tab is used. Sent again once if the first one did not take.
+        $launch = { [void](Invoke-Adb -TimeoutSec ([int][Math]::Max(2, [Math]::Min(8, (& $left) - $reserve))) -Arguments @('-s', $DeviceSerial, 'shell', 'monkey', '-p', $BrowserPackage, '-c', 'android.intent.category.LAUNCHER', '1')) }
+        & $launch
         $front = $false
-        while (-not $front -and (& $left) -gt $reserve) { Start-Sleep -Milliseconds 400; $front = Test-QuestBrowserInFront -DeviceSerial $DeviceSerial }
-        if (-not $front) { Write-QuestLog 'History: Quest Browser did not come to the front in time - trying anyway.' }
+        $resent = $false
+        $t0 = [DateTime]::UtcNow
+        while (-not $front -and (& $left) -gt $reserve) {
+            Start-Sleep -Milliseconds 400
+            $front = Test-QuestBrowserInFront -DeviceSerial $DeviceSerial
+            if (-not $front -and -not $resent -and ([DateTime]::UtcNow - $t0).TotalSeconds -gt 3) { & $launch; $resent = $true }
+        }
+        $now = Get-QuestFrontActivity -DeviceSerial $DeviceSerial
+        if ($front) {
+            Write-QuestLog ("History: brought the Quest Browser window to the front (was '{0}')." -f $(if ($was) { $was } else { 'unknown' }))
+        } else {
+            Write-QuestLog ("History: Quest Browser window did not come to the front in time (was '{0}', now '{1}') - trying anyway." -f $was, $now)
+        }
     }
     $ui = Get-QuestBrowserUi
     while (-not $ui -and (& $left) -gt $reserve) { Start-Sleep -Milliseconds 400; $ui = Get-QuestBrowserUi }
