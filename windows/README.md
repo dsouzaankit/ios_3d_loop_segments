@@ -19,7 +19,7 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 | `sideload/` | AltServer logon task; Sideloadly fallback |
 | `lan/` | Multi-phone unified listing / PC index on `:8766`; gateway Wi‑Fi reboot (wrong-subnet / other-router / off-subnet); LAN throughput |
 | `rclone/` | Optional WinFsp `L:` mount + `rclone serve dlna` for Quest |
-| `quest/` | Quest Browser over adb: **Open on Quest** (signed-in normal tab), insecure-origin flag at companion startup, history clear and proximity sensor on at companion close. Setup: [quest/README.md](quest/README.md) |
+| `quest/` | Quest Browser over adb: **Open on Quest** (signed-in normal tab), insecure-origin flag at companion startup, keep the headset awake during the session, history clear on companion close. Setup: [quest/README.md](quest/README.md) |
 | `pcloud_web_companion/` | Chromium MV3 companion + `Run-PCloudWebCompanion.ps1` |
 | `archive/` | Legacy `net use` / sync scripts |
 
@@ -246,7 +246,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `questSendLanLogin` | `true` (default) = the tab is signed in with the LAN login (login URL, then reloaded plain) |
 | `questEnsureInsecureOriginFlag` | `true` (default) = companion startup / Open on Quest keep Quest's `unsafely-treat-insecure-origin-as-secure` flag on the phone origin(s); restarts Quest Browser when it changes the flag |
 | `questClearHistoryOnExit` | `true` (default) = companion close clears Quest Browser history (History only, All time) |
-| `questEnableProximityOnExit` | `true` (default) = companion close turns the Quest proximity sensor back on (undoes `prox_close`) |
+| `questKeepAwakeDuringSession` | `true` (default) = while the companion runs, the Quest proximity sensor is held off (`prox_close`) so the headset stays awake on adb; cleanup clears history first, then turns the sensor back on |
 | `notes` | Free text (e.g. "Koofr remote = koofr on M:") |
 
 ## Koofr + Loop Segments on one PC
@@ -296,7 +296,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `%TEMP%\loopsegments-rclone-mount.log` | live rclone mount log (copied to `rclone\loopsegments-rclone-mount.log` on quit) |
 | `%TEMP%\loopsegments-rclone-dlna.log` | live rclone DLNA serve log |
 | `pcloud_web_companion\Run-PCloudWebCompanion.ps1` | pCloud Chromium companion: gateway subnet check/reboot, USB-launch Loop Segments, sync profile, start browser |
-| `quest\Watch-LoopSegmentsQuestLanTab.ps1` | Quest Browser over adb + DevTools: `-Once` (the **Open on Quest** button) opens the phone LAN page in a signed-in **normal tab**; `-EnsureFlags` keeps the insecure-origin flag on the phone origin(s) (companion startup); `-ClearHistory` clears history, history only, all time (companion close); `-EnableProximity` turns the proximity sensor back on (companion close); `-ProbeIncognito` read-only. Without a mode it polls and opens on each asleep->**Awake**. Setup: [quest/README.md](quest/README.md). Log `%TEMP%\loopsegments-quest-lantab.log` |
+| `quest\Watch-LoopSegmentsQuestLanTab.ps1` | Quest Browser over adb + DevTools: `-Once` (the **Open on Quest** button, with `-WaitMinutes 7` so a click on an asleep headset opens the page when it wakes) opens the phone LAN page in a signed-in **normal tab**; `-EnsureFlags` keeps the insecure-origin flag on the phone origin(s) (companion startup); `-ClearHistory` clears history, history only, all time (companion close); `-KeepAwakeSession` holds the proximity sensor off while the companion runs; `-EnableProximity` turns it back on (companion close); `-ProbeIncognito` read-only. Without a mode it polls and opens on each asleep->**Awake**. Setup: [quest/README.md](quest/README.md). Log `%TEMP%\loopsegments-quest-lantab.log` |
 | `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); DVT `--userspace --no-kill-existing` first; skips if already foreground; exit **3** if phone locked |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish if it is still foreground (skip when backgrounded or lock screen; DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); no USB → skip. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` (**in-process**, throws `HOME_USB_EXIT:<code>`) and companion pauses itself after a Home fail |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |

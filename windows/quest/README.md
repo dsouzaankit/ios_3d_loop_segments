@@ -6,10 +6,12 @@ The PC companion drives **Quest Browser** over **adb over Wi-Fi** and the browse
 |------|------|---------|
 | **Open on Quest** click (PC LAN page) | Check the flag (below), then open the LAN page in a **normal tab, signed in** | `questSendLanLogin`, `questIncognito` |
 | Companion **startup** | Hidden, in the background: make sure the insecure-origin flag lists the phone LAN origin(s) | `questEnsureInsecureOriginFlag` |
-| Companion **close** (normal finish and the console-X watchdog) | Clear Quest Browser **history** (History only, All time) | `questClearHistoryOnExit` |
-| Companion **close** (same) | Turn the Quest **proximity sensor** back on | `questEnableProximityOnExit` |
+| Companion **startup**, until close | Keep the headset **awake**: proximity sensor held off once the headset is on adb | `questKeepAwakeDuringSession` |
+| Companion **close** (normal finish and the console-X watchdog) | Clear Quest Browser **history** (History only, All time), then turn the **proximity sensor back on** | `questClearHistoryOnExit`, `questKeepAwakeDuringSession` |
 
-Each step is skipped (and logged) when the headset is not on adb.
+Startup and close steps are skipped (and logged) when the headset is not on adb. **Open on Quest** waits instead (below).
+
+**Headset asleep or off adb when you click:** the click is queued. The button says *Queued: opens on Quest when the headset wakes (until HH:MM)*, and the companion keeps polling for **7 minutes**; when the headset wakes and adb is back it opens the page once. Clicking again while one is queued just shows it. The wait ends when the page opens, after 7 minutes (*Quest did not wake ... - nothing opened*), or when the companion quits.
 
 ## Open on Quest: normal tab, signed in
 
@@ -25,13 +27,17 @@ The password comes from `webdavPassword` in `windows\loop-segments-windows.json`
 
 Quest WebXR over LAN `http://` needs `chrome://flags/#unsafely-treat-insecure-origin-as-secure` **Enabled** with the phone's origin listed. The script reads the flag on a helper tab (a no-login phone page, `/xr-assets/aframe.min.js`, closed afterwards). If a phone LAN origin is missing (`phoneLanHost` / `phoneLanHosts` with `lanPort`, plus the companion's current phone address) it **adds** it, keeping the origins already there. It then enables the flag, **restarts Quest Browser** (flags apply only after a restart), and confirms the value after the restart. Nothing changes and nothing restarts when the flag already covers every origin. **The restart closes open Quest Browser tabs** (Quest does not restore them). Manual run: `-EnsureFlags`.
 
-## Proximity sensor on companion close
+## Keep the headset awake during the session
 
-If the proximity sensor was switched off (`adb shell am broadcast -a com.oculus.vrpowermanager.prox_close`, which makes the headset act as if worn and never sleep), the companion turns it back on when it quits: `am broadcast -a com.oculus.vrpowermanager.automation_disable`, then checks that `dumpsys vrpowermanager` reports `Virtual proximity state: DISABLED` (no override, real sensor in charge). Harmless when the sensor is already on. Manual run: `-EnableProximity`. Set `"questEnableProximityOnExit": false` to leave it as it is.
+A history clear at quit only works if the headset is on adb, and an asleep Quest usually is not. So while the companion runs, a hidden job holds the **proximity sensor off** (`am broadcast -a com.oculus.vrpowermanager.prox_close`: the headset acts as if worn and does not sleep when you take it off). It checks about every 20 s and applies the override as soon as the headset shows up on adb, and again after a headset reboot (a reboot clears it).
+
+Cleanup, on a normal quit and on console X (the watchdog), runs in this order: stop that job, **clear history** (the headset is still awake), then **turn the sensor back on** (`am broadcast -a com.oculus.vrpowermanager.automation_disable`, checked against `dumpsys vrpowermanager`: `Virtual proximity state: DISABLED`).
+
+Things this does not cover: pressing the power button or a flat battery still sleeps the headset. If the PC crashes or both companion processes are killed, nothing turns the sensor back on: run `-EnableProximity`, or reboot the headset. While the override is on, the display stays lit when the headset is off your head (battery, and keep the lenses out of direct sunlight). `"questKeepAwakeDuringSession": false` turns both halves off.
 
 ## Clear history on companion close
 
-Uses the browser's own **Clear browsing data** dialog: ticks **History only**, picks **All time**, presses **Clear data**, then puts the dialog's previous ticks and time range back. **Cookies, cache, saved passwords, form data and site settings are kept.** This deletes your **whole** Quest Browser history, not only Loop Segments pages. If Quest Browser is not running, a helper tab opens it first (that visit is cleared too). Manual run: `-ClearHistory`. Set `"questClearHistoryOnExit": false` to keep history.
+Uses the browser's own **Clear browsing data** dialog: ticks **History only**, picks **All time**, presses **Clear data**, then puts the dialog's previous ticks and time range back. **Cookies, cache, saved passwords, form data and site settings are kept.** This deletes your **whole** Quest Browser history, not only Loop Segments pages. Quest Browser is brought to the front first (the dialog only answers then), and started if it was closed. The whole clear is limited to **30 s**: with the browser already running it takes a few seconds, but a cold start of Quest Browser usually takes longer, so if the browser was closed the clear is skipped and logged. Manual run: `-ClearHistory`. Set `"questClearHistoryOnExit": false` to keep history.
 
 ## One-time setup
 
@@ -100,9 +106,10 @@ With the headset awake, from `windows\`:
 
 ```powershell
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -Once           # open, signed in
+pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -Once -WaitMinutes 7   # wait for wake, like the button
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -EnsureFlags    # flag check only
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -ClearHistory   # history only, all time
-pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -EnableProximity                                 # proximity sensor on
+pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -EnableProximity                                 # proximity sensor back on
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -ProbeIncognito                                  # read-only
 ```
 
@@ -120,4 +127,4 @@ Log: `%TEMP%\loopsegments-quest-lantab.log`.
 | `questSendLanLogin` | `true` | Sign the tab in with the LAN login (`false` = sign in on the headset) |
 | `questEnsureInsecureOriginFlag` | `true` | Startup and each Open on Quest: keep the insecure-origin flag on the phone origin(s); may restart Quest Browser |
 | `questClearHistoryOnExit` | `true` | Companion close: clear Quest Browser history (History only, All time) |
-| `questEnableProximityOnExit` | `true` | Companion close: turn the proximity sensor back on (undo `prox_close`) |
+| `questKeepAwakeDuringSession` | `true` | Hold the proximity sensor off while the companion runs (headset stays awake for the close-time history clear); turned back on at cleanup |

@@ -58,8 +58,8 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questEnsureInsecureOriginFlag = $true
         # Companion close: clear Quest Browser history (History only, All time).
         questClearHistoryOnExit = $true
-        # Companion close: turn the Quest proximity sensor back on (undo a prox_close override).
-        questEnableProximityOnExit = $true
+        # Companion session: hold the Quest proximity sensor off (headset stays awake and on adb), turn it back on at cleanup.
+        questKeepAwakeDuringSession = $true
         webdavUser              = 'admin'
         webdavPassword          = ''
         iCloudDownloads         = ''

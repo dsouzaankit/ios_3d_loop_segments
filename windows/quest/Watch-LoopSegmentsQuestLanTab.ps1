@@ -19,12 +19,19 @@
   cannot enter VR there. -PrivateTab (or questIncognito=true) still opens a private tab instead
   (Chromium IncognitoTabLauncher + typed URL; falls back to a normal tab).
 
+  -WaitMinutes N : with -Once, a headset that is asleep or off adb is not an error: keep polling
+                   for up to N minutes and open the page when it wakes (the button uses 7).
+                   -StatusFile gets 'queued' / 'opening' so the companion sink can report it.
   -EnsureFlags   : only step 1 (companion runs it hidden at startup).
   -ClearHistory  : clear Quest Browser history - History only, All time - through the browser's
                    own "Clear browsing data" dialog (cookies, cache, passwords, forms, settings are
                    kept; the dialog's previous ticks are restored). Companion runs it on close.
   -EnableProximity : turn the proximity sensor back on (undoes a `prox_close` override, so the
                    headset sleeps again when taken off). Companion runs it on close. Needs no -Url.
+  -KeepAwakeSession : until -ParentPid exits, every ~20 s: when the headset is on adb and the
+                   proximity override is not CLOSE, send `prox_close` (headset acts as worn and does
+                   not sleep, so it stays on adb). Re-applies after a headset reboot. Never re-enables
+                   the sensor itself (the companion's cleanup does, after clearing history).
 
   Without -Once / -EnsureFlags / -ClearHistory it keeps polling and opens the page on each
   asleep->Awake (manual use); -ParentPid makes it exit with that process.
@@ -69,6 +76,10 @@ param(
     [int] $Port = 0,
     # Open once now (no wake transition needed) and exit.
     [switch] $Once,
+    # With -Once: wait up to this many minutes for an asleep / unreachable headset to wake.
+    [int] $WaitMinutes = 0,
+    # With -Once: file that gets 'queued' / 'opening' (read by the companion sink).
+    [string] $StatusFile = '',
     # Read-only: report Quest Browser incognito / private launch entry points and exit.
     [switch] $ProbeIncognito,
     # Open a private tab instead of the default normal tab (no WebXR immersive mode there).
@@ -84,10 +95,13 @@ param(
     # Do not touch chrome://flags before opening the tab.
     [switch] $NoFlags,
     # Only turn the proximity sensor back on (am broadcast ...vrpowermanager.automation_disable).
-    [switch] $EnableProximity
+    [switch] $EnableProximity,
+    # Keep the headset awake (prox_close) while -ParentPid runs.
+    [switch] $KeepAwakeSession
 )
 
 Set-StrictMode -Version Latest
+$script:StartedAt = [DateTime]::UtcNow
 $ErrorActionPreference = 'Stop'
 
 $LogPath = Join-Path $env:TEMP 'loopsegments-quest-lantab.log'
@@ -504,6 +518,38 @@ function Invoke-QuestEnableProximity {
     return 0
 }
 
+function Invoke-QuestKeepAwakeSession {
+    if ($ParentPid -le 0) { Write-QuestLog 'Keep-awake: -ParentPid is required.'; return 2 }
+    Write-QuestLog "Keep-awake: holding the Quest proximity sensor off while PID $ParentPid runs."
+    $lastNote = ''
+    while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
+        $note = ''
+        try {
+            $dev = Get-OnlineQuestSerial
+            if (-not $dev) { $dev = Connect-Quest }
+            if (-not $dev) {
+                $note = 'headset not on adb - waiting'
+            } else {
+                $state = Get-QuestVirtualProximity -DeviceSerial $dev
+                if ($state -eq 'CLOSE') {
+                    $note = "sensor held off ($dev)"
+                } else {
+                    # Check the parent again right before acting: cleanup may have started.
+                    if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
+                    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $dev, 'shell', 'am', 'broadcast', '-a', 'com.oculus.vrpowermanager.prox_close')
+                    $note = if ($r.Out -match 'Broadcast completed') { "sensor switched off (was '$state', $dev)" } else { "prox_close failed: $(Get-AdbMessage $r)" }
+                }
+            }
+        } catch {
+            $note = "error: $($_.Exception.Message)"
+        }
+        if ($note -ne $lastNote) { Write-QuestLog "Keep-awake: $note"; $lastNote = $note }
+        for ($i = 0; $i -lt 20 -and (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
+    }
+    Write-QuestLog 'Keep-awake: companion gone - stopping (sensor is re-enabled by the companion cleanup).'
+    return 0
+}
+
 $script:Adb = Find-QuestAdbExe
 if (-not $script:Adb) {
     Write-QuestLog 'adb not found (winget install Google.PlatformTools, or set questAdbExe) - Quest LAN tab disabled.'
@@ -513,6 +559,7 @@ $script:LastConnectMsg = ''
 $script:SendLanLogin = (-not $NoLanLogin) -and [bool](Get-Command Get-LoopSegmentsWebDAVCredentials -ErrorAction SilentlyContinue)
 if ($ProbeIncognito) { exit (Invoke-QuestIncognitoProbe) }
 if ($EnableProximity) { exit (Invoke-QuestEnableProximity) }
+if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession) }
 if ([string]::IsNullOrWhiteSpace($Url)) {
     Write-QuestLog '-Url is required (unless -ProbeIncognito).'
     exit 2
@@ -527,7 +574,9 @@ if ($EnsureFlags -or $ClearHistory) {
     }
     if ($ClearHistory) {
         if (-not (Open-QuestDevTools -DeviceSerial $dev)) { exit 3 }
-        try { $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) } finally { Close-QuestDevTools }
+        # Whole run (pwsh start, adb connect, clear) must finish within ~30 s; keep ~2 s for exit.
+        $budget = 28 - ([DateTime]::UtcNow - $script:StartedAt).TotalSeconds
+        try { $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -BudgetSec $budget } finally { Close-QuestDevTools }
         if ($res -eq 'cleared') { exit 0 } else { exit 3 }
     }
     $res = Invoke-QuestFlagSync -DeviceSerial $dev
@@ -535,8 +584,17 @@ if ($EnsureFlags -or $ClearHistory) {
 }
 Write-QuestLog ("Watcher start: url={0} adb={1} host={2} port={3} serial={4} parent={5}" -f $Url, $script:Adb, $QuestHost, $Port, $Serial, $ParentPid)
 
+function Set-QuestOpenStatus {
+    param([string] $Value)
+    if ([string]::IsNullOrWhiteSpace($StatusFile)) { return }
+    try { Set-Content -LiteralPath $StatusFile -Value $Value -Encoding ascii } catch {}
+}
+
 $wasAwake = $false
 $lastState = ''
+$queuedLogged = $false
+$deadline = if ($Once -and $WaitMinutes -gt 0) { [DateTime]::UtcNow.AddMinutes($WaitMinutes) } else { $null }
+Set-QuestOpenStatus 'checking'
 while ($true) {
     if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
         Write-QuestLog 'Companion exited - watcher stop.'
@@ -554,8 +612,10 @@ while ($true) {
         # Unknown (dumpsys hiccup) keeps the previous state so a blip does not reopen the tab.
         if ($state -eq 'Awake') {
             if (-not $wasAwake) {
-                [void](Open-QuestLanTab -DeviceSerial $dev)
-                if ($Once) { exit 0 }
+                if ($queuedLogged) { Write-QuestLog 'Headset woke - opening the queued page.' }
+                Set-QuestOpenStatus 'opening'
+                $opened = Open-QuestLanTab -DeviceSerial $dev
+                if ($Once) { if ($opened) { exit 0 } else { exit 3 } }
             }
             $wasAwake = $true
         } elseif ($state -ne 'Unknown') {
@@ -566,8 +626,17 @@ while ($true) {
         $wasAwake = $false
     }
     if ($Once) {
-        Write-QuestLog "Headset not awake/reachable ($lastState) - nothing opened."
-        exit 1
+        if ($deadline -and [DateTime]::UtcNow -lt $deadline) {
+            if (-not $queuedLogged) {
+                Write-QuestLog "Queued: headset $lastState - opening when it wakes (up to $WaitMinutes min)."
+                Set-QuestOpenStatus 'queued'
+                $queuedLogged = $true
+            }
+        } else {
+            if ($deadline) { Write-QuestLog "Headset did not wake within $WaitMinutes min ($lastState) - nothing opened." }
+            else { Write-QuestLog "Headset not awake/reachable ($lastState) - nothing opened." }
+            exit 1
+        }
     }
     Start-Sleep -Seconds ([Math]::Max(2, $PollSeconds))
 }

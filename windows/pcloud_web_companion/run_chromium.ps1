@@ -2150,10 +2150,13 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): clear Quest Browser history, Quest proximity sensor on, close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): clear Quest Browser history, Quest proximity sensor back on, close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
 
     try {
         # Quest first: if Quest Browser is closed, clearing opens it on a phone page, so the phone LAN must still be up.
+        # Order: stop keep-awake (it would switch the sensor off again), clear history while the
+        # headset is still awake, then turn the proximity sensor back on.
+        if (Get-Command Stop-QuestKeepAwake -ErrorAction SilentlyContinue) { try { Stop-QuestKeepAwake } catch {} }
         if (Get-Command Invoke-QuestHistoryClearOnExit -ErrorAction SilentlyContinue) {
             try { Invoke-QuestHistoryClearOnExit -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $ExtensionDir) } catch {}
         }
@@ -2494,6 +2497,9 @@ if (-not $DetachChromium) {
     Start-CompanionExitWatchdog
     if (Get-Command Start-QuestFlagSyncInBackground -ErrorAction SilentlyContinue) {
         Start-QuestFlagSyncInBackground -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $ExtensionDir)
+    }
+    if (Get-Command Start-QuestKeepAwakeInBackground -ErrorAction SilentlyContinue) {
+        Start-QuestKeepAwakeInBackground -CompanionPid $PID
     }
 }
 

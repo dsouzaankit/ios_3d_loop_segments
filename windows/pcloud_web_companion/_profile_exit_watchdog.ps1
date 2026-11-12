@@ -117,7 +117,8 @@ if (Test-Path -LiteralPath $GracefulMarkerPath) {
 }
 
 # Ungraceful close (console X, kill, crash): finish the companion session.
-Write-Host "[watchdog] Parent gone without graceful marker - clearing Quest Browser history, turning the Quest proximity sensor on, closing Chromium, dropping Skybox shares, quitting Skybox if we started it, syncing profile"
+Write-Host "[watchdog] Parent gone without graceful marker - clearing Quest Browser history, turning the Quest proximity sensor back on, closing Chromium, dropping Skybox shares, quitting Skybox if we started it, syncing profile"
+if (Get-Command Stop-QuestKeepAwake -ErrorAction SilentlyContinue) { try { Stop-QuestKeepAwake } catch {} }
 if (Get-Command Invoke-QuestHistoryClearOnExit -ErrorAction SilentlyContinue) {
     try { Invoke-QuestHistoryClearOnExit -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $PSScriptRoot) } catch {}
 }

@@ -749,6 +749,9 @@ $script:QuestOpenProc = $null
 $script:QuestOpenUrl = ''
 $script:QuestOpenStartedAt = $null
 $script:QuestOpenLogPath = Join-Path $env:TEMP 'loopsegments-quest-lantab.log'
+$script:QuestOpenStatusPath = Join-Path $env:TEMP 'loopsegments-quest-open-status.txt'
+# Click while the headset is asleep / off adb: keep trying this long, open when it wakes.
+$script:QuestOpenWaitMinutes = 7
 
 function Test-CompanionHeader {
     # Extension service worker sends this; a web page cannot without a CORS preflight,
@@ -770,6 +773,15 @@ function Get-QuestOpenStatus {
         return [ordered]@{ ok = $true; state = 'idle' }
     }
     if (-not $script:QuestOpenProc.HasExited) {
+        $phase = ''
+        try { $phase = ([string](Get-Content -LiteralPath $script:QuestOpenStatusPath -Raw -ErrorAction Stop)).Trim() } catch {}
+        if ($phase -eq 'queued') {
+            $until = $script:QuestOpenStartedAt.AddMinutes($script:QuestOpenWaitMinutes).ToString('HH:mm')
+            return [ordered]@{
+                ok = $true; state = 'queued'; url = $script:QuestOpenUrl
+                message = "Queued: opens on Quest when the headset wakes (until $until)."
+            }
+        }
         return [ordered]@{ ok = $true; state = 'running'; url = $script:QuestOpenUrl }
     }
     $code = $script:QuestOpenProc.ExitCode
@@ -780,9 +792,9 @@ function Get-QuestOpenStatus {
             elseif ($detail -match 'normal tab') { 'Opened on Quest (normal tab).' }
             else { 'Opened on Quest.' }
         }
-        1 { 'Quest not reachable or asleep - wake the headset and check adb (see log).' }
+        1 { "Quest did not wake (or was not on adb) within $($script:QuestOpenWaitMinutes) min - nothing opened." }
         2 { 'adb not found on this PC (winget install Google.PlatformTools).' }
-        default { "Quest open failed (exit $code)." }
+        default { "Quest open failed (exit $code) - see %TEMP%\loopsegments-quest-lantab.log." }
     }
     return [ordered]@{
         ok       = ($code -eq 0)
@@ -808,11 +820,14 @@ function Start-QuestOpen {
     if (-not (Test-Path -LiteralPath $watcher)) {
         throw "Missing $watcher"
     }
+    Remove-Item -LiteralPath $script:QuestOpenStatusPath -Force -ErrorAction SilentlyContinue
     $pwshExe = (Get-Process -Id $PID).Path
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $pwshExe
     foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-            '-File', $watcher, '-Url', $url, '-Once')) { [void]$psi.ArgumentList.Add($a) }
+            '-File', $watcher, '-Url', $url, '-Once',
+            '-WaitMinutes', "$($script:QuestOpenWaitMinutes)", '-StatusFile', $script:QuestOpenStatusPath,
+            '-ParentPid', "$PID")) { [void]$psi.ArgumentList.Add($a) }
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $script:QuestOpenProc = [System.Diagnostics.Process]::Start($psi)

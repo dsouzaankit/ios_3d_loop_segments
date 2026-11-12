@@ -247,10 +247,12 @@ $script:QuestClearHistoryJs = @'
   const prevTime = st().selectedTimeIndex;
   const restore = () => { for (const [id, sel] of Object.entries(prevItems)) store.dispatch({ type: "clearData/setItemSelected", payload: { id, selected: sel } }); store.dispatch({ type: "clearData/setSelectedTimeIndex", payload: { selectedTimeIndex: prevTime, isFBLoggedIn: fb } }); };
   store.dispatch({ type: "modal/showModal", payload: "clear" });
-  for (let i = 0; i < 30 && !(st().subtitles || []).length; i++) await sleep(200);
+  // The browser fills the time options in asynchronously (slower right after a cold start).
+  const t0 = Date.now();
+  while (!(st().subtitles || []).length && Date.now() - t0 < __OPTIONS_WAIT_MS__) await sleep(200);
   const subs = st().subtitles || [];
   const allIdx = subs.findIndex(s => s.id === "all");
-  if (allIdx < 0) { close(); return JSON.stringify({ ok: false, error: "no 'all time' option", subs: subs.map(s => s.id) }); }
+  if (allIdx < 0) { close(); return JSON.stringify({ ok: false, error: subs.length ? ("no 'all time' option (" + subs.map(s => s.id).join(",") + ")") : "dialog time options never arrived" }); }
   const before = subs[allIdx].historyCount;
   // History only: never cookies, cache, passwords, forms or settings.
   for (const id of Object.keys(st().clearItems)) store.dispatch({ type: "clearData/setItemSelected", payload: { id, selected: id === "history" } });
@@ -268,24 +270,42 @@ $script:QuestClearHistoryJs = @'
 })()
 '@
 
-# Returns 'cleared', 'failed' or 'skipped'.
+function Test-QuestBrowserInFront {
+    param([string] $DeviceSerial)
+    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'activity', 'activities')
+    $top = @(([string]$r.Out) -split "`r?`n" | Where-Object { $_ -match 'topResumedActivity=' } | Select-Object -First 1)
+    return ($top.Count -gt 0 -and $top[0] -match [regex]::Escape($BrowserPackage))
+}
+
+# Returns 'cleared' or 'failed'. Everything fits in -BudgetSec (one deadline, not per-step
+# limits). The dialog only answers while Quest Browser is the front app, so the browser is brought
+# to the front (and started, if it was closed) first. A cold start rarely fits a short budget.
 function Clear-QuestBrowserHistory {
-    param([string] $DeviceSerial, [string] $HelperUrl)
-    $helper = $null
-    $ui = Get-QuestBrowserUi
-    if (-not $ui) {
-        # Browser not running: open it with a helper tab (that visit is cleared too).
-        $helper = New-QuestViewTab -DeviceSerial $DeviceSerial -PlainUrl $HelperUrl
-        for ($i = 0; $i -lt 20 -and -not $ui; $i++) { Start-Sleep -Milliseconds 500; $ui = Get-QuestBrowserUi }
+    param([string] $DeviceSerial, [string] $HelperUrl, [double] $BudgetSec = 25)
+    $deadline = [DateTime]::UtcNow.AddSeconds($BudgetSec)
+    $left = { [Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalSeconds) }
+    # Keep this much for running the clear in the dialog itself.
+    $reserve = 6
+    if (-not (Test-QuestBrowserInFront -DeviceSerial $DeviceSerial)) {
+        # Launcher intent: starts the browser if needed and brings it to the front. A VIEW intent
+        # on a cold start only opened a new-tab page, so no helper tab is used.
+        [void](Invoke-Adb -TimeoutSec ([int][Math]::Max(2, [Math]::Min(8, (& $left) - $reserve))) -Arguments @('-s', $DeviceSerial, 'shell', 'monkey', '-p', $BrowserPackage, '-c', 'android.intent.category.LAUNCHER', '1'))
+        $front = $false
+        while (-not $front -and (& $left) -gt $reserve) { Start-Sleep -Milliseconds 400; $front = Test-QuestBrowserInFront -DeviceSerial $DeviceSerial }
+        if (-not $front) { Write-QuestLog 'History: Quest Browser did not come to the front in time - trying anyway.' }
     }
+    $ui = Get-QuestBrowserUi
+    while (-not $ui -and (& $left) -gt $reserve) { Start-Sleep -Milliseconds 400; $ui = Get-QuestBrowserUi }
     if (-not $ui) {
-        if ($helper) { Close-QuestTab -Id $helper.id }
-        Write-QuestLog 'History: Quest Browser UI not found - not cleared.'
+        Write-QuestLog ("History: Quest Browser UI not ready within the {0:0} s budget (cold start?) - not cleared." -f $BudgetSec)
         return 'failed'
     }
     try {
-        if ($helper) { Close-QuestTab -Id $helper.id; Start-Sleep -Milliseconds 500 }
-        $r = Invoke-QuestEval -Tab $ui -Expression $script:QuestClearHistoryJs -TimeoutSec 30 | ConvertFrom-Json
+        $evalSec = [Math]::Max(3, (& $left))
+        # Options wait inside the dialog: what is left, minus time to tick boxes, click and restore.
+        $optionsMs = [int][Math]::Max(1000, [Math]::Min(15000, ($evalSec - 3) * 1000))
+        $js = $script:QuestClearHistoryJs.Replace('__OPTIONS_WAIT_MS__', "$optionsMs")
+        $r = Invoke-QuestEval -Tab $ui -Expression $js -TimeoutSec ([int][Math]::Ceiling($evalSec)) | ConvertFrom-Json
         if ($r.ok) { Write-QuestLog 'History: cleared Quest Browser history (all time, history only).'; return 'cleared' }
         Write-QuestLog "History: not cleared - $($r.error)"
         return 'failed'

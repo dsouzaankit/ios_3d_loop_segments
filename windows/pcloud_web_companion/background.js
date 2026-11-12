@@ -3200,9 +3200,14 @@ async function openLanPageOnQuest(sender) {
   try {
     let st = await questOpenFetch("POST", { url });
     const deadline = Date.now() + QUEST_OPEN_TIMEOUT_MS;
+    // "queued" ends the wait: the sink keeps the job running until the headset wakes.
     while (st?.state === "running" && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, QUEST_OPEN_POLL_MS));
       st = await questOpenFetch("GET");
+    }
+    if (st?.state === "queued") {
+      // Headset asleep / off adb: the companion keeps trying and opens it when the headset wakes.
+      return st;
     }
     if (st?.state === "running") {
       return { ok: false, message: "Still waiting on adb - see loopsegments-quest-lantab.log in %TEMP%." };
