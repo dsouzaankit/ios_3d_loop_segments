@@ -14,6 +14,10 @@
     Clear  : remove every SKYBOX server this PC added
   Each runs quest\Watch-LoopSegmentsQuestLanTab.ps1 in the background; the page polls /status.json.
 
+  LAN bandwidth (PC <-> phone): Measure LAN runs lan\Measure-LoopSegmentsLanThroughput.ps1 (HTTP,
+  plus the rclone mount when it is up; never reboots routers) and shows its result file
+  %TEMP%\loopsegments-lan-throughput.json, which the companion's startup probe also writes.
+
   Reachable from the LAN, so every request must pass all of:
     - client address is loopback or private (10/8, 172.16/12, 192.168/16, 169.254/16)
     - Host header is an IP literal or localhost (no DNS names: blocks DNS rebinding)
@@ -44,6 +48,10 @@ $script:QuestLog = Join-Path $env:TEMP 'loopsegments-quest-lantab.log'
 $script:ServerLog = Join-Path $env:TEMP 'loopsegments-quest-control.log'
 $script:StatePath = Join-Path $env:TEMP 'loopsegments-quest-control.json'
 $script:SkyboxStatePath = Join-Path $env:TEMP 'loopsegments-skybox-webdav.json'
+$script:LanBwScript = Join-Path $WindowsDir 'lan\Measure-LoopSegmentsLanThroughput.ps1'
+# Written by the measure script (-ResultFile), also by the companion's startup probe.
+$script:LanBwResultPath = Join-Path $env:TEMP 'loopsegments-lan-throughput.json'
+$script:LanBwLog = Join-Path $env:TEMP 'loopsegments-quest-control-lanbw.log'
 
 function Write-ControlLog {
     param([string] $Message)
@@ -206,6 +214,50 @@ function Start-ControlAction {
     return $true
 }
 
+# ---- LAN bandwidth (PC <-> phone): the same probe the companion runs at startup ----
+
+$script:LanBw = $null
+
+# HTTP + rclone mount when the mount drive is up, else HTTP only. Never reboots routers from a
+# page click (-SkipLowThroughputGatewayReboot); only the companion's startup probe does that.
+function Start-ControlLanBw {
+    if ($script:LanBw -and -not $script:LanBw.Proc.HasExited) { return $false }
+    $letter = Get-LoopSegmentsMountDriveLetter
+    $mountUp = [bool](Test-Path -LiteralPath "${letter}:\" -ErrorAction SilentlyContinue)
+    $q = { param($s) "'" + ([string]$s -replace "'", "''") + "'" }
+    $cmd = "& $(& $q $script:LanBwScript) -NoWaitEnter -SkipLowThroughputGatewayReboot -DriveLetter $letter " +
+           $(if ($mountUp) { '-WaitMountSec 15' } else { '-WaitMountSec 0 -HttpOnly' }) +
+           " -ResultFile $(& $q $script:LanBwResultPath) *>&1 | ForEach-Object { Add-Content -LiteralPath $(& $q $script:LanBwLog) -Value (`"`$_`") -Encoding utf8 }; exit `$LASTEXITCODE"
+    Remove-Item -LiteralPath $script:LanBwLog -Force -ErrorAction SilentlyContinue
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = (Get-Process -Id $PID).Path
+    foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $cmd)) { [void]$psi.ArgumentList.Add($a) }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $script:LanBw = [pscustomobject]@{ Proc = $proc; StartedAt = (Get-Date); Mount = $mountUp }
+    Write-ControlLog "ACTION_START lan-measure (pid $($proc.Id), mount $(if ($mountUp) { 'up' } else { 'down: HTTP only' }))"
+    return $true
+}
+
+function Get-ControlLanBwStatus {
+    $out = [ordered]@{ state = 'idle'; result = $null; lines = @() }
+    $a = $script:LanBw
+    if ($a) {
+        $out.state = if ($a.Proc.HasExited) { 'done' } else { 'running' }
+        $out.startedAt = $a.StartedAt.ToString('HH:mm:ss')
+        $out.mount = $a.Mount
+        if ($a.Proc.HasExited) { $out.exitCode = $a.Proc.ExitCode }
+        if (Test-Path -LiteralPath $script:LanBwLog) {
+            try { $out.lines = @(Get-Content -LiteralPath $script:LanBwLog -Tail 60 | Where-Object { $_.Trim() } | Select-Object -Last 12) } catch {}
+        }
+    }
+    if (Test-Path -LiteralPath $script:LanBwResultPath) {
+        try { $out.result = Get-Content -LiteralPath $script:LanBwResultPath -Raw | ConvertFrom-Json } catch {}
+    }
+    return $out
+}
+
 function Get-ControlStatus {
     $s = Get-ControlSettings
     $lan = Get-ControlLanUrl
@@ -228,6 +280,7 @@ function Get-ControlStatus {
         addedByThisPc = $added
         action        = (Get-ControlActionStatus)
         log           = $log
+        lanBw         = (Get-ControlLanBwStatus)
     }
 }
 
@@ -258,8 +311,9 @@ $script:PageHtml = @'
   button.danger { border-color: #6e2b2b; color: #ffb4ae; }
   button:disabled { opacity: .45; cursor: default; }
   .note { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
-  #msg { margin-top: 14px; min-height: 1.4em; font-size: 16px; }
-  #msg.ok { color: var(--ok); } #msg.warn { color: var(--warn); } #msg.bad { color: var(--bad); }
+  #msg, .msg { margin-top: 14px; min-height: 1.4em; font-size: 16px; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  #bwLines { margin-top: 10px; }
   pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, Consolas, monospace; color: var(--muted); }
 </style>
 </head>
@@ -283,6 +337,22 @@ $script:PageHtml = @'
     </div>
     <div id="msg" role="status" aria-live="polite"></div>
     <p class="note">Push adds "Loop Segments" to SKYBOX's Network list at the phone's current address with the current login (and removes older addresses). Update does the same only if it is already there. Clear removes it. SKYBOX restarts if it is open when the server changes; it is also removed when the companion quits.</p>
+  </section>
+
+  <section>
+    <h2>LAN bandwidth: PC &harr; phone</h2>
+    <dl>
+      <dt>Result</dt><dd id="bwMbps">-</dd>
+      <dt>HTTP / mount</dt><dd id="bwPaths">-</dd>
+      <dt>Max segment bitrate</dt><dd id="bwRec">-</dd>
+      <dt>Measured</dt><dd id="bwAt">-</dd>
+    </dl>
+    <div class="buttons">
+      <button id="bwMeasure" class="primary">Measure LAN</button>
+    </div>
+    <div id="bwMsg" class="msg" role="status" aria-live="polite"></div>
+    <pre id="bwLines" hidden></pre>
+    <p class="note">Runs the same probe as the companion at startup (lan\Measure-LoopSegmentsLanThroughput.ps1): downloads up to 64 MB of a phone video over HTTP, and copies it from the rclone mount when the mount is up, then uses the lower number. It never reboots routers from here. Takes about 10-60 s; pause a Virtual Desktop session first or the number comes out low.</p>
   </section>
 
   <section>
@@ -318,8 +388,52 @@ $script:PageHtml = @'
       const text = a.name[0].toUpperCase() + a.name.slice(1) + ' at ' + a.startedAt + ': ' + word + '.';
       if (key !== lastShown || $('msg').textContent === '') { setMsg(text, ok ? 'ok' : 'bad'); lastShown = key; }
     }
-    schedule(running ? 1500 : 10000);
+    const bwRunning = renderBw(s.lanBw || {});
+    schedule((running || bwRunning) ? 1500 : 10000);
   }
+
+  function mbps(v) { return (v === null || v === undefined) ? '-' : Number(v).toFixed(1) + ' Mbps'; }
+
+  // Returns true while a measurement runs.
+  function renderBw(b) {
+    const r = b.result, m = $('bwMsg');
+    if (r && r.ok) {
+      const low = r.belowMin;
+      $('bwMbps').textContent = mbps(r.measuredMbps) + ' (' + r.measureMethod + ')' + (low ? '  LOW: under ' + r.minLanThroughputMbps + ' Mbps' : '');
+      $('bwMbps').className = low ? 'bad' : 'ok';
+      $('bwPaths').textContent = mbps(r.measuredHttpMbps) + ' / ' + (r.measuredMountMbps === null ? 'not measured' : mbps(r.measuredMountMbps));
+      $('bwRec').textContent = r.recommendedMaxMediaBitrateMbps + ' Mbps (min LAN ' + r.minLanThroughputMbps + ' Mbps)';
+    } else if (r && !r.ok) {
+      $('bwMbps').textContent = 'failed: ' + (r.error || 'unknown error'); $('bwMbps').className = 'bad';
+      $('bwPaths').textContent = '-'; $('bwRec').textContent = '-';
+    }
+    if (r && r.measuredAtUtc) {
+      const d = new Date(r.measuredAtUtc);
+      $('bwAt').textContent = d.toLocaleString() + (r.virtualDesktopRunning ? '  (Virtual Desktop was running: may read low)' : '');
+    }
+    const running = b.state === 'running';
+    $('bwMeasure').disabled = running;
+    const lines = b.lines || [];
+    $('bwLines').hidden = !(running || (b.state === 'done' && lines.length));
+    $('bwLines').textContent = lines.join('\n');
+    if (running) { m.textContent = 'Measuring (started ' + b.startedAt + (b.mount ? '' : ', mount not up: HTTP only') + ')...'; m.className = 'msg warn'; }
+    else if (b.state === 'done') {
+      const ok = b.exitCode === 0 && r && r.ok;
+      m.textContent = 'Measurement at ' + b.startedAt + ': ' + (ok ? 'done.' : 'failed (exit ' + b.exitCode + ').'); m.className = 'msg ' + (ok ? 'ok' : 'bad');
+    } else if (!r) { m.textContent = 'No measurement yet.'; m.className = 'msg'; }
+    return running;
+  }
+
+  $('bwMeasure').addEventListener('click', async () => {
+    $('bwMeasure').disabled = true;
+    const m = $('bwMsg'); m.textContent = 'Starting...'; m.className = 'msg warn';
+    try {
+      const r = await fetch('lan/measure', { method: 'POST', headers: { 'X-Quest-Control': '1' } });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { m.textContent = j.error || ('HTTP ' + r.status); m.className = 'msg bad'; }
+    } catch (e) { m.textContent = 'Request failed: ' + e.message; m.className = 'msg bad'; }
+    schedule(800);
+  });
 
   async function refresh() {
     try {
@@ -329,6 +443,7 @@ $script:PageHtml = @'
     } catch (e) {
       setMsg('Companion not reachable (' + e.message + '). It stops when the companion quits.', 'bad');
       buttons.forEach(b => b.disabled = true);
+      $('bwMeasure').disabled = true;
       schedule(5000);
     }
   }
@@ -410,6 +525,17 @@ function Invoke-ControlClient {
             Write-ControlResponse -Stream $s -StatusCode 202 -Body (ConvertTo-ControlJson @{ ok = $true; action = $name; state = 'running' })
         } else {
             Write-ControlResponse -Stream $s -StatusCode 409 -Body '{"ok":false,"error":"another action is still running"}'
+        }
+    } elseif ($path -eq '/lan/measure') {
+        if ($method -ne 'POST') { Write-ControlResponse -Stream $s -StatusCode 405 -Body '{"ok":false,"error":"POST only"}'; return }
+        if ((Get-ControlHeader -HeaderText $req.HeaderText -Name 'X-Quest-Control') -ne '1') {
+            Write-ControlResponse -Stream $s -StatusCode 403 -Body '{"ok":false,"error":"missing X-Quest-Control header"}'
+            return
+        }
+        if (Start-ControlLanBw) {
+            Write-ControlResponse -Stream $s -StatusCode 202 -Body '{"ok":true,"action":"lan-measure","state":"running"}'
+        } else {
+            Write-ControlResponse -Stream $s -StatusCode 409 -Body '{"ok":false,"error":"a measurement is already running"}'
         }
     } elseif ($method -eq 'OPTIONS') {
         # No CORS: cross-origin preflights fail, so other sites cannot send the action header.

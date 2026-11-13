@@ -72,7 +72,10 @@ param(
     # Alias of -NoWaitEnter (kept for companion callers).
     [switch] $NoWaitEnterOnLowThroughputStop,
     [switch] $SkipSidecarWrite,
-    [switch] $KeepLocal
+    [switch] $KeepLocal,
+    # Also write the final result (after any re-checks) as JSON here, on success and on failure
+    # (ok=false + error). Used by the Quest control page's Measure LAN button.
+    [string] $ResultFile = ''
 )
 
 Set-StrictMode -Version Latest
@@ -100,6 +103,20 @@ function Wait-EnterToClose {
 
 $outHttp = $null
 $outMount = $null
+
+function Write-LanBwResultFile {
+    param([System.Collections.IDictionary] $Payload)
+    if ([string]::IsNullOrWhiteSpace($ResultFile)) { return }
+    try {
+        $dir = Split-Path -Parent $ResultFile
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $tmp = "$ResultFile.tmp"
+        Set-Content -LiteralPath $tmp -Value ($Payload | ConvertTo-Json -Depth 4) -Encoding UTF8
+        Move-Item -LiteralPath $tmp -Destination $ResultFile -Force
+    } catch {
+        Write-Warning ("[lan-bw] Could not write result file {0}: {1}" -f $ResultFile, $_.Exception.Message)
+    }
+}
 
 function Clear-LoopSegmentsLanBwTempCopies {
     if ($KeepLocal) { return }
@@ -137,6 +154,12 @@ trap {
         }
     }
     try { Clear-LoopSegmentsLanBwTempCopies } catch {}
+    Write-LanBwResultFile -Payload ([ordered]@{
+            schema        = 'loopsegments-lan-throughput-result/v1'
+            ok            = $false
+            error         = ("{0}" -f $_.Exception.Message) -replace '^\[lan-bw\]\s*', ''
+            measuredAtUtc = [datetime]::UtcNow.ToString('o')
+        })
     Wait-EnterToClose
     if ($skipEnterPrompt) {
         throw $_
@@ -1130,6 +1153,24 @@ if ($KeepLocal) {
 } else {
     Clear-LoopSegmentsLanBwTempCopies
 }
+
+Write-LanBwResultFile -Payload ([ordered]@{
+        schema                         = 'loopsegments-lan-throughput-result/v1'
+        ok                             = $true
+        measureMethod                  = [string]$primary.Method
+        measuredMbps                   = [Math]::Round($mbps, 1)
+        measuredHttpMbps               = if ($httpStats) { [Math]::Round([double]$httpStats.MegabitsPerSec, 1) } else { $null }
+        measuredMountMbps              = if ($mountStats) { [Math]::Round([double]$mountStats.MegabitsPerSec, 1) } else { $null }
+        recommendedMaxMediaBitrateMbps = $recommendedMbps
+        minLanThroughputMbps           = $minLanMbps
+        belowMin                       = [bool]($minLanMbps -gt 0 -and $mbps -lt $minLanMbps)
+        retries                        = $retry
+        virtualDesktopRunning          = $vdRunning
+        transferredBytes               = $primary.Bytes
+        elapsedSeconds                 = [Math]::Round($primary.Seconds, 2)
+        phoneLanBaseUrl                = (Get-LoopSegmentsPhoneLanBaseUrl)
+        measuredAtUtc                  = [datetime]::UtcNow.ToString('o')
+    })
 
 Wait-EnterToClose
 exit 0

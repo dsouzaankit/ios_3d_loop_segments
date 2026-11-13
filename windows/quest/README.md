@@ -7,7 +7,7 @@ The PC companion drives **Quest Browser** over **adb over Wi-Fi** and the browse
 | **Open on Quest** click (PC LAN page) | Check the flag (below), open the **Quest control page** in its own tab, then the LAN page in a **normal tab, signed in** (in front) | `questSendLanLogin`, `questIncognito`, `questControlPageOnQuest` |
 | Companion **startup** | Hidden, in the background: make sure the insecure-origin flag lists the phone LAN origin(s) | `questEnsureInsecureOriginFlag` |
 | Companion **startup**, until close | Keep the headset **awake**: proximity sensor held off once the headset is on adb | `questKeepAwakeDuringSession` |
-| Companion **startup**, until close | Serve the **Quest control page** on this PC's LAN address, signed in: **SKYBOX Push / Update / Clear** buttons | `questControlPage`, `questControlPort`, `questSkyboxWebDav` |
+| Companion **startup**, until close | Serve the **Quest control page** on this PC's LAN address, signed in: **SKYBOX Push / Update / Clear** buttons and **Measure LAN** (PC ↔ phone bandwidth) | `questControlPage`, `questControlPort`, `questSkyboxWebDav` |
 | Companion **close** (normal finish and the console-X watchdog) | Stop the control page, close Quest Browser **tabs on the phone LAN page and the control page**, clear **history** (History only, All time), **remove the Loop Segments entries from SKYBOX** (phone WebDAV servers and the rclone DLNA entry), then turn the **proximity sensor back on** | `questCloseLanTabsOnExit`, `questClearHistoryOnExit`, `questSkyboxWebDav`, `questKeepAwakeDuringSession` |
 
 Startup and close steps are skipped (and logged) when the headset is not on adb. **Open on Quest** waits instead (below).
@@ -52,7 +52,7 @@ Uses the browser's own **Clear browsing data** dialog: ticks **History only**, p
 
 A small page the companion serves on **this PC's LAN address**, made for Quest Browser: [`Serve-QuestControlPage.ps1`](Serve-QuestControlPage.ps1), started hidden at companion startup and stopped at close (it also exits by itself once the companion is gone). Default port **18766** (`questControlPort`), for example `http://10.0.100.244:18766/`. **Open on Quest** opens it in its own normal tab, signed in the same way as the LAN page (login URL, then reloaded plain, back/forward list reset), then opens the LAN page so that one is in front; an already open control tab is reused. `"questControlPageOnQuest": false` leaves it out. From the PC it also opens in any browser at the same address.
 
-Today it holds the SKYBOX buttons (next section): the target address and login user, the servers this PC added, the last action's result, and the recent `SKYBOX:` log lines. It refreshes every 10 s, every 1.5 s while an action runs. More Quest actions can be added to it later.
+It holds the SKYBOX buttons (the target address and login user, the servers this PC added, the last action's result, the recent `SKYBOX:` log lines) and the **LAN bandwidth** test (both below). It refreshes every 10 s, every 1.5 s while an action or a measurement runs. More Quest actions can be added to it later.
 
 Unlike the companion's own `127.0.0.1:18765` endpoint, this one is **reachable from the LAN**, so every request must pass all of:
 
@@ -62,6 +62,19 @@ Unlike the companion's own `127.0.0.1:18765` endpoint, this one is **reachable f
 - **actions**: `POST` with header `X-Quest-Control: 1`. A form or link on another website cannot send that header, and the cross-origin preflight a script would need is refused (no CORS), so another site open in the same browser cannot press the buttons with the cached login.
 
 The server handles one request at a time and only once a connection has sent one: Quest Browser opens spare connections that send nothing, and those are closed after 10 s instead of holding up the page. The page sends `Content-Security-Policy`, `X-Frame-Options: DENY` and `Cache-Control: no-store`. The login travels unencrypted over the LAN, like the phone LAN page's. **Windows Firewall** must allow inbound TCP on the port on the Private network: on this PC the existing *PowerShell 7* allow rule for `pwsh.exe` already does. If the Quest cannot open the page (the log says `Control page: ... did not load on the Quest`), allow it yourself, or set `"questControlPage": false`. Server log: `%TEMP%\loopsegments-quest-control.log`; action log: `%TEMP%\loopsegments-quest-lantab.log`.
+
+## LAN bandwidth (PC ↔ phone), from the control page
+
+The **LAN bandwidth: PC ↔ phone** section shows the last measurement and a **Measure LAN** button. The button runs the same probe the companion runs at startup, [`..\lan\Measure-LoopSegmentsLanThroughput.ps1`](../lan/Measure-LoopSegmentsLanThroughput.ps1), in the background on the PC: it downloads up to **64 MB** of a random phone video over **HTTP**, and when the rclone mount (`mountDriveLetter`, default `L:`) is up also copies it **from the mount**, then uses the **lower** number. While it runs the page shows its last output lines; it usually takes 10-60 s. One measurement at a time (a second press gets *already running*); it runs alongside a SKYBOX action.
+
+| Row | Meaning |
+|---|---|
+| **Result** | Mbps of the lower path (`http` or `mount`), green; red with **LOW** when under `minLanThroughputMbps` (default 40), or *failed: ...* with the error |
+| **HTTP / mount** | Each path's Mbps (*not measured* when the mount was not up) |
+| **Max segment bitrate** | The recommended max media bitrate for minute segments (80% of the result, 5-100 Mbps), the same number the probe prints and writes to the phone sidecars when the mount is up |
+| **Measured** | When, in the viewer's local time; notes when Virtual Desktop's streamer was running (it uses ~50 Mbps of the LAN, so the number reads low) |
+
+Unlike the startup probe, a press **never reboots routers** when the result is low (`-SkipLowThroughputGatewayReboot`): only the companion's startup probe does that. The result is kept on the PC in `%TEMP%\loopsegments-lan-throughput.json` (`-ResultFile`; the startup probe writes it too, so the page shows that one until you press the button); the output of the last press is in `%TEMP%\loopsegments-quest-control-lanbw.log`. The phone LAN page's own **LAN speed test** measures the browser ↔ phone path instead (on the Quest: headset ↔ phone).
 
 ## SKYBOX: phone as a WebDAV server, from the control page
 

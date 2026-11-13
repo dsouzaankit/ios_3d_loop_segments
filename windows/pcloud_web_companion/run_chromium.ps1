@@ -1585,6 +1585,9 @@ function Invoke-MeasureLanThroughputIfMounted {
         [void]$psArgs.Add("-SkipLowThroughputGatewayReboot")
     }
     [void]$psArgs.Add("-NoWaitEnter")
+    # Shown on the Quest control page (quest\Serve-QuestControlPage.ps1), which can also re-run it.
+    [void]$psArgs.Add("-ResultFile")
+    [void]$psArgs.Add((Join-Path $env:TEMP 'loopsegments-lan-throughput.json'))
 
     Write-Host "[lan-bw] > pwsh $($psArgs -join ' ')"
     $prev = $ErrorActionPreference
