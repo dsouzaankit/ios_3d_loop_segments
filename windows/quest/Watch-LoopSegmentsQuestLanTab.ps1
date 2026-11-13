@@ -58,6 +58,8 @@
     1. A device already in `adb devices -l` whose model looks like a Quest (or -Serial).
     2. `adb connect <questAdbHost>:<questAdbPort>` (default port 5555) when questAdbHost is set.
     3. `adb mdns services` _adb-tls-connect entries (wireless-debugging TLS port, already paired).
+    4. Not found for questAdbRediscoverSec (60 s) and no adb device connected: restart the adb server
+       once and look over mDNS again (at most every 5 min across processes; 0 = off).
 
   Log: %TEMP%\loopsegments-quest-lantab.log
   Exit codes: 0 ok, 1 headset not reachable / asleep, 2 no adb or bad arguments, 3 step failed.
