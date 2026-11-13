@@ -136,7 +136,14 @@ function Wait-QuestCleanupOnExit {
     $took = ([DateTime]::UtcNow - $script:QuestCleanupStartedAt).TotalSeconds
     switch ($p.ExitCode) {
         0 { Write-Host ("[quest] Quest cleanup done ({0}) within {1:0.0} s." -f $script:QuestCleanupWhat, $took) -ForegroundColor Green }
-        1 { Write-Host '[quest] Quest not on adb - cleanup skipped (a headset reboot also resets the proximity sensor).' -ForegroundColor DarkYellow }
+        1 {
+            if (Test-Path -LiteralPath (Join-Path $env:TEMP 'loopsegments-quest-history-pending.json')) {
+                Write-Host '[quest] Quest not on adb - cleanup postponed: a background helper closes the LAN tabs, deletes the history entries and resets the proximity sensor once the headset is back (worn) within 2 h.' -ForegroundColor DarkYellow
+            } else {
+                Write-Host '[quest] Quest not on adb - cleanup skipped (a headset reboot also resets the proximity sensor).' -ForegroundColor DarkYellow
+            }
+        }
+        4 { Write-Host ("[quest] Quest cleanup done within {0:0.0} s, except the history delete: Quest Browser did not answer (headset not worn?), so a background helper deletes those entries the next time the headset is worn (gives up after 2 h)." -f $took) -ForegroundColor DarkYellow }
         default { Write-Warning "[quest] Quest cleanup incomplete (exit $($p.ExitCode)); see %TEMP%\loopsegments-quest-lantab.log" }
     }
 }
@@ -207,6 +214,9 @@ $script:QuestKeepAwakeProc = $null
 # headset first shows up on adb and again after a headset reboot.
 function Start-QuestKeepAwakeInBackground {
     param([int] $CompanionPid = $PID)
+    # A new session takes over from the last quit's history helper (this session's quit deletes
+    # those entries), before keep-awake can switch the sensor off under it.
+    Stop-QuestHistoryRetry
     if (-not (Get-QuestCompanionSetting -Name 'questKeepAwakeDuringSession')) {
         Write-Host '[quest] Not keeping the Quest awake (questKeepAwakeDuringSession=false)'
         return
@@ -218,6 +228,22 @@ function Start-QuestKeepAwakeInBackground {
         Write-Host "[quest] Keeping the Quest awake while the companion runs (proximity sensor off once it is on adb; PID $($script:QuestKeepAwakeProc.Id))"
     } catch {
         Write-Warning "[quest] Could not start Quest keep-awake: $($_.Exception.Message)"
+    }
+}
+
+# Stop the after-quit history helper (Watch-LoopSegmentsQuestLanTab.ps1 -RetryHistory) a previous
+# quit left waiting for the headset, and drop what it was waiting to do.
+function Stop-QuestHistoryRetry {
+    $pending = Join-Path $env:TEMP 'loopsegments-quest-history-pending.json'
+    $n = 0
+    try {
+        Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine -like '*Watch-LoopSegmentsQuestLanTab.ps1*' -and $_.CommandLine -like '*-RetryHistory*' } |
+            ForEach-Object { Stop-Process -Id ([int]$_.ProcessId) -Force -ErrorAction SilentlyContinue; $n++ }
+    } catch {}
+    if (Test-Path -LiteralPath $pending) {
+        Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
+        Write-Host "[quest] Stopped the last quit's history helper$(if ($n) { " (PID stopped: $n)" }); this session's quit deletes those entries."
     }
 }
 

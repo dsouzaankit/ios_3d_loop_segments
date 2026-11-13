@@ -253,6 +253,7 @@ chrome.webRequest.onAuthRequired.addListener(
           return;
         }
         lanAuthAnswered.add(details.requestId);
+        if (details.tabId >= 0) void rememberLanLoginTab(details.tabId);
         callback({ authCredentials: { username: cfg.webdavUser, password } });
       })
       .catch(() => callback({}));
@@ -264,6 +265,63 @@ chrome.webRequest.onAuthRequired.addListener(
 for (const ev of [chrome.webRequest.onCompleted, chrome.webRequest.onErrorOccurred]) {
   ev.addListener((details) => lanAuthAnswered.delete(details.requestId), { urls: ["http://*:8765/*", "http://127.0.0.1/*"] });
 }
+
+// Startup race: the companion opens the phone LAN page from Chromium's command line, and that
+// first request can reach the phone before this worker has registered onAuthRequired above, so
+// Chromium shows its own sign-in popup (and forgets what is typed there at the next run). Chromium
+// commits the 401 page under that popup, so the tab looks loaded. At browser start Chromium has no
+// cached login, so a phone tab whose login this worker never answered is one behind the popup:
+// navigate it again and the retried request is answered here.
+async function rememberLanLoginTab(tabId) {
+  try {
+    const { lanLoginTabs = [] } = await chrome.storage.session.get("lanLoginTabs");
+    if (!lanLoginTabs.includes(tabId)) await chrome.storage.session.set({ lanLoginTabs: [...lanLoginTabs, tabId] });
+  } catch {}
+}
+
+async function retryLanTabsStuckOnLogin(pass) {
+  // Once per browser start: MV3 workers restart often during a session, and a page that is
+  // simply loading then must not be restarted. chrome.storage.session is cleared at browser start.
+  const key = `lanLoginRetry${pass}`;
+  try {
+    if ((await chrome.storage.session.get(key))[key]) return;
+    await chrome.storage.session.set({ [key]: true });
+  } catch {}
+  let cfg;
+  try {
+    cfg = await loadLanConfig();
+  } catch {
+    return;
+  }
+  const origin = new URL(lanBaseUrl(cfg)).origin;
+  const onPhone = (u) => {
+    try {
+      return !!u && new URL(u).origin === origin;
+    } catch {
+      return false;
+    }
+  };
+  let answered = [];
+  try {
+    answered = (await chrome.storage.session.get("lanLoginTabs")).lanLoginTabs || [];
+  } catch {}
+  const seen = [];
+  for (const tab of await chrome.tabs.query({})) {
+    const target = tab.pendingUrl || tab.url || "";
+    if (!onPhone(target)) continue;
+    seen.push(`${tab.id}:${tab.status}:${answered.includes(tab.id) ? "signed-in" : "not-answered"}`);
+    if (answered.includes(tab.id)) continue;
+    try {
+      await chrome.tabs.update(tab.id, { url: target });
+      void appendRestLog({ type: "lan_login_retry", pass, url: target, tabStatus: tab.status, silent: true });
+    } catch {}
+  }
+  void appendRestLog({ type: "lan_login_check", pass, phoneTabs: seen.join(", ") || "none", silent: true });
+}
+// The worker starts with the browser; the tab and its popup may come a moment later.
+void retryLanTabsStuckOnLogin(1);
+setTimeout(() => void retryLanTabsStuckOnLogin(2), 3000);
+setTimeout(() => void retryLanTabsStuckOnLogin(3), 8000);
 
 /** Clash/TUN often proxies RFC1918 phone LAN; surface a hint when fetch dies. */
 function formatLanFetchError(err) {

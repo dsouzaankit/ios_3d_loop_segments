@@ -24,6 +24,7 @@
   "questAdbSerial": "",
   "questAdbExe": "",
   "questAdbRediscoverSec": 60,
+  "questHistoryRetryMinutes": 120,
   "questIncognito": false,
   "questSendLanLogin": true,
   "questEnsureInsecureOriginFlag": true,

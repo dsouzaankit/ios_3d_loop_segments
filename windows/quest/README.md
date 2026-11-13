@@ -30,7 +30,11 @@ Quest WebXR over LAN `http://` needs `chrome://flags/#unsafely-treat-insecure-or
 
 ## Keep the headset awake during the session
 
-Deleting the Loop Segments history at quit only works if the headset is on adb, and an asleep Quest usually is not. So while the companion runs, a hidden job holds the **proximity sensor off** (`am broadcast -a com.oculus.vrpowermanager.prox_close`: the headset acts as if worn and does not sleep when you take it off). It checks about every 20 s and applies the override as soon as the headset shows up on adb, and again after a headset reboot (a reboot clears it).
+Deleting the Loop Segments history at quit only works if the headset is on adb, and an asleep Quest usually is not. So while the companion runs, a hidden job holds the **proximity sensor off** (`am broadcast -a com.oculus.vrpowermanager.prox_close`: the headset acts as if worn and does not sleep when you take it off). It checks about every 20 s and applies the override as soon as the headset is on adb **and awake**, and again after a headset reboot (a reboot clears it).
+
+**A sleeping headset is left alone.** For a while after it goes to standby the headset stays on Wi-Fi and wireless adb, and `prox_close` there means "just put on": it wakes it (`transition from STANDBY to HEADSET_MOUNTED` in `dumpsys vrpowermanager`). So a companion started soon after a quit used to light up a headset lying on the desk. Now the job reads `mWakefulness` first and, unless it is `Awake`, only logs `Keep-awake: headset asleep (Asleep) - not waking it`; the override goes on within ~20 s of you putting the headset on (which wakes it).
+
+**Awake is not the same as in use.** With the override on, a headset lying still stays awake but goes **idle** after about a minute (`Device idle state` in `dumpsys vrpowermanager`), and while it is idle Quest Browser does not answer: no history list, no clear dialog, no new tabs from intents. Closing tabs over DevTools, SKYBOX edits and the sensor still work. That is why the history delete at quit often fails when nobody is wearing the headset; see [After-quit history helper](#after-quit-history-helper).
 
 **Why it keeps checking:** one `prox_close` at startup would not last the session. The headset is often asleep or off adb when the companion starts, a reboot (also an OS update) clears the override, and anything else can turn the sensor back on (`Set-QuestProximitySensor.ps1 -State On`); adb has no event for "headset connected" or "sensor changed", so the job asks. A check is cheap: with the headset on adb it is `adb devices -l` plus one `dumpsys vrpowermanager`, and nothing is sent while the state is already `CLOSE`; with the headset away it also tries mDNS and `adb connect`, with short timeouts. The 20 s is how long the sensor can stay live after the headset shows up or reboots: taken off in that window, it can fall asleep before the job catches it. The flip side: a manual **On** while the companion runs is undone within ~20 s.
 
@@ -65,7 +69,21 @@ Only the current origins are matched. The PC address is worked out again at quit
 
 Quest Browser's 2D window is brought to the front first (the list only fills in then), and the browser is started if it was closed. This also takes the headset out of an immersive `/xr` session: immersive WebXR runs in a separate task, and while it is in front the 2D window is hidden. The whole step is limited to **30 s**. With the browser already running it takes 1-3 s, but a cold start of Quest Browser usually takes longer, so if the browser was closed the step may run out of time; that is logged. Manual run: `-ClearHistory`. Set `"questClearHistoryOnExit": false` to keep these entries.
 
+**Recently closed.** The History panel also lists *Recently closed* tabs, and every tab closed over DevTools lands there: the LAN and control tabs closed at quit, and the flag check's helper tab (startup and each Open on Quest), which used to show up as *Experiments* (`chrome://flags`). Nothing removes an item there except deleting its pages from history (Chromium drops a closed tab once none of its pages are left in history), and `chrome://` pages are never in history. So the flag check sends its helper tab back to the phone page (`/xr-assets/aframe.min.js`) and resets the tab's back/forward list before closing it; the item then holds only phone pages, and the phone-origin delete above removes it together with the LAN and control tabs. (Older *Experiments* and empty *New tab* items, from before this change, were cleaned once by reopening each and closing it the same way.)
+
 This relies on Quest Browser's internal UI (its History list component and the `webui_action_query_history` / `webui_action_delete_history` messages). A Quest Browser update can change those; the selective delete then fails (for example `History list not found`) and the 24-hour fallback runs.
+
+### After-quit history helper
+
+When the history step at quit still fails (usually `history query never answered` and `dialog time options never arrived`: nobody is wearing the headset, so Quest Browser is idle, see above), or the quit cannot reach the headset at all, the delete is **postponed** instead of dropped:
+
+- the origins to delete go to `%TEMP%\loopsegments-quest-history-pending.json` (with "close the LAN tabs" and "reset the sensor" when the quit could not reach the headset);
+- a hidden helper starts, detached from the companion so it keeps running after it: `Watch-LoopSegmentsQuestLanTab.ps1 -RetryHistory`. The log says `History: postponed - deleted when the headset is next worn (helper PID 6172, until 02:22)` and the step result is `postponed` (exit code 4; the companion prints *cleanup done ..., except the history delete*);
+- every **5 s** it looks for the headset on adb (as often as the Open on Quest queue; each check is `adb devices`, and `dumpsys vrpowermanager` once the headset is there). If the quit could not reach it, it turns the sensor back on as soon as it gets through. Once the headset is **worn** (mounted and not idle), it brings Quest Browser to the front (so the browser pops up shortly after you put the headset on), closes the LAN tabs if the quit could not, and deletes the entries: `History retry: headset worn - deleting.` ... `History retry: done.` It never uses the 24-hour fallback: by then it would delete your new browsing too;
+- it gives up after **2 hours** (`questHistoryRetryMinutes`, `0` = no helper): `History retry: the headset was not worn in time - gave up`;
+- it also stops when the companion starts again: the new session's quit deletes the same origins, old entries included. The companion stops it first thing at startup (before keep-awake can switch the sensor off under it).
+
+Tested (with a 30 s check then): quit with the headset lying idle for 2 min → postponed; headset put on 4 min later → 3 entries deleted 6 s after the helper saw it worn. With the 5 s check the delete starts within ~5 s of putting the headset on, plus ~3 s for the browser to settle. While it waits, the helper restarts the PC's adb server at most every 20 min (not 5) when it cannot find the headset.
 
 ## Quest control page
 
@@ -241,6 +259,7 @@ Log: `%TEMP%\loopsegments-quest-lantab.log`.
 | `questSendLanLogin` | `true` | Sign the tab in with the LAN login (`false` = sign in on the headset) |
 | `questEnsureInsecureOriginFlag` | `true` | Startup and each Open on Quest: keep the insecure-origin flag on the phone origin(s); may restart Quest Browser |
 | `questClearHistoryOnExit` | `true` | Companion close: delete the Quest Browser history entries on the phone LAN page and the control page (other history is kept) |
+| `questHistoryRetryMinutes` | `120` | The quit could not delete the history (headset not worn / not on adb): a background helper deletes it once the headset is worn, for up to this many minutes. `0` = off |
 | `questClearHistoryFallback` | `"day"` | If that selective delete fails: clear **all** history from this range instead (`hour`, `day`, `week`, `fourweeks`, `all`; `none` = no fallback) |
 | `questCloseLanTabsOnExit` | `true` | Companion close: close Quest Browser tabs on the phone LAN page (before the history clear) |
 | `questControlPage` | `true` | Companion session: serve the Quest control page on this PC's LAN address (signed in with the phone LAN login) |

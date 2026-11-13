@@ -284,8 +284,26 @@ function Sync-QuestInsecureOriginFlag {
         Write-QuestLog "Flags: confirmed after restart: '$($chk.value)'."
         return 'changed'
     } finally {
-        if ($tab) { Close-QuestTab -Id $tab.id }
+        if ($tab) { Close-QuestHelperTab -Tab $tab -HelperUrl $HelperUrl }
     }
+}
+
+# Close a helper tab without leaving "Experiments" (chrome://flags) in Quest Browser's Recently
+# closed list. Every closed tab goes there, and nothing removes an item except deleting its pages
+# from history - chrome:// pages are never in history. So the tab first goes back to the phone page
+# (a page in history) with its back/forward list reset: the item then holds only that page, and the
+# quit-time history delete of the phone origin removes it.
+function Close-QuestHelperTab {
+    param($Tab, [string] $HelperUrl)
+    try {
+        if ($HelperUrl -and ([string]$Tab.url) -notlike "$(ConvertTo-QuestBareUrl $HelperUrl)*") {
+            [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.navigate' -Params @{ url = $HelperUrl } -TimeoutSec 8)
+            $back = Wait-QuestTabUrl -Id $Tab.id -TimeoutSec 6 -Match { param($u) $u -like 'http*' }
+            if ($back) { $Tab = $back }
+        }
+        [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.resetNavigationHistory' -TimeoutSec 5)
+    } catch {}
+    Close-QuestTab -Id $Tab.id
 }
 
 # ---- Delete this app's history entries (phone LAN page, control page) through the browser's own History list ----
@@ -342,9 +360,16 @@ $script:QuestDeleteHistoryJs = @'
   let ours = H().items.filter(isOurs);
   const found = ours.length;
   if (!found) return finish({ ok: true, found: 0, total, kept: total });
+  // A row of the list (its remove button's handler). Sometimes not drawn yet: ask for the list
+  // again after 3 s and wait up to 7 s in all.
   let row = findInst("handleDelete");
   const r0 = Date.now();
-  while (!row && Date.now() - r0 < 3000 && left() > 0) { await sleep(200); row = findInst("handleDelete"); }
+  let requeried = false;
+  while (!row && Date.now() - r0 < 7000 && left() > 0) {
+    await sleep(200);
+    row = findInst("handleDelete");
+    if (!row && !requeried && Date.now() - r0 > 3000) { requeried = true; await query(max); }
+  }
   if (!row) return finish({ ok: false, error: "History row not found" });
   const del = Object.getPrototypeOf(row).handleDelete;
   let calls = 0, rounds = 0;

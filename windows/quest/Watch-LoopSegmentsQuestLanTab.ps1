@@ -42,9 +42,17 @@
   -SkyboxUpdate  : the same, only if such a server is already there (Update button).
   -ClearSkyboxWebDav : remove every SKYBOX server this PC added (with -ClearHistory: after the
                    history step). Needs no -Url.
-  -KeepAwakeSession : until -ParentPid exits, every ~20 s: when the headset is on adb and the
+  -RetryHistory  : after-quit helper. A -ClearHistory whose history delete fails (Quest Browser does
+                   not answer while nobody wears the headset) or that finds no headset saves the
+                   origins and starts this, detached: every 5 s it checks for the headset on adb
+                   and worn (mounted, not idle), then closes the LAN tabs and deletes those entries
+                   (no range fallback). Stops when done, after questHistoryRetryMinutes (120), or when
+                   the companion starts again. Exit 4 from -ClearHistory = only the history step was
+                   handed to it.
+  -KeepAwakeSession : until -ParentPid exits, every ~20 s: when the headset is on adb, awake, and the
                    proximity override is not CLOSE, send `prox_close` (headset acts as worn and does
-                   not sleep, so it stays on adb). Re-applies after a headset reboot. Never re-enables
+                   not sleep, so it stays on adb). A headset in standby is left alone (prox_close
+                   would wake it); it gets the override once someone puts it on. Re-applies after a headset reboot. Never re-enables
                    the sensor itself (the companion's cleanup does, after clearing history).
 
   Without -Once / -EnsureFlags / -ClearHistory it keeps polling and opens the page on each
@@ -62,7 +70,8 @@
        once and look over mDNS again (at most every 5 min across processes; 0 = off).
 
   Log: %TEMP%\loopsegments-quest-lantab.log
-  Exit codes: 0 ok, 1 headset not reachable / asleep, 2 no adb or bad arguments, 3 step failed.
+  Exit codes: 0 ok, 1 headset not reachable / asleep, 2 no adb or bad arguments, 3 step failed,
+  4 (-ClearHistory) everything else done, history delete postponed to the -RetryHistory helper.
 
 .EXAMPLE
   .\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://10.0.100.10:8765/ -Once
@@ -132,7 +141,12 @@ param(
     # Remove that SKYBOX WebDAV server (alone, or with -ClearHistory after the history step).
     [switch] $ClearSkyboxWebDav,
     # The companion's lan_config.json: phone address for the SKYBOX steps (re-read every poll).
-    [string] $LanConfig = ''
+    [string] $LanConfig = '',
+    # After-quit helper (started by a -ClearHistory whose history delete failed or found no headset):
+    # wait until the headset is worn, then close the LAN tabs and delete the Loop Segments history
+    # entries saved in %TEMP%\loopsegments-quest-history-pending.json; gives up after
+    # questHistoryRetryMinutes (120) or when the companion starts again.
+    [switch] $RetryHistory
 )
 
 Set-StrictMode -Version Latest
@@ -281,6 +295,8 @@ function Connect-QuestViaMdns {
 # device at all is connected (nothing to interrupt), and at most once every 5 min across all
 # companion processes (shared %TEMP% stamp). Returns $true when it restarted the server.
 $script:MdnsUnseenSince = $null
+# Minutes between adb server restarts (the after-quit history helper waits longer: 20).
+$script:AdbRediscoverEveryMin = 5
 $script:AdbRestartStamp = Join-Path $env:TEMP 'loopsegments-adb-rediscover.txt'
 function Invoke-QuestAdbRediscover {
     if ($script:AdbRediscoverSec -le 0) { return $false }
@@ -291,7 +307,7 @@ function Invoke-QuestAdbRediscover {
     try {
         if (Test-Path -LiteralPath $script:AdbRestartStamp) {
             $last = [DateTime]::Parse((Get-Content -LiteralPath $script:AdbRestartStamp -Raw).Trim(), $null, [Globalization.DateTimeStyles]::RoundtripKind)
-            if (($now - $last).TotalMinutes -lt 5) { return $false }
+            if (($now - $last).TotalMinutes -lt $script:AdbRediscoverEveryMin) { return $false }
         }
     } catch {}
     $d = Invoke-Adb -Arguments @('devices')
@@ -729,8 +745,14 @@ function Invoke-QuestKeepAwakeSession {
                 $note = 'headset not on adb - waiting'
             } else {
                 $state = Get-QuestVirtualProximity -DeviceSerial $dev
+                # prox_close tells the headset it was just put on, so it would wake one lying in
+                # standby (still on Wi-Fi for a while after it sleeps). Only act once it is awake,
+                # i.e. someone woke it by putting it on.
+                $wake = if ($state -eq 'CLOSE') { $null } else { Get-QuestWakefulness -DeviceSerial $dev }
                 if ($state -eq 'CLOSE') {
                     $note = "sensor held off ($dev)"
+                } elseif ($wake -ne 'Awake') {
+                    $note = "headset asleep ($(if ($wake) { $wake } else { 'unknown' })) - not waking it; sensor goes off once it is put on"
                 } else {
                     # Check the parent again right before acting: cleanup may have started.
                     if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
@@ -819,6 +841,160 @@ function Set-QuestOpenStatus {
     try { Set-Content -LiteralPath $StatusFile -Value $Value -Encoding ascii } catch {}
 }
 
+# ---- After-quit history helper (-RetryHistory) ----
+
+$script:HistoryPendingPath = Join-Path $env:TEMP 'loopsegments-quest-history-pending.json'
+
+function Read-QuestHistoryPending {
+    if (-not (Test-Path -LiteralPath $script:HistoryPendingPath)) { return $null }
+    try { return (Get-Content -LiteralPath $script:HistoryPendingPath -Raw | ConvertFrom-Json) } catch { return $null }
+}
+
+function Write-QuestHistoryPending {
+    param($Pending)
+    $tmp = "$($script:HistoryPendingPath).tmp"
+    Set-Content -LiteralPath $tmp -Value ($Pending | ConvertTo-Json -Depth 4) -Encoding utf8
+    Move-Item -LiteralPath $tmp -Destination $script:HistoryPendingPath -Force
+}
+
+function Test-QuestHistoryHelperAlive {
+    param([int] $HelperPid)
+    if ($HelperPid -le 0) { return $false }
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId = $HelperPid" -ErrorAction SilentlyContinue
+    return [bool]($p -and ([string]$p.CommandLine) -match '-RetryHistory')
+}
+
+# A PC companion (Run-PCloudWebCompanion / run_chromium) started after -Since is running. The
+# helper starts while the quitting companion still waits for its cleanup, so older ones do not count.
+function Test-QuestCompanionRunning {
+    param([DateTime] $Since)
+    return [bool](Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { ([string]$_.CommandLine) -match 'Run-PCloudWebCompanion\.ps1|run_chromium\.ps1' -and $_.CreationDate -and $_.CreationDate.ToUniversalTime() -gt $Since } |
+        Select-Object -First 1)
+}
+
+# Worn = mounted and not idle. Quest Browser only answers (history list, clear dialog, new tabs)
+# while the headset is in use; a headset lying still is idle even when kept awake by prox_close.
+function Test-QuestHeadsetWorn {
+    param([string] $DeviceSerial)
+    $r = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'vrpowermanager')
+    if ($r.Code -ne 0) { return $false }
+    $o = [string]$r.Out
+    return ($o -match '(?m)^\s*State:\s*HEADSET_MOUNTED\b') -and ($o -match '(?m)^\s*Device idle state:\s*Not idle\b')
+}
+
+# Save what is left to do and make sure one helper is running for it. -Proximity: the quit could
+# not reach the headset, so the sensor override may still be on. Returns $true when handed over.
+function Start-QuestHistoryRetry {
+    param([string[]] $Origins, [switch] $CloseTabs, [switch] $Proximity)
+    $mins = 120
+    if ($script:Cfg -and $script:Cfg.Contains('questHistoryRetryMinutes')) { $mins = [int]$script:Cfg.questHistoryRetryMinutes }
+    if ($mins -le 0) { return $false }
+    $Origins = @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/') })
+    if ($Origins.Count -eq 0) { return $false }
+    $prev = Read-QuestHistoryPending
+    $all = @(@($Origins) + @($(if ($prev) { @($prev.origins) } else { @() })) | Where-Object { $_ } | Select-Object -Unique)
+    $helperPid = if ($prev -and (Test-QuestHistoryHelperAlive -HelperPid ([int]$prev.pid))) { [int]$prev.pid } else { 0 }
+    $until = [DateTime]::UtcNow.AddMinutes($mins)
+    $pending = [ordered]@{
+        origins   = $all
+        url       = $Url
+        closeTabs = [bool]($CloseTabs -or ($prev -and $prev.closeTabs))
+        proximity = [bool]($Proximity -or ($prev -and $prev.proximity))
+        until     = $until.ToString('o')
+        queuedAt  = [DateTime]::UtcNow.ToString('o')
+        pid       = $helperPid
+    }
+    Write-QuestHistoryPending $pending
+    if ($helperPid -eq 0) {
+        # Detached (WMI-created, so not part of the companion's process tree), no window.
+        $pwsh = (Get-Process -Id $PID).Path
+        $cmd = ('"{0}" -NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "{1}" -Url "{2}" -RetryHistory' -f $pwsh, $PSCommandPath, ($Url -replace '"', ''))
+        try {
+            $si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+            $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $si }
+            if ([int]$r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }
+            $helperPid = [int]$r.ProcessId
+            $pending.pid = $helperPid
+            Write-QuestHistoryPending $pending
+        } catch {
+            Write-QuestLog "History: could not start the retry helper - $($_.Exception.Message)"
+            Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+    }
+    Write-QuestLog ("History: postponed - deleted when the headset is next worn (helper PID {0}, until {1:HH:mm})." -f $helperPid, $until.ToLocalTime())
+    return $true
+}
+
+function Invoke-QuestHistoryRetry {
+    $script:AdbRediscoverEveryMin = 20
+    $p = Read-QuestHistoryPending
+    if (-not $p) { Write-QuestLog 'History retry: nothing pending - stop.'; return 0 }
+    $until = [DateTime]::Parse([string]$p.until, $null, [Globalization.DateTimeStyles]::RoundtripKind)
+    Write-QuestLog ("History retry: waiting for the headset to be worn (until {0:HH:mm}; {1})." -f $until.ToLocalTime(), (@($p.origins) -join ', '))
+    $proxDone = -not [bool]$p.proximity
+    $shownWorn = $false
+    while ($true) {
+        $p = Read-QuestHistoryPending
+        if (-not $p) { Write-QuestLog 'History retry: no longer pending - stop.'; return 0 }
+        $owner = [int]$p.pid
+        if ($owner -ne $PID) {
+            if (Test-QuestHistoryHelperAlive -HelperPid $owner) { return 0 }
+            $p.pid = $PID
+            Write-QuestHistoryPending $p
+        }
+        $until = [DateTime]::Parse([string]$p.until, $null, [Globalization.DateTimeStyles]::RoundtripKind)
+        if ([DateTime]::UtcNow -gt $until) {
+            Write-QuestLog 'History retry: the headset was not worn in time - gave up (the next companion quit deletes those entries).'
+            Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+            return 1
+        }
+        if (Test-QuestCompanionRunning -Since $script:StartedAt) {
+            Write-QuestLog 'History retry: the companion started again - stop (its quit deletes those entries).'
+            Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+            return 0
+        }
+        $dev = Get-OnlineQuestSerial
+        if (-not $dev) { $dev = Connect-Quest }
+        if ($dev) {
+            if (-not $proxDone) {
+                # The quit could not reach the headset: put the sensor back to normal now.
+                $proxDone = ((Invoke-QuestEnableProximity) -eq 0)
+                if ($proxDone) { $p.proximity = $false; Write-QuestHistoryPending $p }
+            }
+            if (Test-QuestHeadsetWorn -DeviceSerial $dev) {
+                if (-not $shownWorn) { Write-QuestLog 'History retry: headset worn - deleting.'; $shownWorn = $true }
+                # Let the browser catch up after the headset is put on.
+                Start-Sleep -Seconds 3
+                $res = 'failed'
+                if (Open-QuestDevTools -DeviceSerial $dev) {
+                    try {
+                        $origins = @($p.origins)
+                        if ($p.closeTabs) {
+                            $lan = @(Get-QuestLanTabs -Origins $origins)
+                            foreach ($t in $lan) { Close-QuestTab -Id $t.id }
+                            if ($lan.Count) { Write-QuestLog "History retry: closed $($lan.Count) Quest Browser tab(s) on the phone LAN page / control page." }
+                        }
+                        # No range fallback here: by now it would delete your new browsing too.
+                        $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -Origins $origins -BudgetSec 25 -FallbackRange ''
+                    } finally { Close-QuestDevTools }
+                }
+                if ($res -eq 'cleared') {
+                    Write-QuestLog 'History retry: done.'
+                    Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+                    return 0
+                }
+                Write-QuestLog 'History retry: not done yet - trying again while the headset is worn.'
+            } else {
+                $shownWorn = $false
+            }
+        }
+        # Same pace as the Open on Quest queue: the delete starts within ~5 s of the headset being put on.
+        Start-Sleep -Seconds 5
+    }
+}
+
 $script:Adb = Find-QuestAdbExe
 if (-not $script:Adb) {
     Write-QuestLog 'adb not found (winget install Google.PlatformTools, or set questAdbExe) - Quest LAN tab disabled.'
@@ -853,12 +1029,18 @@ if ([string]::IsNullOrWhiteSpace($Url)) {
     Write-QuestLog '-Url is required (unless -ProbeIncognito).'
     exit 2
 }
+if ($RetryHistory) { exit (Invoke-QuestHistoryRetry) }
 if ($EnsureFlags -or $ClearHistory) {
     # Headset only needs to be on adb (awake or not); never waits.
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
     if (-not $dev) {
         Write-QuestLog ("{0}: headset not reachable over adb - skipped." -f $(if ($ClearHistory) { 'History' } else { 'Flags' }))
+        if ($ClearHistory -and -not $SkipHistoryClear) {
+            # Close the tabs, delete the entries and reset the sensor once the headset is back.
+            $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigin -DeviceSerial '') | Where-Object { $_ } | Select-Object -Unique)
+            [void](Start-QuestHistoryRetry -Origins $origins -CloseTabs:$CloseLanTabs -Proximity:$EnableProximityAfter)
+        }
         exit 1
     }
     if ($ClearHistory) {
@@ -892,6 +1074,9 @@ if ($EnsureFlags -or $ClearHistory) {
                             else { Write-QuestLog "History: questClearHistoryFallback '$fbRaw' unknown - using 'day'." }
                         }
                         $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -Origins $origins -BudgetSec $budget -FallbackRange $fbRange
+                        # Usually nobody is wearing the headset at quit, and then Quest Browser does not
+                        # answer: hand the delete to the after-quit helper.
+                        if ($res -eq 'failed' -and (Start-QuestHistoryRetry -Origins $origins)) { $res = 'postponed' }
                         Write-QuestLog ("History step: {0} ({1:0.0} s)." -f $res, ([DateTime]::UtcNow - $t0).TotalSeconds)
                     }
                 } finally { Close-QuestDevTools }
@@ -916,6 +1101,7 @@ if ($EnsureFlags -or $ClearHistory) {
         Write-QuestLog ("Cleanup: finished {0:0.0} s after start (history {1}, SKYBOX {2}, proximity {3})." -f (& $since), $res, $sky, $prox)
         $historyBad = ($res -eq 'failed') -or (($res -eq 'skipped') -and (-not $SkipHistoryClear))
         if ($historyBad -or ($prox -eq 'failed') -or ($sky -eq 'failed')) { exit 3 }
+        if ($res -eq 'postponed') { exit 4 }
         exit 0
     }
     $res = Invoke-QuestFlagSync -DeviceSerial $dev

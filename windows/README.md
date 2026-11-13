@@ -247,6 +247,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `questSendLanLogin` | `true` (default) = the tab is signed in with the LAN login (login URL, then reloaded plain) |
 | `questEnsureInsecureOriginFlag` | `true` (default) = companion startup / Open on Quest keep Quest's `unsafely-treat-insecure-origin-as-secure` flag on the phone origin(s); restarts Quest Browser when it changes the flag |
 | `questClearHistoryOnExit` | `true` (default) = companion close deletes the Quest Browser history entries on the phone LAN page and the Quest control page (other history is kept) |
+| `questHistoryRetryMinutes` | `120` (default) = if that delete fails at quit (nobody wearing the headset, so Quest Browser does not answer; or headset not on adb), a background helper does it once the headset is worn, for up to 2 h; it stops when the companion starts again. `0` = off: [quest/README.md](quest/README.md#after-quit-history-helper) |
 | `questClearHistoryFallback` | `"day"` (default) = if that selective delete fails, clear **all** Quest Browser history from the last 24 hours instead; also `hour`, `week`, `fourweeks`, `all`, or `none` |
 | `questCloseLanTabsOnExit` | `true` (default) = companion close first closes Quest Browser tabs on the phone LAN page |
 | `questKeepAwakeDuringSession` | `true` (default) = while the companion runs, the Quest proximity sensor is held off (`prox_close`) so the headset stays awake on adb; cleanup deletes the Loop Segments history entries first, then turns the sensor back on |

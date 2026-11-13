@@ -143,7 +143,7 @@ Each launch:
 }
 ```
 
-The phone's LAN pages (`/`, `/browse`) ask for the WebDAV login. The extension answers that prompt itself with `webdavUser` / `webdavPassword` above, only for the configured phone and port 8765, so the LAN tab opens without a dialog. If the password is wrong, the normal browser prompt appears instead. The launcher copies the password from `windows/loop-segments-windows.json`; there is no built-in default.
+The phone's LAN pages (`/`, `/browse`) ask for the WebDAV login. The extension answers that prompt itself with `webdavUser` / `webdavPassword` above, only for the configured phone and port 8765, so the LAN tab opens without a dialog. If the password is wrong, the normal browser prompt appears instead. At startup the LAN tab is opened from Chromium's command line, and its first request can reach the phone before the extension's background worker is listening; Chromium then shows its own sign-in popup (and what is typed there only lasts that run). Chromium shows the 401 page under that popup, so the tab looks loaded. Since Chromium has no cached login at browser start, a phone tab whose login the extension has not answered is one behind the popup: at 0, 3 and 8 s after the worker starts (once per browser start) it re-opens such a tab, which drops the popup and lets the extension answer. `rest.log` gets a `lan_login_check` line per pass (`557902428:complete:not-answered`, then `signed-in`) and `lan_login_retry` for each re-open. The launcher copies the password from `windows/loop-segments-windows.json`; there is no built-in default.
 
 `webCompanionMediaListFile` is optional — default is `{SyncDrive}\p_cld_media\web_compann_plst\media_files.txt` from registry. Env `WEB_COMPANION_MEDIA_LIST` overrides both.
 
