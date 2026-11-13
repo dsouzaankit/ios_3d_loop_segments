@@ -24,9 +24,12 @@
                    -StatusFile gets 'queued' / 'opening' so the companion sink can report it.
   -EnsureFlags   : only step 1 (companion runs it hidden at startup).
   -ClearHistory  : (-CloseLanTabs first closes every tab on a phone LAN origin; -SkipHistoryClear
-                   then stops there) clear Quest Browser history - History only, All time - through the browser's
-                   own "Clear browsing data" dialog (cookies, cache, passwords, forms, settings are
-                   kept; the dialog's previous ticks are restored). Companion runs it on close.
+                   then stops there) delete the Quest Browser history entries on the phone LAN
+                   origins and the Quest control page (through the browser's own History list);
+                   other history, cookies, cache, passwords, forms, settings are kept. If that
+                   fails, clears ALL history from the questClearHistoryFallback range (default
+                   last 24 hours, history only) through the Clear browsing data dialog. Companion
+                   runs it on close.
   -EnableProximity : turn the proximity sensor back on (undoes a `prox_close` override, so the
                    headset sleeps again when taken off). Companion runs it on close. Needs no -Url.
   -DisableProximity : hold the proximity sensor off (`prox_close`; headset stays awake when taken
@@ -816,10 +819,12 @@ if ($EnsureFlags -or $ClearHistory) {
         if ($CloseLanTabs -or -not $SkipHistoryClear) {
             if (Open-QuestDevTools -DeviceSerial $dev) {
                 try {
+                    # Phone LAN page origins, plus the Quest control page on this PC: the tabs to close
+                    # and the only history entries deleted.
+                    $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigin -DeviceSerial $dev) | Where-Object { $_ } | Select-Object -Unique)
                     if ($CloseLanTabs) {
                         $t0 = [DateTime]::UtcNow
                         # Phone LAN page tabs, plus the Quest control page on this PC.
-                        $origins = @(Get-QuestLanOrigins) + @(Get-QuestControlOrigin -DeviceSerial $dev)
                         $lan = @(Get-QuestLanTabs -Origins $origins)
                         foreach ($t in $lan) { Close-QuestTab -Id $t.id }
                         Write-QuestLog ("Tabs: closed {0} Quest Browser tab(s) on the phone LAN page / control page ({1:0.0} s)." -f $lan.Count, ([DateTime]::UtcNow - $t0).TotalSeconds)
@@ -827,7 +832,15 @@ if ($EnsureFlags -or $ClearHistory) {
                     if (-not $SkipHistoryClear) {
                         $t0 = [DateTime]::UtcNow
                         $budget = 28 - (& $since)
-                        $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -BudgetSec $budget
+                        # questClearHistoryFallback: dialog range cleared if the selective delete fails.
+                        $fbRange = 'day'
+                        if ($script:Cfg -and $script:Cfg.Contains('questClearHistoryFallback')) {
+                            $fbRaw = ([string]$script:Cfg.questClearHistoryFallback).Trim().ToLowerInvariant()
+                            if (@('', 'none', 'off', 'false') -contains $fbRaw) { $fbRange = '' }
+                            elseif (@('hour', 'day', 'week', 'fourweeks', 'all') -contains $fbRaw) { $fbRange = $fbRaw }
+                            else { Write-QuestLog "History: questClearHistoryFallback '$fbRaw' unknown - using 'day'." }
+                        }
+                        $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -Origins $origins -BudgetSec $budget -FallbackRange $fbRange
                         Write-QuestLog ("History step: {0} ({1:0.0} s)." -f $res, ([DateTime]::UtcNow - $t0).TotalSeconds)
                     }
                 } finally { Close-QuestDevTools }

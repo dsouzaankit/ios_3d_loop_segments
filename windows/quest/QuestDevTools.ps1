@@ -288,7 +288,87 @@ function Sync-QuestInsecureOriginFlag {
     }
 }
 
-# ---- Clear browsing history (History only, All time) through the browser's own dialog ----
+# ---- Delete this app's history entries (phone LAN page, control page) through the browser's own History list ----
+
+# The History modal (chrome://panel-app-nav) asks the browser for entries with its
+# requestMoreHistory (webui_action_query_history -> store.history.items: {url, host, date, ...})
+# and each row's remove button runs handleDelete (webui_action_delete_history). Both are called
+# here with only this app's origins; every other entry is left alone. Re-queried at the end: any
+# matching entry left = failed.
+$script:QuestDeleteHistoryJs = @'
+(async () => {
+  const ORIGINS = __ORIGINS__;
+  const WAIT_MS = __WAIT_MS__;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const t0 = Date.now();
+  const left = () => WAIT_MS - (Date.now() - t0);
+  const roots = () => { const r = []; if (!document.body) return r; for (const el of [document.body, ...document.body.children]) { const k = Object.keys(el).find(k => k.startsWith("__reactContainer") || k.startsWith("__reactFiber")); if (k) r.push(el[k]); } return r; };
+  const walk = cb => { for (const root of roots()) { let st = [root], n = 0; while (st.length && n++ < 60000) { const f = st.pop(); if (!f) continue; if (cb(f) === false) return; if (f.child) st.push(f.child); if (f.sibling) st.push(f.sibling); } } };
+  const findStore = () => { let s = null; walk(f => { const p = f.memoizedProps; if (p && p.store && p.store.getState) { s = p.store; return false; } }); return s; };
+  // A mounted component instance that has method m (the History modal, one of its rows).
+  const findInst = m => { let i = null; walk(f => { const sn = f.stateNode; if (sn && typeof sn[m] === "function" && sn.props) { i = sn; return false; } }); return i; };
+  // Right after the browser comes to the front its UI page may still be loading (no body yet).
+  let store = findStore();
+  while (!store && left() > 0) { await sleep(200); store = findStore(); }
+  if (!store) return JSON.stringify({ ok: false, error: "browser UI store not found" });
+  const H = () => store.getState().history;
+  const originOf = u => { try { return new URL(u).origin.toLowerCase(); } catch (e) { return ""; } };
+  const want = new Set(ORIGINS.map(originOf).filter(o => o && o !== "null"));
+  if (!want.size) return JSON.stringify({ ok: false, error: "no origins" });
+  const isOurs = it => want.has(originOf(it.url));
+  const opened = store.getState().modal.modalId !== "history";
+  if (opened) store.dispatch({ type: "modal/showModal", payload: "history" });
+  const finish = r => { if (opened && store.getState().modal.modalId === "history") store.dispatch({ type: "modal/hideModal", payload: "history" }); return JSON.stringify(r); };
+  let modal = findInst("requestMoreHistory");
+  while (!modal && left() > 0) { await sleep(200); modal = findInst("requestMoreHistory"); }
+  if (!modal) return finish({ ok: false, error: "History list not found" });
+  const query = async max => {
+    const before = H().items;
+    modal.requestMoreHistory.call({ props: { lastQuery: "" } }, max);
+    const q0 = Date.now();
+    while (H().items === before && Date.now() - q0 < 4000 && left() > 0) await sleep(150);
+    await sleep(150);
+    return H().items !== before;
+  };
+  // Whole history: maxResults grows until the browser says it reached the beginning.
+  let max = 500, answered = false;
+  for (let i = 0; i < 6 && left() > 0; i++) {
+    answered = (await query(max)) || answered;
+    if (H().queryReachedBeginning || H().items.length < max) break;
+    max *= 4;
+  }
+  if (!answered) return finish({ ok: false, error: "history query never answered" });
+  const total = H().items.length;
+  let ours = H().items.filter(isOurs);
+  const found = ours.length;
+  if (!found) return finish({ ok: true, found: 0, total, kept: total });
+  let row = findInst("handleDelete");
+  const r0 = Date.now();
+  while (!row && Date.now() - r0 < 3000 && left() > 0) { await sleep(200); row = findInst("handleDelete"); }
+  if (!row) return finish({ ok: false, error: "History row not found" });
+  const del = Object.getPrototypeOf(row).handleDelete;
+  let calls = 0, rounds = 0;
+  while (ours.length && rounds++ < 20 && left() > 1500) {
+    for (const item of ours) {
+      if (left() <= 500) break;
+      const before = H().items;
+      del.call({ props: { data: item, lastQuery: "", maxResults: max } });
+      calls++;
+      const d0 = Date.now();
+      while (H().items === before && Date.now() - d0 < 3000 && left() > 0) await sleep(100);
+    }
+    await query(max);
+    ours = H().items.filter(isOurs);
+  }
+  const kept = H().items.length - ours.length;
+  if (ours.length) return finish({ ok: false, error: ours.length + " matching entries left (time ran out?)", found, total, kept });
+  return finish({ ok: true, found, calls, total, kept });
+})()
+'@
+
+# ---- Fallback: clear browsing history (History only) for a fixed range through the browser's own dialog ----
+# Used only when the match-only delete above fails; __TIME_ID__ is a dialog range id (hour, day,
+# week, fourweeks, all). Cookies, cache, passwords, forms and settings are never ticked.
 
 $script:QuestClearHistoryJs = @'
 (async () => {
@@ -310,8 +390,8 @@ $script:QuestClearHistoryJs = @'
   // One wait for both: the store wait above and this one share __OPTIONS_WAIT_MS__ from t0.
   while (!(st().subtitles || []).length && Date.now() - t0 < __OPTIONS_WAIT_MS__) await sleep(200);
   const subs = st().subtitles || [];
-  const allIdx = subs.findIndex(s => s.id === "all");
-  if (allIdx < 0) { close(); return JSON.stringify({ ok: false, error: subs.length ? ("no 'all time' option (" + subs.map(s => s.id).join(",") + ")") : "dialog time options never arrived" }); }
+  const allIdx = subs.findIndex(s => s.id === __TIME_ID__);
+  if (allIdx < 0) { close(); return JSON.stringify({ ok: false, error: subs.length ? ("no " + __TIME_ID__ + " option (" + subs.map(s => s.id).join(",") + ")") : "dialog time options never arrived" }); }
   const before = subs[allIdx].historyCount;
   // History only: never cookies, cache, passwords, forms or settings.
   for (const id of Object.keys(st().clearItems)) store.dispatch({ type: "clearData/setItemSelected", payload: { id, selected: id === "history" } });
@@ -338,22 +418,28 @@ function Get-QuestFrontActivity {
     return ''
 }
 
-# True only for the browser's 2D window (BrowserActivity), where the clear-data dialog lives.
+# True only for the browser's 2D window (BrowserActivity), where the History list lives.
 # Immersive WebXR/video (WebVRActivity, VideoImmersiveActivity, ...) is the same package but a
-# separate task: while it is in front the 2D window is hidden and the dialog never fills in.
+# separate task: while it is in front the 2D window is hidden and the list may never fill in.
 function Test-QuestBrowserInFront {
     param([string] $DeviceSerial)
     return ((Get-QuestFrontActivity -DeviceSerial $DeviceSerial) -like "$BrowserPackage/*.BrowserActivity")
 }
 
-# Returns 'cleared' or 'failed'. Everything fits in -BudgetSec (one deadline, not per-step
-# limits). The dialog only answers while Quest Browser is the front app, so the browser is brought
-# to the front (and started, if it was closed) first. A cold start rarely fits a short budget.
+# Deletes the history entries on -Origins (http://host:port) and keeps every other one.
+# Returns 'cleared' (none of ours left), 'fallback' (that failed, so all history from
+# -FallbackRange was cleared instead) or 'failed'. -FallbackRange '' = no fallback. Everything
+# fits in -BudgetSec (one deadline, not per-step limits; the fallback keeps 10 s of it). The
+# History list only fills in while Quest Browser is the front app, so the browser is brought to
+# the front (and started, if it was closed) first. A cold start rarely fits a short budget.
 function Clear-QuestBrowserHistory {
-    param([string] $DeviceSerial, [string] $HelperUrl, [double] $BudgetSec = 25)
+    param([string] $DeviceSerial, [string] $HelperUrl, [string[]] $Origins, [double] $BudgetSec = 25,
+        [ValidateSet('', 'hour', 'day', 'week', 'fourweeks', 'all')] [string] $FallbackRange = 'day')
     $deadline = [DateTime]::UtcNow.AddSeconds($BudgetSec)
     $left = { [Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalSeconds) }
-    # Keep this much for running the clear in the dialog itself.
+    $Origins = @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/') } | Select-Object -Unique)
+    if ($Origins.Count -eq 0) { Write-QuestLog 'History: no Loop Segments origins to delete - skipped.'; return 'failed' }
+    # Keep this much for the delete itself.
     $reserve = 6
     $was = Get-QuestFrontActivity -DeviceSerial $DeviceSerial
     if ($was -notlike "$BrowserPackage/*.BrowserActivity") {
@@ -383,17 +469,46 @@ function Clear-QuestBrowserHistory {
         Write-QuestLog ("History: Quest Browser UI not ready within the {0:0} s budget (cold start?) - not cleared." -f $BudgetSec)
         return 'failed'
     }
+    # Leave time for the fallback range clear when there is one.
+    $fallbackSec = if ($FallbackRange) { 10 } else { 0 }
     try {
-        $evalSec = [Math]::Max(3, (& $left))
-        # Options wait inside the dialog: what is left, minus time to tick boxes, click and restore.
-        $optionsMs = [int][Math]::Max(1000, [Math]::Min(15000, ($evalSec - 3) * 1000))
-        $js = $script:QuestClearHistoryJs.Replace('__OPTIONS_WAIT_MS__', "$optionsMs")
-        $r = Invoke-QuestEval -Tab $ui -Expression $js -TimeoutSec ([int][Math]::Ceiling($evalSec)) | ConvertFrom-Json
-        if ($r.ok) { Write-QuestLog 'History: cleared Quest Browser history (all time, history only).'; return 'cleared' }
-        Write-QuestLog "History: not cleared - $($r.error)"
-        return 'failed'
+        $evalSec = [Math]::Max(3, (& $left) - $fallbackSec)
+        # The page script's own deadline: its share of what is left, minus a little for the reply.
+        $waitMs = [int][Math]::Max(2000, ($evalSec - 1.5) * 1000)
+        $js = $script:QuestDeleteHistoryJs.Replace('__ORIGINS__', (ConvertTo-Json -InputObject @($Origins) -Compress)).Replace('__WAIT_MS__', "$waitMs")
+        $r = Invoke-QuestEval -Tab $ui -Expression $js -TimeoutSec ([int][Math]::Ceiling($evalSec) + 2) | ConvertFrom-Json
+        $on = $Origins -join ', '
+        if ($r.ok) {
+            if ([int]$r.found -eq 0) { Write-QuestLog ("History: no entries on {0} (kept {1})." -f $on, $r.kept) }
+            else { Write-QuestLog ("History: deleted {0} entr{1} on {2}; kept the other {3}." -f $r.found, $(if ([int]$r.found -eq 1) { 'y' } else { 'ies' }), $on, $r.kept) }
+            return 'cleared'
+        }
+        Write-QuestLog "History: selective delete failed - $($r.error)"
     } catch {
-        Write-QuestLog "History: not cleared - $($_.Exception.Message)"
-        return 'failed'
+        Write-QuestLog "History: selective delete failed - $($_.Exception.Message)"
     }
+    if (-not $FallbackRange) { return 'failed' }
+    $ui = Get-QuestBrowserUi
+    if (-not $ui) { Write-QuestLog 'History: fallback skipped - Quest Browser UI gone.'; return 'failed' }
+    $fb = Clear-QuestBrowserHistoryRange -Ui $ui -Range $FallbackRange -BudgetSec ([Math]::Max(3, (& $left)))
+    return $(if ($fb) { 'fallback' } else { 'failed' })
+}
+
+# Fallback: clear ALL history (History only) for one of the dialog's fixed ranges (hour, day,
+# week, fourweeks, all) through Quest Browser's Clear browsing data dialog; the dialog's previous
+# ticks and range are put back. Returns $true when cleared.
+function Clear-QuestBrowserHistoryRange {
+    param($Ui, [ValidateSet('hour', 'day', 'week', 'fourweeks', 'all')] [string] $Range, [double] $BudgetSec = 10)
+    $label = @{ hour = 'last hour'; day = 'last 24 hours'; week = 'last 7 days'; fourweeks = 'last 4 weeks'; all = 'all time' }[$Range]
+    try {
+        $evalSec = [Math]::Max(3, $BudgetSec)
+        $optionsMs = [int][Math]::Max(1000, [Math]::Min(15000, ($evalSec - 3) * 1000))
+        $js = $script:QuestClearHistoryJs.Replace('__OPTIONS_WAIT_MS__', "$optionsMs").Replace('__TIME_ID__', (ConvertTo-Json -InputObject $Range -Compress))
+        $r = Invoke-QuestEval -Tab $Ui -Expression $js -TimeoutSec ([int][Math]::Ceiling($evalSec) + 2) | ConvertFrom-Json
+        if ($r.ok) { Write-QuestLog "History: fallback cleared ALL Quest Browser history from the $label (history only)."; return $true }
+        Write-QuestLog "History: fallback ($label) not cleared - $($r.error)"
+    } catch {
+        Write-QuestLog "History: fallback ($label) not cleared - $($_.Exception.Message)"
+    }
+    return $false
 }

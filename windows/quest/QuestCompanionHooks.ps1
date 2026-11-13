@@ -90,7 +90,7 @@ function Start-QuestCleanupOnExit {
     if (-not (Test-Path -LiteralPath $script:QuestWatchScript)) { return }
     $what = @()
     if ($close) { $what += 'close LAN tabs' }
-    if ($clear) { $what += 'clear history' }
+    if ($clear) { $what += 'delete Loop Segments history' }
     if ($sky) { $what += 'remove SKYBOX WebDAV server' }
     if ($prox) { $what += 'proximity sensor on' }
     if ([string]::IsNullOrWhiteSpace($LanUrl)) {

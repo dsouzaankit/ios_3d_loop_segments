@@ -8,7 +8,7 @@ The PC companion drives **Quest Browser** over **adb over Wi-Fi** and the browse
 | Companion **startup** | Hidden, in the background: make sure the insecure-origin flag lists the phone LAN origin(s) | `questEnsureInsecureOriginFlag` |
 | Companion **startup**, until close | Keep the headset **awake**: proximity sensor held off once the headset is on adb | `questKeepAwakeDuringSession` |
 | Companion **startup**, until close | Serve the **Quest control page** on this PC's LAN address, signed in: **SKYBOX Push / Update / Clear** buttons and **Measure LAN** (PC ↔ phone bandwidth) | `questControlPage`, `questControlPort`, `questSkyboxWebDav` |
-| Companion **close** (normal finish and the console-X watchdog) | Stop the control page, close Quest Browser **tabs on the phone LAN page and the control page**, clear **history** (History only, All time), **remove the Loop Segments entries from SKYBOX** (phone WebDAV servers and the rclone DLNA entry), then turn the **proximity sensor back on** | `questCloseLanTabsOnExit`, `questClearHistoryOnExit`, `questSkyboxWebDav`, `questKeepAwakeDuringSession` |
+| Companion **close** (normal finish and the console-X watchdog) | Stop the control page, close Quest Browser **tabs on the phone LAN page and the control page**, delete the **history entries on those two** (other history is kept), **remove the Loop Segments entries from SKYBOX** (phone WebDAV servers and the rclone DLNA entry), then turn the **proximity sensor back on** | `questCloseLanTabsOnExit`, `questClearHistoryOnExit`, `questSkyboxWebDav`, `questKeepAwakeDuringSession` |
 
 Startup and close steps are skipped (and logged) when the headset is not on adb. **Open on Quest** waits instead (below).
 
@@ -30,11 +30,11 @@ Quest WebXR over LAN `http://` needs `chrome://flags/#unsafely-treat-insecure-or
 
 ## Keep the headset awake during the session
 
-A history clear at quit only works if the headset is on adb, and an asleep Quest usually is not. So while the companion runs, a hidden job holds the **proximity sensor off** (`am broadcast -a com.oculus.vrpowermanager.prox_close`: the headset acts as if worn and does not sleep when you take it off). It checks about every 20 s and applies the override as soon as the headset shows up on adb, and again after a headset reboot (a reboot clears it).
+Deleting the Loop Segments history at quit only works if the headset is on adb, and an asleep Quest usually is not. So while the companion runs, a hidden job holds the **proximity sensor off** (`am broadcast -a com.oculus.vrpowermanager.prox_close`: the headset acts as if worn and does not sleep when you take it off). It checks about every 20 s and applies the override as soon as the headset shows up on adb, and again after a headset reboot (a reboot clears it).
 
 **Why it keeps checking:** one `prox_close` at startup would not last the session. The headset is often asleep or off adb when the companion starts, a reboot (also an OS update) clears the override, and anything else can turn the sensor back on (`Set-QuestProximitySensor.ps1 -State On`); adb has no event for "headset connected" or "sensor changed", so the job asks. A check is cheap: with the headset on adb it is `adb devices -l` plus one `dumpsys vrpowermanager`, and nothing is sent while the state is already `CLOSE`; with the headset away it also tries mDNS and `adb connect`, with short timeouts. The 20 s is how long the sensor can stay live after the headset shows up or reboots: taken off in that window, it can fall asleep before the job catches it. The flip side: a manual **On** while the companion runs is undone within ~20 s.
 
-Cleanup, on a normal quit and on console X (the watchdog), stops that job and starts **one background process** that closes the LAN tabs, **clears history** (the headset is still awake), then **turns the sensor back on**. The companion closes Chromium and syncs the profile meanwhile, and waits for that process (at most 40 s from its start) before the Wi-Fi probe / router restart, which would drop the Quest's adb. Each step logs its duration (`Tabs: ... (0.4 s)`, `History step: ...`, `Proximity step: ...`, `Cleanup: finished ... s after start`). The sensor is turned back on even if the history clear failed (`am broadcast -a com.oculus.vrpowermanager.automation_disable`, checked against `dumpsys vrpowermanager`: `Virtual proximity state: DISABLED`).
+Cleanup, on a normal quit and on console X (the watchdog), stops that job and starts **one background process** that closes the LAN tabs, **deletes the Loop Segments history entries** (the headset is still awake), then **turns the sensor back on**. The companion closes Chromium and syncs the profile meanwhile, and waits for that process (at most 40 s from its start) before the Wi-Fi probe / router restart, which would drop the Quest's adb. Each step logs its duration (`Tabs: ... (0.4 s)`, `History step: ...`, `Proximity step: ...`, `Cleanup: finished ... s after start`). The sensor is turned back on even if the history clear failed (`am broadcast -a com.oculus.vrpowermanager.automation_disable`, checked against `dumpsys vrpowermanager`: `Virtual proximity state: DISABLED`).
 
 Things this does not cover: pressing the power button or a flat battery still sleeps the headset. If the PC crashes or both companion processes are killed, nothing turns the sensor back on: run `-EnableProximity` (or `Set-QuestProximitySensor.ps1`, below), or reboot the headset. While the override is on, the display stays lit when the headset is off your head (battery, and keep the lenses out of direct sunlight). `"questKeepAwakeDuringSession": false` turns both halves off.
 
@@ -44,13 +44,32 @@ Things this does not cover: pressing the power button or a flat battery still sl
 
 Before the history clear, every Quest Browser tab whose address is a phone LAN origin (the LAN page, `/xr`, ...) or the Quest control page on this PC is closed over DevTools; other tabs stay. `"questCloseLanTabsOnExit": false` keeps them open.
 
-## Clear history on companion close
+## Delete Loop Segments history on companion close
 
-Uses the browser's own **Clear browsing data** dialog: ticks **History only**, picks **All time**, presses **Clear data**, then puts the dialog's previous ticks and time range back. **Cookies, cache, saved passwords, form data and site settings are kept.** This deletes your **whole** Quest Browser history, not only Loop Segments pages. Quest Browser's 2D window is brought to the front first (the dialog only answers then), and the browser is started if it was closed. This also takes the headset out of an immersive `/xr` session: immersive WebXR runs in a separate task, and while it is in front the 2D window is hidden and the dialog's time options never fill in. The whole clear is limited to **30 s**: with the browser already running it takes a few seconds, but a cold start of Quest Browser usually takes longer, so if the browser was closed the clear is skipped and logged. Manual run: `-ClearHistory`. Set `"questClearHistoryOnExit": false` to keep history.
+Deletes **only this app's entries** from Quest Browser history: every entry whose origin is a phone LAN origin (`-Url`, `phoneLanHost`, `phoneLanHosts` with `lanPort`: the LAN page, `/xr`, its assets) or the Quest control page on this PC (`http://<PC address>:18766`). **The rest of your history is kept**, and so are cookies, cache, saved passwords, form data and site settings.
+
+How: Quest Browser's own **History** list (the panel behind *History* in the browser menu) is opened over DevTools. Its own code asks the browser for the whole history, and each matching entry is removed the way that entry's remove button does it. Matching is by origin (scheme, host and port), so every entry on those origins goes, whatever its path.
+
+Then the history is read again. A delete is a message to the browser with no reply, so this re-read is the only proof that none are left. If some are left, it deletes those and checks again. That covers:
+- a delete the browser dropped;
+- a very large history, where older matches appear only once newer ones are gone;
+- a page still loading that adds a visit.
+
+Normally one pass and one check is all it takes (1-2 s in tests). It stops after 20 rounds or when the time limit is nearly used up. If any matching entry is still left then, the selective delete has failed. The log says what happened, for example `History: deleted 2 entries on http://10.0.100.10:8765, http://10.0.100.244:18766; kept the other 2.`
+
+**Fallback: last 24 hours.** If the selective delete fails (History list not found, query not answered, entries left), the step clears **all** Quest Browser history from the **last 24 hours** instead, through the browser's own *Clear browsing data* dialog: **History only** is ticked, the range is picked, *Clear data* is pressed, then the dialog's previous ticks and range are put back. Cookies, cache, passwords, form data and site settings are never ticked. This does delete unrelated browsing from those 24 hours, and misses Loop Segments entries older than that. The log then says `History: selective delete failed - ...` followed by `History: fallback cleared ALL Quest Browser history from the last 24 hours (history only).`, and the step result is `fallback`. 10 s of the step's time limit is kept for it. `"questClearHistoryFallback"` picks the range: `hour`, `day` (default), `week`, `fourweeks`, `all`, or `none` for no fallback (the step is then just `failed`).
+
+The dialog is only the fallback because it only offers those fixed ranges. Any of them deletes unrelated browsing in that window, and a short range misses entries from a longer session.
+
+Only the current origins are matched. The PC address is worked out again at quit (see [Quest control page](#quest-control-page)). Entries from a phone address no longer in the config, or from an earlier PC address (for example after DHCP gave the PC a new IP), stay. Only the fallback catches those, and only from the last 24 hours, if it runs.
+
+Quest Browser's 2D window is brought to the front first (the list only fills in then), and the browser is started if it was closed. This also takes the headset out of an immersive `/xr` session: immersive WebXR runs in a separate task, and while it is in front the 2D window is hidden. The whole step is limited to **30 s**. With the browser already running it takes 1-3 s, but a cold start of Quest Browser usually takes longer, so if the browser was closed the step may run out of time; that is logged. Manual run: `-ClearHistory`. Set `"questClearHistoryOnExit": false` to keep these entries.
+
+This relies on Quest Browser's internal UI (its History list component and the `webui_action_query_history` / `webui_action_delete_history` messages). A Quest Browser update can change those; the selective delete then fails (for example `History list not found`) and the 24-hour fallback runs.
 
 ## Quest control page
 
-A small page the companion serves on **this PC's LAN address**, made for Quest Browser: [`Serve-QuestControlPage.ps1`](Serve-QuestControlPage.ps1), started hidden at companion startup and stopped at close (it also exits by itself once the companion is gone). Default port **18766** (`questControlPort`), for example `http://10.0.100.244:18766/`. **Open on Quest** opens it in its own normal tab, signed in the same way as the LAN page (login URL, then reloaded plain, back/forward list reset), then opens the LAN page so that one is in front; an already open control tab is reused. `"questControlPageOnQuest": false` leaves it out. From the PC it also opens in any browser at the same address.
+A small page the companion serves on **this PC's LAN address**, made for Quest Browser: [`Serve-QuestControlPage.ps1`](Serve-QuestControlPage.ps1), started hidden at companion startup and stopped at close (it also exits by itself once the companion is gone). Default port **18766** (`questControlPort`), for example `http://10.0.100.244:18766/`. The address is not a setting. Each time it is needed (Open on Quest, closing tabs and deleting history at quit), it is the PC's IPv4 address on the route to the headset: a UDP socket is "connected", without sending anything, to the headset's IP from its wireless adb serial (or `questAdbHost`; for a USB serial, the phone address from `-Url`), and the local address Windows picks is used. A new PC address is picked up on the next run. **Open on Quest** opens it in its own normal tab, signed in the same way as the LAN page (login URL, then reloaded plain, back/forward list reset), then opens the LAN page so that one is in front; an already open control tab is reused. `"questControlPageOnQuest": false` leaves it out. From the PC it also opens in any browser at the same address.
 
 It holds the SKYBOX buttons (the target address and login user, the servers this PC added, the last action's result, the recent `SKYBOX:` log lines) and the **LAN bandwidth** test (both below). It refreshes every 10 s, every 1.5 s while an action or a measurement runs. More Quest actions can be added to it later.
 
@@ -193,7 +212,7 @@ With the headset awake, from `windows\`:
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -Once           # open, signed in
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -Once -WaitMinutes 7   # wait for wake, like the button
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -EnsureFlags    # flag check only
-pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -ClearHistory   # history only, all time
+pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -ClearHistory   # only the LAN page / control page entries
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -EnableProximity                                 # proximity sensor back on
 pwsh -File quest\Set-QuestProximitySensor.ps1 -State Off                                       # sensor off (stays awake); no -State = toggle; waits for Enter
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -SkyboxPush         # Push button: put the phone in SKYBOX
@@ -215,7 +234,8 @@ Log: `%TEMP%\loopsegments-quest-lantab.log`.
 | `questIncognito` | `false` | `true` = private tab (no immersive WebXR there) instead of the normal tab |
 | `questSendLanLogin` | `true` | Sign the tab in with the LAN login (`false` = sign in on the headset) |
 | `questEnsureInsecureOriginFlag` | `true` | Startup and each Open on Quest: keep the insecure-origin flag on the phone origin(s); may restart Quest Browser |
-| `questClearHistoryOnExit` | `true` | Companion close: clear Quest Browser history (History only, All time) |
+| `questClearHistoryOnExit` | `true` | Companion close: delete the Quest Browser history entries on the phone LAN page and the control page (other history is kept) |
+| `questClearHistoryFallback` | `"day"` | If that selective delete fails: clear **all** history from this range instead (`hour`, `day`, `week`, `fourweeks`, `all`; `none` = no fallback) |
 | `questCloseLanTabsOnExit` | `true` | Companion close: close Quest Browser tabs on the phone LAN page (before the history clear) |
 | `questControlPage` | `true` | Companion session: serve the Quest control page on this PC's LAN address (signed in with the phone LAN login) |
 | `questControlPort` | `18766` | Its TCP port (Windows Firewall must allow it inbound on the Private network) |

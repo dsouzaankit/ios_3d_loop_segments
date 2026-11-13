@@ -56,8 +56,11 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questSendLanLogin       = $true
         # Companion startup: keep Quest Browser's insecure-origin chrome://flags entry on the phone LAN origin(s).
         questEnsureInsecureOriginFlag = $true
-        # Companion close: clear Quest Browser history (History only, All time).
+        # Companion close: delete the Quest Browser history entries on the phone LAN page and the control page.
         questClearHistoryOnExit = $true
+        # If that selective delete fails: clear ALL history from this dialog range instead
+        # (hour, day, week, fourweeks, all; "none" = no fallback).
+        questClearHistoryFallback = 'day'
         # Companion close: close Quest Browser tabs on the phone LAN page (before the history clear).
         questCloseLanTabsOnExit = $true
         # Companion session: hold the Quest proximity sensor off (headset stays awake and on adb), turn it back on at cleanup.
