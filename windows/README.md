@@ -242,6 +242,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `questAdbHost` / `questAdbPort` | Quest Wi‑Fi IP and adb port (default `5555`) for the LAN page **Open on Quest** button. Empty host = only an already-connected or mDNS-paired headset |
 | `questAdbSerial` | Optional: pick this adb serial when several Android devices are connected |
 | `questAdbExe` | **Empty** = `adb` on PATH / winget / Android SDK / MQDH |
+| `questAdbRediscoverSec` | `60` (default) = headset not found over mDNS for this long and no adb device connected: restart the PC's adb server once to rediscover it (at most every 5 min). `0` = off. A headset that switched to another Wi-Fi network cannot be found this way: [quest/README.md](quest/README.md#5-how-the-pc-finds-the-headset) |
 | `questIncognito` | `false` (default) = **Open on Quest** uses a normal tab (WebXR works); `true` = private tab (no immersive WebXR) |
 | `questSendLanLogin` | `true` (default) = the tab is signed in with the LAN login (login URL, then reloaded plain) |
 | `questEnsureInsecureOriginFlag` | `true` (default) = companion startup / Open on Quest keep Quest's `unsafely-treat-insecure-origin-as-secure` flag on the phone origin(s); restarts Quest Browser when it changes the flag |

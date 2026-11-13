@@ -200,7 +200,10 @@ The script tries, in order:
 
 1. a Quest already listed by `adb devices -l` (or `questAdbSerial`);
 2. `adb connect <questAdbHost>:<questAdbPort>` (default `5555`) when `questAdbHost` is set;
-3. `adb mdns services` → the wireless-debugging TLS port (random, e.g. `10.0.100.238:37275`).
+3. `adb mdns services` → the wireless-debugging TLS port (random, e.g. `10.0.100.238:37275`);
+4. if none of that has found the headset for **60 s** (`questAdbRediscoverSec`) and no adb device at all is connected: restart the PC's adb server (`adb kill-server`, `adb start-server`) and look over mDNS again. The adb server can stop hearing the headset's announcements after the headset sleeps and comes back on a new port; a restart makes it listen afresh. At most once every 5 min across all companion processes (`%TEMP%\loopsegments-adb-rediscover.txt`), logged as `adb: headset not seen over mDNS for 60 s - restarting the adb server`. `0` turns it off.
+
+**Headset on another Wi-Fi network.** mDNS does not cross routers, so the PC finds the headset only while it is on the same network (subnet) as the PC. If the headset has several Wi-Fi networks saved, it can switch to another one on its own (seen: from `10.0.100.x`, the PC's and phone's network, to a `192.168.2.x` router): the headset still answers ping at its new address, but `adb mdns services` stops listing it, `adb devices` shows the old serial as *offline*, and each switch gives wireless debugging a new port. Restarting the adb server does not help. Fix it on the headset: Wi-Fi settings → forget the other network, or turn off its auto-connect. Back on the PC's network, the companion finds it again within about 20 s.
 
 **Use wireless debugging (mDNS); leave `questAdbHost` empty.** It needs no config and keeps working across reboots. It works once this PC is paired: if `adb mdns services` lists the headset but `adb connect` fails with an auth error, pair once: on the headset, Settings → System → Developer → **Wireless debugging** → *Pair device with pairing code*, then `adb pair <ip>:<pairing-port>` and type the code.
 
@@ -233,6 +236,7 @@ Log: `%TEMP%\loopsegments-quest-lantab.log`.
 | `questAdbPort` | `5555` | Port for `questAdbHost` |
 | `questAdbSerial` | `""` | Pick this adb serial when several Android devices are connected |
 | `questAdbExe` | `""` | Full path to `adb.exe` (empty = auto) |
+| `questAdbRediscoverSec` | `60` | Headset not found for this long and no adb device connected: restart the PC's adb server once to rediscover it over mDNS (at most every 5 min). `0` = off |
 | `questIncognito` | `false` | `true` = private tab (no immersive WebXR there) instead of the normal tab |
 | `questSendLanLogin` | `true` | Sign the tab in with the LAN login (`false` = sign in on the headset) |
 | `questEnsureInsecureOriginFlag` | `true` | Startup and each Open on Quest: keep the insecure-origin flag on the phone origin(s); may restart Quest Browser |

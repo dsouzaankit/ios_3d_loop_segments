@@ -23,6 +23,7 @@
   "questAdbPort": 5555,
   "questAdbSerial": "",
   "questAdbExe": "",
+  "questAdbRediscoverSec": 60,
   "questIncognito": false,
   "questSendLanLogin": true,
   "questEnsureInsecureOriginFlag": true,

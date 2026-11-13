@@ -149,6 +149,7 @@ function Write-QuestLog {
 }
 
 # Per-PC overrides from windows\loop-segments-windows.json (params win).
+$script:AdbRediscoverSec = 60
 $WindowsLib = Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\LoopSegments-Windows.ps1'
 if (Test-Path -LiteralPath $WindowsLib) {
     try {
@@ -159,6 +160,7 @@ if (Test-Path -LiteralPath $WindowsLib) {
         if ([string]::IsNullOrWhiteSpace($QuestHost)) { $QuestHost = [string]$cfg.questAdbHost }
         if ([string]::IsNullOrWhiteSpace($Serial)) { $Serial = [string]$cfg.questAdbSerial }
         if ($Port -le 0 -and $null -ne $cfg.questAdbPort) { $Port = [int]$cfg.questAdbPort }
+        if ($null -ne $cfg.questAdbRediscoverSec) { $script:AdbRediscoverSec = [int]$cfg.questAdbRediscoverSec }
         if ($cfg.Contains('questIncognito') -and $cfg.questIncognito -eq $true) { $PrivateTab = $true }
         if ($cfg.Contains('questEnsureInsecureOriginFlag') -and $cfg.questEnsureInsecureOriginFlag -eq $false) { $NoFlags = $true }
         if ($cfg.Contains('questSendLanLogin') -and $cfg.questSendLanLogin -eq $false) { $NoLanLogin = $true }
@@ -248,6 +250,16 @@ function Connect-Quest {
         if ($s) { return $s }
     }
     # Wireless debugging (TLS) advertises its random port over mDNS; works once paired.
+    $s = Connect-QuestViaMdns
+    if ($s) { $script:MdnsUnseenSince = $null; return $s }
+    if (Invoke-QuestAdbRediscover) {
+        $s = Connect-QuestViaMdns
+        if ($s) { $script:MdnsUnseenSince = $null; return $s }
+    }
+    return $null
+}
+
+function Connect-QuestViaMdns {
     $m = Invoke-Adb -Arguments @('mdns', 'services') -TimeoutSec 8
     foreach ($l in @($m.Out -split "`r?`n")) {
         if ($l -match '_adb-tls-connect\._tcp\.?\s+(\d{1,3}(?:\.\d{1,3}){3}:\d+)') {
@@ -258,6 +270,43 @@ function Connect-Quest {
         }
     }
     return $null
+}
+
+# The PC's adb server can stop hearing the headset's mDNS announcements (seen after the headset
+# slept and came back on a new wireless-debugging port: the headset advertised, `adb mdns services`
+# stayed empty until the server was restarted). So once this process has not found the headset for
+# questAdbRediscoverSec (default 60 s), restart the adb server and look again. Only when no adb
+# device at all is connected (nothing to interrupt), and at most once every 5 min across all
+# companion processes (shared %TEMP% stamp). Returns $true when it restarted the server.
+$script:MdnsUnseenSince = $null
+$script:AdbRestartStamp = Join-Path $env:TEMP 'loopsegments-adb-rediscover.txt'
+function Invoke-QuestAdbRediscover {
+    if ($script:AdbRediscoverSec -le 0) { return $false }
+    $now = [DateTime]::UtcNow
+    if (-not $script:MdnsUnseenSince) { $script:MdnsUnseenSince = $now; return $false }
+    $unseen = ($now - $script:MdnsUnseenSince).TotalSeconds
+    if ($unseen -lt $script:AdbRediscoverSec) { return $false }
+    try {
+        if (Test-Path -LiteralPath $script:AdbRestartStamp) {
+            $last = [DateTime]::Parse((Get-Content -LiteralPath $script:AdbRestartStamp -Raw).Trim(), $null, [Globalization.DateTimeStyles]::RoundtripKind)
+            if (($now - $last).TotalMinutes -lt 5) { return $false }
+        }
+    } catch {}
+    $d = Invoke-Adb -Arguments @('devices')
+    $attached = @($d.Out -split "`r?`n" | Where-Object { $_ -match '^\S+\s+(device|unauthorized|recovery|sideload)\b' })
+    if ($attached.Count -gt 0) { return $false }
+    try { Set-Content -LiteralPath $script:AdbRestartStamp -Value $now.ToString('o') -Encoding ascii } catch {}
+    Write-QuestLog ("adb: headset not seen over mDNS for {0:0} s - restarting the adb server to rediscover it." -f $unseen)
+    [void](Invoke-Adb -Arguments @('kill-server') -TimeoutSec 10)
+    [void](Invoke-Adb -Arguments @('start-server') -TimeoutSec 15)
+    # mDNS answers arrive over the next few seconds.
+    for ($i = 0; $i -lt 8; $i++) {
+        Start-Sleep -Seconds 1
+        $m = Invoke-Adb -Arguments @('mdns', 'services') -TimeoutSec 8
+        if ($m.Out -match '_adb-tls-connect') { break }
+    }
+    $script:MdnsUnseenSince = $now
+    return $true
 }
 
 function Get-QuestWakefulness {
