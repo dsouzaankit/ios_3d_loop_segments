@@ -1929,6 +1929,10 @@ function Stop-CompanionRestLogSink {
 }
 
 function Invoke-BouncePhoneLanAp {
+    # A pending Quest history delete needs the headset on this Wi-Fi: let its helper bounce later.
+    if (Get-Command Request-QuestDeferredWifiBounce -ErrorAction SilentlyContinue) {
+        if (Request-QuestDeferredWifiBounce -PhoneLanHost (Get-LanConfigPhoneHost)) { return }
+    }
     $rebootPs1 = Join-Path $WindowsDir "lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1"
     if (-not (Test-Path -LiteralPath $rebootPs1)) {
         Write-Warning "[wifi-www] Missing $rebootPs1 - cannot bounce phone LAN AP"
@@ -2524,9 +2528,6 @@ $script:CompanionBrowserStarted = $true
 if (-not $DetachChromium) {
     Register-CompanionCancelHandler
     Start-CompanionExitWatchdog
-    if (Get-Command Start-QuestFlagSyncInBackground -ErrorAction SilentlyContinue) {
-        Start-QuestFlagSyncInBackground -LanUrl (Get-QuestCompanionLanUrl -ExtensionDir $ExtensionDir)
-    }
     if (Get-Command Start-QuestKeepAwakeInBackground -ErrorAction SilentlyContinue) {
         Start-QuestKeepAwakeInBackground -CompanionPid $PID
     }

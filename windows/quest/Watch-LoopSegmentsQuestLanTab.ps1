@@ -5,12 +5,14 @@
 .DESCRIPTION
   Default (-Once, used by the "Open on Quest" button through the companion sink): opens -Url in a
   NORMAL Quest Browser tab, signed in:
-    1. makes sure chrome://flags "unsafely-treat-insecure-origin-as-secure" is enabled and lists
-       every phone LAN origin (restarts Quest Browser only if it had to change the flag),
-    2. VIEW intent for the plain URL (retried; the browser sometimes drops the first one),
-    3. over the browser's DevTools socket: navigate that tab to http://admin:<password>@host/
+    1. VIEW intent for the plain URL (retried; the browser sometimes drops the first one),
+    2. over the browser's DevTools socket: navigate that tab to http://admin:<password>@host/
        (caches the LAN login), then back to the plain URL, then drop its back/forward entries.
        A page whose URL still has user:pass@ cannot fetch() (status_lists.json would fail).
+    3. reads window.isSecureContext in the opened tab. It is true only while chrome://flags
+       "unsafely-treat-insecure-origin-as-secure" lists the page's origin (WebXR needs it), so
+       chrome://flags is opened only when it is false: the flag gets every phone LAN origin,
+       Quest Browser restarts (closing its tabs) and steps 1-2 run again.
   The password comes from loop-segments-windows.json (per-phone phoneLanHosts[].webdavPassword,
   else webdavPassword); it is never logged or put on a command line. -NoLanLogin /
   questSendLanLogin=false opens the plain URL (you sign in on the headset).
@@ -19,10 +21,11 @@
   cannot enter VR there. -PrivateTab (or questIncognito=true) still opens a private tab instead
   (Chromium IncognitoTabLauncher + typed URL; falls back to a normal tab).
 
-  -WaitMinutes N : with -Once, a headset that is asleep or off adb is not an error: keep polling
+  -WaitMinutes N : when opening the page, a headset that is asleep or off adb is not an error: keep polling
                    for up to N minutes and open the page when it wakes (the button uses 7).
                    -StatusFile gets 'queued' / 'opening' so the companion sink can report it.
-  -EnsureFlags   : only step 1 (companion runs it hidden at startup).
+  -EnsureFlags   : only the chrome://flags fix of step 3, for any phone LAN origin missing from
+                   the flag (by hand; the companion no longer runs it at startup).
   -ClearHistory  : (-CloseLanTabs first closes every tab on a phone LAN origin; -SkipHistoryClear
                    then stops there) delete the Quest Browser history entries on the phone LAN
                    origins and the Quest control page (through the browser's own History list);
@@ -55,8 +58,7 @@
                    would wake it); it gets the override once someone puts it on. Re-applies after a headset reboot. Never re-enables
                    the sensor itself (the companion's cleanup does, after clearing history).
 
-  Without -Once / -EnsureFlags / -ClearHistory it keeps polling and opens the page on each
-  asleep->Awake (manual use); -ParentPid makes it exit with that process.
+  Without a mode switch it opens the page once, like -Once (there is no keep-watching mode).
 
   Needs developer mode on the Quest and adb on this PC (winget install Google.PlatformTools).
   Wireless adb is switched off by every Quest reboot; the adb-auto-enable app
@@ -99,11 +101,11 @@ param(
     [string] $Serial = '',
     [string] $QuestHost = '',
     [int] $Port = 0,
-    # Open once now (no wake transition needed) and exit.
+    # Open the page once and exit (also the default; kept for the companion sink's command line).
     [switch] $Once,
-    # With -Once: wait up to this many minutes for an asleep / unreachable headset to wake.
+    # Opening the page: wait up to this many minutes for an asleep / unreachable headset to wake.
     [int] $WaitMinutes = 0,
-    # With -Once: file that gets 'queued' / 'opening' (read by the companion sink).
+    # Opening the page: file that gets 'queued' / 'opening' (read by the companion sink).
     [string] $StatusFile = '',
     # Read-only: report Quest Browser incognito / private launch entry points and exit.
     [switch] $ProbeIncognito,
@@ -123,7 +125,7 @@ param(
     [switch] $SkipHistoryClear,
     # With -ClearHistory: afterwards turn the proximity sensor back on (companion close, one process).
     [switch] $EnableProximityAfter,
-    # Do not touch chrome://flags before opening the tab.
+    # Do not check isSecureContext / touch chrome://flags after opening the tab.
     [switch] $NoFlags,
     # Only turn the proximity sensor back on (am broadcast ...vrpowermanager.automation_disable).
     [switch] $EnableProximity,
@@ -145,7 +147,8 @@ param(
     # After-quit helper (started by a -ClearHistory whose history delete failed or found no headset):
     # wait until the headset is worn, then close the LAN tabs and delete the Loop Segments history
     # entries saved in %TEMP%\loopsegments-quest-history-pending.json; gives up after
-    # questHistoryRetryMinutes (120) or when the companion starts again.
+    # questHistoryRetryMinutes (120) or when the companion starts again. A Wi-Fi->www AP bounce the
+    # quit handed over (%TEMP%\loopsegments-wifi-bounce-pending.json) runs after the delete / give-up.
     [switch] $RetryHistory
 )
 
@@ -632,14 +635,55 @@ function Open-QuestIncognitoTab {
     return $true
 }
 
-function Open-QuestLanTab {
+# window.isSecureContext of the open phone LAN tab(s): true only while the insecure-origin flag
+# lists that origin, so this checks the flag without opening chrome://flags (no helper tab, no
+# "Experiments" in history or Recently closed). Returns 'secure', 'insecure' or 'unknown'.
+function Test-QuestLanTabSecure {
     param([string] $DeviceSerial)
-    if (-not $NoFlags) { [void](Invoke-QuestFlagSync -DeviceSerial $DeviceSerial) }
+    if (-not (Open-QuestDevTools -DeviceSerial $DeviceSerial)) { return 'unknown' }
+    try {
+        $want = (ConvertTo-QuestBareUrl $Url).ToLowerInvariant()
+        try { $want = ([Uri]$want).GetLeftPart([UriPartial]::Authority).ToLowerInvariant() } catch {}
+        for ($i = 0; $i -lt 10; $i++) {
+            foreach ($t in @(Get-QuestLanTabs -Origins @($want))) {
+                try {
+                    $r = Invoke-QuestEval -Tab $t -TimeoutSec 5 -Expression 'JSON.stringify({ origin: location.origin, secure: window.isSecureContext })' | ConvertFrom-Json
+                    if ($r.origin -and $r.origin.ToLowerInvariant() -eq $want) {
+                        Write-QuestLog ("Flags: {0} isSecureContext={1} in the open tab." -f $r.origin, $r.secure)
+                        return $(if ($r.secure) { 'secure' } else { 'insecure' })
+                    }
+                } catch {}
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        Write-QuestLog 'Flags: could not read isSecureContext in the LAN tab - flag not checked.'
+        return 'unknown'
+    } finally { Close-QuestDevTools }
+}
+
+function Open-QuestLanTabOnce {
+    param([string] $DeviceSerial)
     if ($PrivateTab) {
         if (Open-QuestIncognitoTab -DeviceSerial $DeviceSerial) { return $true }
         Write-QuestLog 'Falling back to a normal tab.'
     }
     return (Open-QuestNormalTab -DeviceSerial $DeviceSerial)
+}
+
+function Open-QuestLanTab {
+    param([string] $DeviceSerial)
+    if (-not (Open-QuestLanTabOnce -DeviceSerial $DeviceSerial)) { return $false }
+    if ($NoFlags) { return $true }
+    if ((Test-QuestLanTabSecure -DeviceSerial $DeviceSerial) -ne 'insecure') { return $true }
+    # Not a secure context: WebXR is off. Fix the flag (restarts Quest Browser, closing its tabs)
+    # and open the page again.
+    $res = Invoke-QuestFlagSync -DeviceSerial $DeviceSerial
+    if ($res -ne 'changed') {
+        Write-QuestLog "Flags: page is not a secure context, flag fix result '$res' - XR may not start."
+        return $true
+    }
+    Write-QuestLog 'Flags: fixed - opening the page again after the browser restart.'
+    return (Open-QuestLanTabOnce -DeviceSerial $DeviceSerial)
 }
 
 function Invoke-QuestIncognitoProbe {
@@ -857,6 +901,41 @@ function Write-QuestHistoryPending {
     Move-Item -LiteralPath $tmp -Destination $script:HistoryPendingPath -Force
 }
 
+# The quit's phone LAN AP bounce (Wi-Fi->www probe failed), handed over by run_chromium.ps1 while a
+# history delete is pending: the bounce reboots the 10.0.100.x AP, the headset falls over to the
+# other Wi-Fi and the PC (back on 10.0.100.x) can no longer reach it. So it runs here, after the
+# delete (or the give-up). Dropped when the companion starts again (its quit probes anew).
+$script:BouncePendingPath = Join-Path $env:TEMP 'loopsegments-wifi-bounce-pending.json'
+
+function Invoke-QuestDeferredBounce {
+    param([string] $Why)
+    if (-not (Test-Path -LiteralPath $script:BouncePendingPath)) { return }
+    $b = $null
+    try { $b = Get-Content -LiteralPath $script:BouncePendingPath -Raw | ConvertFrom-Json } catch {}
+    Remove-Item -LiteralPath $script:BouncePendingPath -Force -ErrorAction SilentlyContinue
+    $ps1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
+    if (-not (Test-Path -LiteralPath $ps1)) { Write-QuestLog "Wi-Fi bounce: $ps1 missing - skipped."; return }
+    $log = Join-Path $env:TEMP 'loopsegments-wifi-bounce.log'
+    Write-QuestLog "Wi-Fi bounce: $Why - bouncing the phone LAN AP now (held by the quit; output in $log)."
+    $a = @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $ps1, '-BouncePhoneLanAp', '-NoWaitEnter')
+    if ($b -and $b.phoneLanHost) { $a += @('-PhoneLanHost', [string]$b.phoneLanHost) }
+    try {
+        $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $a -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+        if (-not $p.WaitForExit(600000)) { try { $p.Kill($true) } catch {}; Write-QuestLog 'Wi-Fi bounce: still running after 10 min - stopped.'; return }
+        Write-QuestLog "Wi-Fi bounce: finished (exit $($p.ExitCode))."
+    } catch {
+        Write-QuestLog "Wi-Fi bounce: could not run: $($_.Exception.Message)"
+    }
+}
+
+function Remove-QuestDeferredBounce {
+    if (Test-Path -LiteralPath $script:BouncePendingPath) {
+        Remove-Item -LiteralPath $script:BouncePendingPath -Force -ErrorAction SilentlyContinue
+        Write-QuestLog 'Wi-Fi bounce: dropped (the companion started again; its quit probes Wi-Fi->www anew).'
+    }
+}
+
 function Test-QuestHistoryHelperAlive {
     param([int] $HelperPid)
     if ($HelperPid -le 0) { return $false }
@@ -930,14 +1009,14 @@ function Start-QuestHistoryRetry {
 function Invoke-QuestHistoryRetry {
     $script:AdbRediscoverEveryMin = 20
     $p = Read-QuestHistoryPending
-    if (-not $p) { Write-QuestLog 'History retry: nothing pending - stop.'; return 0 }
+    if (-not $p) { Write-QuestLog 'History retry: nothing pending - stop.'; Invoke-QuestDeferredBounce -Why 'no history delete pending'; return 0 }
     $until = [DateTime]::Parse([string]$p.until, $null, [Globalization.DateTimeStyles]::RoundtripKind)
     Write-QuestLog ("History retry: waiting for the headset to be worn (until {0:HH:mm}; {1})." -f $until.ToLocalTime(), (@($p.origins) -join ', '))
     $proxDone = -not [bool]$p.proximity
     $shownWorn = $false
     while ($true) {
         $p = Read-QuestHistoryPending
-        if (-not $p) { Write-QuestLog 'History retry: no longer pending - stop.'; return 0 }
+        if (-not $p) { Write-QuestLog 'History retry: no longer pending - stop.'; Invoke-QuestDeferredBounce -Why 'history delete no longer pending'; return 0 }
         $owner = [int]$p.pid
         if ($owner -ne $PID) {
             if (Test-QuestHistoryHelperAlive -HelperPid $owner) { return 0 }
@@ -948,11 +1027,13 @@ function Invoke-QuestHistoryRetry {
         if ([DateTime]::UtcNow -gt $until) {
             Write-QuestLog 'History retry: the headset was not worn in time - gave up (the next companion quit deletes those entries).'
             Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+            Invoke-QuestDeferredBounce -Why 'history helper gave up'
             return 1
         }
         if (Test-QuestCompanionRunning -Since $script:StartedAt) {
             Write-QuestLog 'History retry: the companion started again - stop (its quit deletes those entries).'
             Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+            Remove-QuestDeferredBounce
             return 0
         }
         $dev = Get-OnlineQuestSerial
@@ -983,6 +1064,7 @@ function Invoke-QuestHistoryRetry {
                 if ($res -eq 'cleared') {
                     Write-QuestLog 'History retry: done.'
                     Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+                    Invoke-QuestDeferredBounce -Why 'history deleted'
                     return 0
                 }
                 Write-QuestLog 'History retry: not done yet - trying again while the headset is worn.'
@@ -1107,19 +1189,14 @@ if ($EnsureFlags -or $ClearHistory) {
     $res = Invoke-QuestFlagSync -DeviceSerial $dev
     if ($res -eq 'failed') { exit 3 } else { exit 0 }
 }
-Write-QuestLog ("Watcher start: url={0} adb={1} host={2} port={3} serial={4} parent={5}" -f $Url, $script:Adb, $QuestHost, $Port, $Serial, $ParentPid)
-
-
-$wasAwake = $false
+# Default: open the page once (the Open on Quest button). An asleep / unreachable headset is
+# polled for up to -WaitMinutes and the page opens when it wakes.
+Write-QuestLog ("Open start: url={0} adb={1} host={2} port={3} serial={4}" -f $Url, $script:Adb, $QuestHost, $Port, $Serial)
 $lastState = ''
 $queuedLogged = $false
-$deadline = if ($Once -and $WaitMinutes -gt 0) { [DateTime]::UtcNow.AddMinutes($WaitMinutes) } else { $null }
+$deadline = if ($WaitMinutes -gt 0) { [DateTime]::UtcNow.AddMinutes($WaitMinutes) } else { $null }
 Set-QuestOpenStatus 'checking'
 while ($true) {
-    if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
-        Write-QuestLog 'Companion exited - watcher stop.'
-        exit 0
-    }
     try {
         $dev = Get-OnlineQuestSerial
         if (-not $dev) { $dev = Connect-Quest }
@@ -1129,34 +1206,24 @@ while ($true) {
             Write-QuestLog ("Headset {0}{1}" -f $state, $(if ($dev) { " ($dev)" } else { '' }))
             $lastState = $state
         }
-        # Unknown (dumpsys hiccup) keeps the previous state so a blip does not reopen the tab.
         if ($state -eq 'Awake') {
-            if (-not $wasAwake) {
-                if ($queuedLogged) { Write-QuestLog 'Headset woke - opening the queued page.' }
-                Set-QuestOpenStatus 'opening'
-                $opened = Open-QuestLanTab -DeviceSerial $dev
-                if ($Once) { if ($opened) { exit 0 } else { exit 3 } }
-            }
-            $wasAwake = $true
-        } elseif ($state -ne 'Unknown') {
-            $wasAwake = $false
+            if ($queuedLogged) { Write-QuestLog 'Headset woke - opening the queued page.' }
+            Set-QuestOpenStatus 'opening'
+            if (Open-QuestLanTab -DeviceSerial $dev) { exit 0 } else { exit 3 }
         }
     } catch {
         Write-QuestLog "Poll error: $($_.Exception.Message)"
-        $wasAwake = $false
     }
-    if ($Once) {
-        if ($deadline -and [DateTime]::UtcNow -lt $deadline) {
-            if (-not $queuedLogged) {
-                Write-QuestLog "Queued: headset $lastState - opening when it wakes (up to $WaitMinutes min)."
-                Set-QuestOpenStatus 'queued'
-                $queuedLogged = $true
-            }
-        } else {
-            if ($deadline) { Write-QuestLog "Headset did not wake within $WaitMinutes min ($lastState) - nothing opened." }
-            else { Write-QuestLog "Headset not awake/reachable ($lastState) - nothing opened." }
-            exit 1
+    if ($deadline -and [DateTime]::UtcNow -lt $deadline) {
+        if (-not $queuedLogged) {
+            Write-QuestLog "Queued: headset $lastState - opening when it wakes (up to $WaitMinutes min)."
+            Set-QuestOpenStatus 'queued'
+            $queuedLogged = $true
         }
+    } else {
+        if ($deadline) { Write-QuestLog "Headset did not wake within $WaitMinutes min ($lastState) - nothing opened." }
+        else { Write-QuestLog "Headset not awake/reachable ($lastState) - nothing opened." }
+        exit 1
     }
     Start-Sleep -Seconds ([Math]::Max(2, $PollSeconds))
 }

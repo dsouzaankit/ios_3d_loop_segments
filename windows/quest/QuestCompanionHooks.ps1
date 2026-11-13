@@ -1,7 +1,6 @@
 # Companion hooks for Quest Browser (dot-sourced by pcloud_web_companion\run_chromium.ps1 and
 # _profile_exit_watchdog.ps1). Each hook runs quest\Watch-LoopSegmentsQuestLanTab.ps1 in a
 # hidden pwsh; log lines go to %TEMP%\loopsegments-quest-lantab.log.
-#   startup : -EnsureFlags  (background, never blocks)  - questEnsureInsecureOriginFlag (default true)
 #   startup : -KeepAwakeSession (background, until the companion exits) - questKeepAwakeDuringSession
 #   startup : Serve-QuestControlPage.ps1 (background, until the companion exits): the Quest control
 #             page with SKYBOX Push / Update / Clear - questControlPage / questSkyboxWebDav
@@ -52,22 +51,6 @@ function Start-QuestWatchProcess {
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     return [System.Diagnostics.Process]::Start($psi)
-}
-
-# Startup: make sure Quest Browser's insecure-origin flag lists the phone LAN origin(s).
-function Start-QuestFlagSyncInBackground {
-    param([string] $LanUrl)
-    if (-not (Get-QuestCompanionSetting -Name 'questEnsureInsecureOriginFlag')) {
-        Write-Host '[quest] Skipping Quest flags check (questEnsureInsecureOriginFlag=false)'
-        return
-    }
-    if ([string]::IsNullOrWhiteSpace($LanUrl) -or -not (Test-Path -LiteralPath $script:QuestWatchScript)) { return }
-    try {
-        $p = Start-QuestWatchProcess -Arguments @('-Url', $LanUrl, '-EnsureFlags')
-        Write-Host "[quest] Checking Quest Browser insecure-origin flag in the background (PID $($p.Id); skipped if the headset is not on adb)"
-    } catch {
-        Write-Warning "[quest] Could not start the Quest flags check: $($_.Exception.Message)"
-    }
 }
 
 # ---- Close: one background cleanup process (LAN tabs -> history -> proximity sensor) ----
@@ -245,6 +228,30 @@ function Stop-QuestHistoryRetry {
         Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
         Write-Host "[quest] Stopped the last quit's history helper$(if ($n) { " (PID stopped: $n)" }); this session's quit deletes those entries."
     }
+    # The Wi-Fi->www AP bounce it was holding: this session's quit probes again.
+    $bounce = Join-Path $env:TEMP 'loopsegments-wifi-bounce-pending.json'
+    if (Test-Path -LiteralPath $bounce) {
+        Remove-Item -LiteralPath $bounce -Force -ErrorAction SilentlyContinue
+        Write-Host "[quest] Dropped the last quit's held Wi-Fi AP bounce; this session's quit probes Wi-Fi->www again."
+    }
+}
+
+# Quit: the Wi-Fi->www probe failed. If the after-quit history helper is waiting for the headset, hand
+# it the AP bounce (it runs it after the delete, or when it gives up): bouncing now moves the headset
+# to the other Wi-Fi, where the helper on this PC cannot reach it. $true = handed over.
+function Request-QuestDeferredWifiBounce {
+    param([string] $PhoneLanHost)
+    $pending = Join-Path $env:TEMP 'loopsegments-quest-history-pending.json'
+    if (-not (Test-Path -LiteralPath $pending)) { return $false }
+    try {
+        $p = Get-Content -LiteralPath $pending -Raw | ConvertFrom-Json
+        if (-not ($p.pid -and (Get-Process -Id ([int]$p.pid) -ErrorAction SilentlyContinue))) { return $false }
+        $until = [DateTime]::Parse([string]$p.until, $null, [Globalization.DateTimeStyles]::RoundtripKind)
+        @{ phoneLanHost = $PhoneLanHost; queuedAt = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json |
+            Set-Content -LiteralPath (Join-Path $env:TEMP 'loopsegments-wifi-bounce-pending.json') -Encoding utf8
+        Write-Host ("[wifi-www] Quest history delete still pending: AP bounce held until it is done (headset worn) or the helper gives up at {0:HH:mm}." -f $until.ToLocalTime()) -ForegroundColor DarkYellow
+        return $true
+    } catch { return $false }
 }
 
 # Stop the keep-awake job (this session's, or any left running) so it cannot switch the sensor off
