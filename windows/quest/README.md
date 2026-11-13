@@ -12,7 +12,7 @@ The PC companion drives **Quest Browser** over **adb over Wi-Fi** and the browse
 
 Startup and close steps are skipped (and logged) when the headset is not on adb. **Open on Quest** waits instead (below).
 
-**Headset asleep or off adb when you click:** the click is queued. The button says *Queued: opens on Quest when the headset wakes (until HH:MM)*, and the companion keeps polling for **7 minutes**; when the headset wakes and adb is back it opens the page once. Clicking again while one is queued just shows it. The wait ends when the page opens, after 7 minutes (*Quest did not wake ... - nothing opened*), or when the companion quits.
+**Headset asleep or off adb when you click:** the click is queued. The button says *Queued: opens on Quest when the headset wakes (until HH:MM)*, and the companion keeps polling for **7 minutes**; when the headset wakes and adb is back it opens the page once. It checks about every **5 s** (`-PollSeconds`, at least 2 s); while the headset is unreachable each check first tries to reconnect (`questAdbHost`, then mDNS + `adb connect`), so the real gap is a bit longer. The page usually opens 5-10 s after the headset wakes. Clicking again while one is queued just shows it. The wait ends when the page opens, after 7 minutes (*Quest did not wake ... - nothing opened*), or when the companion quits.
 
 ## Open on Quest: normal tab, signed in
 
