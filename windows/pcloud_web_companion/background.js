@@ -214,7 +214,16 @@ async function loadLanConfig() {
     lanPort: Number(cfg.lanPort) > 0 ? Number(cfg.lanPort) : 8765,
     webdavUser: String(cfg.webdavUser || "admin"),
     webdavPassword: String(cfg.webdavPassword || ""),
+    // Quest control page on this PC (quest\Serve-QuestControlPage.ps1); older lan_config.json
+    // files have none of these.
+    questControlPage: cfg.questControlPage !== false,
+    questControlPort: Number(cfg.questControlPort) > 0 ? Number(cfg.questControlPort) : 18766,
+    questControlPassword: String(cfg.questControlPassword ?? cfg.webdavPassword ?? ""),
   };
+}
+
+function questControlUrl(cfg) {
+  return `http://127.0.0.1:${cfg.questControlPort}/`;
 }
 
 function lanBaseUrl(cfg) {
@@ -234,22 +243,26 @@ chrome.webRequest.onAuthRequired.addListener(
     }
     loadLanConfig()
       .then((cfg) => {
-        const phone = new URL(lanBaseUrl(cfg));
         const asked = new URL(details.url);
-        if (asked.host !== phone.host || !cfg.webdavPassword) {
+        let password = "";
+        if (asked.host === new URL(lanBaseUrl(cfg)).host) password = cfg.webdavPassword;
+        // The Quest control page on this PC, opened by the LAN page's "Quest control" button.
+        else if (asked.host === new URL(questControlUrl(cfg)).host) password = cfg.questControlPassword;
+        if (!password) {
           callback({});
           return;
         }
         lanAuthAnswered.add(details.requestId);
-        callback({ authCredentials: { username: cfg.webdavUser, password: cfg.webdavPassword } });
+        callback({ authCredentials: { username: cfg.webdavUser, password } });
       })
       .catch(() => callback({}));
   },
-  { urls: ["http://*:8765/*"] },
+  // 127.0.0.1 without a port matches every port; the handler only answers questControlPort.
+  { urls: ["http://*:8765/*", "http://127.0.0.1/*"] },
   ["asyncBlocking"]
 );
 for (const ev of [chrome.webRequest.onCompleted, chrome.webRequest.onErrorOccurred]) {
-  ev.addListener((details) => lanAuthAnswered.delete(details.requestId), { urls: ["http://*:8765/*"] });
+  ev.addListener((details) => lanAuthAnswered.delete(details.requestId), { urls: ["http://*:8765/*", "http://127.0.0.1/*"] });
 }
 
 /** Clash/TUN often proxies RFC1918 phone LAN; surface a hint when fetch dies. */
@@ -3226,7 +3239,52 @@ async function openLanPageOnQuest(sender) {
   }
 }
 
+/** Open (or bring forward) the Quest control page in this Chromium, next to the LAN tab. */
+async function openQuestControlPage(sender) {
+  let cfg;
+  try {
+    cfg = await loadLanConfig();
+  } catch (err) {
+    return { ok: false, message: `lan_config.json: ${err?.message || err}` };
+  }
+  if (!cfg.questControlPage) return { ok: false, message: "Quest control page is off (questControlPage=false)." };
+  const url = questControlUrl(cfg);
+  // Is it up? (the companion starts it; it stops at companion close)
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 3000);
+    const res = await fetch(`${url}status.json`, {
+      cache: "no-store",
+      signal: ctl.signal,
+      headers: { Authorization: basicAuthHeader(cfg.webdavUser, cfg.questControlPassword) },
+    });
+    clearTimeout(t);
+    if (res.status === 401) return { ok: false, message: "Quest control page refused the login (check webdavPassword / phoneLanHosts)." };
+    if (!res.ok) return { ok: false, message: `Quest control page answered HTTP ${res.status}.` };
+  } catch {
+    return { ok: false, message: `Quest control page not running on ${url} (restart the companion).` };
+  }
+  const open = await chrome.tabs.query({ url: `${url}*` });
+  if (open.length) {
+    await chrome.tabs.update(open[0].id, { active: true });
+    if (open[0].windowId !== undefined) await chrome.windows.update(open[0].windowId, { focused: true });
+    return { ok: true, message: "Quest control page is open (switched to its tab)." };
+  }
+  const props = { url, active: true };
+  if (sender?.tab) {
+    props.index = sender.tab.index + 1;
+    props.windowId = sender.tab.windowId;
+    props.openerTabId = sender.tab.id;
+  }
+  await chrome.tabs.create(props);
+  return { ok: true, message: "Opened the Quest control page." };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "quest-open-control-page") {
+    void (async () => sendResponse(await openQuestControlPage(sender)))();
+    return true;
+  }
   if (message?.type === "quest-open-lan-tab") {
     void (async () => sendResponse(await openLanPageOnQuest(sender)))();
     return true;

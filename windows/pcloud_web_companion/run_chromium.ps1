@@ -455,6 +455,27 @@ function Sync-LanConfigFromLoopSegments {
         $password = [string]$settings.webdavPassword
     }
 
+    # Quest control page (quest\Serve-QuestControlPage.ps1): the PC LAN page's "Quest control" button
+    # opens it on 127.0.0.1 and the extension answers its login. Same login the server checks:
+    # webdavUser + this phone's phoneLanHosts[].webdavPassword, else webdavPassword.
+    $controlPage = $true
+    $controlPort = 18766
+    $controlPassword = $password
+    try {
+        if (Get-Command Get-LoopSegmentsWindowsSettings -ErrorAction SilentlyContinue) {
+            $ws = Get-LoopSegmentsWindowsSettings
+            $controlPage = [bool]$ws.questControlPage
+            if ([int]$ws.questControlPort -gt 0) { $controlPort = [int]$ws.questControlPort }
+            if (Get-Command ConvertTo-LoopSegmentsPhoneHostEntry -ErrorAction SilentlyContinue) {
+                foreach ($raw in @($ws.phoneLanHosts)) {
+                    if ($null -eq $raw) { continue }
+                    $e = ConvertTo-LoopSegmentsPhoneHostEntry -Raw $raw
+                    if ($e -and $e.Host -eq $hostName.Trim() -and -not [string]::IsNullOrWhiteSpace([string]$e.Password)) { $controlPassword = [string]$e.Password }
+                }
+            }
+        }
+    } catch {}
+
     $lanConfig = [ordered]@{
         phoneLanHost          = $hostName.Trim()
         lanPort               = $port
@@ -463,6 +484,9 @@ function Sync-LanConfigFromLoopSegments {
         phoneLanHostSource    = $(if ($preferUsb) { 'usb' } else { 'config' })
         preferUsbPhoneLanHost = [bool]$preferUsb
         configPhoneLanHost    = $configHost
+        questControlPage      = $controlPage
+        questControlPort      = $controlPort
+        questControlPassword  = $controlPassword
     }
 
     $json = $lanConfig | ConvertTo-Json -Depth 3

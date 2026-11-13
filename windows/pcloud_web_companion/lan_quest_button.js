@@ -1,7 +1,10 @@
-// Adds "Open on Quest" next to Night mode on the phone LAN page (PC Chromium only).
-// Click -> background -> 127.0.0.1:18765 companion sink -> adb opens this page in Quest Browser.
+// Adds "Open on Quest" and "Quest control" next to Night mode on the phone LAN page (PC Chromium only).
+// Open on Quest: background -> 127.0.0.1:18765 companion sink -> adb opens this page in Quest Browser.
+// Quest control: background opens the companion's Quest control page (127.0.0.1:questControlPort)
+// in a tab here, signed in by the extension.
 (() => {
   const BTN_ID = "lan-open-on-quest";
+  const CONTROL_ID = "lan-quest-control";
   const STATUS_ID = "lan-open-on-quest-status";
 
   function isLanPage() {
@@ -34,6 +37,20 @@
     }
   }
 
+  async function onControlClick(ev) {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    setStatus("Opening the Quest control page…", false);
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "quest-open-control-page" });
+      setStatus(res?.message || (res?.ok ? "Opened." : "Could not open the Quest control page."), !res?.ok);
+    } catch (err) {
+      setStatus(`Companion extension not reachable: ${err?.message || err}`, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function ensureButton() {
     if (!isLanPage() || document.getElementById(BTN_ID)) return;
     const anchor = document.getElementById("lan-night-toggle");
@@ -49,8 +66,16 @@
     status.className = "muted";
     status.setAttribute("role", "status");
     status.style.marginLeft = "0.5rem";
+    const control = document.createElement("button");
+    control.type = "button";
+    control.id = CONTROL_ID;
+    control.textContent = "Quest control";
+    control.title = "Open the Quest control page (SKYBOX, LAN bandwidth) in a tab here, signed in (PC companion)";
+    control.style.marginLeft = "0.5rem";
+    control.addEventListener("click", onControlClick);
     anchor.insertAdjacentElement("afterend", btn);
-    btn.insertAdjacentElement("afterend", status);
+    btn.insertAdjacentElement("afterend", control);
+    control.insertAdjacentElement("afterend", status);
   }
 
   ensureButton();

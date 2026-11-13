@@ -297,10 +297,17 @@ $script:PageHtml = @'
   :root { color-scheme: dark; --bg:#111418; --panel:#1b2027; --line:#2c333d; --text:#e8ecf1; --muted:#9aa5b1; --accent:#4c9aff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font:18px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
-  h1 { font-size: 26px; margin: 0 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 20px; font-size: 15px; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  main { max-width: 1440px; margin: 0 auto; padding: 14px 16px 12px; }
+  header { display:flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 0 0 16px; }
+  h1 { font-size: 26px; margin: 0; }
+  .sub { color: var(--muted); margin: 0; font-size: 15px; }
+  /* Tiles side by side on a wide window (Quest Browser is landscape), one column on a phone. */
+  .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+  .tiles .wide { grid-column: 1 / -1; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0; }
+  #log { max-height: 7.5em; overflow-y: auto; }
+  #msg:empty, .msg:empty { display: none; }
+  #bwLines { max-height: 9em; overflow-y: auto; }
   h2 { font-size: 19px; margin: 0 0 12px; }
   dl { display:grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 16px; font-size: 16px; }
   dt { color: var(--muted); }
@@ -319,9 +326,12 @@ $script:PageHtml = @'
 </head>
 <body>
 <main>
-  <h1>Quest control</h1>
-  <p class="sub">Loop Segments PC companion</p>
+  <header>
+    <h1>Quest control</h1>
+    <p class="sub">Loop Segments PC companion</p>
+  </header>
 
+  <div class="tiles">
   <section>
     <h2>SKYBOX: phone as a WebDAV server</h2>
     <dl>
@@ -355,10 +365,11 @@ $script:PageHtml = @'
     <p class="note">Runs the same probe as the companion at startup (lan\Measure-LoopSegmentsLanThroughput.ps1): downloads up to 64 MB of a phone video over HTTP, and copies it from the rclone mount when the mount is up, then uses the lower number. It never reboots routers from here. Takes about 10-60 s; pause a Virtual Desktop session first or the number comes out low.</p>
   </section>
 
-  <section>
+  <section class="wide">
     <h2>Recent SKYBOX log</h2>
     <pre id="log">-</pre>
   </section>
+  </div>
 </main>
 <script>
 (() => {
