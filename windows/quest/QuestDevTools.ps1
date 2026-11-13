@@ -153,6 +153,14 @@ function Open-QuestSignedInTab {
     $want = ConvertTo-QuestBareUrl $PlainUrl
     $script:QuestReusedTab = $false
     $existing = @(Get-QuestLanTabs -Origins $Origins)
+    # Tabs Quest Browser restored after it was stopped (force-stop, or closed from the headset) can
+    # stay unloaded and not answer DevTools: close those and open a fresh tab instead.
+    $dead = @($existing | Where-Object { $t = $_; try { [void](Invoke-QuestEval -Tab $t -Expression '1' -TimeoutSec 5); $false } catch { $true } })
+    if ($dead.Count -gt 0) {
+        foreach ($t in $dead) { Close-QuestTab -Id $t.id }
+        Write-QuestLog "Normal tab: closed $($dead.Count) open tab(s) on $want that did not answer (restored, not loaded) - opening a new one."
+        $existing = @($existing | Where-Object { $dead.id -notcontains $_.id })
+    }
     if ($existing.Count -gt 0) {
         $tab = ($existing | Where-Object { (ConvertTo-QuestBareUrl $_.url) -eq $want } | Select-Object -First 1)
         if (-not $tab) { $tab = $existing[0] }

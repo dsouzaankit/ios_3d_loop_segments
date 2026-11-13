@@ -228,6 +228,8 @@ function Stop-QuestHistoryRetry {
         Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
         Write-Host "[quest] Stopped the last quit's history helper$(if ($n) { " (PID stopped: $n)" }); this session's quit deletes those entries."
     }
+    # Whether this session started Quest Browser: decided again by its first Open on Quest.
+    Remove-Item -LiteralPath (Join-Path $env:TEMP 'loopsegments-quest-browser-ours.json') -Force -ErrorAction SilentlyContinue
     # The Wi-Fi->www AP bounce it was holding: this session's quit probes again.
     $bounce = Join-Path $env:TEMP 'loopsegments-wifi-bounce-pending.json'
     if (Test-Path -LiteralPath $bounce) {

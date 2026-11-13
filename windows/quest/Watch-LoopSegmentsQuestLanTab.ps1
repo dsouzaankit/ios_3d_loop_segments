@@ -49,7 +49,7 @@
                    not answer while nobody wears the headset) or that finds no headset saves the
                    origins and starts this, detached: every 5 s it checks for the headset on adb
                    and worn (mounted, not idle), then closes the LAN tabs and deletes those entries
-                   (no range fallback). Stops when done, after questHistoryRetryMinutes (120), or when
+                   (same questClearHistoryFallback range as the quit). Stops when done, after questHistoryRetryMinutes (120), or when
                    the companion starts again. Exit 4 from -ClearHistory = only the history step was
                    handed to it.
   -KeepAwakeSession : until -ParentPid exits, every ~20 s: when the headset is on adb, awake, and the
@@ -67,8 +67,10 @@
   Finding the headset:
     1. A device already in `adb devices -l` whose model looks like a Quest (or -Serial).
     2. `adb connect <questAdbHost>:<questAdbPort>` (default port 5555) when questAdbHost is set.
-    3. `adb mdns services` _adb-tls-connect entries (wireless-debugging TLS port, already paired).
-    4. Not found for questAdbRediscoverSec (60 s) and no adb device connected: restart the adb server
+    3. `adb connect` to the last ip:port the headset was on adb at (%TEMP%\loopsegments-quest-last-adb.txt):
+       the port survives until a reboot / wireless-debugging toggle, and mDNS can take minutes.
+    4. `adb mdns services` _adb-tls-connect entries (wireless-debugging TLS port, already paired).
+    5. Not found for questAdbRediscoverSec (60 s) and no adb device connected: restart the adb server
        once and look over mDNS again (at most every 5 min across processes; 0 = off).
 
   Log: %TEMP%\loopsegments-quest-lantab.log
@@ -235,7 +237,36 @@ function Invoke-Adb {
     return [pscustomobject]@{ Code = $p.ExitCode; Out = $outTask.Result; Err = $errTask.Result }
 }
 
+# Last ip:port the headset was on adb at (%TEMP%\loopsegments-quest-last-adb.txt, shared by Open on
+# Quest, keep-awake and the history helper). Wireless debugging keeps its port until it is switched
+# off or the headset reboots, so a direct `adb connect` to it gets the headset back at once, while
+# mDNS can take minutes to list it again (seen: 17 s, then nothing in 240 s, after an adb server
+# restart; the direct connect took 134 ms).
+$script:LastAdbPath = Join-Path $env:TEMP 'loopsegments-quest-last-adb.txt'
+$script:LastAdbSaved = ''
+
 function Get-OnlineQuestSerial {
+    $s = Find-OnlineQuestSerial
+    if ($s -and $s -match '^\d{1,3}(\.\d{1,3}){3}:\d+$' -and $s -ne $script:LastAdbSaved) {
+        try { Set-Content -LiteralPath $script:LastAdbPath -Value $s -Encoding ascii -NoNewline; $script:LastAdbSaved = $s } catch {}
+    }
+    return $s
+}
+
+# Direct `adb connect` to the last known address (short timeout: on another network it just fails).
+function Connect-QuestLastAddress {
+    if (-not (Test-Path -LiteralPath $script:LastAdbPath)) { return $null }
+    $target = ''
+    try { $target = (Get-Content -LiteralPath $script:LastAdbPath -Raw).Trim() } catch {}
+    if ($target -notmatch '^\d{1,3}(\.\d{1,3}){3}:\d+$') { return $null }
+    $r = Invoke-Adb -Arguments @('connect', $target) -TimeoutSec 3
+    if (([string]$r.Out) -notmatch '(?i)\bconnected to\b') { return $null }
+    $s = Get-OnlineQuestSerial
+    if ($s) { Write-QuestLog "Connected to the last known address $target" }
+    return $s
+}
+
+function Find-OnlineQuestSerial {
     $r = Invoke-Adb -Arguments @('devices', '-l')
     $lines = @($r.Out -split "`r?`n" | Where-Object { $_ -match '^\S+\s+device\b' })
     if (-not [string]::IsNullOrWhiteSpace($Serial)) {
@@ -268,6 +299,9 @@ function Connect-Quest {
         $s = Get-OnlineQuestSerial
         if ($s) { return $s }
     }
+    # Same port as last time (no reboot / wireless debugging toggle since): no mDNS needed.
+    $s = Connect-QuestLastAddress
+    if ($s) { $script:MdnsUnseenSince = $null; return $s }
     # Wireless debugging (TLS) advertises its random port over mDNS; works once paired.
     $s = Connect-QuestViaMdns
     if ($s) { $script:MdnsUnseenSince = $null; return $s }
@@ -670,8 +704,49 @@ function Open-QuestLanTabOnce {
     return (Open-QuestNormalTab -DeviceSerial $DeviceSerial)
 }
 
+# ---- Close Quest Browser at quit when this session started it ----
+# %TEMP%\loopsegments-quest-browser-ours.json: {ours: true} once an Open on Quest found Quest Browser
+# not running (so it was started for Loop Segments), {ours: false} when the first one found it
+# running. The companion removes it at startup; the quit reads it.
+$script:BrowserOursPath = Join-Path $env:TEMP 'loopsegments-quest-browser-ours.json'
+
+function Test-QuestBrowserRunning {
+    param([string] $DeviceSerial)
+    $r = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'pidof', $BrowserPackage)
+    return ([string]$r.Out).Trim() -match '^\d'
+}
+
+function Test-QuestBrowserOurs {
+    try { return [bool]((Get-Content -LiteralPath $script:BrowserOursPath -Raw | ConvertFrom-Json).ours) } catch { return $false }
+}
+
+# Before Open on Quest's first intent. A later click that finds the browser closed again also
+# makes it ours (whatever was open before is gone by then).
+function Save-QuestBrowserOurs {
+    param([string] $DeviceSerial)
+    $running = Test-QuestBrowserRunning -DeviceSerial $DeviceSerial
+    if ($running -and (Test-Path -LiteralPath $script:BrowserOursPath)) { return }
+    try { @{ ours = (-not $running); at = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $script:BrowserOursPath -Encoding utf8 } catch {}
+    Write-QuestLog ("Browser: Quest Browser {0}" -f $(if ($running) { 'was already running before Open on Quest - left running at quit.' } else { 'was not running before Open on Quest - closed again at quit if no other tabs are left.' }))
+}
+
+# DevTools must be open. Force-stops Quest Browser when only empty tabs are left (new tab pages).
+function Close-QuestBrowserIfEmpty {
+    param([string] $DeviceSerial)
+    $left = @(Get-QuestTabs | Where-Object { $u = [string]$_.url; -not ($u -eq '' -or $u -eq 'about:blank' -or $u -like 'chrome://panel-app-nav/ntp*' -or $u -like 'chrome://newtab*') })
+    if ($left.Count -gt 0) {
+        Write-QuestLog "Browser: $($left.Count) other tab(s) open - Quest Browser left running."
+        return 'left'
+    }
+    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'force-stop', $BrowserPackage)
+    if ($r.Code -ne 0) { Write-QuestLog "Browser: force-stop failed (code $($r.Code))."; return 'failed' }
+    Write-QuestLog 'Browser: closed Quest Browser (it was started for Loop Segments and no other tabs were open).'
+    return 'closed'
+}
+
 function Open-QuestLanTab {
     param([string] $DeviceSerial)
+    Save-QuestBrowserOurs -DeviceSerial $DeviceSerial
     if (-not (Open-QuestLanTabOnce -DeviceSerial $DeviceSerial)) { return $false }
     if ($NoFlags) { return $true }
     if ((Test-QuestLanTabSecure -DeviceSerial $DeviceSerial) -ne 'insecure') { return $true }
@@ -965,7 +1040,7 @@ function Test-QuestHeadsetWorn {
 # Save what is left to do and make sure one helper is running for it. -Proximity: the quit could
 # not reach the headset, so the sensor override may still be on. Returns $true when handed over.
 function Start-QuestHistoryRetry {
-    param([string[]] $Origins, [switch] $CloseTabs, [switch] $Proximity)
+    param([string[]] $Origins, [switch] $CloseTabs, [switch] $Proximity, [switch] $CloseBrowser)
     $mins = 120
     if ($script:Cfg -and $script:Cfg.Contains('questHistoryRetryMinutes')) { $mins = [int]$script:Cfg.questHistoryRetryMinutes }
     if ($mins -le 0) { return $false }
@@ -980,6 +1055,7 @@ function Start-QuestHistoryRetry {
         url       = $Url
         closeTabs = [bool]($CloseTabs -or ($prev -and $prev.closeTabs))
         proximity = [bool]($Proximity -or ($prev -and $prev.proximity))
+        closeBrowser = [bool]($CloseBrowser -or ($prev -and $prev.PSObject.Properties['closeBrowser'] -and $prev.closeBrowser))
         until     = $until.ToString('o')
         queuedAt  = [DateTime]::UtcNow.ToString('o')
         pid       = $helperPid
@@ -1004,6 +1080,19 @@ function Start-QuestHistoryRetry {
     }
     Write-QuestLog ("History: postponed - deleted when the headset is next worn (helper PID {0}, until {1:HH:mm})." -f $helperPid, $until.ToLocalTime())
     return $true
+}
+
+# questClearHistoryFallback: the Clear browsing data range (history only) cleared when the selective
+# delete fails, at quit and in the after-quit helper. '' = no fallback.
+function Get-QuestHistoryFallbackRange {
+    $fbRange = 'day'
+    if ($script:Cfg -and $script:Cfg.Contains('questClearHistoryFallback')) {
+        $fbRaw = ([string]$script:Cfg.questClearHistoryFallback).Trim().ToLowerInvariant()
+        if (@('', 'none', 'off', 'false') -contains $fbRaw) { $fbRange = '' }
+        elseif (@('hour', 'day', 'week', 'fourweeks', 'all') -contains $fbRaw) { $fbRange = $fbRaw }
+        else { Write-QuestLog "History: questClearHistoryFallback '$fbRaw' unknown - using 'day'." }
+    }
+    return $fbRange
 }
 
 function Invoke-QuestHistoryRetry {
@@ -1057,12 +1146,17 @@ function Invoke-QuestHistoryRetry {
                             foreach ($t in $lan) { Close-QuestTab -Id $t.id }
                             if ($lan.Count) { Write-QuestLog "History retry: closed $($lan.Count) Quest Browser tab(s) on the phone LAN page / control page." }
                         }
-                        # No range fallback here: by now it would delete your new browsing too.
-                        $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -Origins $origins -BudgetSec 25 -FallbackRange ''
+                        # Same range fallback as the quit (questClearHistoryFallback): it also clears what
+                        # you browsed since, within that range.
+                        $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -Origins $origins -BudgetSec 25 -FallbackRange (Get-QuestHistoryFallbackRange)
+                        # The quit left Quest Browser running for this delete: close it now if it was ours.
+                        if (($res -eq 'cleared' -or $res -eq 'fallback') -and $p.PSObject.Properties['closeBrowser'] -and $p.closeBrowser) {
+                            [void](Close-QuestBrowserIfEmpty -DeviceSerial $dev)
+                        }
                     } finally { Close-QuestDevTools }
                 }
-                if ($res -eq 'cleared') {
-                    Write-QuestLog 'History retry: done.'
+                if ($res -eq 'cleared' -or $res -eq 'fallback') {
+                    Write-QuestLog ("History retry: done{0}." -f $(if ($res -eq 'fallback') { ' (range fallback)' } else { '' }))
                     Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
                     Invoke-QuestDeferredBounce -Why 'history deleted'
                     return 0
@@ -1121,8 +1215,9 @@ if ($EnsureFlags -or $ClearHistory) {
         if ($ClearHistory -and -not $SkipHistoryClear) {
             # Close the tabs, delete the entries and reset the sensor once the headset is back.
             $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigin -DeviceSerial '') | Where-Object { $_ } | Select-Object -Unique)
-            [void](Start-QuestHistoryRetry -Origins $origins -CloseTabs:$CloseLanTabs -Proximity:$EnableProximityAfter)
+            [void](Start-QuestHistoryRetry -Origins $origins -CloseTabs:$CloseLanTabs -Proximity:$EnableProximityAfter -CloseBrowser:(Test-QuestBrowserOurs))
         }
+        Remove-Item -LiteralPath $script:BrowserOursPath -Force -ErrorAction SilentlyContinue
         exit 1
     }
     if ($ClearHistory) {
@@ -1131,6 +1226,10 @@ if ($EnsureFlags -or $ClearHistory) {
         $since = { ([DateTime]::UtcNow - $script:StartedAt).TotalSeconds }
         Write-QuestLog ("Cleanup: headset on adb after {0:0.0} s." -f (& $since))
         $res = 'skipped'
+        # Close Quest Browser afterwards when this session started it, or when it was closed at quit
+        # (the history step starts it): only with -CloseLanTabs, and only if no other tabs are left.
+        $closeBrowser = $CloseLanTabs -and ((Test-QuestBrowserOurs) -or -not (Test-QuestBrowserRunning -DeviceSerial $dev))
+        $browserRes = 'kept'
         if ($CloseLanTabs -or -not $SkipHistoryClear) {
             if (Open-QuestDevTools -DeviceSerial $dev) {
                 try {
@@ -1147,21 +1246,18 @@ if ($EnsureFlags -or $ClearHistory) {
                     if (-not $SkipHistoryClear) {
                         $t0 = [DateTime]::UtcNow
                         $budget = 28 - (& $since)
-                        # questClearHistoryFallback: dialog range cleared if the selective delete fails.
-                        $fbRange = 'day'
-                        if ($script:Cfg -and $script:Cfg.Contains('questClearHistoryFallback')) {
-                            $fbRaw = ([string]$script:Cfg.questClearHistoryFallback).Trim().ToLowerInvariant()
-                            if (@('', 'none', 'off', 'false') -contains $fbRaw) { $fbRange = '' }
-                            elseif (@('hour', 'day', 'week', 'fourweeks', 'all') -contains $fbRaw) { $fbRange = $fbRaw }
-                            else { Write-QuestLog "History: questClearHistoryFallback '$fbRaw' unknown - using 'day'." }
-                        }
-                        $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -Origins $origins -BudgetSec $budget -FallbackRange $fbRange
+                        $res = Clear-QuestBrowserHistory -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl) -Origins $origins -BudgetSec $budget -FallbackRange (Get-QuestHistoryFallbackRange)
                         # Usually nobody is wearing the headset at quit, and then Quest Browser does not
                         # answer: hand the delete to the after-quit helper.
-                        if ($res -eq 'failed' -and (Start-QuestHistoryRetry -Origins $origins)) { $res = 'postponed' }
+                        if ($res -eq 'failed' -and (Start-QuestHistoryRetry -Origins $origins -CloseBrowser:$closeBrowser)) { $res = 'postponed' }
                         Write-QuestLog ("History step: {0} ({1:0.0} s)." -f $res, ([DateTime]::UtcNow - $t0).TotalSeconds)
                     }
+                    if ($closeBrowser) {
+                        # A postponed delete needs the browser: the helper closes it after its delete.
+                        $browserRes = if ($res -eq 'postponed') { 'helper' } else { Close-QuestBrowserIfEmpty -DeviceSerial $dev }
+                    }
                 } finally { Close-QuestDevTools }
+                Remove-Item -LiteralPath $script:BrowserOursPath -Force -ErrorAction SilentlyContinue
             } else {
                 $res = 'failed'
             }
@@ -1180,7 +1276,7 @@ if ($EnsureFlags -or $ClearHistory) {
             $prox = if ((Invoke-QuestEnableProximity) -eq 0) { 'on' } else { 'failed' }
             Write-QuestLog ("Proximity step: {0} ({1:0.0} s)." -f $prox, ([DateTime]::UtcNow - $t0).TotalSeconds)
         }
-        Write-QuestLog ("Cleanup: finished {0:0.0} s after start (history {1}, SKYBOX {2}, proximity {3})." -f (& $since), $res, $sky, $prox)
+        Write-QuestLog ("Cleanup: finished {0:0.0} s after start (history {1}, browser {2}, SKYBOX {3}, proximity {4})." -f (& $since), $res, $browserRes, $sky, $prox)
         $historyBad = ($res -eq 'failed') -or (($res -eq 'skipped') -and (-not $SkipHistoryClear))
         if ($historyBad -or ($prox -eq 'failed') -or ($sky -eq 'failed')) { exit 3 }
         if ($res -eq 'postponed') { exit 4 }
