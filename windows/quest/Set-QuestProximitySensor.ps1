@@ -18,6 +18,9 @@
   While the PC companion runs with questKeepAwakeDuringSession=true, its keep-awake job switches the
   sensor off again within ~20 s after you turn it on; the companion turns it on itself at close.
 
+  Headset not on adb (asleep, or Wi-Fi just switched on): keeps trying every 5 s for up to
+  -WaitSec (default 120 s), so you can put the headset on or switch its Wi-Fi on meanwhile.
+
   Exit codes: 0 done, 1 headset not on adb, 2 no adb, 3 the headset did not take the change.
   Log: %TEMP%\loopsegments-quest-lantab.log
 
@@ -31,7 +34,9 @@
 param(
     [ValidateSet('On', 'Off', 'Toggle')] [string] $State = 'Toggle',
     # Exit straight away instead of waiting for Enter (for scripts).
-    [switch] $NoWait
+    [switch] $NoWait,
+    # Headset not on adb: keep trying for this many seconds (every 5 s). 0 = try once.
+    [int] $WaitSec = 120
 )
 
 $watch = Join-Path $PSScriptRoot 'Watch-LoopSegmentsQuestLanTab.ps1'
@@ -39,8 +44,20 @@ $switch = @{ On = '-EnableProximity'; Off = '-DisableProximity'; Toggle = '-Togg
 Write-Host "Quest proximity sensor: $($State.ToLowerInvariant())..." -ForegroundColor Cyan
 
 # The Quest script prints "[quest] Proximity: ... now 'CLOSE'" (or an error line); keep its lines.
-$out = @(& (Get-Process -Id $PID).Path -NoProfile -NoLogo -ExecutionPolicy Bypass -File $watch $switch 2>&1 | ForEach-Object { "$_" })
-$code = $LASTEXITCODE
+# Exit 1 = headset not on adb: try again every 5 s until -WaitSec runs out.
+$deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(0, $WaitSec))
+$tries = 0
+while ($true) {
+    $tries++
+    $out = @(& (Get-Process -Id $PID).Path -NoProfile -NoLogo -ExecutionPolicy Bypass -File $watch $switch 2>&1 | ForEach-Object { "$_" })
+    $code = $LASTEXITCODE
+    if ($code -ne 1 -or [DateTime]::UtcNow -ge $deadline) { break }
+    if ($tries -eq 1) {
+        Write-Host ("  Headset not on adb yet - trying every 5 s for up to {0} s (put it on / switch its Wi-Fi on; Ctrl+C to stop)..." -f $WaitSec) -ForegroundColor Yellow
+    }
+    Start-Sleep -Seconds 5
+}
+if ($tries -gt 1) { Write-Host "  ($tries tries)" -ForegroundColor DarkGray }
 foreach ($l in $out) { Write-Host "  $l" -ForegroundColor DarkGray }
 
 $now = $null
@@ -54,7 +71,7 @@ if ($code -eq 0) {
     }
 } else {
     $why = switch ($code) {
-        1 { 'Headset not reachable over adb: wake it (put it on) and check wireless debugging, then try again.' }
+        1 { "Headset not reachable over adb within $WaitSec s: wake it (put it on), check its Wi-Fi and wireless debugging, then try again." }
         2 { 'adb not found: winget install Google.PlatformTools (see quest\README.md).' }
         3 { 'The headset did not take the change (see the lines above).' }
         default { "Failed (exit $code)." }
