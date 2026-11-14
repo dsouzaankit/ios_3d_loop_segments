@@ -38,6 +38,9 @@
   -DisableProximity : hold the proximity sensor off (`prox_close`; headset stays awake when taken
                    off). -ToggleProximity flips it. Both need no -Url; quest\Set-QuestProximitySensor.ps1
                    wraps all three.
+  -WifiOff       : switch the headset's Wi-Fi off now (Settings > Wi-Fi opened first on an awake
+                   headset), whatever questWifiOffOnExit says; adb drops right after.
+                   quest\Set-QuestWifiOff.ps1 wraps it. Needs no -Url.
   -ResetFlags    : reset every Quest Browser chrome://flags entry to its default ("Reset all") and
                    restart Quest Browser (closes its tabs). The next Open on Quest sets the
                    insecure-origin flag again. quest\Reset-QuestBrowserFlags.ps1 wraps it.
@@ -142,6 +145,8 @@ param(
     [switch] $KeepAwakeSession,
     # Only reset all Quest Browser chrome://flags to their defaults (and restart the browser).
     [switch] $ResetFlags,
+    # Only switch the headset's Wi-Fi off (by hand; ignores questWifiOffOnExit).
+    [switch] $WifiOff,
     # Quest control page: put the phone in SKYBOX as WebDAV server 'Loop Segments' (current address
     # and login), dropping older addresses this PC added.
     [switch] $SkyboxPush,
@@ -1213,8 +1218,9 @@ function Test-QuestWifiOffWanted {
 }
 
 function Invoke-QuestWifiOff {
-    param([string] $DeviceSerial)
-    if (-not (Test-QuestWifiOffWanted)) { return 'kept' }
+    # -Force: by hand (-WifiOff), regardless of questWifiOffOnExit.
+    param([string] $DeviceSerial, [switch] $Force)
+    if (-not $Force -and -not (Test-QuestWifiOffWanted)) { return 'kept' }
     # Open Settings > Wi-Fi first (android.settings.WIFI_SETTINGS: Quest relays it to its Settings
     # app on the Wi-Fi page, toggle at the top), so switching Wi-Fi back on is one tap when the
     # headset is next put on. Only on an awake headset (an activity start may wake a sleeping one),
@@ -1343,6 +1349,13 @@ if ($ProbeIncognito) { exit (Invoke-QuestIncognitoProbe) }
 if ($EnableProximity) { exit (Invoke-QuestEnableProximity) }
 if ($DisableProximity) { exit (Invoke-QuestDisableProximity) }
 if ($ToggleProximity) { exit (Invoke-QuestToggleProximity) }
+if ($WifiOff) {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-QuestLog 'Wi-Fi: headset not reachable over adb - skipped.'; exit 1 }
+    $w = Invoke-QuestWifiOff -DeviceSerial $dev -Force
+    if ($w -eq 'off') { exit 0 } else { exit 3 }
+}
 if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession) }
 if ($SkyboxPush -or $SkyboxUpdate) {
     $res = Invoke-QuestSkyboxWebDavPush -OnlyIfPresent:$SkyboxUpdate
