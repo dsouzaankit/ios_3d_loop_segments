@@ -1136,6 +1136,8 @@ function Clear-QuestHistoryAndClosed {
 # the router. adb (over that Wi-Fi) drops right after. Wireless debugging comes back on its own (new
 # port, found over mDNS) once Wi-Fi is switched on again in the headset's quick settings.
 # Returns 'off', 'failed' or 'kept' (setting off).
+$script:QuestQuickControls = 'com.oculus.panelapp.settings/com.oculus.navigator.quickcontrols.app.NavigatorQuickControlsActivity'
+
 function Test-QuestWifiOffWanted {
     $on = $true
     if ($script:Cfg -and $script:Cfg.Contains('questWifiOffOnExit')) { $on = [bool]$script:Cfg.questWifiOffOnExit }
@@ -1145,12 +1147,13 @@ function Test-QuestWifiOffWanted {
 function Invoke-QuestWifiOff {
     param([string] $DeviceSerial)
     if (-not (Test-QuestWifiOffWanted)) { return 'kept' }
-    # The Meta button's short press first (KEYCODE_HOME: Horizon Home to the front, Quest Browser
-    # behind it), so the headset is left on Home. Only on an awake headset: a key press may wake a
-    # sleeping one. Always after the browser steps: a browser behind Home may not answer.
+    # Open Quick Controls first (the panel with the Wi-Fi toggle), so switching Wi-Fi back on is one
+    # tap when the headset is next put on. Only on an awake headset (an activity start may wake a
+    # sleeping one), and after the browser steps (Quest Browser goes behind the panel).
     if ((Get-QuestWakefulness -DeviceSerial $DeviceSerial) -eq 'Awake') {
-        $h = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'input', 'keyevent', 'KEYCODE_HOME')
-        if ($h.Code -eq 0) { Write-QuestLog 'Home: pressed the Meta button (Horizon Home in front).'; Start-Sleep -Milliseconds 800 }
+        $h = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'start', '-n', $script:QuestQuickControls)
+        if ($h.Code -eq 0 -and ([string]$h.Out) -notmatch '(?i)error') { Write-QuestLog 'Quick Controls: opened (Wi-Fi toggle in front).'; Start-Sleep -Milliseconds 800 }
+        else { Write-QuestLog "Quick Controls: could not open ($(([string]$h.Out + ' ' + [string]$h.Err).Trim()))." }
     }
     $w = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'cmd', 'wifi', 'set-wifi-enabled', 'disabled')
     if ($w.Code -eq 0) {
