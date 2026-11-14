@@ -851,6 +851,57 @@ function Get-QuestVirtualProximity {
 
 # Hold the proximity sensor off (`prox_close`, virtual state CLOSE): the headset acts as worn and
 # does not sleep when taken off. Undone by -EnableProximity or a headset reboot.
+# A notification in the headset while the sensor is held off by hand (Set-QuestProximitySensor.ps1),
+# so it is clear why the headset does not sleep. `cmd notification post` (as the Android shell; Quest
+# shows it in the notification panel, not as a popup); there is no remove command, so turning the
+# sensor on snoozes it for a year, which takes it off the panel. A snoozed notification stays snoozed
+# when posted again under the same tag, so each post gets its own tag (loopsegments_prox_<time>) and
+# the hide snoozes every one of them. Keep-awake during a companion session does not post it.
+$script:QuestSensorNoticeTag = 'loopsegments_prox'
+
+function Show-QuestSensorOffNotice {
+    param([string] $DeviceSerial)
+    $text = 'The headset stays awake when you take it off. Run Set-QuestProximitySensor.ps1 on the PC to turn the sensor on again (a headset reboot or the companion quit also does).'
+    Hide-QuestSensorOffNotice -DeviceSerial $DeviceSerial -Quiet
+    $tag = '{0}_{1}' -f $script:QuestSensorNoticeTag, [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $r = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', "cmd notification post -S bigtext -t 'Proximity sensor OFF' $tag '$text'")
+    if ($r.Code -ne 0) { return }
+    Write-QuestLog 'Proximity: posted a "Proximity sensor OFF" notification in the headset.'
+    # Quest lists it only behind the bell (Meta button > bell), so open that list in front of the
+    # user: the system UI's notifications panel. Only on an awake headset (an activity start may
+    # wake a sleeping one). (The Navigator's NotificationsActivity sometimes brings up the Library
+    # instead, and `cmd statusbar expand-notifications` opens Settings > Notifications.)
+    if ((Get-QuestWakefulness -DeviceSerial $DeviceSerial) -eq 'Awake') {
+        $o = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'start', '-n', 'com.oculus.systemux/com.oculus.panelapp.notifications.NotificationsActivity')
+        if ($o.Code -eq 0 -and ([string]$o.Out) -notmatch '(?i)error') {
+            Write-QuestLog 'Proximity: opened the notifications list (bell) in the headset; closing it in 20 s.'
+            # Back / Home / Escape do not close that panel; removing its window's task does (like
+            # swiping it away; the notification stays behind the bell). Skipped if already closed.
+            Start-Sleep -Seconds 20
+            $acts = [string](Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'activity', 'activities')).Out
+            $m = [regex]::Match($acts, 'rootTaskId=(\d+)[^\n]*\n(?:[^\n]*\n){0,3}?[^\n]*panelapp\.notifications\.NotificationsActivity')
+            $root = if ($m.Success) { $m.Groups[1].Value } else { '' }
+            if (-not $root) {
+                $t = [regex]::Match($acts, 'panelapp\.notifications\.NotificationsActivity t(\d+)')
+                if ($t.Success) { $root = $t.Groups[1].Value }
+            }
+            if ($root) {
+                [void](Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'stack', 'remove', $root))
+                Write-QuestLog 'Proximity: closed the notifications list.'
+            }
+        }
+    }
+}
+
+function Hide-QuestSensorOffNotice {
+    param([string] $DeviceSerial, [switch] $Quiet)
+    $l = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'cmd', 'notification', 'list')
+    foreach ($k in @(([string]$l.Out) -split "`r?`n" | Where-Object { $_ -match "\|$([regex]::Escape($script:QuestSensorNoticeTag))(_\d+)?\|" })) {
+        [void](Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', "cmd notification snooze --for 31536000000 '$($k.Trim())'"))
+        if (-not $Quiet) { Write-QuestLog 'Proximity: removed the "Proximity sensor OFF" notification.' }
+    }
+}
+
 function Invoke-QuestDisableProximity {
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
@@ -868,6 +919,7 @@ function Invoke-QuestDisableProximity {
         return 3
     }
     Write-QuestLog ("Proximity: sensor off, headset stays awake (override was '{0}', now '{1}')." -f $(if ($before) { $before } else { '?' }), $(if ($after) { $after } else { '?' }))
+    Show-QuestSensorOffNotice -DeviceSerial $dev
     return 0
 }
 
@@ -897,6 +949,7 @@ function Invoke-QuestEnableProximity {
         return 3
     }
     Write-QuestLog ("Proximity: sensor on (override was '{0}', now '{1}')." -f $(if ($before) { $before } else { '?' }), $(if ($after) { $after } else { '?' }))
+    Hide-QuestSensorOffNotice -DeviceSerial $dev
     return 0
 }
 

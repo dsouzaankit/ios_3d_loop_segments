@@ -15,8 +15,13 @@
 
   Runs quest\Watch-LoopSegmentsQuestLanTab.ps1 -ResetFlags, so it finds the headset the same way (adb
   devices, last known address, mDNS). Needs the phone LAN page up: the helper tab opens a no-login
-  phone page (/xr-assets/aframe.min.js) before going to chrome://flags. Headset not on adb yet
-  (asleep, or Wi-Fi just switched on): keeps trying every 5 s for up to -WaitSec (default 120 s).
+  phone page (/xr-assets/aframe.min.js) before going to chrome://flags.
+
+  Like Set-QuestProximitySensor.ps1 (shared code in quest\QuestWrapperCommon.ps1): first makes sure
+  this PC is on the phone's network (lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1;
+  -SkipNetworkCheck skips it), then, while the headset is not on adb (asleep, or Wi-Fi just switched
+  on), keeps trying every 5 s for up to -WaitSec (default 120 s), restarting the adb server before
+  each retry.
 
   Exit codes: 0 reset, 1 headset not on adb, 2 no adb, 3 failed.
   Log: %TEMP%\loopsegments-quest-lantab.log
@@ -32,67 +37,19 @@ param(
     # Exit straight away instead of waiting for Enter (for scripts).
     [switch] $NoWait,
     # Headset not on adb: keep trying for this many seconds (every 5 s). 0 = try once.
-    [int] $WaitSec = 120
+    [int] $WaitSec = 120,
+    # Do not check / fix this PC's network first.
+    [switch] $SkipNetworkCheck
 )
 
-$watch = Join-Path $PSScriptRoot 'Watch-LoopSegmentsQuestLanTab.ps1'
-# Phone LAN page from windows\loop-segments-windows.json (phoneLanHost, lanPort).
-$phone = '10.0.100.10'; $port = 8765
-try {
-    . (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\LoopSegments-Windows.ps1')
-    $cfg = Get-LoopSegmentsWindowsSettings
-    if ($cfg.phoneLanHost) { $phone = [string]$cfg.phoneLanHost }
-    if ([int]$cfg.lanPort -gt 0) { $port = [int]$cfg.lanPort }
-} catch {}
-$url = "http://${phone}:$port/"
+. (Join-Path $PSScriptRoot 'QuestWrapperCommon.ps1')
+
+if (-not $SkipNetworkCheck) { Invoke-QuestWrapperNetworkCheck }
+$url = Get-QuestWrapperPhoneUrl
 Write-Host "Quest Browser: resetting all chrome://flags to default (phone page $url)..." -ForegroundColor Cyan
 
-$deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(0, $WaitSec))
-$tries = 0
-$adbRestarted = $false
-while ($true) {
-    $tries++
-    $out = @(& (Get-Process -Id $PID).Path -NoProfile -NoLogo -ExecutionPolicy Bypass -File $watch -Url $url -ResetFlags 2>&1 | ForEach-Object { "$_" })
-    $code = $LASTEXITCODE
-    if ($code -ne 1 -or [DateTime]::UtcNow -ge $deadline) { break }
-    if ($tries -eq 1) {
-        Write-Host ("  Headset not on adb yet - trying every 5 s for up to {0} s (put it on / switch its Wi-Fi on; Ctrl+C to stop)..." -f $WaitSec) -ForegroundColor Yellow
-    }
-    Start-Sleep -Seconds 5
-    # After ~30 s of misses, restart the PC's adb server once: when the headset's Wi-Fi comes back,
-    # wireless debugging gets a new port, and a running adb server can go on missing it over mDNS
-    # (seen: nothing for minutes; listed 4 s after a restart). Each try above is a new process, so
-    # the Quest script's own 60 s restart never fires here.
-    if (-not $adbRestarted -and $tries -ge 4) {
-        $adbRestarted = $true
-        $adbExe = (Get-Command adb -ErrorAction SilentlyContinue).Source
-        if ($adbExe) {
-            Write-Host '  Restarting the adb server to look for the headset afresh...' -ForegroundColor Yellow
-            & $adbExe kill-server 2>&1 | Out-Null
-            & $adbExe start-server 2>&1 | Out-Null
-            Start-Sleep -Seconds 3
-        }
-    }
-}
-if ($tries -gt 1) { Write-Host "  ($tries tries)" -ForegroundColor DarkGray }
-foreach ($l in $out) { Write-Host "  $l" -ForegroundColor DarkGray }
-
-Write-Host ''
-if ($code -eq 0) {
+$r = Invoke-QuestWrapperWatch -Arguments @('-Url', $url, '-ResetFlags') -WaitSec $WaitSec
+if ($r.Code -eq 0) {
     Write-Host 'Done: chrome://flags reset and Quest Browser restarted. The next Open on Quest sets the insecure-origin flag again.' -ForegroundColor Green
-} else {
-    $why = switch ($code) {
-        1 { "Headset not reachable over adb within $WaitSec s: wake it (put it on), check its Wi-Fi and wireless debugging, then try again." }
-        2 { 'adb not found: winget install Google.PlatformTools (see quest\README.md).' }
-        3 { 'Reset failed (see the lines above): is the phone LAN page up, and is the headset worn (Quest Browser answers only then)?' }
-        default { "Failed (exit $code)." }
-    }
-    Write-Host "ERROR: $why" -ForegroundColor Red
 }
-Write-Host "Log: $env:TEMP\loopsegments-quest-lantab.log" -ForegroundColor DarkGray
-
-if (-not $NoWait) {
-    Write-Host ''
-    [void](Read-Host 'Press Enter to close')
-}
-exit $code
+Exit-QuestWrapper -Code $r.Code -WaitSec $WaitSec -NoWait:$NoWait -FailedText 'Reset failed (see the lines above): is the phone LAN page up, and is the headset worn (Quest Browser answers only then)?'
