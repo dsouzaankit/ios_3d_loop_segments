@@ -195,6 +195,8 @@ Each phone runs its own LAN server on **`http://<phone-ip>:8765/`**. To browse *
 # Open http://<pc-ip>:8766/
 ```
 
+The page asks for the phone LAN login (`webdavUser` + `webdavPassword`, or a `phoneLanHosts` entry's password), because it shows what the phones keep behind that login. It also refuses clients outside private address ranges, and `Host` headers that are not an IP address or `localhost`. Open it by IP, not by a host name.
+
 Links in the unified view point back to each phone’s `:8765` URL — playback and WebDAV still go to the phone that holds the file. **`rclone\Mount-LoopSegmentsRclone.ps1`** still mounts **one** phone at a time (`phoneLanHost`).
 
 ### LAN throughput (after rclone mount)

@@ -99,11 +99,7 @@ function Get-ControlLogin {
 
 function Test-ControlClientAllowed {
     param([System.Net.IPAddress] $Address)
-    if ($Address.IsIPv4MappedToIPv6) { $Address = $Address.MapToIPv4() }
-    if ([System.Net.IPAddress]::IsLoopback($Address)) { return $true }
-    if ($Address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $false }
-    $b = $Address.GetAddressBytes()
-    return ($b[0] -eq 10) -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) -or ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 169 -and $b[1] -eq 254)
+    return (Test-LoopSegmentsPrivateLanAddress -Address $Address)
 }
 
 function Get-ControlHeader {
@@ -116,9 +112,7 @@ function Get-ControlHeader {
 
 function Test-ControlHostHeader {
     param([string] $HeaderText)
-    $h = Get-ControlHeader -HeaderText $HeaderText -Name 'Host'
-    if (-not $h) { return $false }
-    return ($h -match '^(\d{1,3}(\.\d{1,3}){3}|localhost|\[[0-9a-fA-F:]+\])(:\d+)?$')
+    return (Test-LoopSegmentsIpLiteralHostHeader -HostHeader (Get-ControlHeader -HeaderText $HeaderText -Name 'Host'))
 }
 
 function Test-ControlAuth {

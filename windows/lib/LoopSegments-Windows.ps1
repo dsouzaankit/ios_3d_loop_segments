@@ -1390,6 +1390,67 @@ function ConvertTo-LoopSegmentsHtmlEncoded {
     return ($Text -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;')
 }
 
+# ---- Checks for HTTP servers this PC runs on the LAN ----
+
+# Loopback, or a private / link-local IPv4 address (10/8, 172.16/12, 192.168/16, 169.254/16).
+function Test-LoopSegmentsPrivateLanAddress {
+    param([System.Net.IPAddress] $Address)
+    if ($null -eq $Address) { return $false }
+    if ($Address.IsIPv4MappedToIPv6) { $Address = $Address.MapToIPv4() }
+    if ([System.Net.IPAddress]::IsLoopback($Address)) { return $true }
+    if ($Address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    $b = $Address.GetAddressBytes()
+    return ($b[0] -eq 10) -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) -or ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 169 -and $b[1] -eq 254)
+}
+
+# Host header is an IP literal or localhost (with an optional port). DNS names are refused, which
+# blocks DNS rebinding from a web page.
+function Test-LoopSegmentsIpLiteralHostHeader {
+    param([string] $HostHeader)
+    if ([string]::IsNullOrWhiteSpace($HostHeader)) { return $false }
+    return ($HostHeader.Trim() -match '^(\d{1,3}(\.\d{1,3}){3}|localhost|\[[0-9a-fA-F:]+\])(:\d+)?$')
+}
+
+# Compares in time that does not depend on where the inputs differ. Works on Windows PowerShell 5.1,
+# which lacks CryptographicOperations.FixedTimeEquals.
+function Test-LoopSegmentsBytesEqualFixedTime {
+    param([byte[]] $A, [byte[]] $B)
+    if ($null -eq $A -or $null -eq $B) { return $false }
+    $diff = $A.Length -bxor $B.Length
+    for ($i = 0; $i -lt $A.Length; $i++) {
+        $diff = $diff -bor ($A[$i] -bxor $B[$i % [Math]::Max(1, $B.Length)])
+    }
+    return ($diff -eq 0)
+}
+
+# True when the Authorization header is HTTP Basic with the phone LAN login: webdavUser plus
+# webdavPassword or any phoneLanHosts[].webdavPassword. False when no password is configured.
+function Test-LoopSegmentsPhoneLanBasicAuth {
+    param([string] $AuthorizationHeader)
+    if ([string]::IsNullOrWhiteSpace($AuthorizationHeader)) { return $false }
+    if ($AuthorizationHeader.Trim() -notmatch '^(?i)Basic\s+(\S+)$') { return $false }
+    try {
+        $given = [Text.Encoding]::UTF8.GetBytes([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1])))
+    } catch {
+        return $false
+    }
+    $settings = Get-LoopSegmentsWindowsSettings
+    $user = if (-not [string]::IsNullOrWhiteSpace([string]$settings.webdavUser)) { [string]$settings.webdavUser } else { 'admin' }
+    $passwords = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrEmpty([string]$settings.webdavPassword)) { [void]$passwords.Add([string]$settings.webdavPassword) }
+    foreach ($raw in @($settings.phoneLanHosts)) {
+        if ($null -eq $raw) { continue }
+        $entry = ConvertTo-LoopSegmentsPhoneHostEntry -Raw $raw
+        if ($entry -and -not [string]::IsNullOrEmpty([string]$entry.Password)) { [void]$passwords.Add([string]$entry.Password) }
+    }
+    $ok = $false
+    foreach ($p in $passwords) {
+        $want = [Text.Encoding]::UTF8.GetBytes(('{0}:{1}' -f $user, $p))
+        if (Test-LoopSegmentsBytesEqualFixedTime -A $want -B $given) { $ok = $true }
+    }
+    return $ok
+}
+
 function Get-LoopSegmentsUnifiedLANListing {
     param(
         [string[]] $PhoneHost = @(),
@@ -1486,7 +1547,7 @@ function ConvertTo-LoopSegmentsUnifiedLANHtml {
         }
         $exportLine = ''
         if ($null -ne $device.exportSource -and $null -ne $device.exportSource.displayName) {
-            $exportLine = "<p><strong>Export:</strong> $($device.exportSource.displayName)</p>"
+            $exportLine = "<p><strong>Export:</strong> $(ConvertTo-LoopSegmentsHtmlEncoded -Text ([string]$device.exportSource.displayName))</p>"
         }
         $errorLine = ''
         if (-not [string]::IsNullOrWhiteSpace([string]$device.error)) {
