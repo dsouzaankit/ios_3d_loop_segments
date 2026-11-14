@@ -72,6 +72,7 @@ Write-Host "Quest proximity sensor: $($State.ToLowerInvariant())..." -Foreground
 # Exit 1 = headset not on adb: try again every 5 s until -WaitSec runs out.
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(0, $WaitSec))
 $tries = 0
+$adbRestarted = $false
 while ($true) {
     $tries++
     $out = @(& (Get-Process -Id $PID).Path -NoProfile -NoLogo -ExecutionPolicy Bypass -File $watch $switch 2>&1 | ForEach-Object { "$_" })
@@ -81,6 +82,20 @@ while ($true) {
         Write-Host ("  Headset not on adb yet - trying every 5 s for up to {0} s (put it on / switch its Wi-Fi on; Ctrl+C to stop)..." -f $WaitSec) -ForegroundColor Yellow
     }
     Start-Sleep -Seconds 5
+    # After ~30 s of misses, restart the PC's adb server once: when the headset's Wi-Fi comes back,
+    # wireless debugging gets a new port, and a running adb server can go on missing it over mDNS
+    # (seen: nothing for minutes; listed 4 s after a restart). Each try above is a new process, so
+    # the Quest script's own 60 s restart never fires here.
+    if (-not $adbRestarted -and $tries -ge 4) {
+        $adbRestarted = $true
+        $adbExe = (Get-Command adb -ErrorAction SilentlyContinue).Source
+        if ($adbExe) {
+            Write-Host '  Restarting the adb server to look for the headset afresh...' -ForegroundColor Yellow
+            & $adbExe kill-server 2>&1 | Out-Null
+            & $adbExe start-server 2>&1 | Out-Null
+            Start-Sleep -Seconds 3
+        }
+    }
 }
 if ($tries -gt 1) { Write-Host "  ($tries tries)" -ForegroundColor DarkGray }
 foreach ($l in $out) { Write-Host "  $l" -ForegroundColor DarkGray }
