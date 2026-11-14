@@ -296,6 +296,35 @@ function Sync-QuestInsecureOriginFlag {
     }
 }
 
+# Close our tabs (on -Origins). Quest Browser's History list only answers while the browser has at
+# least one tab open (seen: deleted with one tab open, 'history query never answered' right after
+# its last tab was closed), so when our tabs are the only ones the last of them is kept, turned into
+# a blank page with no back/forward entries (about:blank is never in history) instead of closed.
+# The force-stop that closes a browser Loop Segments started removes it without a Recently closed
+# item. Returns the number of tabs closed (the blanked one not counted).
+function Close-QuestOurTabs {
+    param([string[]] $Origins)
+    $ours = @(Get-QuestLanTabs -Origins $Origins)
+    if ($ours.Count -eq 0) { return 0 }
+    $others = @(Get-QuestTabs | Where-Object { $ours.id -notcontains $_.id })
+    $keep = $null
+    if ($others.Count -eq 0) {
+        $keep = $ours[0]
+        try {
+            [void](Invoke-QuestCdp -Tab $keep -Method 'Page.navigate' -Params @{ url = 'about:blank' } -TimeoutSec 8)
+            $b = Wait-QuestTabUrl -Id $keep.id -TimeoutSec 6 -Match { param($u) $u -eq 'about:blank' }
+            if ($b) { $keep = $b }
+            try { [void](Invoke-QuestCdp -Tab $keep -Method 'Page.resetNavigationHistory' -TimeoutSec 5) } catch {}
+            Write-QuestLog 'Tabs: kept one tab as a blank page (the History list needs an open tab).'
+        } catch {
+            $keep = $null
+        }
+    }
+    $n = 0
+    foreach ($t in $ours) { if (-not $keep -or $t.id -ne $keep.id) { Close-QuestTab -Id $t.id; $n++ } }
+    return $n
+}
+
 # Close a helper tab without leaving "Experiments" (chrome://flags) in Quest Browser's Recently
 # closed list. Every closed tab goes there, and nothing removes an item except deleting its pages
 # from history - chrome:// pages are never in history. So the tab first goes back to the phone page
@@ -314,8 +343,8 @@ function Close-QuestHelperTab {
     Close-QuestTab -Id $Tab.id
 }
 
-# Recently closed items that are only ours: every tab in them is on one of -Origins, a new-tab page
-# or chrome://flags. They also show as tiles on the new-tab page, and deleting their pages from
+# Recently closed items that are only ours: every tab in them is on one of -Origins, a new-tab page,
+# a blank page or chrome://flags. They also show as tiles on the new-tab page, and deleting their pages from
 # history does not reliably drop them (seen: items for a deleted page and for chrome:// pages
 # lasting for days). Each is reopened, sent to -HelperUrl with its back/forward list reset and
 # closed (Close-QuestHelperTab): the new item then holds only the phone page, which the caller's
@@ -333,7 +362,7 @@ function Invoke-QuestRecentlyClosedSweep {
     $ui = Get-QuestBrowserUi
     if (-not $ui) { return -1 }
     $os = ConvertTo-Json -Compress -InputObject @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/').ToLowerInvariant() })
-    $listJs = "(() => {`n$($script:QuestClosedCommonJs)`n  if (!store) return JSON.stringify({ ok: false });`n  const O = new Set($os);`n  const mine = u => { if (/^chrome:\/\/(flags|panel-app-nav\/ntp)/.test(u)) return true; try { return O.has(new URL(u).origin.toLowerCase()); } catch (e) { return false; } };`n  const ids = (store.getState().history.recentlyClosedTabs || []).filter(e => e.type === 'tab' && e.tabs && e.tabs.length && e.tabs.every(t => mine(String(t.url || '')))).map(e => e.sessionId);`n  return JSON.stringify({ ok: true, menu: !!menu, ids });`n})()"
+    $listJs = "(() => {`n$($script:QuestClosedCommonJs)`n  if (!store) return JSON.stringify({ ok: false });`n  const O = new Set($os);`n  const mine = u => { if (u === 'about:blank' || /^chrome:\/\/(flags|panel-app-nav\/ntp)/.test(u)) return true; try { return O.has(new URL(u).origin.toLowerCase()); } catch (e) { return false; } };`n  const ids = (store.getState().history.recentlyClosedTabs || []).filter(e => e.type === 'tab' && e.tabs && e.tabs.length && e.tabs.every(t => mine(String(t.url || '')))).map(e => e.sessionId);`n  return JSON.stringify({ ok: true, menu: !!menu, ids });`n})()"
     try { $l = Invoke-QuestEval -Tab $ui -Expression $listJs -TimeoutSec 8 | ConvertFrom-Json } catch { return -1 }
     if (-not $l.ok) { return -1 }
     $ids = @($l.ids)
@@ -350,7 +379,7 @@ function Invoke-QuestRecentlyClosedSweep {
         Close-QuestHelperTab -Tab $new -HelperUrl $HelperUrl
         $done++
     }
-    Write-QuestLog ("Recently closed: cleaned {0} of {1} Loop Segments / new-tab / chrome://flags item(s)." -f $done, $ids.Count)
+    Write-QuestLog ("Recently closed: cleaned {0} of {1} Loop Segments / new-tab / blank / chrome://flags item(s)." -f $done, $ids.Count)
     return $done
 }
 

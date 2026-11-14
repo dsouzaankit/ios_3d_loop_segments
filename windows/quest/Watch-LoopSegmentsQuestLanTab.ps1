@@ -586,6 +586,13 @@ function Open-QuestNormalTab {
         $how = if ($login -ne $plain) { 'signed in' } else { 'not signed in' }
         $which = if ($script:QuestReusedTab) { 'reused open tab' } else { 'new tab' }
         Write-QuestLog "Opened $Url in Quest browser, normal tab, $how, $which ($DeviceSerial)"
+        # A cold start can bring back extra browser windows (Android keeps their records across a
+        # force-stop), each on an empty new-tab page. Close empty new-tab pages: a window left with
+        # none closes with it. Your own tabs are not touched; the quit sweeps the 'New tab' items
+        # this leaves in Recently closed.
+        $empty = @(Get-QuestTabs | Where-Object { ([string]$_.url) -like 'chrome://panel-app-nav/ntp*' -or ([string]$_.url) -eq 'about:blank' })
+        foreach ($t in $empty) { Close-QuestTab -Id $t.id }
+        if ($empty.Count) { Write-QuestLog "Closed $($empty.Count) empty new-tab page(s) (extra browser windows from the cold start)." }
         return $true
     } catch {
         Write-QuestLog "Normal tab: $($_.Exception.Message)"
@@ -1184,6 +1191,7 @@ function Invoke-QuestHistoryRetry {
     Write-QuestLog ("History retry: waiting for the headset to be worn (until {0:HH:mm}; {1})." -f $until.ToLocalTime(), (@($p.origins) -join ', '))
     $proxDone = -not [bool]$p.proximity
     $shownWorn = $false
+    $fallbackTried = $false
     while ($true) {
         $p = Read-QuestHistoryPending
         if (-not $p) { Write-QuestLog 'History retry: no longer pending - stop.'; Invoke-QuestDeferredBounce -Why 'history delete no longer pending'; return 0 }
@@ -1227,13 +1235,16 @@ function Invoke-QuestHistoryRetry {
                     try {
                         $origins = @($p.origins)
                         if ($p.closeTabs) {
-                            $lan = @(Get-QuestLanTabs -Origins $origins)
-                            foreach ($t in $lan) { Close-QuestTab -Id $t.id }
-                            if ($lan.Count) { Write-QuestLog "History retry: closed $($lan.Count) Quest Browser tab(s) on the phone LAN page / control page." }
+                            $closed = Close-QuestOurTabs -Origins $origins
+                            if ($closed) { Write-QuestLog "History retry: closed $closed Quest Browser tab(s) on the phone LAN page / control page." }
                         }
                         # Same range fallback as the quit (questClearHistoryFallback): it also clears what
                         # you browsed since, within that range.
-                        $res = Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins $origins -BudgetSec 40 -FallbackRange (Get-QuestHistoryFallbackRange)
+                        # The range fallback at most once per helper run: retried every few seconds, its
+                        # Clear browsing data dialog would keep popping up while the browser is stuck.
+                        $fb = if ($fallbackTried) { '' } else { Get-QuestHistoryFallbackRange }
+                        if ($fb) { $fallbackTried = $true }
+                        $res = Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins $origins -BudgetSec 40 -FallbackRange $fb
                         # The quit left Quest Browser running for this delete: close it now if it was ours.
                         if (($res -eq 'cleared' -or $res -eq 'fallback') -and $p.PSObject.Properties['closeBrowser'] -and $p.closeBrowser) {
                             [void](Close-QuestBrowserIfEmpty -DeviceSerial $dev)
@@ -1326,9 +1337,8 @@ if ($EnsureFlags -or $ClearHistory) {
                     if ($CloseLanTabs) {
                         $t0 = [DateTime]::UtcNow
                         # Phone LAN page tabs, plus the Quest control page on this PC.
-                        $lan = @(Get-QuestLanTabs -Origins $origins)
-                        foreach ($t in $lan) { Close-QuestTab -Id $t.id }
-                        Write-QuestLog ("Tabs: closed {0} Quest Browser tab(s) on the phone LAN page / control page ({1:0.0} s)." -f $lan.Count, ([DateTime]::UtcNow - $t0).TotalSeconds)
+                        $closed = Close-QuestOurTabs -Origins $origins
+                        Write-QuestLog ("Tabs: closed {0} Quest Browser tab(s) on the phone LAN page / control page ({1:0.0} s)." -f $closed, ([DateTime]::UtcNow - $t0).TotalSeconds)
                     }
                     if (-not $SkipHistoryClear) {
                         $t0 = [DateTime]::UtcNow
