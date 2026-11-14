@@ -243,6 +243,45 @@ function Get-QuestFlagsJs {
 "@
 }
 
+# Reset every chrome://flags entry to its default (the page's own "Reset all"), restart Quest Browser
+# so it applies, and check afterwards that the insecure-origin flag is no longer enabled (its origin
+# list text survives a reset, which does nothing while the flag is off). Uses its own
+# helper tab (closed afterwards). The restart closes all open Quest Browser tabs. Returns 'reset' or
+# 'failed'. The next Open on Quest finds isSecureContext false and sets the insecure-origin flag again.
+function Reset-QuestBrowserFlags {
+    param([string] $DeviceSerial, [string] $HelperUrl)
+    $tab = New-QuestViewTab -DeviceSerial $DeviceSerial -PlainUrl $HelperUrl
+    if (-not $tab) { Write-QuestLog 'Flags reset: could not open a helper tab (phone LAN page up?).'; return 'failed' }
+    try {
+        [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = 'chrome://flags/' })
+        $tab = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 8 -Match { param($u) $u -like 'chrome://flags*' }
+        if (-not $tab) { Write-QuestLog 'Flags reset: chrome://flags did not load.'; return 'failed' }
+        $before = Invoke-QuestEval -Tab $tab -Expression (Get-QuestFlagsJs -Action 'read') | ConvertFrom-Json
+        $r = Invoke-QuestEval -Tab $tab -TimeoutSec 8 -Expression "(async () => { for (let i = 0; i < 40 && !document.querySelector('flags-app'); i++) await new Promise(r => setTimeout(r, 250)); if (!window.chrome || !chrome.send) return 'no chrome.send'; chrome.send('resetAllFlags'); return 'ok'; })()"
+        if ($r -ne 'ok') { Write-QuestLog "Flags reset: $r."; return 'failed' }
+        Write-QuestLog ("Flags reset: all chrome://flags entries set back to default (insecure-origin flag was enabled={0}, '{1}'); restarting Quest Browser." -f $before.enabled, $before.value)
+        try { [void](Invoke-QuestEval -Tab $tab -Expression (Get-QuestFlagsJs -Action 'restart') -TimeoutSec 5) } catch {}
+        $tab = $null
+        $back = $false
+        for ($i = 0; $i -lt 40 -and -not $back; $i++) { Start-Sleep -Milliseconds 750; $back = [bool](Get-QuestBrowserUi) }
+        if (-not $back) { Write-QuestLog 'Flags reset: Quest Browser did not come back after the restart (reset still applies on its next start).'; return 'reset' }
+        Start-Sleep -Seconds 1
+        $tab = New-QuestViewTab -DeviceSerial $DeviceSerial -PlainUrl $HelperUrl
+        if (-not $tab) { return 'reset' }
+        [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = "chrome://flags/#$($script:QuestFlagName)" })
+        $tab = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 8 -Match { param($u) $u -like 'chrome://flags*' }
+        if (-not $tab) { return 'reset' }
+        $chk = Invoke-QuestEval -Tab $tab -Expression (Get-QuestFlagsJs -Action 'read') | ConvertFrom-Json
+        # Reset all puts each flag back to Default; the origin list text stays, but a flag that is not
+        # enabled does nothing.
+        if ($chk.ok -and -not $chk.enabled) { Write-QuestLog 'Flags reset: confirmed after the restart (insecure-origin flag back to Default, not enabled).' }
+        else { Write-QuestLog "Flags reset: after the restart the insecure-origin flag is still enabled ('$($chk.value)')." }
+        return 'reset'
+    } finally {
+        if ($tab) { Close-QuestHelperTab -Tab $tab -HelperUrl $HelperUrl }
+    }
+}
+
 # Make sure every origin in -Origins is in the flag and the flag is enabled. Uses its own
 # helper tab (closed afterwards). Restarts Quest Browser only when something changed.
 # Returns 'ok', 'changed', or 'failed'.

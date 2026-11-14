@@ -38,6 +38,9 @@
   -DisableProximity : hold the proximity sensor off (`prox_close`; headset stays awake when taken
                    off). -ToggleProximity flips it. Both need no -Url; quest\Set-QuestProximitySensor.ps1
                    wraps all three.
+  -ResetFlags    : reset every Quest Browser chrome://flags entry to its default ("Reset all") and
+                   restart Quest Browser (closes its tabs). The next Open on Quest sets the
+                   insecure-origin flag again. quest\Reset-QuestBrowserFlags.ps1 wraps it.
   -SkyboxPush    : put WebDAV server 'Loop Segments' in SKYBOX's Network list at the phone's current
                    address (-LanConfig lan_config.json, else -Url) with the current LAN login, and drop
                    the ones this PC added at older addresses (QuestSkybox.ps1; stops SKYBOX only when
@@ -137,6 +140,8 @@ param(
     [switch] $ToggleProximity,
     # Keep the headset awake (prox_close) while -ParentPid runs.
     [switch] $KeepAwakeSession,
+    # Only reset all Quest Browser chrome://flags to their defaults (and restart the browser).
+    [switch] $ResetFlags,
     # Quest control page: put the phone in SKYBOX as WebDAV server 'Loop Segments' (current address
     # and login), dropping older addresses this PC added.
     [switch] $SkyboxPush,
@@ -1304,6 +1309,24 @@ if ([string]::IsNullOrWhiteSpace($Url)) {
     exit 2
 }
 if ($RetryHistory) { exit (Invoke-QuestHistoryRetry) }
+if ($ResetFlags) {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-QuestLog 'Flags reset: headset not reachable over adb - skipped.'; exit 1 }
+    $wasRunning = Test-QuestBrowserRunning -DeviceSerial $dev
+    if (-not (Open-QuestDevTools -DeviceSerial $dev)) { exit 3 }
+    try {
+        $res = Reset-QuestBrowserFlags -DeviceSerial $dev -HelperUrl (Get-QuestHelperUrl)
+        # Leave no trace: the helper tab's phone page in history, and its chrome://flags / new-tab /
+        # blank items in Recently closed. Then close Quest Browser again if the reset started it.
+        if ($res -eq 'reset') {
+            Start-Sleep -Seconds 1
+            [void](Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins @(Get-QuestLanOrigins) -BudgetSec 25 -FallbackRange '')
+            if (-not $wasRunning) { [void](Close-QuestBrowserIfEmpty -DeviceSerial $dev) }
+        }
+    } finally { Close-QuestDevTools }
+    if ($res -eq 'reset') { exit 0 } else { exit 3 }
+}
 if ($EnsureFlags -or $ClearHistory) {
     # Headset only needs to be on adb (awake or not); never waits.
     $dev = Get-OnlineQuestSerial
