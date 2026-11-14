@@ -1,5 +1,5 @@
 #Requires -Version 7.0
-# Shared Chromium profile sync for run_chromium.ps1 and _profile_exit_watchdog.ps1.
+# Shared Chromium profile sync for _run_chromium.ps1 and _profile_exit_watchdog.ps1.
 # Canonical copy on P: is one zip (cookies/login). Cache stays off pCloud.
 
 function Get-ChromiumProfileExcludeDirNames {

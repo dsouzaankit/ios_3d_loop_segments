@@ -3505,7 +3505,7 @@ chrome.runtime.onInstalled.addListener(() => {
   void cancelAllInFlightPcloudDownloads("onInstalled");
   void schedulePendingLanFlush();
   void flushPendingLanExports();
-  // LAN monitor tab: run_chromium CLI 2nd URL only (SW/onInstalled used to race → 3 tabs).
+  // LAN monitor tab: _run_chromium CLI 2nd URL only (SW/onInstalled used to race → 3 tabs).
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -3544,4 +3544,4 @@ void logServiceWorkerBoot("service_worker_eval");
 void cancelAllInFlightPcloudDownloads("service_worker_eval");
 void schedulePendingLanFlush();
 void flushPendingLanExports();
-// Startup LAN tab: run_chromium CLI only.
+// Startup LAN tab: _run_chromium CLI only.

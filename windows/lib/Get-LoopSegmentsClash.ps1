@@ -4,7 +4,7 @@
   Loop Segments wrapper around env_setup\altserver_refresh\VpnMulticast (Bonjour).
 
 .DESCRIPTION
-  Dot-source from pcloud_web_companion\run_chromium.ps1.
+  Dot-source from pcloud_web_companion\_run_chromium.ps1.
   Core lives in env_setup\altserver_refresh\VpnMulticast (submodule or P:\all_scripts\iOS apps\env_setup).
 #>
 

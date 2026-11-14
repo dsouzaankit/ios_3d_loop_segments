@@ -4,7 +4,7 @@
   Locate / start Virtual Desktop Streamer and hide its window to the tray.
 
 .DESCRIPTION
-  Dot-source from pcloud_web_companion\run_chromium.ps1.
+  Dot-source from pcloud_web_companion\_run_chromium.ps1.
   Companion starts Streamer if idle (starts the Windows service if it is stopped)
   and hides the Streamer window to the tray. Does not quit Streamer if it is
   already running, and does not quit it on companion finish. Missing install

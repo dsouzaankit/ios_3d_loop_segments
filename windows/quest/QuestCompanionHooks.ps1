@@ -1,4 +1,4 @@
-# Companion hooks for Quest Browser (dot-sourced by pcloud_web_companion\run_chromium.ps1 and
+# Companion hooks for Quest Browser (dot-sourced by pcloud_web_companion\_run_chromium.ps1 and
 # _profile_exit_watchdog.ps1). Each hook runs quest\Watch-LoopSegmentsQuestLanTab.ps1 in a
 # hidden pwsh; log lines go to %TEMP%\loopsegments-quest-lantab.log.
 #   startup : -KeepAwakeSession (background, until the companion exits) - questKeepAwakeDuringSession

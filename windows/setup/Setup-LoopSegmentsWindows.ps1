@@ -53,7 +53,7 @@ $LibDir = Join-Path $WindowsRoot 'lib'
 $exampleJson = Join-Path $WindowsRoot "loop-segments-windows.example.json"
 $liveJson = Join-Path $WindowsRoot "loop-segments-windows.json"
 $companionDir = Join-Path $WindowsRoot "pcloud_web_companion"
-$runChromium = Join-Path $companionDir "run_chromium.ps1"
+$runChromium = Join-Path $companionDir "_run_chromium.ps1"
 
 Write-Host "=== Loop Segments Windows setup (portable) ===" -ForegroundColor Cyan
 Write-Host "Repo windows folder: $WindowsRoot"

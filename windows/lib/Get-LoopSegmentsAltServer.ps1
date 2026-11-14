@@ -7,7 +7,7 @@
   Core locate/start lives in env_setup\altserver_refresh\lib\Get-AltServer.ps1
   (git submodule env_setup, with a sibling-folder fallback).
   This file keeps Loop Segments-specific warnings and USB-list heuristics.
-  Dot-source from Launch-LoopSegmentsViaUsb.ps1, run_chromium.ps1, Setup, etc.
+  Dot-source from Launch-LoopSegmentsViaUsb.ps1, _run_chromium.ps1, Setup, etc.
 
   AltServer is optional (SideStore default). Callers pass -EnsureAltServer /
   -EnsureStarted only for the AltStore path. Core env_setup load is lazy.

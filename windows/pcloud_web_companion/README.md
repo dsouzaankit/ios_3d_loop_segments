@@ -74,7 +74,7 @@ cd <repo>\windows
 .\pcloud_web_companion\Run-PCloudWebCompanion.ps1
 ```
 
-Prefer **`Run-PCloudWebCompanion.ps1`** (wrapper: Enter-on-error, forwards flags). `run_chromium.ps1` is the implementation — fine from a **pwsh** prompt; avoid Explorer “Run with PowerShell” / double-click on it (Windows PowerShell 5.1). Entry scripts are UTF-8 with BOM so a 5.1 start can re-launch under `pwsh` instead of flash-closing.
+Prefer **`Run-PCloudWebCompanion.ps1`** (wrapper: Enter-on-error, forwards flags). Files starting with `_` are internal helpers it runs or dot-sources (`_run_chromium.ps1`, `_rest_log_sink.ps1`, `_profile_exit_watchdog.ps1`, ...), so in Explorer the one to run is the only `Run-` file. To start it from Start or the taskbar, pin a shortcut to it (a `.ps1` cannot be pinned): target `"C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File "<this folder>\Run-PCloudWebCompanion.ps1"`, then *Pin to Start* / *Pin to taskbar*; or right-click the file → *Add to Favorites* for Explorer's Home. `_run_chromium.ps1` is the implementation — fine from a **pwsh** prompt; avoid Explorer “Run with PowerShell” / double-click on it (Windows PowerShell 5.1). Entry scripts are UTF-8 with BOM so a 5.1 start can re-launch under `pwsh` instead of flash-closing.
 | Flag | Effect |
 |------|--------|
 | `-RecreateVenv` | Recreate machine-local venv under `%LOCALAPPDATA%\pcloud_web_companion\venv` |
@@ -125,7 +125,7 @@ Each launch:
 
 ## Playwright
 
-**Not required by the extension.** Playwright is only used by `run_chromium.ps1` to download a Chromium build and resolve `chrome.exe`. Runtime is plain Chromium + the MV3 extension (no Playwright API calls). You can replace that with any Chromium/Chrome-for-Testing binary if you prefer.
+**Not required by the extension.** Playwright is only used by `_run_chromium.ps1` to download a Chromium build and resolve `chrome.exe`. Runtime is plain Chromium + the MV3 extension (no Playwright API calls). You can replace that with any Chromium/Chrome-for-Testing binary if you prefer.
 
 ## Config
 
@@ -153,7 +153,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 | Where | What |
 |-------|------|
-| `windows\pcloud_web_companion\logs\companion-console-*.log` | Full companion **console transcript** (`Start-Transcript` from `run_chromium.ps1`; includes `[lan]` / `[gateway]` / `[wifi-www]` / finish). Gitignored. |
+| `windows\pcloud_web_companion\logs\companion-console-*.log` | Full companion **console transcript** (`Start-Transcript` from `_run_chromium.ps1`; includes `[lan]` / `[gateway]` / `[wifi-www]` / finish). Gitignored. |
 | `windows\pcloud_web_companion\rest.log` | Live extension/sink JSON lines (`sw_boot`, `capture`, `request`, …). Truncated each companion start (previous file archived). |
 | `windows\pcloud_web_companion\logs\rest-*.log` | Archived `rest.log` from prior runs |
 | Extension toolbar icon | REST logs popup (current session) |
@@ -181,7 +181,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | `logs.html` / `logs.js` | In-browser REST log UI + **Open pCloud Drive folder** + **Write hybrid media_files.txt** |
 | `lan_config.json` | Phone LAN target (synced on launch) |
 | `Sync-Reload-PCloudWebCompanionDev.ps1` | Dev: sync extension to LOCALAPPDATA + restart sink (poll health up to ~25s; no Chromium exit); then `chrome://extensions` Reload |
-| `run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, toolbar pin + **Ctrl+E** / **Ctrl+Shift+H** prefs, browser launch, console transcript |
+| `_run_chromium.ps1` | Venv, Playwright Chromium, gateway reboot check, USB launch, rclone mount, LAN throughput probe, profile sync, extension copy, toolbar pin + **Ctrl+E** / **Ctrl+Shift+H** prefs, browser launch, console transcript |
 | `_companion_logging.ps1` | `Start-Transcript` + `rest.log` archive + retention under `logs\` |
 | `_chromium_profile_sync.ps1` | Zip/unzip Chromium profile (cache off pCloud); used by launcher + exit watchdog |
 | `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium, unmap Skybox AirScreen shares, quit Skybox if we started it, + sync/clear profile |
@@ -191,7 +191,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 
 ## Requirements
 
-- Windows + **PowerShell 7** (`pwsh`; install from https://aka.ms/powershell). Prefer a **pwsh** prompt. A Windows PowerShell 5.1 (blue) start of `Run-PCloudWebCompanion.ps1` / `run_chromium.ps1` **re-runs under `pwsh`** when the file parses (UTF-8 BOM); still prefer opening 7 first.
+- Windows + **PowerShell 7** (`pwsh`; install from https://aka.ms/powershell). Prefer a **pwsh** prompt. A Windows PowerShell 5.1 (blue) start of `Run-PCloudWebCompanion.ps1` / `_run_chromium.ps1` **re-runs under `pwsh`** when the file parses (UTF-8 BOM); still prefer opening 7 first.
 - Windows + Python (`py`) — for the launcher’s Chromium install via Playwright
 - Loop Segments app LAN server on port 8765 (USB launch opens the app first when possible)
 - `windows\loop-segments-windows.json` with `phoneLanHost`
@@ -203,6 +203,6 @@ The extension must reach `http://<phoneLanHost>:8765/`. **Clash TUN** often blac
 
 **Fix in 1.7.4+:** phone LAN API calls go through `http://127.0.0.1:18765/phone-lan` (companion PowerShell sink) which talks to the phone with an **empty WinHTTP proxy** (DIRECT). Loopback is normally excluded from TUN. In-progress pCloud **downloads** are re-cancelled while the pipeline runs. **CDN view tabs are not closed** (1.7.8+).
 
-`run_chromium.ps1` also sets `--proxy-bypass-list` for system-proxy Clash. Keep the companion console open so the local sink stays up.
+`_run_chromium.ps1` also sets `--proxy-bypass-list` for system-proxy Clash. Keep the companion console open so the local sink stays up.
 
 **Still need Clash DIRECT for private ranges** if even the LAN monitor tab fails under TUN.

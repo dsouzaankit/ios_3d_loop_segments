@@ -4,7 +4,7 @@
   If the companion console dies without a graceful marker, close Chromium/Skybox shares and sync profile.
 
 .DESCRIPTION
-  Started by run_chromium.ps1 while waiting on Chromium. When the parent PowerShell
+  Started by _run_chromium.ps1 while waiting on Chromium. When the parent PowerShell
   PID exits without writing the graceful-exit marker, this script force-closes the
   profile Chromium, unmaps Skybox AirScreen Add-folders, quits SKYBOX VR
   if this companion session started it, stops phone rclone mount+DLNA, uploads

@@ -4,7 +4,7 @@
   Start integrated pcloud_web_companion Chromium helper (USB-launches Loop Segments first).
 
 .DESCRIPTION
-  Wrapper around run_chromium.ps1 in this folder.
+  Wrapper around _run_chromium.ps1 in this folder.
   Before Chromium starts, if the PC default gateway is not on the same subnet as
   the phone LAN page IP, reboots Wi-Fi on that current gateway (scripts under
   P:\all_scripts\5g_router_reboot), waits for this PC to get a new LAN IP, and
@@ -127,7 +127,7 @@ function Wait-EnterOnError {
 }
 
 try {
-    $target = Join-Path $PSScriptRoot "run_chromium.ps1"
+    $target = Join-Path $PSScriptRoot "_run_chromium.ps1"
     if (-not (Test-Path -LiteralPath $target)) {
         throw "Missing $target"
     }

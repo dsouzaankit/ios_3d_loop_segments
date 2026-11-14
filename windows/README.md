@@ -310,7 +310,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `usb\Launch-LoopSegmentsViaUsb.ps1` | Force-open Loop Segments over USB (`pymobiledevice3`); DVT `--userspace --no-kill-existing` first; skips if already foreground; exit **3** if phone locked |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish if it is still foreground (skip when backgrounded or lock screen; DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); no USB → skip. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` (**in-process**, throws `HOME_USB_EXIT:<code>`) and companion pauses itself after a Home fail |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |
-| `pcloud_web_companion/` | MV3 extension + `run_chromium.ps1` (see that folder’s README) |
+| `pcloud_web_companion/` | MV3 extension + `_run_chromium.ps1` (see that folder’s README) |
 | `sideload\Register-AltServerAtLogon.ps1` | **AltStore only:** AltServer at logon. **SideStore:** skip or `-Unregister` (LocalDevVPN Wi‑Fi refresh; no PC). UsbWatch is a **different** task — unregister with `env_setup\altserver_refresh\usb\Register-IphoneUsbAltServer.ps1 -Unregister` (also kills leftover Watch processes; task-only unregister used to leave an orphan that still started AltServer on plug-in) |
 | `sideload\Register-SideloadlyAutoRefresh.ps1` | **Fallback only** — Sideloadly daemon if AltStore fails |
 | `archive/` | Legacy `net use` / port-80 proxy, `Sync-FromPhoneLAN.ps1`, optional HTTP **`Copy-ToLoopSegmentsPhoneLAN.ps1`** (no **L:** mount) |

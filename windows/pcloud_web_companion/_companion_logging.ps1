@@ -1,5 +1,5 @@
 #Requires -Version 7.0
-# Dot-sourced by run_chromium.ps1. Console transcript + rest.log archive retention
+# Dot-sourced by _run_chromium.ps1. Console transcript + rest.log archive retention
 # under windows\pcloud_web_companion\logs\ (gitignored).
 
 function Get-CompanionLogsDirectory {

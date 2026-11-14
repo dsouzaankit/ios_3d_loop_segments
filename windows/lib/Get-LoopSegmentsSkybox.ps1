@@ -4,7 +4,7 @@
   Companion Skybox start/stop plus AirScreen Add-folders (Skybox_vr_pc shares only).
 
 .DESCRIPTION
-  Dot-source from pcloud_web_companion\run_chromium.ps1.
+  Dot-source from pcloud_web_companion\_run_chromium.ps1.
   Process start / hide-to-tray / quit and the AirScreen share (p_cld_media by default)
   come from the Skybox_vr_pc submodule (SkyboxVrPc.UnmapPath.ps1). Phone media for Quest
   uses rclone serve dlna (not L:/pcld_ios_media Add-folders). On start/stop this still

@@ -1025,7 +1025,7 @@ function Write-QuestHistoryPending {
     Move-Item -LiteralPath $tmp -Destination $script:HistoryPendingPath -Force
 }
 
-# The quit's phone LAN AP bounce (Wi-Fi->www probe failed), handed over by run_chromium.ps1 while a
+# The quit's phone LAN AP bounce (Wi-Fi->www probe failed), handed over by _run_chromium.ps1 while a
 # history delete is pending: the bounce reboots the 10.0.100.x AP, the headset falls over to the
 # other Wi-Fi and the PC (back on 10.0.100.x) can no longer reach it. So it runs here, after the
 # delete (or the give-up). Dropped when the companion starts again (its quit probes anew).
@@ -1067,12 +1067,12 @@ function Test-QuestHistoryHelperAlive {
     return [bool]($p -and ([string]$p.CommandLine) -match '-RetryHistory')
 }
 
-# A PC companion (Run-PCloudWebCompanion / run_chromium) started after -Since is running. The
+# A PC companion (Run-PCloudWebCompanion / _run_chromium) started after -Since is running. The
 # helper starts while the quitting companion still waits for its cleanup, so older ones do not count.
 function Test-QuestCompanionRunning {
     param([DateTime] $Since)
     return [bool](Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { ([string]$_.CommandLine) -match 'Run-PCloudWebCompanion\.ps1|run_chromium\.ps1' -and $_.CreationDate -and $_.CreationDate.ToUniversalTime() -gt $Since } |
+        Where-Object { ([string]$_.CommandLine) -match 'Run-PCloudWebCompanion\.ps1|_run_chromium\.ps1' -and $_.CreationDate -and $_.CreationDate.ToUniversalTime() -gt $Since } |
         Select-Object -First 1)
 }
 

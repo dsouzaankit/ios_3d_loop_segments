@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Prefer Python 3.12 (prebuilt wheels for pymobiledevice3). Avoid 3.14+ for
-  USB tooling. Dot-source from Launch-LoopSegmentsViaUsb.ps1 / run_chromium.ps1.
+  USB tooling. Dot-source from Launch-LoopSegmentsViaUsb.ps1 / _run_chromium.ps1.
 #>
 
 function Test-LoopSegmentsPyLauncherVersion {
