@@ -286,7 +286,9 @@ function Reset-QuestBrowserFlags {
 # helper tab (closed afterwards). Restarts Quest Browser only when something changed.
 # Returns 'ok', 'changed', or 'failed'.
 function Sync-QuestInsecureOriginFlag {
-    param([string] $DeviceSerial, [string[]] $Origins, [string] $HelperUrl)
+    # -SkipConfirm: no second chrome://flags visit after the restart (Open on Quest checks
+    # isSecureContext in the reopened LAN tab instead).
+    param([string] $DeviceSerial, [string[]] $Origins, [string] $HelperUrl, [switch] $SkipConfirm)
     $tab = New-QuestViewTab -DeviceSerial $DeviceSerial -PlainUrl $HelperUrl
     if (-not $tab) { Write-QuestLog 'Flags: could not open a helper tab.'; return 'failed' }
     try {
@@ -316,6 +318,7 @@ function Sync-QuestInsecureOriginFlag {
             $back = [bool](Get-QuestBrowserUi)
         }
         if (-not $back) { Write-QuestLog 'Flags: Quest Browser did not come back after the restart.'; return 'failed' }
+        if ($SkipConfirm) { return 'changed' }
         Start-Sleep -Seconds 1
         $tab = New-QuestViewTab -DeviceSerial $DeviceSerial -PlainUrl $HelperUrl
         if (-not $tab) { Write-QuestLog 'Flags: restarted, but could not open a helper tab to confirm.'; return 'changed' }

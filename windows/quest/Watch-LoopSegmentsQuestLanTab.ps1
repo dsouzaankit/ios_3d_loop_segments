@@ -494,10 +494,10 @@ function Get-QuestHelperUrl {
 }
 
 function Invoke-QuestFlagSync {
-    param([string] $DeviceSerial)
+    param([string] $DeviceSerial, [switch] $SkipConfirm)
     if (-not (Open-QuestDevTools -DeviceSerial $DeviceSerial)) { return 'failed' }
     try {
-        return (Sync-QuestInsecureOriginFlag -DeviceSerial $DeviceSerial -Origins (Get-QuestLanOrigins) -HelperUrl (Get-QuestHelperUrl))
+        return (Sync-QuestInsecureOriginFlag -DeviceSerial $DeviceSerial -Origins (Get-QuestLanOrigins) -HelperUrl (Get-QuestHelperUrl) -SkipConfirm:$SkipConfirm)
     } catch {
         Write-QuestLog "Flags: $($_.Exception.Message)"
         return 'failed'
@@ -796,13 +796,18 @@ function Open-QuestLanTab {
     if ((Test-QuestLanTabSecure -DeviceSerial $DeviceSerial) -ne 'insecure') { return $true }
     # Not a secure context: WebXR is off. Fix the flag (restarts Quest Browser, closing its tabs)
     # and open the page again.
-    $res = Invoke-QuestFlagSync -DeviceSerial $DeviceSerial
+    $res = Invoke-QuestFlagSync -DeviceSerial $DeviceSerial -SkipConfirm
     if ($res -ne 'changed') {
         Write-QuestLog "Flags: page is not a secure context, flag fix result '$res' - XR may not start."
         return $true
     }
     Write-QuestLog 'Flags: fixed - opening the page again after the browser restart.'
-    return (Open-QuestLanTabOnce -DeviceSerial $DeviceSerial)
+    if (-not (Open-QuestLanTabOnce -DeviceSerial $DeviceSerial)) { return $false }
+    # The confirmation: the reopened page is a secure context now (logged by the check).
+    if ((Test-QuestLanTabSecure -DeviceSerial $DeviceSerial) -eq 'insecure') {
+        Write-QuestLog 'Flags: the page is still not a secure context after the restart - the flag did not stick, XR may not start.'
+    }
+    return $true
 }
 
 function Invoke-QuestIncognitoProbe {

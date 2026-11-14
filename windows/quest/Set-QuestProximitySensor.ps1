@@ -18,6 +18,12 @@
   While the PC companion runs with questKeepAwakeDuringSession=true, its keep-awake job switches the
   sensor off again within ~20 s after you turn it on; the companion turns it on itself at close.
 
+  First it makes sure this PC is on the phone's network, like the companion's startup:
+  lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -PhoneLanHost <phoneLanHost> checks the PC's
+  default gateway against the phone's subnet and, only when it is on another network (for example
+  after a quit's Wi-Fi bounce), restarts that router's Wi-Fi so the PC moves back. -SkipNetworkCheck
+  skips it. The headset is only reachable over adb from the same network.
+
   Headset not on adb (asleep, or Wi-Fi just switched on): keeps trying every 5 s for up to
   -WaitSec (default 120 s), so you can put the headset on or switch its Wi-Fi on meanwhile.
 
@@ -36,10 +42,29 @@ param(
     # Exit straight away instead of waiting for Enter (for scripts).
     [switch] $NoWait,
     # Headset not on adb: keep trying for this many seconds (every 5 s). 0 = try once.
-    [int] $WaitSec = 120
+    [int] $WaitSec = 120,
+    # Do not check / fix this PC's network first.
+    [switch] $SkipNetworkCheck
 )
 
 $watch = Join-Path $PSScriptRoot 'Watch-LoopSegmentsQuestLanTab.ps1'
+
+# This PC on the phone's network first (the headset is reachable over adb only from there).
+if (-not $SkipNetworkCheck) {
+    $gw = Join-Path (Split-Path -Parent $PSScriptRoot) 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
+    $phone = ''
+    try {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\LoopSegments-Windows.ps1')
+        $phone = [string](Get-LoopSegmentsWindowsSettings).phoneLanHost
+    } catch {}
+    if (Test-Path -LiteralPath $gw) {
+        Write-Host "Network: making sure this PC is on the phone's network$(if ($phone) { " ($phone)" })..." -ForegroundColor Cyan
+        $gwArgs = @('-NoProfile', '-NoLogo', '-ExecutionPolicy', 'Bypass', '-File', $gw, '-NoWaitEnter')
+        if ($phone) { $gwArgs += @('-PhoneLanHost', $phone) }
+        & (Get-Process -Id $PID).Path @gwArgs
+        if ($LASTEXITCODE -ne 0) { Write-Host "  Network check exited $LASTEXITCODE - trying the headset anyway." -ForegroundColor Yellow }
+    }
+}
 $switch = @{ On = '-EnableProximity'; Off = '-DisableProximity'; Toggle = '-ToggleProximity' }[$State]
 Write-Host "Quest proximity sensor: $($State.ToLowerInvariant())..." -ForegroundColor Cyan
 
