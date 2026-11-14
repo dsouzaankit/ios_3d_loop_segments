@@ -56,6 +56,9 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         # Companion quit could not delete the Quest Browser history (headset not worn / not on adb):
         # a background helper retries once the headset is worn, for up to this many minutes. 0 = off.
         questHistoryRetryMinutes = 120
+        # Companion quit: switch the Quest's Wi-Fi off as the last Quest step (sleeping headset does not
+        # drain on Wi-Fi or hop networks). You switch it on in the headset before the next session.
+        questWifiOffOnExit      = $true
         # Open on Quest: false (default) = normal tab (WebXR works); true = private tab (no immersive WebXR).
         questIncognito          = $false
         # Private tab URL carries admin:<webdavPassword>@ so the LAN page opens signed in.

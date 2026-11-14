@@ -314,6 +314,46 @@ function Close-QuestHelperTab {
     Close-QuestTab -Id $Tab.id
 }
 
+# Recently closed items that are only ours: every tab in them is on one of -Origins, a new-tab page
+# or chrome://flags. They also show as tiles on the new-tab page, and deleting their pages from
+# history does not reliably drop them (seen: items for a deleted page and for chrome:// pages
+# lasting for days). Each is reopened, sent to -HelperUrl with its back/forward list reset and
+# closed (Close-QuestHelperTab): the new item then holds only the phone page, which the caller's
+# next history delete removes. Returns the number cleaned, or -1 if the list could not be read.
+$script:QuestClosedCommonJs = @'
+  const roots = () => { const r = []; if (!document.body) return r; for (const el of [document.body, ...document.body.children]) { const k = Object.keys(el).find(k => k.startsWith("__reactContainer") || k.startsWith("__reactFiber")); if (k) r.push(el[k]); } return r; };
+  const walk = cb => { for (const root of roots()) { let st = [root], n = 0; while (st.length && n++ < 80000) { const f = st.pop(); if (!f) continue; if (cb(f) === false) return; if (f.child) st.push(f.child); if (f.sibling) st.push(f.sibling); } } };
+  let store = null; walk(f => { const p = f.memoizedProps; if (p && p.store && p.store.getState) { store = p.store; return false; } });
+  let menu = null; walk(f => { const sn = f.stateNode; try { if (sn && sn.props && typeof Object.getPrototypeOf(sn).handleReopenClosedTab === "function") { menu = sn; return false; } } catch (e) {} });
+'@
+
+function Invoke-QuestRecentlyClosedSweep {
+    param([string[]] $Origins, [string] $HelperUrl, [double] $BudgetSec = 20)
+    $t0 = [DateTime]::UtcNow
+    $ui = Get-QuestBrowserUi
+    if (-not $ui) { return -1 }
+    $os = ConvertTo-Json -Compress -InputObject @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/').ToLowerInvariant() })
+    $listJs = "(() => {`n$($script:QuestClosedCommonJs)`n  if (!store) return JSON.stringify({ ok: false });`n  const O = new Set($os);`n  const mine = u => { if (/^chrome:\/\/(flags|panel-app-nav\/ntp)/.test(u)) return true; try { return O.has(new URL(u).origin.toLowerCase()); } catch (e) { return false; } };`n  const ids = (store.getState().history.recentlyClosedTabs || []).filter(e => e.type === 'tab' && e.tabs && e.tabs.length && e.tabs.every(t => mine(String(t.url || '')))).map(e => e.sessionId);`n  return JSON.stringify({ ok: true, menu: !!menu, ids });`n})()"
+    try { $l = Invoke-QuestEval -Tab $ui -Expression $listJs -TimeoutSec 8 | ConvertFrom-Json } catch { return -1 }
+    if (-not $l.ok) { return -1 }
+    $ids = @($l.ids)
+    if ($ids.Count -eq 0) { return 0 }
+    if (-not $l.menu) { Write-QuestLog "Recently closed: $($ids.Count) Loop Segments item(s), but the reopen handler was not found - left."; return -1 }
+    $done = 0
+    foreach ($sid in $ids) {
+        if (([DateTime]::UtcNow - $t0).TotalSeconds -gt $BudgetSec) { Write-QuestLog 'Recently closed: out of time - the rest is left.'; break }
+        $before = @(Get-QuestTabs | ForEach-Object { $_.id })
+        try { [void](Invoke-QuestEval -Tab $ui -TimeoutSec 5 -Expression "(() => {`n$($script:QuestClosedCommonJs)`n  Object.getPrototypeOf(menu).handleReopenClosedTab.call(menu, $sid); return 1;`n})()") } catch { continue }
+        $new = $null
+        for ($i = 0; $i -lt 20 -and -not $new; $i++) { Start-Sleep -Milliseconds 300; $new = @(Get-QuestTabs | Where-Object { $before -notcontains $_.id })[0] }
+        if (-not $new) { continue }
+        Close-QuestHelperTab -Tab $new -HelperUrl $HelperUrl
+        $done++
+    }
+    Write-QuestLog ("Recently closed: cleaned {0} of {1} Loop Segments / new-tab / chrome://flags item(s)." -f $done, $ids.Count)
+    return $done
+}
+
 # ---- Delete this app's history entries (phone LAN page, control page) through the browser's own History list ----
 
 # The History modal (chrome://panel-app-nav) asks the browser for entries with its

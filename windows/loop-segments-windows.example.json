@@ -25,6 +25,7 @@
   "questAdbExe": "",
   "questAdbRediscoverSec": 60,
   "questHistoryRetryMinutes": 120,
+  "questWifiOffOnExit": true,
   "questIncognito": false,
   "questSendLanLogin": true,
   "questEnsureInsecureOriginFlag": true,
