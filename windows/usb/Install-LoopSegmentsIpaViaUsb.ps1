@@ -110,6 +110,8 @@ function Restore-Vpn([bool] $Installed) {
     # One USB connection: launch Loop Segments with localdevvpn://disable, check the tunnel every
     # second, then the Home Screen (LocalDevVPN is in front after the disable link).
     $out = Invoke-Py @($InfoPy, 'vpn-off')
+    # vpn-off ends on the Home Screen whenever it got as far as checking the tunnel.
+    if ($out -match '(?m)^VPN_(OFF|STILL_UP)\b') { $script:WentHome = $true }
     if ($out -match '(?m)^VPN_OFF\b') {
         Write-Inst 'LocalDevVPN switched back off (it was off before this deploy).' Green
         Remove-Item -LiteralPath $VpnMarker -Force -ErrorAction SilentlyContinue
@@ -388,5 +390,9 @@ if ($installed) {
 } else {
     Write-Inst "The phone did not report build $ipaBuild within $InstallWaitSec s - check SideStore." Yellow
 }
+$script:WentHome = $false
 Restore-Vpn $installed
+# SideStore is still in front after the install: back to the Home Screen (the VPN-off step already
+# did that when it ran; it does not when LocalDevVPN was on before the deploy).
+if ($installed -and -not $script:WentHome) { [void](Invoke-Py @($InfoPy, 'home')) }
 exit $(if ($installed) { 0 } else { 1 })

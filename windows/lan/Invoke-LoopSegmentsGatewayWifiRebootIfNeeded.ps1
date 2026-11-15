@@ -203,12 +203,21 @@ function Get-LoopSegmentsDefaultGatewayInfo {
         PrefixLength = 24
     }
 
+    # Skip VPN / TUN adapters (Clash/Mihomo owns the default route on 198.18.0.x with a /30): the
+    # gateway that matters here is the real Wi-Fi / Ethernet router, and its /24.
+    $skipAlias = '(?i)loopback|clash|meta|mihomo|wintun|wireguard|nord|mullvad|vpn|tap-windows|tun\b|vethernet|hyper-v|docker|wsl|virtualbox|vmware|localdevvpn|stosvpn|zerotier|hamachi|radmin'
+    $isTun = {
+        param($alias, $ip)
+        ([string]$alias -match $skipAlias) -or ([string]$ip -like '198.18.*')
+    }
+
     try {
         $configs = @(Get-NetIPConfiguration -ErrorAction Stop |
             Where-Object {
                 $_.IPv4DefaultGateway -and
                 $_.NetAdapter -and
-                $_.NetAdapter.Status -eq 'Up'
+                $_.NetAdapter.Status -eq 'Up' -and
+                -not (& $isTun $_.InterfaceAlias (@($_.IPv4Address)[0].IPAddress))
             })
         foreach ($cfg in $configs) {
             $nextHop = [string]$cfg.IPv4DefaultGateway.NextHop
@@ -238,7 +247,7 @@ function Get-LoopSegmentsDefaultGatewayInfo {
 
     try {
         $route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
-            Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' } |
+            Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' -and -not (& $isTun $_.InterfaceAlias $_.NextHop) } |
             Sort-Object RouteMetric, InterfaceMetric |
             Select-Object -First 1
         if ($route) {
