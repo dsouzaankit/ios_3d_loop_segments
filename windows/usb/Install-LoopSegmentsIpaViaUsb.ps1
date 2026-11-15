@@ -31,7 +31,11 @@
      Serves one full download (up to -WaitSec), then waits up to -InstallWaitSec for the phone to
      report the new build (checked every 1 s). A failed try (download cut short, e.g. -1005 - the
      phone's network at the cut is logged - or SideStore never finished) is retried once: both are
-     put back off the phone LAN and the link is opened again (tap Install). If that fails too and
+     put back off the phone LAN and the link is opened again (tap Install). Right before the link,
+     and every 30 s until the download starts, it checks the phone is still on the install Wi-Fi
+     (same Wi-Fi address as when it got there - iOS uses a private address per network - and not
+     dropped to 5G); if it left (e.g. back to the phone LAN AP: SideStore -1001), the phone is moved
+     again before the link, or the try ends and is retried like a cut download. If that fails too and
      -RestartPhoneOnError is set (deploy.ps1 sets it): restarts the phone over USB (the best fix for
      SideStore errors other than an offline LocalDevVPN), waits for it to come back, for you to
      unlock it, and for LocalDevVPN to reconnect, then one last try. Not while an export runs
@@ -199,11 +203,28 @@ function Move-PcOnPhoneLan([string] $PhoneHost) {
     return Connect-LoopSegmentsPcToSubnet -HostIp $PhoneHost -PrefixLength 24 -LogPrefix '[usb-install]'
 }
 
-function Get-PhoneWifiAssoc {
-    # 'ASSOCIATED' (joined to some Wi-Fi), 'NOT_ASSOCIATED' (5G only) or 'UNKNOWN'.
+function Get-PhoneWifiState {
+    # State 'ASSOCIATED' (joined to some Wi-Fi), 'NOT_ASSOCIATED' (5G only) or 'UNKNOWN', plus the
+    # phone's Wi-Fi address (Mac). iOS uses a separate private address per network, so a different
+    # Mac means a different network (iOS redacts the SSID / BSSID, so this is the one handle).
     $a = Invoke-Py @($InfoPy, 'wifi-assoc')
-    if ($a -match '(?m)^(ASSOCIATED|NOT_ASSOCIATED)\b') { return $Matches[1] }
-    return 'UNKNOWN'
+    $state = if ($a -match '(?m)^(ASSOCIATED|NOT_ASSOCIATED)\b') { $Matches[1] } else { 'UNKNOWN' }
+    $mac = if ($a -match '(?m)\tmac=([0-9a-fA-F:]{17})') { $Matches[1].ToLowerInvariant() } else { $null }
+    return [pscustomobject]@{ State = $state; Mac = $mac }
+}
+
+function Get-PhoneWifiAssoc { (Get-PhoneWifiState).State }
+
+function Get-PhoneLeftInstallWifi {
+    # Why the phone is no longer on the Wi-Fi it was on when the install link was opened, or $null.
+    # Cheap (~2-3 s, no network monitor). With "Private Wi-Fi Address" off the Mac is the same on every
+    # network, so only a drop to 5G is seen here.
+    $st = Get-PhoneWifiState
+    if ($st.State -eq 'NOT_ASSOCIATED') { return 'it dropped to 5G (no Wi-Fi)' }
+    if ($script:InstallWifiMac -and $st.Mac -and $st.Mac -ne $script:InstallWifiMac) {
+        return "it switched to another Wi-Fi (its Wi-Fi address changed: $($script:InstallWifiMac) -> $($st.Mac))"
+    }
+    return $null
 }
 
 function Wait-PhoneOnOtherWifi([string] $PhoneHost, [int] $Seconds, [string] $Why) {
@@ -360,6 +381,8 @@ if (-not $phoneIp) { Write-Inst 'The phone is not on a Wi-Fi off the phone LAN, 
 $move = Move-PcOffPhoneLan $phoneHost $phoneIp
 if (-not $move.Ok) { Write-Inst $move.Error Red; exit 2 }
 $pcIp = $move.Ip
+# The phone's Wi-Fi address on the install Wi-Fi: a different one later means it switched network.
+$script:InstallWifiMac = (Get-PhoneWifiState).Mac
 $token = [Guid]::NewGuid().ToString('N').Substring(0, 12)
 $path = "/$token/LoopSegments.ipa"
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
@@ -395,6 +418,7 @@ try {
             $move = Move-PcOffPhoneLan $phoneHost $phoneIp
             if (-not $move.Ok) { $failure = $move.Error; break }
             $pcIp = $move.Ip
+            $script:InstallWifiMac = (Get-PhoneWifiState).Mac
         }
         # A fresh SideStore for every try: a running one keeps whatever state it was left in (an
         # error dialog, a stale connection to LocalDevVPN) and the link would just be handed to it.
@@ -405,6 +429,19 @@ try {
         $v = Invoke-Py @($InfoPy, 'vpn-restart')
         if ($v -match '(?m)^VPN_RESTARTED\b') { Write-Inst 'Restarted LocalDevVPN (fresh tunnel).' }
         else { Write-Inst "LocalDevVPN restart: $(($v -split "`n" | Where-Object { $_ -match '^(VPN_|NOT_|NO_|ERROR)' } | Select-Object -First 1)) - trying anyway." Yellow }
+        # Still on the install Wi-Fi right before the link? The phone can hop back to the phone LAN AP
+        # (iOS prefers it) between the move and here; SideStore then cannot reach this PC (-1001).
+        if (-not $script:InstallWifiMac) { $script:InstallWifiMac = (Get-PhoneWifiState).Mac }
+        $gone = Get-PhoneLeftInstallWifi
+        if ($gone) {
+            Write-Inst "The phone left the install Wi-Fi before the install link: $gone. Moving it off the phone LAN again..." Yellow
+            $phoneIp = Move-PhoneOffPhoneLan $phoneHost
+            if (-not $phoneIp) { $failure = 'the phone is not on a Wi-Fi off the phone LAN'; break }
+            $move = Move-PcOffPhoneLan $phoneHost $phoneIp
+            if (-not $move.Ok) { $failure = $move.Error; break }
+            $pcIp = $move.Ip
+            $script:InstallWifiMac = (Get-PhoneWifiState).Mac
+        }
         $ipaUrl = "http://${pcIp}:$Port$path"
         $link = 'sidestore://install?url=' + [Uri]::EscapeDataString($ipaUrl)
         Write-Inst "Serving $([math]::Round($size / 1MB, 1)) MB at $ipaUrl"
@@ -421,9 +458,20 @@ try {
 
         $served = $false
         $cut = $false
+        $left = $null
         $deadline = (Get-Date).AddSeconds($WaitSec)
-        while (-not $served -and -not $cut -and (Get-Date) -lt $deadline) {
-            if (-not $listener.Pending()) { Start-Sleep -Milliseconds 200; continue }
+        $nextWifiCheck = (Get-Date).AddSeconds(30)
+        while (-not $served -and -not $cut -and -not $left -and (Get-Date) -lt $deadline) {
+            if (-not $listener.Pending()) {
+                # Every 30 s until the download starts: if the phone left the install Wi-Fi, SideStore
+                # cannot reach this PC, so end this try now instead of waiting out -WaitSec.
+                if ((Get-Date) -ge $nextWifiCheck) {
+                    $left = Get-PhoneLeftInstallWifi
+                    if ($left) { Write-Inst "The phone left the install Wi-Fi while waiting for the download: $left." Yellow; break }
+                    $nextWifiCheck = (Get-Date).AddSeconds(30)
+                }
+                Start-Sleep -Milliseconds 200; continue
+            }
             $client = $listener.AcceptTcpClient()
             try {
                 $client.ReceiveTimeout = 10000
@@ -461,9 +509,10 @@ try {
             $installed = $ipaBuild -and ((Invoke-Py @($InfoPy, 'wait-install', $ipaBuild, $oldPath, [string]$InstallWaitSec)) -match '(?m)^INSTALLED\b')
             if ($installed) { break }
             Write-Inst "The phone did not report build $ipaBuild within $InstallWaitSec s (SideStore error?)." Yellow
-        } elseif (-not $cut) {
-            # No download at all: Install not tapped, or SideStore could not reach this PC. Not a
-            # SideStore error a retry or restart would fix.
+        } elseif (-not $cut -and -not $left) {
+            # No download at all, with the phone still on the install Wi-Fi: Install not tapped (or
+            # SideStore could not reach this PC). Not a SideStore error a retry or restart would fix.
+            # A phone that left the Wi-Fi ($left) is retried below, like a cut download.
             $failure = "SideStore did not download the IPA within $WaitSec s (Install not tapped, or VPN / Wi-Fi)"
             break
         }

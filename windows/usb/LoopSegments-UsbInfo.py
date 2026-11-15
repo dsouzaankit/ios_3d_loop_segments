@@ -7,8 +7,10 @@
   home                     -> HOME | HOME_FAILED <why>   (Home Screen to the front)
   wifi-ip [listen s]       -> WIFI_IP <ipv4> | NO_WIFI_IP   (the phone's own address on en0, DVT network monitor;
                               listens 6 s by default)
-  wifi-assoc               -> ASSOCIATED channel=<n> band=<b> | NOT_ASSOCIATED | UNKNOWN <why>
-                              (joined to any Wi-Fi at all? diagnostics IORegistry)
+  wifi-assoc               -> ASSOCIATED channel=<n> band=<b> mac=<aa:bb:..> | NOT_ASSOCIATED | UNKNOWN <why>
+                              (joined to any Wi-Fi at all? diagnostics IORegistry. mac = the phone's Wi-Fi
+                              address now: iOS uses a separate private address per network, so a new mac
+                              means the phone switched network; SSID and BSSID are redacted by iOS)
   wait-install <build> <old app path> <timeout s>
                            -> INSTALLED <build> <path> | TIMEOUT   (checks every 1 s on one connection)
   vpn-off                  -> VPN_OFF | VPN_STILL_UP   (quits LocalDevVPN's tunnel extension, then
@@ -134,7 +136,9 @@ async def wifi_assoc() -> int:
     band = str(raw.get("IO80211Band") or "").strip()
     ssid = raw.get("IO80211SSID")
     if (isinstance(ch, int) and ch > 0) or band or ssid:
-        print(f"ASSOCIATED\tchannel={ch}\tband={band}")
+        mac = raw.get("IOMACAddress")
+        mac = mac.hex(":") if isinstance(mac, (bytes, bytearray)) else str(mac or "")
+        print(f"ASSOCIATED\tchannel={ch}\tband={band}\tmac={mac}")
         return 0
     print("NOT_ASSOCIATED")
     return 0
