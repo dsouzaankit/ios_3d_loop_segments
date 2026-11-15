@@ -7,6 +7,10 @@
   For a new IPA with no app changes (for example to test the deploy / USB install path end to end):
   the USB install skips a phone that already has the IPA's build, so a test needs a new number.
 
+    0. First: if the newest built IPA (successful ios-build workflow_dispatch run) has a higher build
+       than the Loop Segments on the USB iPhone - e.g. a deploy that timed out - it runs
+       .\deploy.ps1 -UseLatest to install that one and stops; no bump, no new build. -ForceBump skips
+       this check. No USB phone: the check is skipped and it bumps.
     1. ios\project.yml: CURRENT_PROJECT_VERSION + 1.
     2. ios\README.md: a "**Build N (version):** <note>" line above the newest build note.
     3. git commit of only those two files, then git push (current branch).
@@ -28,6 +32,9 @@
 .PARAMETER NoDeploy
   Stop after the push.
 
+.PARAMETER ForceBump
+  Always make a new build, even when a built IPA newer than the phone's build is ready.
+
 .PARAMETER DeployArgs
   Extra arguments for deploy.ps1, e.g. -DeployArgs '-SkipICloud'.
 
@@ -45,6 +52,7 @@ param(
     [switch] $DryRun,
     [switch] $NoPush,
     [switch] $NoDeploy,
+    [switch] $ForceBump,
     [string[]] $DeployArgs = @(),
     [switch] $NoWaitEnter
 )
@@ -78,6 +86,46 @@ function Invoke-Git {
     $out = & git -C $ProjectRoot @args 2>&1
     if ($LASTEXITCODE -ne 0) { throw ("git {0} failed:`n{1}" -f ($args -join ' '), ($out | Out-String)) }
     return $out
+}
+
+function Get-LatestBuiltIpa {
+    # Newest successful ios-build workflow_dispatch run (an IPA) and the build number in its commit.
+    $json = & gh run list --workflow=ios-build.yml --event=workflow_dispatch --status=success --limit 1 --json databaseId,headSha 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
+    $run = @($json | ConvertFrom-Json) | Select-Object -First 1
+    if (-not $run) { return $null }
+    $ymlAt = (& git -C $ProjectRoot show "$($run.headSha):ios/project.yml" 2>$null) -join "`n"
+    if ($ymlAt -notmatch 'CURRENT_PROJECT_VERSION:\s*"(\d+)"') { return $null }
+    return [pscustomobject]@{ RunId = [string]$run.databaseId; Build = [int]$Matches[1] }
+}
+
+function Get-PhoneBuild {
+    # Loop Segments build on the USB iPhone, or $null (no phone / no Python / not installed).
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    $info = Join-Path $ProjectRoot 'windows\usb\LoopSegments-UsbInfo.py'
+    if (-not $py -or -not (Test-Path -LiteralPath $info)) { return $null }
+    $out = (& $py.Source -3.12 $info installed-build 2>$null) -join "`n"
+    if ($out -match '(?m)^BUILD\t(\d+)') { return [int]$Matches[1] }
+    return $null
+}
+
+# 0. A built IPA the phone does not have yet (e.g. a deploy that timed out): install that instead of
+# making another build. -ForceBump always bumps.
+if (-not $ForceBump) {
+    $built = Get-LatestBuiltIpa
+    $phone = if ($built) { Get-PhoneBuild } else { $null }
+    if ($built -and $null -ne $phone -and $built.Build -gt $phone) {
+        Write-Host ("Build {0} is already built (run {1}) but the phone has {2}: installing it with deploy.ps1 -UseLatest instead of a new build (-ForceBump to bump anyway)." -f $built.Build, $built.RunId, $phone) -ForegroundColor Cyan
+        if ($DryRun) { Write-Host 'Dry run: nothing changed.' -ForegroundColor Yellow; Wait-EnterToClose; exit 0 }
+        $deploy = Join-Path $ProjectRoot 'deploy.ps1'
+        $passArgs = @('-UseLatest') + @($DeployArgs)
+        if ($NoWaitEnter) { $passArgs += '-NoWaitEnter' }
+        & $deploy @passArgs
+        exit $LASTEXITCODE
+    }
+    if ($built -and $null -ne $phone) {
+        Write-Host ("Newest built IPA is build {0}; the phone has {1}: making a new build." -f $built.Build, $phone)
+    }
 }
 
 $utf8 = New-Object System.Text.UTF8Encoding $false
