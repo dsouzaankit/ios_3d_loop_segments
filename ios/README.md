@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 431 (1.3.1):** No app changes: a new build number to test the deploy and the USB install.
+
 **Build 430 (1.3.1):** No app changes: a new build number to test the deploy and the USB install.
 
 **Build 429 (1.3.1):** No app changes: a new build number to test the deploy and the USB install.
