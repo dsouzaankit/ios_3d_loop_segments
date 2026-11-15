@@ -9,7 +9,8 @@
   2. Moves the phone AND this PC off the phone LAN: SideStore needs www over Wi-Fi to sign, and the
      phone LAN Wi-Fi has no gateway on the phone (LAN only, 5G for internet). The phone LAN is
      phoneLanHost's /24 from loop-segments-windows.json.
-     Phone: its Wi-Fi IP is read over USB (DVT network monitor: its own address on en0). On the phone LAN: bounces that AP (lan\Invoke-LoopSegments-
+     Phone: its Wi-Fi IP is read over USB (DVT network monitor: its own address on its TCP connections
+     over en0; none = no www on Wi-Fi = the phone LAN). On the phone LAN: bounces that AP (lan\Invoke-LoopSegments-
      GatewayWifiRebootIfNeeded.ps1 -BouncePhoneLanAp), and the phone hops to another saved Wi-Fi
      (waits up to 150 s). Then waits for the bounced AP to show up again in this PC's Wi-Fi scan,
      plus 15 s (cap -SettleSec 120), so a hop back happens before SideStore downloads; a hop back
@@ -141,11 +142,11 @@ function Get-PcIpOn([string] $PhoneHost) {
 }
 
 function Get-PhoneWifiIp {
-    # The phone's current Wi-Fi IPv4 over USB (shared lookup: DVT network monitor on en0, exact;
-    # pcapd sniffing as the fallback). The PC's addresses are refreshed each time it may have moved.
-    $env:LOOP_SEGMENTS_EXCLUDE_LAN_IPS = (@(Get-LoopSegmentsPcLanIpv4Addresses) -join ',')
-    $u = Get-LoopSegmentsIphoneLanIpv4ViaUsb -Quiet
-    if ($u.Ok -and $u.Ip) { return [string]$u.Ip }
+    # The phone's Wi-Fi IPv4 over USB from its TCP connections on en0 (DVT network monitor, exact).
+    # $null = no TCP over Wi-Fi: on a Wi-Fi with www the phone always has some, so that means the
+    # phone LAN (no gateway; internet over 5G) or Wi-Fi off. No pcapd fallback here: sniffing
+    # guesses, and a wrong guess bounces the AP for nothing.
+    if ((Invoke-Py @($InfoPy, 'wifi-ip')) -match '(?m)^WIFI_IP\t(\S+)') { return $Matches[1] }
     return $null
 }
 
@@ -158,16 +159,16 @@ function Move-PhoneOffPhoneLan([string] $PhoneHost) {
         Write-Inst "Phone is already off the phone LAN ($ip)."
         return $ip
     }
-    if (-not $ip) { Write-Inst 'Could not read the phone Wi-Fi IP over USB; assuming it is on the phone LAN.' Yellow }
+    if (-not $ip) { Write-Inst 'No internet traffic on the phone''s Wi-Fi: it is on the phone LAN (or Wi-Fi is off).' }
     if ($NoBounce) {
-        Write-Inst "Phone is on the phone LAN ($ip) and -NoBounce is set: switch the phone to another Wi-Fi by hand." Yellow
+        Write-Inst "Phone is on the phone LAN$(if ($ip) { " ($ip)" }) and -NoBounce is set: switch the phone to another Wi-Fi by hand." Yellow
         return $null
     }
     $reboot = Join-Path $WindowsDir 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
     # The phone LAN's network name: the PC's Wi-Fi when it is on the phone LAN now (else unknown).
     $lanSsid = if (Get-PcIpOn $PhoneHost) { (Get-WifiState).Current } else { $null }
     foreach ($round in 1..2) {
-        Write-Inst "Phone is on the phone LAN ($ip): bouncing the phone LAN AP so it hops to another Wi-Fi (round $round)..." Yellow
+        Write-Inst "Phone is on the phone LAN$(if ($ip) { " ($ip)" }): bouncing the phone LAN AP so it hops to another Wi-Fi (round $round)..." Yellow
         & (Get-Command pwsh).Source -NoProfile -ExecutionPolicy Bypass -File $reboot -BouncePhoneLanAp -NoWaitEnter -PhoneLanHost $PhoneHost | Out-Host
         $moved = $null
         $until = (Get-Date).AddSeconds(150)
@@ -198,7 +199,7 @@ function Move-PhoneOffPhoneLan([string] $PhoneHost) {
             Write-Inst "Phone stayed off the phone LAN ($ip)." Green
             return $ip
         }
-        Write-Inst "Phone went back to the phone LAN ($ip)." Yellow
+        Write-Inst "Phone went back to the phone LAN$(if ($ip) { " ($ip)" })." Yellow
     }
     Write-Inst 'The phone keeps going back to the phone LAN: switch it to another Wi-Fi by hand.' Yellow
     return $null

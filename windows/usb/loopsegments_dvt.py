@@ -65,9 +65,10 @@ async def launch(bundle_id: str, arguments: Optional[list[str]] = None, kill_exi
 
 
 async def wifi_ipv4(seconds: float = 6.0) -> Optional[str]:
-    """The phone's own Wi-Fi IPv4: the local address of its connections on en0 (Wi-Fi), from the
-    DVT network monitor. Exact, unlike pcapd sniffing (which also sees peers such as this PC).
-    None when no Wi-Fi connection shows up within `seconds` (Wi-Fi off, or nothing open on it)."""
+    """The phone's own Wi-Fi IPv4: the local address of its TCP connections on en0 (Wi-Fi), from
+    the DVT network monitor. Exact, unlike pcapd sniffing (which also sees peers such as this PC).
+    None when no TCP connection on Wi-Fi shows up within `seconds`: Wi-Fi off, or a Wi-Fi with no
+    gateway (the phone LAN, where internet goes over cellular), so callers fall back to pcapd."""
     import asyncio
     import ipaddress
     from collections import Counter
@@ -88,6 +89,10 @@ async def wifi_ipv4(seconds: float = 6.0) -> Optional[str]:
                     if isinstance(event, InterfaceDetectionEvent):
                         names[event.interface_index] = event.name
                     elif isinstance(event, ConnectionDetectionEvent):
+                        # TCP only (kind 1): iOS drops TCP connections when their address goes away,
+                        # but UDP sockets (kind 2) can stay bound to a previous Wi-Fi's address.
+                        if event.kind != 1:
+                            continue
                         addr = getattr(event.local_address.data, "address", None)
                         if isinstance(addr, ipaddress.IPv4Address) and addr.is_private and not addr.is_loopback \
                                 and not addr.is_link_local and str(addr) != "0.0.0.0":
