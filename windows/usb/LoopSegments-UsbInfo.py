@@ -6,6 +6,8 @@
   vpn-tunnel               -> TUNNEL_UP | TUNNEL_DOWN | NO_DEVICE <why>
   home                     -> HOME | HOME_FAILED <why>   (Home Screen to the front)
   wifi-ip                  -> WIFI_IP <ipv4> | NO_WIFI_IP   (the phone's own address on en0, DVT network monitor)
+  wifi-assoc               -> ASSOCIATED channel=<n> band=<b> | NOT_ASSOCIATED | UNKNOWN <why>
+                              (joined to any Wi-Fi at all? diagnostics IORegistry)
   wait-install <build> <old app path> <timeout s>
                            -> INSTALLED <build> <path> | TIMEOUT   (checks every 1 s on one connection)
   vpn-off                  -> VPN_OFF | VPN_STILL_UP   (quits LocalDevVPN's tunnel extension, then
@@ -101,6 +103,40 @@ async def wait_install(want_build: str, old_path: str, timeout: float) -> int:
     return 1
 
 
+async def wifi_assoc() -> int:
+    """Is the phone's Wi-Fi joined to any network at all? (Diagnostics IORegistry: a channel / band /
+    SSID is present only while associated.) Tells "on a Wi-Fi with no www traffic" (the phone LAN)
+    apart from "not on Wi-Fi" (5G only, e.g. after its AP was restarted)."""
+    from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.services.diagnostics import DiagnosticsService
+
+    try:
+        lockdown = await create_using_usbmux()
+        try:
+            async with DiagnosticsService(lockdown=lockdown) as diag:
+                raw = await diag.get_wifi()
+        finally:
+            try:
+                await lockdown.close()
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception as exc:  # noqa: BLE001
+        msg = f"{type(exc).__name__}: {exc}"
+        print(("NO_DEVICE\t" if is_no_device(msg) else "UNKNOWN\t") + msg)
+        return 2
+    if not isinstance(raw, dict):
+        print("UNKNOWN\tno Wi-Fi record")
+        return 1
+    ch = raw.get("IO80211Channel")
+    band = str(raw.get("IO80211Band") or "").strip()
+    ssid = raw.get("IO80211SSID")
+    if (isinstance(ch, int) and ch > 0) or band or ssid:
+        print(f"ASSOCIATED\tchannel={ch}\tband={band}")
+        return 0
+    print("NOT_ASSOCIATED")
+    return 0
+
+
 def ipa_build(path: str) -> int:
     try:
         with zipfile.ZipFile(path) as z:
@@ -134,6 +170,8 @@ def main() -> int:
         return ipa_build(sys.argv[2])
     if cmd == "vpn-tunnel":
         return asyncio.run(vpn_tunnel())
+    if cmd == "wifi-assoc":
+        return asyncio.run(wifi_assoc())
     if cmd == "wifi-ip":
         try:
             ip = asyncio.run(wifi_ipv4())

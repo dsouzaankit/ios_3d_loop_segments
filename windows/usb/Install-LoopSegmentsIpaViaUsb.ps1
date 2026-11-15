@@ -196,6 +196,40 @@ function Move-PcOnPhoneLan([string] $PhoneHost) {
     return Connect-LoopSegmentsPcToSubnet -HostIp $PhoneHost -PrefixLength 24 -LogPrefix '[usb-install]'
 }
 
+function Get-PhoneWifiAssoc {
+    # 'ASSOCIATED' (joined to some Wi-Fi), 'NOT_ASSOCIATED' (5G only) or 'UNKNOWN'.
+    $a = Invoke-Py @($InfoPy, 'wifi-assoc')
+    if ($a -match '(?m)^(ASSOCIATED|NOT_ASSOCIATED)\b') { return $Matches[1] }
+    return 'UNKNOWN'
+}
+
+function Wait-PhoneOnOtherWifi([string] $PhoneHost, [int] $Seconds, [string] $Why) {
+    # Until the phone has Wi-Fi traffic off the phone LAN; prints what it sees at every check.
+    $t0 = Get-Date
+    $until = $t0.AddSeconds($Seconds)
+    $asked = $false
+    while ((Get-Date) -lt $until) {
+        Start-Sleep -Seconds 10
+        $ip = Get-PhoneWifiIp
+        if ($ip -and -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneHost)) {
+            Write-Inst "Phone is on another Wi-Fi ($ip)." Green
+            return $ip
+        }
+        $assoc = Get-PhoneWifiAssoc
+        $state = if ($ip) { "still on the phone LAN ($ip)" }
+                 elseif ($assoc -eq 'NOT_ASSOCIATED') { 'on no Wi-Fi (5G only)' }
+                 elseif ($assoc -eq 'ASSOCIATED') { 'on a Wi-Fi, no internet traffic yet' }
+                 else { 'unknown' }
+        Write-Inst ("{0}: phone {1} ({2:N0} of {3} s)" -f $Why, $state, ((Get-Date) - $t0).TotalSeconds, $Seconds)
+        if ($assoc -eq 'NOT_ASSOCIATED' -and -not $asked) {
+            # iOS can sit on 5G after its Wi-Fi drops instead of joining another saved network.
+            Write-Inst 'The phone is not joining another Wi-Fi by itself: on the phone, Settings > Wi-Fi, tap your other network (the one this PC can join).' Cyan
+            $asked = $true
+        }
+    }
+    return $null
+}
+
 function Move-PhoneOffPhoneLan([string] $PhoneHost) {
     # SideStore needs www over Wi-Fi, which the phone LAN lacks. There is no way to pick the phone's
     # Wi-Fi over USB, so bounce the phone LAN AP: the phone hops to another saved Wi-Fi (the PC on
@@ -205,7 +239,14 @@ function Move-PhoneOffPhoneLan([string] $PhoneHost) {
         Write-Inst "Phone is already off the phone LAN ($ip)."
         return $ip
     }
-    if (-not $ip) { Write-Inst 'No internet traffic on the phone''s Wi-Fi: it is on the phone LAN (or Wi-Fi is off).' }
+    if (-not $ip -and (Get-PhoneWifiAssoc) -eq 'NOT_ASSOCIATED') {
+        # On no Wi-Fi at all (5G only): bouncing the phone LAN AP would not move it anywhere.
+        Write-Inst 'The phone is on no Wi-Fi (5G only), so there is nothing to bounce it off.' Yellow
+        $ip = Wait-PhoneOnOtherWifi $PhoneHost 150 'Waiting for the phone to join a Wi-Fi'
+        if (-not $ip) { Write-Inst 'The phone did not join a Wi-Fi with internet within 150 s.' Yellow }
+        return $ip
+    }
+    if (-not $ip) { Write-Inst 'No internet traffic on the phone''s Wi-Fi: it is on the phone LAN.' }
     if ($NoBounce) {
         Write-Inst "Phone is on the phone LAN$(if ($ip) { " ($ip)" }) and -NoBounce is set: switch the phone to another Wi-Fi by hand." Yellow
         return $null
@@ -220,17 +261,9 @@ function Move-PhoneOffPhoneLan([string] $PhoneHost) {
     & (Get-Command pwsh).Source -NoProfile -ExecutionPolicy Bypass -File $reboot -BouncePhoneLanAp -NoWaitEnter -PhoneLanHost $PhoneHost | Out-Host
     # No wait for the bounced AP to come back: it can take minutes, and a download cut short by a
     # hop back to it is handled by the retry like any other -1005.
-    $until = (Get-Date).AddSeconds(150)
-    while ((Get-Date) -lt $until) {
-        Start-Sleep -Seconds 10
-        $ip = Get-PhoneWifiIp
-        if ($ip -and -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneHost)) {
-            Write-Inst "Phone moved off the phone LAN ($ip)." Green
-            return $ip
-        }
-    }
-    Write-Inst 'The phone did not leave the phone LAN within 150 s of the AP bounce.' Yellow
-    return $null
+    $ip = Wait-PhoneOnOtherWifi $PhoneHost 150 'After the AP bounce'
+    if (-not $ip) { Write-Inst 'The phone did not reach another Wi-Fi within 150 s of the AP bounce.' Yellow }
+    return $ip
 }
 
 function Move-PcOffPhoneLan([string] $PhoneHost, [string] $PhoneIp = '') {
