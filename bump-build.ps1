@@ -88,6 +88,21 @@ function Invoke-Git {
     return $out
 }
 
+function ConvertTo-DeploySplat([string[]] $Tokens) {
+    # '-SkipICloud', '-RunId 123' -> @{ SkipICloud = $true; RunId = '123' }. A splatted *array* would
+    # hand '-Name' to deploy.ps1 as a plain value (it landed in -RunId), so named args need a hashtable.
+    $h = @{}
+    $list = @($Tokens | ForEach-Object { "$_" -split '\s+' } | Where-Object { $_ })
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $t = $list[$i]
+        if ($t -notlike '-*') { throw "DeployArgs: expected -Name, got '$t'" }
+        $name = $t.TrimStart('-')
+        if ($i + 1 -lt $list.Count -and $list[$i + 1] -notlike '-*') { $h[$name] = $list[$i + 1]; $i++ }
+        else { $h[$name] = $true }
+    }
+    return $h
+}
+
 function Get-LatestBuiltIpa {
     # Newest successful ios-build workflow_dispatch run (an IPA) and the build number in its commit.
     $json = & gh run list --workflow=ios-build.yml --event=workflow_dispatch --status=success --limit 1 --json databaseId,headSha 2>$null
@@ -118,8 +133,9 @@ if (-not $ForceBump) {
         Write-Host ("Build {0} is already built (run {1}) but the phone has {2}: installing it with deploy.ps1 -UseLatest instead of a new build (-ForceBump to bump anyway)." -f $built.Build, $built.RunId, $phone) -ForegroundColor Cyan
         if ($DryRun) { Write-Host 'Dry run: nothing changed.' -ForegroundColor Yellow; Wait-EnterToClose; exit 0 }
         $deploy = Join-Path $ProjectRoot 'deploy.ps1'
-        $passArgs = @('-UseLatest') + @($DeployArgs)
-        if ($NoWaitEnter) { $passArgs += '-NoWaitEnter' }
+        $passArgs = ConvertTo-DeploySplat $DeployArgs
+        $passArgs['UseLatest'] = $true
+        if ($NoWaitEnter) { $passArgs['NoWaitEnter'] = $true }
         & $deploy @passArgs
         exit $LASTEXITCODE
     }
@@ -173,7 +189,7 @@ if ($NoDeploy) { Wait-EnterToClose; exit 0 }
 
 # 4. Deploy (it waits for Enter itself unless -NoWaitEnter).
 $deploy = Join-Path $ProjectRoot 'deploy.ps1'
-$passArgs = @($DeployArgs)
-if ($NoWaitEnter) { $passArgs += '-NoWaitEnter' }
+$passArgs = ConvertTo-DeploySplat $DeployArgs
+if ($NoWaitEnter) { $passArgs['NoWaitEnter'] = $true }
 & $deploy @passArgs
 exit $LASTEXITCODE
