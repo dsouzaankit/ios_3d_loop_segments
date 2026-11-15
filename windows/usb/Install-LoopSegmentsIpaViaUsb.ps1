@@ -150,6 +150,27 @@ function Get-PhoneWifiIp {
     return $null
 }
 
+function Move-PcOnPhoneLan([string] $PhoneHost) {
+    # Put this PC on the phone LAN (phoneLanHost /24) and return that Wi-Fi's profile name. Already
+    # there: the current profile. Else each saved profile in range until one gives a phone-LAN IP.
+    $wifi = Get-WifiState
+    if (Get-PcIpOn $PhoneHost) { return $wifi.Current }
+    # In-range profiles first; then the rest, since a scan can briefly miss a restarting AP.
+    $others = @($wifi.Profiles | Where-Object { $_ -ne $wifi.Current })
+    $order = @($others | Where-Object { $wifi.Visible -contains $_ }) + @($others | Where-Object { $wifi.Visible -notcontains $_ })
+    foreach ($p in $order) {
+        Write-Inst "Moving this PC onto the phone LAN to restart its AP: trying $p..."
+        & netsh wlan connect "name=$p" | Out-Null
+        $until = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $until) {
+            Start-Sleep -Seconds 2
+            $ip = Get-PcIpOn $PhoneHost
+            if ($ip) { Write-Inst "PC is on the phone LAN: $p ($ip)." Green; return $p }
+        }
+    }
+    return $null
+}
+
 function Move-PhoneOffPhoneLan([string] $PhoneHost) {
     # SideStore needs www over Wi-Fi, which the phone LAN lacks. There is no way to pick the phone's
     # Wi-Fi over USB, so bounce the phone LAN AP: the phone hops to another saved Wi-Fi (the PC on
@@ -165,9 +186,14 @@ function Move-PhoneOffPhoneLan([string] $PhoneHost) {
         return $null
     }
     $reboot = Join-Path $WindowsDir 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
-    # The phone LAN's network name: the PC's Wi-Fi when it is on the phone LAN now (else unknown).
-    $lanSsid = if (Get-PcIpOn $PhoneHost) { (Get-WifiState).Current } else { $null }
+    $lanSsid = $null
     foreach ($round in 1..2) {
+        # The AP's restart command (telnet) only answers on the phone LAN: the PC has to be there.
+        $lanSsid = Move-PcOnPhoneLan $PhoneHost
+        if (-not $lanSsid) {
+            Write-Inst "This PC could not join the phone LAN ($PhoneHost /24), so it cannot restart that AP. Switch the phone to another Wi-Fi by hand." Yellow
+            return $null
+        }
         Write-Inst "Phone is on the phone LAN$(if ($ip) { " ($ip)" }): bouncing the phone LAN AP so it hops to another Wi-Fi (round $round)..." Yellow
         & (Get-Command pwsh).Source -NoProfile -ExecutionPolicy Bypass -File $reboot -BouncePhoneLanAp -NoWaitEnter -PhoneLanHost $PhoneHost | Out-Host
         $moved = $null
@@ -181,12 +207,20 @@ function Move-PhoneOffPhoneLan([string] $PhoneHost) {
         # The bounced AP comes back after a minute or so and the phone may hop back to it: wait that
         # out before SideStore starts, so the hop does not cut its download (-1005).
         if ($lanSsid) {
-            # Until the bounced AP shows in this PC's Wi-Fi scan again, then 15 s for the phone to
-            # decide whether to hop back (cap: -SettleSec).
+            # Until the bounced AP has dropped out of this PC's Wi-Fi scan and come back, then 15 s for
+            # the phone to decide whether to hop back (cap: -SettleSec). Windows' scan list is cached,
+            # so right after the bounce it can still list the AP: when the drop-out is never seen,
+            # wait at least 45 s instead of trusting that stale entry.
             Write-Inst "Phone moved off the phone LAN ($moved). Waiting for $lanSsid to come back (up to $SettleSec s)..."
             $t0 = Get-Date
             $capAt = $t0.AddSeconds($SettleSec)
-            while ((Get-Date) -lt $capAt -and -not ((Get-WifiState).Visible -contains $lanSsid)) { Start-Sleep -Seconds 5 }
+            $sawGone = $false
+            while ((Get-Date) -lt $capAt) {
+                $vis = (Get-WifiState).Visible -contains $lanSsid
+                if (-not $vis) { $sawGone = $true }
+                elseif ($sawGone -or ((Get-Date) - $t0).TotalSeconds -ge 45) { break }
+                Start-Sleep -Seconds 5
+            }
             $back = (Get-WifiState).Visible -contains $lanSsid
             Write-Inst ("{0} after {1:N0} s; giving the phone 15 s to settle..." -f $(if ($back) { "$lanSsid is back" } else { "$lanSsid not seen yet" }), ((Get-Date) - $t0).TotalSeconds)
             Start-Sleep -Seconds 15
@@ -313,8 +347,15 @@ try {
         $ipaUrl = "http://${pcIp}:$Port$path"
         $link = 'sidestore://install?url=' + [Uri]::EscapeDataString($ipaUrl)
         Write-Inst "Serving $([math]::Round($size / 1MB, 1)) MB at $ipaUrl"
-        $out = Invoke-Py @($OpenPy, $link)
-        if ($out -notmatch '(?m)^LAUNCHED\b') {
+        # iOS refuses USB launches while the phone is locked: ask to unlock and retry for ~1 min.
+        $launched = $false
+        foreach ($try in 1..7) {
+            $out = Invoke-Py @($OpenPy, $link)
+            if ($out -match '(?m)^LAUNCHED\b') { $launched = $true; break }
+            if ($try -eq 1) { Write-Inst 'Could not launch Loop Segments over USB - unlock the phone (retrying every 10 s for a minute)...' Yellow }
+            Start-Sleep -Seconds 10
+        }
+        if (-not $launched) {
             Write-Inst "Could not launch Loop Segments over USB: $($out.Trim())" Red
             exit 2
         }
