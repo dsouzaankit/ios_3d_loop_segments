@@ -12,6 +12,8 @@
     2. Wait for iCloud sync on the iPhone (no cloud badge on the IPA)
     3. Force-quit Loop Segments (App Switcher → swipe away); installs over it often hang while it runs
     4. SideStore or AltStore → My Apps → + → LoopSegments.ipa (or Files → Share)
+    iPhone on USB with build 428+: steps 2-4 shrink to one tap on SideStore's Install dialog
+    (see -SkipUsbInstall).
 
   Re-paste only (stamped IPA name, no build): .\copy-to-icloud.ps1
 
@@ -31,6 +33,20 @@
 .PARAMETER SkipAltStorePrep
   Deprecated alias for the default (skip AltServer prep).
 
+.PARAMETER SkipPhoneWwwCheck
+  After triggering the build, the script normally checks the iPhone if it is on USB: the app's
+  Wi-Fi -> www probe (same as the LAN page), and a bounce of the phone's Wi-Fi AP if www is down
+  (windows\usb\Test-PhoneWwwViaUsb.ps1), then quits Loop Segments if it is in the foreground so
+  SideStore can install over it, and connects LocalDevVPN if it is not (launches it over USB; its
+  "Auto-connect on launch" setting must be on). This skips all of that.
+
+.PARAMETER SkipUsbInstall
+  After the download, with the iPhone on USB, the script normally serves the IPA on this PC's LAN
+  and launches Loop Segments (build 428+) with a sidestore://install link, so SideStore shows Install
+  and you tap once (windows\usb\Install-LoopSegmentsIpaViaUsb.ps1). Once the phone reports the new
+  build, LocalDevVPN is switched back off if this deploy switched it on. This skips that; install
+  from iCloud Downloads instead.
+
 .PARAMETER NoWaitEnter
   Do not wait for Enter (child callers). Direct run waits, including on errors.
 
@@ -49,6 +65,8 @@ param(
     [switch] $SkipICloud,
     [switch] $EnsureAltStorePrep,
     [switch] $SkipAltStorePrep,
+    [switch] $SkipPhoneWwwCheck,
+    [switch] $SkipUsbInstall,
     [switch] $NoWaitEnter
 )
 
@@ -120,6 +138,47 @@ function Invoke-ProjectAltStoreDeployPrep {
     } finally {
         $ErrorActionPreference = $prev
     }
+}
+
+function Invoke-PhoneWwwCheck {
+    # While the cloud build runs: iPhone on USB -> its Wi-Fi -> www probe -> AP bounce if down,
+    # so iCloud / SideStore can fetch the IPA. Never fails the deploy.
+    if ($SkipPhoneWwwCheck) { return }
+    $ps1 = Join-Path $ProjectRoot 'windows\usb\Test-PhoneWwwViaUsb.ps1'
+    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $ps1) -or -not $pwsh) {
+        Write-Host '[phone-www] Skipped (needs pwsh 7 and windows\usb\Test-PhoneWwwViaUsb.ps1).' -ForegroundColor DarkYellow
+        return
+    }
+    Write-Step 'Checking the USB iPhone''s Wi-Fi -> www (bounces its AP if down), quitting Loop Segments if in front, connecting LocalDevVPN'
+    try {
+        & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1
+    } catch {
+        Write-Warning ("Phone www check failed: {0}" -f $_.Exception.Message)
+    }
+    $script:PhoneWwwChecked = $true
+    $global:LASTEXITCODE = 0
+}
+
+function Invoke-UsbInstall {
+    # iPhone on USB: serve the IPA on the LAN and have SideStore install it (one tap), then put
+    # LocalDevVPN back off if this deploy switched it on. Never fails the deploy.
+    if ($SkipUsbInstall) { return }
+    $ps1 = Join-Path $ProjectRoot 'windows\usb\Install-LoopSegmentsIpaViaUsb.ps1'
+    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $ps1) -or -not $pwsh) {
+        Write-Host '[usb-install] Skipped (needs pwsh 7 and windows\usb\Install-LoopSegmentsIpaViaUsb.ps1).' -ForegroundColor DarkYellow
+        return
+    }
+    # -UseLatest / -RunId skip the trigger, so the www / VPN check has not run yet.
+    if (-not $script:PhoneWwwChecked) { Invoke-PhoneWwwCheck }
+    Write-Step 'Installing over USB via SideStore (tap Install on the phone)'
+    try {
+        & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 -IpaPath $LocalIpa
+    } catch {
+        Write-Warning ("USB install failed: {0}" -f $_.Exception.Message)
+    }
+    $global:LASTEXITCODE = 0
 }
 
 function Assert-Gh {
@@ -232,6 +291,7 @@ if (-not $resolvedRunId) {
         } finally {
             Pop-Location
         }
+        Invoke-PhoneWwwCheck
         Wait-ForIpaRun $resolvedRunId
     }
 } else {
@@ -258,6 +318,7 @@ Write-Host "Actions:   https://github.com/dsouzaankit/ios_3d_loop_segments/actio
 if ($SkipICloud) {
     Write-Host 'Skipped iCloud copy (-SkipICloud).'
     Write-Host 'Re-paste later: .\copy-to-icloud.ps1'
+    Invoke-UsbInstall
     Invoke-ProjectAltStoreDeployPrep
     Exit-WithEnter 0
 }
@@ -267,5 +328,6 @@ Write-Step 'Pasting IPA to iCloud (copy-to-icloud)'
 if ($null -ne $LASTEXITCODE -and [int]$LASTEXITCODE -ne 0) {
     throw ("copy-to-icloud.ps1 failed (exit {0})" -f $LASTEXITCODE)
 }
+Invoke-UsbInstall
 Invoke-ProjectAltStoreDeployPrep
 Exit-WithEnter 0

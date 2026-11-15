@@ -88,9 +88,13 @@ Pick one:
 .\deploy.ps1              # trigger ios-build → download → calls copy-to-icloud.ps1
 .\deploy.ps1 -UseLatest   # skip trigger; fetch newest successful workflow_dispatch IPA → copy-to-icloud
 .\deploy.ps1 -SkipICloud  # local ios\build artifacts\ipa\ only (no iCloud)
+.\deploy.ps1 -SkipPhoneWwwCheck  # no USB iPhone Wi-Fi->www check / AP bounce / foreground app quit / LocalDevVPN connect after the trigger
+.\deploy.ps1 -SkipUsbInstall     # no USB SideStore install (install from iCloud Downloads)
 .\copy-to-icloud.ps1      # iCloud paste only — unique LoopSegments-b{build}-{time}.ipa (like web_auto_parking)
 .\copy-to-icloud.ps1 -FetchIfMissing   # if local IPA missing, gh -UseLatest first then paste
 ```
+
+**Phone www check:** After it triggers the build, if the iPhone is on **USB**, it asks the app's **Wi‑Fi→www probe** (same as the LAN page button) and **bounces the phone's Wi‑Fi AP** when www is down, so iCloud / SideStore can fetch the IPA. Then, if **Loop Segments is in the foreground**, it **quits it** (SideStore installs over a running app often hang); a backgrounded app is left alone. Last, if **LocalDevVPN** is not connected, it launches LocalDevVPN over USB, whose **Auto-connect on launch** setting (switch it on once in LocalDevVPN) then connects it for SideStore (`windows\usb\Test-PhoneWwwViaUsb.ps1`; skipped with no USB phone; the www probe is skipped when the LAN page does not answer; nothing is bounced or quit while an export runs; `-SkipPhoneWwwCheck` turns it all off). **USB install (build 428+ on the phone):** after the download, with the iPhone on USB, `deploy.ps1` serves the IPA once on this PC's LAN (`http://<PC IP>:8766/<random>/LoopSegments.ipa`, plain TCP listener, no admin) and launches Loop Segments over USB with `-openURL sidestore://install?url=…`. The app opens that link and quits, SideStore shows **Install**: **tap it** (the only manual step). The script waits until the phone reports the new build, then switches **LocalDevVPN back off if this deploy switched it on** (left on if the install is not confirmed). `windows\usb\Install-LoopSegmentsIpaViaUsb.ps1`; `-SkipUsbInstall` turns it off. The iCloud copy is still made as a fallback.
 
 **`deploy.ps1` reuses `copy-to-icloud.ps1`** for the iCloud step (unless `-SkipICloud`). That helper prunes older `LoopSegments*.ipa` in iCloud Downloads, then copies a **new stamped name** so Files refreshes reliably. Optional override: set **`iCloudDownloads`** in `windows\loop-segments-windows.json`.
 

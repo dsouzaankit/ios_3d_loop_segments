@@ -61,6 +61,7 @@ struct RootView: View {
             nightModeEnabled = AppearanceSettings.isNightModeEnabled
             if scenePhase == .active {
                 ExportBackgroundKeepAlive.shared.beginAppForegroundSession()
+                LaunchURLOpener.openIfRequested(canQuit: !session.isExportSessionActive)
             }
             syncLANServices()
         }
@@ -70,6 +71,7 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 ExportBackgroundKeepAlive.shared.beginAppForegroundSession()
+                LaunchURLOpener.openIfRequested(canQuit: !session.isExportSessionActive)
             }
             syncLANServices()
         }

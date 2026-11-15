@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Exit 0 if Loop Segments is already the foreground app over USB (DVT proclist).
 
+--kill: also quit it when it is foreground (DVT kill of its pid; prints KILLED / KILL_FAILED).
+deploy.ps1 uses this (via Test-PhoneWwwViaUsb.ps1) so SideStore can install over it.
+
 Exit codes:
   0  FOREGROUND — app already frontmost; caller may skip relaunch
   1  NOT_FOREGROUND / probe inconclusive — caller should launch
@@ -74,7 +77,46 @@ async def _proclist_via_lockdown() -> list[dict[str, Any]]:
             pass
 
 
-async def probe(want: str) -> int:
+async def _kill_via_userspace(pid: int) -> None:
+    from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
+    from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
+    from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
+
+    async with UserspaceRsdTunnel() as rsd:
+        async with DvtProvider(rsd) as dvt, ProcessControl(dvt) as pc:
+            await pc.kill(pid)
+            await asyncio.sleep(0.5)  # fire-and-forget: let the request leave before closing
+
+
+async def _kill_via_lockdown(pid: int) -> None:
+    from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
+    from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
+
+    lockdown = await create_using_usbmux()
+    try:
+        async with DvtProvider(lockdown) as dvt, ProcessControl(dvt) as pc:
+            await pc.kill(pid)
+            await asyncio.sleep(0.5)
+    finally:
+        try:
+            await lockdown.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def kill(pid: int) -> bool:
+    for label, fn in (("userspace", _kill_via_userspace), ("lockdown", _kill_via_lockdown)):
+        try:
+            await fn(pid)
+            print(f"KILL_OK:{label}", file=sys.stderr)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            print(f"KILL_ERR:{label}: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return False
+
+
+async def probe(want: str, do_kill: bool = False) -> int:
     errors: list[str] = []
     processes: Optional[list[dict[str, Any]]] = None
 
@@ -104,6 +146,12 @@ async def probe(want: str) -> int:
         pid = hit.get("pid", "?")
         bid = hit.get("bundleIdentifier") or hit.get("name") or want
         print(f"FOREGROUND\t{bid}\tpid={pid}")
+        if do_kill:
+            try:
+                ok = await kill(int(pid))
+            except (TypeError, ValueError):
+                ok = False
+            print("KILLED" if ok else "KILL_FAILED")
         return 0
 
     # Helpful for logs: running but not frontmost vs not running.
@@ -120,9 +168,11 @@ async def probe(want: str) -> int:
 
 
 def main() -> int:
-    want = sys.argv[1] if len(sys.argv) > 1 else "com.loopsegments.app"
+    args = [a for a in sys.argv[1:] if a != "--kill"]
+    do_kill = "--kill" in sys.argv[1:]
+    want = args[0] if args else "com.loopsegments.app"
     try:
-        return asyncio.run(probe(want))
+        return asyncio.run(probe(want, do_kill))
     except KeyboardInterrupt:
         return 1
 
