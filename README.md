@@ -70,7 +70,7 @@ On phone: **Settings → Cellular → Loop Segments → On**.
 | [DESIGN.md](DESIGN.md) | Architecture |
 | [deploy.ps1](deploy.ps1) | Windows: Actions IPA → local, then runs [copy-to-icloud.ps1](copy-to-icloud.ps1) |
 | [bump-build.ps1](bump-build.ps1) | Windows: build number + 1 (`ios/project.yml`) and a README build note, commit + push, then runs `deploy.ps1` — a new IPA with no app changes (e.g. to test the USB install, which skips a phone already on that build). If a built IPA is newer than the USB phone's build (e.g. a deploy that timed out), it runs `deploy.ps1 -UseLatest` for that one instead. `-DryRun`, `-NoDeploy`, `-Note`, `-ForceBump` |
-| [deploy-latest.ps1](deploy-latest.ps1) | Windows: `deploy.ps1 -UseLatest` — install the newest already-built IPA (download, iCloud copy, USB install) with **no** GitHub build and no bump, e.g. after a deploy timed out. Passes `-SkipICloud`, `-SkipUsbInstall`, `-NoPhoneRestart`, ... |
+| [install-latest.ps1](install-latest.ps1) | Windows: `deploy.ps1 -UseLatest` — install the newest already-built IPA (download, iCloud copy, USB install) with **no** GitHub build and no bump, e.g. after a deploy timed out. `-Force` reinstalls a build the phone already has. Passes `-SkipICloud`, `-SkipUsbInstall`, `-NoPhoneRestart`, ... |
 | [copy-to-icloud.ps1](copy-to-icloud.ps1) | Stamped iCloud paste + prune (shared by deploy; no build) |
 | [ios/](ios/) | Loop Segments iPhone app |
 | [windows/README.md](windows/README.md) | **Portable PC setup** (`loop-segments-windows.json`) |

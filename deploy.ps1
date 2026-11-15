@@ -56,6 +56,10 @@
   SideStore errors other than an offline LocalDevVPN. Never while an export runs. This turns the
   restart off (the failed install then just says to restart the phone yourself).
 
+.PARAMETER ForceUsbInstall
+  Reinstall over USB even when the phone already has the IPA's build (the install confirms it by the
+  app's new install path). install-latest.ps1 -Force passes this.
+
 .PARAMETER NoWaitEnter
   Do not wait for Enter (child callers). Direct run waits, including on errors.
 
@@ -78,6 +82,7 @@ param(
     [switch] $SkipPhonePrep,
     [switch] $SkipUsbInstall,
     [switch] $NoPhoneRestart,
+    [switch] $ForceUsbInstall,
     [switch] $NoWaitEnter
 )
 
@@ -189,6 +194,8 @@ function Invoke-UsbInstall {
     try {
         $installArgs = @('-IpaPath', $LocalIpa)
         if (-not $NoPhoneRestart) { $installArgs += '-RestartPhoneOnError' }
+        # Reinstall even when the phone already has this build.
+        if ($ForceUsbInstall) { $installArgs += '-Force' }
         & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 @installArgs
     } catch {
         Write-Warning ("USB install failed: {0}" -f $_.Exception.Message)

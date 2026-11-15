@@ -10,14 +10,16 @@
   reinstall the latest build. (bump-build.ps1 also does this on its own when the newest built IPA is
   newer than the phone's build.)
 
-  The USB install skips a phone that already has this build; to reinstall the same build run
-  windows\usb\Install-LoopSegmentsIpaViaUsb.ps1 -Force.
+  The USB install skips a phone that already has this build; -Force reinstalls it anyway.
 
 .EXAMPLE
-  .\deploy-latest.ps1
+  .\install-latest.ps1
 
 .EXAMPLE
-  .\deploy-latest.ps1 -SkipICloud -NoPhoneRestart
+  .\install-latest.ps1 -SkipICloud -NoPhoneRestart
+
+.EXAMPLE
+  .\install-latest.ps1 -Force   # reinstall the build the phone already has
 #>
 param(
     # Same meaning as in deploy.ps1.
@@ -26,7 +28,9 @@ param(
     [switch] $SkipPhonePrep,
     [switch] $NoPhoneRestart,
     [switch] $EnsureAltStorePrep,
-    [switch] $NoWaitEnter
+    [switch] $NoWaitEnter,
+    # Reinstall even when the phone already has this build (deploy.ps1 -ForceUsbInstall).
+    [switch] $Force
 )
 
 $deploy = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'deploy.ps1'
@@ -35,5 +39,6 @@ $pass = @{ UseLatest = $true }
 foreach ($name in 'SkipICloud', 'SkipUsbInstall', 'SkipPhonePrep', 'NoPhoneRestart', 'EnsureAltStorePrep', 'NoWaitEnter') {
     if ((Get-Variable -Name $name -ValueOnly)) { $pass[$name] = $true }
 }
+if ($Force) { $pass['ForceUsbInstall'] = $true }
 & $deploy @pass
 exit $LASTEXITCODE
