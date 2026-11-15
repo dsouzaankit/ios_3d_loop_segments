@@ -640,6 +640,8 @@ enum ExportLANServer {
         "keep_alive.json",
         // Both name the clip they measured with (displayName / sourcePath / folderPath).
         "wan_throughput.json", "lan_throughput.json",
+        // Their usage help includes the live queued / paused exports (clip names and folders).
+        "export_queue.json", "paused_exports.json",
     ]
 
     /// Export logs under `pcld_ios_media/logs/`, including legacy aliases like `/export_latest.txt`.

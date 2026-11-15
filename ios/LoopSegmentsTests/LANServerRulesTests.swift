@@ -147,6 +147,7 @@ final class LANServerRulesTests: XCTestCase {
         let paths = [
             "/xr", "/xr?mode=archive", "/chroma", "/status.json", "/status_lists.json", "/xr_tunnel.json", "/xr_debug.json",
             "/keep_alive.json", "/wan_throughput.json", "/lan_throughput.json",
+            "/export_queue.json", "/paused_exports.json",
             "/export_latest.txt", "/export_progress.txt", "/search_debug.txt", "/logs/export_1.txt",
             "/pcld_ios_media/logs/export_latest.txt", "/pcld_ios_media/logs/export_1700000000.txt"
         ]
