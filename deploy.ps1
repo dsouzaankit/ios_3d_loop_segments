@@ -35,10 +35,9 @@
 
 .PARAMETER SkipPhonePrep
   After triggering the build, with the iPhone on USB, the script normally connects LocalDevVPN if it
-  is not (launches it over USB; its "Auto-connect on launch" setting must be on), then brings
-  Loop Segments to the front (windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1 -NoQuit
-  -KeepAppInFront): it keeps the screen on, so the phone does not lock (and need Face ID) before the
-  install, which relaunches it fresh for the handover. Only for the USB install: with
+  is not (launches it over USB; its "Auto-connect on launch" setting must be on), then goes back to
+  the Home Screen (windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1 -NoQuit). Loop Segments stays
+  open: the USB install relaunches it fresh for the handover. Only for the USB install: with
   -SkipUsbInstall (manual iCloud install, at your pace) the phone is left alone. No router is touched.
   This skips that. -SkipPhoneWwwCheck is the old name.
 
@@ -164,9 +163,9 @@ function Invoke-PhonePrep {
         Write-Host '[phone-prep] Skipped (needs pwsh 7 and windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1).' -ForegroundColor DarkYellow
         return
     }
-    Write-Step 'Preparing the USB iPhone for SideStore (connect LocalDevVPN, then Loop Segments in front so the phone stays unlocked)'
+    Write-Step 'Preparing the USB iPhone for SideStore (connect LocalDevVPN; Loop Segments stays open until the install)'
     try {
-        & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 -NoQuit -KeepAppInFront
+        & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 -NoQuit
     } catch {
         Write-Warning ("Phone prep failed: {0}" -f $_.Exception.Message)
     }

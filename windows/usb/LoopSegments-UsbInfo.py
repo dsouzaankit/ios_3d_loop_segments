@@ -11,9 +11,6 @@
   vpn-off                  -> VPN_OFF | VPN_STILL_UP   (localdevvpn://disable via Loop Segments, tunnel
                               check every 1 s, then Home Screen: one DVT connection)
   quit-sidestore           -> QUIT <pids> | NOT_RUNNING   (fresh SideStore for the next install try)
-  front-app                -> FRONT <pid> | NOT_INSTALLED | LAUNCH_FAILED <why>   (Loop Segments to the
-                              front, a running copy kept: it keeps the screen on, so the phone stays
-                              unlocked while a deploy builds)
   vpn-restart              -> VPN_RESTARTED | VPN_DOWN_TIMEOUT | VPN_UP_TIMEOUT   (tunnel off, fresh
                               LocalDevVPN launch, Auto-connect brings a new tunnel up: one DVT connection)
 """
@@ -25,8 +22,8 @@ import plistlib
 import sys
 import zipfile
 
-from loopsegments_dvt import (go_home, is_no_device, launch, proclist, quit_app, resolve_bundle_id,
-                              vpn_off, vpn_restart, wifi_ipv4)
+from loopsegments_dvt import (go_home, is_no_device, proclist, quit_app, resolve_bundle_id, vpn_off,
+                              vpn_restart, wifi_ipv4)
 
 
 async def installed_build() -> int:
@@ -147,19 +144,6 @@ def main() -> int:
         return 0 if ip else 1
     if cmd == "wait-install" and len(sys.argv) > 4:
         return asyncio.run(wait_install(sys.argv[2].strip(), sys.argv[3].strip(), float(sys.argv[4])))
-    if cmd == "front-app":
-        try:
-            bundle = asyncio.run(resolve_bundle_id("com.loopsegments.app", "Loop Segments"))
-            if not bundle:
-                print("NOT_INSTALLED")
-                return 1
-            pid = asyncio.run(launch(bundle, kill_existing=False))
-        except Exception as exc:  # noqa: BLE001
-            msg = f"{type(exc).__name__}: {exc}"
-            print(("NO_DEVICE\t" if is_no_device(msg) else "LAUNCH_FAILED\t") + msg)
-            return 2 if is_no_device(msg) else 1
-        print(f"FRONT\t{pid}")
-        return 0
     if cmd == "quit-sidestore":
         try:
             # SideStore installs carry the team id: com.SideStore.SideStore.<TEAMID>.
