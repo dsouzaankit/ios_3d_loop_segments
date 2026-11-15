@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 441 (1.3.1):** Keep Alive sessions capped at 24 h (a huge /keep_alive.json extend crashed the app); GET /wan_throughput.json and /lan_throughput.json need the LAN login.
+
 **Build 440 (1.3.1):** `GET`/`POST /keep_alive.json` — companion quit **resets** Keep Alive to **60 min**; successful **Open on Quest** **adds** **60 min** to the remaining session (`action=extend`). Skips the timer while export owns Keep Alive.
 
 **Build 439 (1.3.1):** LAN **WAN speed test** / `POST /wan_throughput.json`: random pCloud video ≥**375 MB**, ~**30 s** WebDAV Range → Mbps on the page; companion POSTs it at startup. While export is **running**, system screen timeout / Auto-Lock is allowed (Keep Alive after lock). Replaces the build-438 pCloud iframe embed.
