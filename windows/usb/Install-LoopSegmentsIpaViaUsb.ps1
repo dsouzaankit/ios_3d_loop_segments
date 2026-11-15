@@ -24,7 +24,9 @@
      (Open-LinkViaLoopSegments.py). Build 428+ opens the link and quits itself, and SideStore shows
      its Install dialog: tap Install. LocalDevVPN must be connected (Prepare-PhoneForSideStoreViaUsb.ps1 does it).
   4. Quits SideStore before every try (LoopSegments-UsbInfo.py quit-sidestore), so the link starts
-     a fresh SideStore instead of one left with an error dialog or a stale LocalDevVPN connection.
+     a fresh SideStore instead of one left with an error dialog or a stale LocalDevVPN connection,
+     and restarts LocalDevVPN (tunnel off, app relaunched, Auto-connect brings a new tunnel up;
+     LoopSegments-UsbInfo.py vpn-restart, ~15 s), since SideStore signs through that tunnel.
      Serves one full download (up to -WaitSec), then waits up to -InstallWaitSec for the phone to
      report the new build (checked every 1 s). A failed try (download cut short, e.g. -1005 - the
      phone's network at the cut is logged - or SideStore never finished) is retried once: both are
@@ -353,6 +355,11 @@ try {
         # error dialog, a stale connection to LocalDevVPN) and the link would just be handed to it.
         $q = Invoke-Py @($InfoPy, 'quit-sidestore')
         if ($q -match '(?m)^QUIT\b') { Write-Inst 'Quit SideStore so this try starts it fresh.' }
+        # And a fresh LocalDevVPN (tunnel off, app relaunched, Auto-connect brings a new tunnel up):
+        # SideStore signs through that tunnel, and the phone may just have changed Wi-Fi.
+        $v = Invoke-Py @($InfoPy, 'vpn-restart')
+        if ($v -match '(?m)^VPN_RESTARTED\b') { Write-Inst 'Restarted LocalDevVPN (fresh tunnel).' }
+        else { Write-Inst "LocalDevVPN restart: $(($v -split "`n" | Where-Object { $_ -match '^(VPN_|NOT_|NO_|ERROR)' } | Select-Object -First 1)) - trying anyway." Yellow }
         $ipaUrl = "http://${pcIp}:$Port$path"
         $link = 'sidestore://install?url=' + [Uri]::EscapeDataString($ipaUrl)
         Write-Inst "Serving $([math]::Round($size / 1MB, 1)) MB at $ipaUrl"

@@ -137,6 +137,45 @@ async def vpn_off(opener_bundle: str, timeout: float = 20.0) -> bool:
     return await with_dvt(_run)
 
 
+async def vpn_restart(opener_bundle: str, down_timeout: float = 15.0, up_timeout: float = 20.0) -> str:
+    """Restart LocalDevVPN (tunnel and app) over ONE DVT connection: tunnel off via the opener app
+    (Loop Segments 428+, -openURL localdevvpn://disable), then a fresh LocalDevVPN launch whose
+    Auto-connect brings a new tunnel up. Returns 'RESTARTED', 'DOWN_TIMEOUT' (old tunnel would not
+    stop) or 'UP_TIMEOUT' (no new tunnel: Auto-connect off?)."""
+    import asyncio
+    import time
+
+    from pymobiledevice3.services.dvt.instruments.device_info import DeviceInfo
+    from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
+
+    def _up(procs: list[dict[str, Any]]) -> bool:
+        return any("LocalDevVPN.app/PlugIns/" in str(p.get("realAppName") or "") for p in procs)
+
+    async def _wait(info: Any, want_up: bool, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            await asyncio.sleep(1)
+            if _up(await info.proclist()) == want_up:
+                return True
+        return False
+
+    async def _run(dvt: Any) -> str:
+        async with DeviceInfo(dvt) as info:
+            if _up(await info.proclist()):
+                async with ProcessControl(dvt) as pc:
+                    await pc.launch(opener_bundle, arguments=["-openURL", "localdevvpn://disable"], kill_existing=True)
+                if not await _wait(info, False, down_timeout):
+                    return "DOWN_TIMEOUT"
+            async with ProcessControl(dvt) as pc:
+                # Fresh app: its launch-time Auto-connect starts a new tunnel.
+                await pc.launch("com.jkcoxson.LocalDevVPN", kill_existing=True)
+            if not await _wait(info, True, up_timeout):
+                return "UP_TIMEOUT"
+        return "RESTARTED"
+
+    return await with_dvt(_run)
+
+
 async def quit_app(bundle_prefix: str, name: str = "") -> list[int]:
     """Quit (kill) every running process whose bundle id starts with bundle_prefix, or whose name
     equals name. One DVT connection. Returns the pids killed (empty = it was not running)."""
