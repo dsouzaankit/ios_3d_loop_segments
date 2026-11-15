@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 443 (1.3.1):** LAN requests need an IP, localhost, .local or single-label Host, or the saved tunnel host (blocks DNS rebinding; else 421). Vanilla download path escaped on the LAN page.
+
 **Build 442 (1.3.1):** GET /export_queue.json and /paused_exports.json need the LAN login (they list queued / paused clip names).
 
 **Build 441 (1.3.1):** Keep Alive sessions capped at 24 h (a huge /keep_alive.json extend crashed the app); GET /wan_throughput.json and /lan_throughput.json need the LAN login.
