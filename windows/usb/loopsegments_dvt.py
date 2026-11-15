@@ -137,6 +137,31 @@ async def vpn_off(opener_bundle: str, timeout: float = 20.0) -> bool:
     return await with_dvt(_run)
 
 
+async def quit_app(bundle_prefix: str, name: str = "") -> list[int]:
+    """Quit (kill) every running process whose bundle id starts with bundle_prefix, or whose name
+    equals name. One DVT connection. Returns the pids killed (empty = it was not running)."""
+    import asyncio
+
+    from pymobiledevice3.services.dvt.instruments.device_info import DeviceInfo
+    from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
+
+    async def _run(dvt: Any) -> list[int]:
+        async with DeviceInfo(dvt) as info:
+            procs = await info.proclist()
+        pids = [int(p["pid"]) for p in procs
+                if isinstance(p.get("pid"), int) and (
+                    str(p.get("bundleIdentifier") or "").startswith(bundle_prefix)
+                    or (name and str(p.get("name") or "") == name))]
+        if pids:
+            async with ProcessControl(dvt) as pc:
+                for pid in pids:
+                    await pc.kill(pid)
+                await asyncio.sleep(0.5)  # kill is fire-and-forget
+        return pids
+
+    return await with_dvt(_run)
+
+
 async def go_home() -> int:
     """Bring the Home Screen to the front (DVT launch of SpringBoard, keeping it running), which
     backgrounds whatever app is in front. Same path as usb\\Go-IphoneHomeViaUsb.ps1."""

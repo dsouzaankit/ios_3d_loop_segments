@@ -81,10 +81,17 @@ if (-not (Test-LoopSegmentsUsbmuxListHasDevice -ExitCode $list.ExitCode -Lines $
 Write-Prep 'iPhone found on USB.'
 
 # --- 2. Quit Loop Segments if it is in the foreground ---
+# A running export also blocks the install's phone restart (Install-LoopSegmentsIpaViaUsb.ps1
+# -RestartPhoneOnError), which cannot check it later from off the phone LAN: leave a marker.
+$busy = Get-ExportBusyReason
+$busyMarker = Join-Path $env:TEMP 'loopsegments-export-busy.json'
+try {
+    if ($busy) { @{ reason = $busy; at = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $busyMarker -Encoding utf8 }
+    else { Remove-Item -LiteralPath $busyMarker -Force -ErrorAction SilentlyContinue }
+} catch {}
 if ($NoQuit) {
     Write-Prep 'Foreground quit skipped (-NoQuit).'
 } else {
-    $busy = Get-ExportBusyReason
     if ($busy) {
         Write-Prep "Loop Segments left running ($busy)." Yellow
     } else {

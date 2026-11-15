@@ -10,6 +10,7 @@
                            -> INSTALLED <build> <path> | TIMEOUT   (checks every 1 s on one connection)
   vpn-off                  -> VPN_OFF | VPN_STILL_UP   (localdevvpn://disable via Loop Segments, tunnel
                               check every 1 s, then Home Screen: one DVT connection)
+  quit-sidestore           -> QUIT <pids> | NOT_RUNNING   (fresh SideStore for the next install try)
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import plistlib
 import sys
 import zipfile
 
-from loopsegments_dvt import go_home, is_no_device, proclist, resolve_bundle_id, vpn_off, wifi_ipv4
+from loopsegments_dvt import go_home, is_no_device, proclist, quit_app, resolve_bundle_id, vpn_off, wifi_ipv4
 
 
 async def installed_build() -> int:
@@ -140,6 +141,16 @@ def main() -> int:
         return 0 if ip else 1
     if cmd == "wait-install" and len(sys.argv) > 4:
         return asyncio.run(wait_install(sys.argv[2].strip(), sys.argv[3].strip(), float(sys.argv[4])))
+    if cmd == "quit-sidestore":
+        try:
+            # SideStore installs carry the team id: com.SideStore.SideStore.<TEAMID>.
+            pids = asyncio.run(quit_app("com.SideStore.SideStore", "SideStore"))
+        except Exception as exc:  # noqa: BLE001
+            msg = f"{type(exc).__name__}: {exc}"
+            print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
+            return 2
+        print(f"QUIT\t{','.join(map(str, pids))}" if pids else "NOT_RUNNING")
+        return 0
     if cmd == "vpn-off":
         try:
             bundle = asyncio.run(resolve_bundle_id("com.loopsegments.app", "Loop Segments"))

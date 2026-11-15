@@ -12,9 +12,8 @@
      Phone: its Wi-Fi IP is read over USB (DVT network monitor: its own address on its TCP connections
      over en0; none = no www on Wi-Fi = the phone LAN). On the phone LAN: bounces that AP (lan\Invoke-LoopSegments-
      GatewayWifiRebootIfNeeded.ps1 -BouncePhoneLanAp), and the phone hops to another saved Wi-Fi
-     (waits up to 150 s). Then waits for the bounced AP to show up again in this PC's Wi-Fi scan,
-     plus 15 s (cap -SettleSec 120), so a hop back happens before SideStore downloads; a hop back
-     means another bounce (2 rounds). -NoBounce skips the bounce.
+     (waits up to 150 s; the PC joins the phone LAN first, since the AP's restart command only
+     answers there). -NoBounce skips the bounce.
      PC: needs an IP on the phone's new /24. Already there (the bounce usually moves it too): stays.
      Otherwise connects to ipaInstallWifiProfile (config, optional) or else each saved Wi-Fi
      profile in range, in Windows' priority order. Both stay on that Wi-Fi afterwards: the web
@@ -24,10 +23,17 @@
   3. Launches Loop Segments over USB with -openURL sidestore://install?url=<that link>
      (Open-LinkViaLoopSegments.py). Build 428+ opens the link and quits itself, and SideStore shows
      its Install dialog: tap Install. LocalDevVPN must be connected (Prepare-PhoneForSideStoreViaUsb.ps1 does it).
-  4. A download cut short (-1005: the phone hopped Wi-Fi mid-transfer) is retried: both are put
-     back off the phone LAN and the install link is opened again (-Attempts 3; tap Install each
-     time). Stops serving once SideStore has downloaded the whole file (or after -WaitSec), then waits up to
-     -InstallWaitSec for the phone to report the new build.
+  4. Quits SideStore before every try (LoopSegments-UsbInfo.py quit-sidestore), so the link starts
+     a fresh SideStore instead of one left with an error dialog or a stale LocalDevVPN connection.
+     Serves one full download (up to -WaitSec), then waits up to -InstallWaitSec for the phone to
+     report the new build (checked every 1 s). A failed try (download cut short, e.g. -1005 - the
+     phone's network at the cut is logged - or SideStore never finished) is retried once: both are
+     put back off the phone LAN and the link is opened again (tap Install). If that fails too and
+     -RestartPhoneOnError is set (deploy.ps1 sets it): restarts the phone over USB (the best fix for
+     SideStore errors other than an offline LocalDevVPN), waits for it to come back, for you to
+     unlock it, and for LocalDevVPN to reconnect, then one last try. Not while an export runs
+     (marker %TEMP%\loopsegments-export-busy.json from the prep). No download at all (Install not
+     tapped) is not retried.
   5. LocalDevVPN back to how it was: if Prepare-PhoneForSideStoreViaUsb.ps1 switched it on for this deploy
      (marker %TEMP%\loopsegments-vpn-turned-on.json), switches it off again (localdevvpn://disable,
      opened the same way) once the new build is confirmed. Left on when the install is not confirmed,
@@ -57,11 +63,9 @@ param(
     [switch] $Force,
     # Never bounce the phone LAN AP; the phone must already be on another Wi-Fi.
     [switch] $NoBounce,
-    # After a bounce: the longest wait for the bounced AP to show up again in this PC's Wi-Fi scan
-    # (then 15 s), or a fixed wait when its network name is unknown. Keeps a hop back off the download.
-    [int] $SettleSec = 120,
-    # Install link launches: a download cut short (-1005, e.g. the phone hopped Wi-Fi) is retried.
-    [int] $Attempts = 3
+    # A failed try (download cut short, or SideStore never finished) is retried once; if that fails
+    # too, restart the phone over USB (you unlock it), reconnect LocalDevVPN and try a last time.
+    [switch] $RestartPhoneOnError
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,6 +77,8 @@ $RepoRoot = Split-Path -Parent $WindowsDir
 . (Join-Path $WindowsDir 'lib\Get-LoopSegmentsWifi.ps1')
 
 $VpnMarker = Join-Path $env:TEMP 'loopsegments-vpn-turned-on.json'
+# Left by Prepare-PhoneForSideStoreViaUsb.ps1 while an export runs: never restart the phone then.
+$ExportBusyMarker = Join-Path $env:TEMP 'loopsegments-export-busy.json'
 $InfoPy = Join-Path $PSScriptRoot 'LoopSegments-UsbInfo.py'
 $OpenPy = Join-Path $PSScriptRoot 'Open-LinkViaLoopSegments.py'
 
@@ -141,6 +147,46 @@ function Get-PhoneWifiIp {
     return $null
 }
 
+function Restart-PhoneAndRecover {
+    # Restart the iPhone over USB, wait for it to come back and be unlocked, reconnect LocalDevVPN.
+    # Skipped while an export runs (the prep leaves a marker then). $true = ready for another try.
+    if ((Test-Path -LiteralPath $ExportBusyMarker) -and
+        (Get-Item -LiteralPath $ExportBusyMarker).LastWriteTime -gt (Get-Date).AddHours(-3)) {
+        Write-Inst 'Not restarting the phone: an export was running when this deploy started.' Yellow
+        return $false
+    }
+    Write-Inst 'Restarting the phone over USB (SideStore errors usually clear after a restart)...' Yellow
+    [void](Invoke-LoopSegmentsPythonRuntime -Runtime $script:rt -ArgumentList @('-m', 'pymobiledevice3', 'diagnostics', 'restart'))
+    $usbUp = {
+        $l = Invoke-LoopSegmentsPythonRuntime -Runtime $script:rt -ArgumentList @('-m', 'pymobiledevice3', 'usbmux', 'list')
+        Test-LoopSegmentsUsbmuxListHasDevice -ExitCode $l.ExitCode -Lines $l.Lines
+    }
+    # Gone from USB (up to 60 s), then back (up to 4 min).
+    $until = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $until -and (& $usbUp)) { Start-Sleep -Seconds 3 }
+    $until = (Get-Date).AddSeconds(240)
+    $back = $false
+    while ((Get-Date) -lt $until) { Start-Sleep -Seconds 5; if (& $usbUp) { $back = $true; break } }
+    if (-not $back) { Write-Inst 'The phone did not come back on USB within 4 min.' Yellow; return $false }
+    # iOS needs the passcode after a restart; developer services only answer once it is entered.
+    Write-Inst 'Phone is back on USB. Unlock it with your passcode (waiting up to 5 min)...' Cyan
+    $until = (Get-Date).AddSeconds(300)
+    $ready = $false
+    while ((Get-Date) -lt $until) {
+        if ((Invoke-Py @($InfoPy, 'vpn-tunnel')) -match '(?m)^TUNNEL_(UP|DOWN)\b') { $ready = $true; break }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $ready) { Write-Inst 'The phone was not unlocked within 5 min.' Yellow; return $false }
+    # The restart dropped LocalDevVPN; its Auto-connect setting brings it back on launch.
+    $vpn = Invoke-Py @((Join-Path $PSScriptRoot 'Connect-LocalDevVPNViaUsb.py'), '--wait', '20')
+    if ($vpn -notmatch '(?m)^VPN_(ALREADY_)?CONNECTED\b') {
+        Write-Inst 'LocalDevVPN did not reconnect after the restart (Auto-connect on launch on?).' Yellow
+        return $false
+    }
+    Write-Inst 'Phone restarted, unlocked, LocalDevVPN connected.' Green
+    return $true
+}
+
 function Move-PcOnPhoneLan([string] $PhoneHost) {
     # Put this PC on the phone LAN (phoneLanHost /24) by a saved-Wi-Fi switch; returns the profile or
     # $null. Shared with the companion's gateway check (lib\Get-LoopSegmentsWifi.ps1).
@@ -162,56 +208,25 @@ function Move-PhoneOffPhoneLan([string] $PhoneHost) {
         return $null
     }
     $reboot = Join-Path $WindowsDir 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
-    $lanSsid = $null
-    foreach ($round in 1..2) {
-        # The AP's restart command (telnet) only answers on the phone LAN: the PC has to be there.
-        $lanSsid = Move-PcOnPhoneLan $PhoneHost
-        if (-not $lanSsid) {
-            Write-Inst "This PC could not join the phone LAN ($PhoneHost /24), so it cannot restart that AP. Switch the phone to another Wi-Fi by hand." Yellow
-            return $null
-        }
-        Write-Inst "Phone is on the phone LAN$(if ($ip) { " ($ip)" }): bouncing the phone LAN AP so it hops to another Wi-Fi (round $round)..." Yellow
-        & (Get-Command pwsh).Source -NoProfile -ExecutionPolicy Bypass -File $reboot -BouncePhoneLanAp -NoWaitEnter -PhoneLanHost $PhoneHost | Out-Host
-        $moved = $null
-        $until = (Get-Date).AddSeconds(150)
-        while ((Get-Date) -lt $until) {
-            Start-Sleep -Seconds 10
-            $ip = Get-PhoneWifiIp
-            if ($ip -and -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneHost)) { $moved = $ip; break }
-        }
-        if (-not $moved) { Write-Inst 'The phone did not leave the phone LAN within 150 s of the AP bounce.' Yellow; return $null }
-        # The bounced AP comes back after a minute or so and the phone may hop back to it: wait that
-        # out before SideStore starts, so the hop does not cut its download (-1005).
-        if ($lanSsid) {
-            # Until the bounced AP has dropped out of this PC's Wi-Fi scan and come back, then 15 s for
-            # the phone to decide whether to hop back (cap: -SettleSec). Windows' scan list is cached,
-            # so right after the bounce it can still list the AP: when the drop-out is never seen,
-            # wait at least 45 s instead of trusting that stale entry.
-            Write-Inst "Phone moved off the phone LAN ($moved). Waiting for $lanSsid to come back (up to $SettleSec s)..."
-            $t0 = Get-Date
-            $capAt = $t0.AddSeconds($SettleSec)
-            $sawGone = $false
-            while ((Get-Date) -lt $capAt) {
-                $vis = (Get-WifiState).Visible -contains $lanSsid
-                if (-not $vis) { $sawGone = $true }
-                elseif ($sawGone -or ((Get-Date) - $t0).TotalSeconds -ge 45) { break }
-                Start-Sleep -Seconds 5
-            }
-            $back = (Get-WifiState).Visible -contains $lanSsid
-            Write-Inst ("{0} after {1:N0} s; giving the phone 15 s to settle..." -f $(if ($back) { "$lanSsid is back" } else { "$lanSsid not seen yet" }), ((Get-Date) - $t0).TotalSeconds)
-            Start-Sleep -Seconds 15
-        } else {
-            Write-Inst "Phone moved off the phone LAN ($moved). Waiting $SettleSec s for the bounced AP to come back..."
-            Start-Sleep -Seconds $SettleSec
-        }
+    # The AP's restart command (telnet) only answers on the phone LAN: the PC has to be there.
+    if (-not (Move-PcOnPhoneLan $PhoneHost)) {
+        Write-Inst "This PC could not join the phone LAN ($PhoneHost /24), so it cannot restart that AP. Switch the phone to another Wi-Fi by hand." Yellow
+        return $null
+    }
+    Write-Inst "Phone is on the phone LAN$(if ($ip) { " ($ip)" }): bouncing the phone LAN AP so it hops to another Wi-Fi..." Yellow
+    & (Get-Command pwsh).Source -NoProfile -ExecutionPolicy Bypass -File $reboot -BouncePhoneLanAp -NoWaitEnter -PhoneLanHost $PhoneHost | Out-Host
+    # No wait for the bounced AP to come back: it can take minutes, and a download cut short by a
+    # hop back to it is handled by the retry like any other -1005.
+    $until = (Get-Date).AddSeconds(150)
+    while ((Get-Date) -lt $until) {
+        Start-Sleep -Seconds 10
         $ip = Get-PhoneWifiIp
         if ($ip -and -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneHost)) {
-            Write-Inst "Phone stayed off the phone LAN ($ip)." Green
+            Write-Inst "Phone moved off the phone LAN ($ip)." Green
             return $ip
         }
-        Write-Inst "Phone went back to the phone LAN$(if ($ip) { " ($ip)" })." Yellow
     }
-    Write-Inst 'The phone keeps going back to the phone LAN: switch it to another Wi-Fi by hand.' Yellow
+    Write-Inst 'The phone did not leave the phone LAN within 150 s of the AP bounce.' Yellow
     return $null
 }
 
@@ -304,22 +319,40 @@ $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $
 try { $listener.Start() } catch { Write-Inst "Port $Port is busy ($($_.Exception.Message)); pass -Port." Red; exit 2 }
 $size = (Get-Item -LiteralPath $IpaPath).Length
 
-# --- 3 + 4. Launch the install link, serve until one full download (retried when cut short) ---
-$served = $false
-$deadline = (Get-Date).AddSeconds($WaitSec)
+# --- 3 + 4. Launch the install link, serve one full download, wait for the new build ---
+# A failed try (download cut short, e.g. -1005, or downloaded but SideStore never finished) is retried
+# once as is; if that fails too, -RestartPhoneOnError restarts the phone over USB (the user's best fix
+# for SideStore errors other than an offline LocalDevVPN), then one last try.
+$oldPath = if ($beforeApp -and $beforeApp.Path) { $beforeApp.Path } else { '-' }
+$installed = $false
+$restarted = $false
+$failure = $null
+$attempt = 0
 try {
-    foreach ($attempt in 1..([Math]::Max(1, $Attempts))) {
+    while ($true) {
+        $attempt++
         if ($attempt -gt 1) {
-            # A cut download (-1005) usually means the phone hopped Wi-Fi: put both back off the
-            # phone LAN on one network, then ask SideStore again.
-            Write-Inst "Retrying the install (attempt $attempt of $Attempts)..." Yellow
+            if ($cut) {
+                # Where the phone is says which kind of cut it was: back on the phone LAN (a hop to the
+                # bounced AP) or still on the install Wi-Fi (another cause).
+                $atCut = Get-PhoneWifiIp
+                $where = if (-not $atCut) { 'no Wi-Fi TCP = the phone LAN (or Wi-Fi off)' }
+                         elseif (Test-LoopSegmentsSameIpv4Slash24 -IpA $atCut -IpB $phoneHost) { "the phone LAN ($atCut)" }
+                         elseif (Test-LoopSegmentsSameIpv4Slash24 -IpA $atCut -IpB $pcIp) { "still the install Wi-Fi ($atCut)" }
+                         else { "another network ($atCut)" }
+                Write-Inst "At the cut the phone was on: $where." Yellow
+            }
+            Write-Inst "Trying the install again (try $attempt)..." Yellow
             $phoneIp = Move-PhoneOffPhoneLan $phoneHost
-            if (-not $phoneIp) { break }
+            if (-not $phoneIp) { $failure = 'the phone is not on a Wi-Fi off the phone LAN'; break }
             $move = Move-PcOffPhoneLan $phoneHost $phoneIp
-            if (-not $move.Ok) { Write-Inst $move.Error Red; break }
+            if (-not $move.Ok) { $failure = $move.Error; break }
             $pcIp = $move.Ip
-            $deadline = (Get-Date).AddSeconds($WaitSec)
         }
+        # A fresh SideStore for every try: a running one keeps whatever state it was left in (an
+        # error dialog, a stale connection to LocalDevVPN) and the link would just be handed to it.
+        $q = Invoke-Py @($InfoPy, 'quit-sidestore')
+        if ($q -match '(?m)^QUIT\b') { Write-Inst 'Quit SideStore so this try starts it fresh.' }
         $ipaUrl = "http://${pcIp}:$Port$path"
         $link = 'sidestore://install?url=' + [Uri]::EscapeDataString($ipaUrl)
         Write-Inst "Serving $([math]::Round($size / 1MB, 1)) MB at $ipaUrl"
@@ -331,13 +364,12 @@ try {
             if ($try -eq 1) { Write-Inst 'Could not launch Loop Segments over USB - unlock the phone (retrying every 10 s for a minute)...' Yellow }
             Start-Sleep -Seconds 10
         }
-        if (-not $launched) {
-            Write-Inst "Could not launch Loop Segments over USB: $($out.Trim())" Red
-            exit 2
-        }
+        if (-not $launched) { $failure = "could not launch Loop Segments over USB: $($out.Trim())"; break }
         Write-Inst 'SideStore should show Install now - tap Install on the phone.' Cyan
 
+        $served = $false
         $cut = $false
+        $deadline = (Get-Date).AddSeconds($WaitSec)
         while (-not $served -and -not $cut -and (Get-Date) -lt $deadline) {
             if (-not $listener.Pending()) { Start-Sleep -Milliseconds 200; continue }
             $client = $listener.AcceptTcpClient()
@@ -370,25 +402,44 @@ try {
                 $client.Close()
             }
         }
-        if ($served -or -not $cut) { break }
+
+        if ($served) {
+            # Checked every second on one connection; a new install path proves the install even for
+            # the same build (-Force).
+            $installed = $ipaBuild -and ((Invoke-Py @($InfoPy, 'wait-install', $ipaBuild, $oldPath, [string]$InstallWaitSec)) -match '(?m)^INSTALLED\b')
+            if ($installed) { break }
+            Write-Inst "The phone did not report build $ipaBuild within $InstallWaitSec s (SideStore error?)." Yellow
+        } elseif (-not $cut) {
+            # No download at all: Install not tapped, or SideStore could not reach this PC. Not a
+            # SideStore error a retry or restart would fix.
+            $failure = "SideStore did not download the IPA within $WaitSec s (Install not tapped, or VPN / Wi-Fi)"
+            break
+        }
+
+        # A failed try: once as is, then (with -RestartPhoneOnError) a phone restart, then a last try.
+        if ($attempt -eq 1) { continue }
+        if ($RestartPhoneOnError -and -not $restarted) {
+            $restarted = $true
+            if (Restart-PhoneAndRecover) { continue }
+            $failure = 'the phone did not come back ready after the restart'
+            break
+        }
+        $failure = 'SideStore failed again'
+        break
     }
 } finally {
     $listener.Stop()
 }
-if (-not $served) {
-    Write-Inst "SideStore did not download the IPA within $WaitSec s (Install not tapped, or VPN / Wi-Fi). Use iCloud Downloads instead." Yellow
-    Restore-Vpn $false
-    exit 1
-}
 
-# Checked every second on one connection; a new install path proves the install even for the same
-# build (-Force).
-$oldPath = if ($beforeApp -and $beforeApp.Path) { $beforeApp.Path } else { '-' }
-$installed = $ipaBuild -and ((Invoke-Py @($InfoPy, 'wait-install', $ipaBuild, $oldPath, [string]$InstallWaitSec)) -match '(?m)^INSTALLED\b')
 if ($installed) {
     Write-Inst "Installed: the phone now has build $ipaBuild." Green
 } else {
-    Write-Inst "The phone did not report build $ipaBuild within $InstallWaitSec s - check SideStore." Yellow
+    Write-Inst "Not installed: $(if ($failure) { $failure } else { 'unknown' })." Yellow
+    if (-not $restarted) {
+        Write-Inst 'For a SideStore error other than LocalDevVPN being offline, restart the phone, then run .\deploy.ps1 -UseLatest (or use iCloud Downloads).' Yellow
+    } else {
+        Write-Inst 'Install it from iCloud Downloads in SideStore, or run .\deploy.ps1 -UseLatest later.' Yellow
+    }
 }
 $script:WentHome = $false
 Restore-Vpn $installed

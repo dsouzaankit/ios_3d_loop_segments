@@ -49,6 +49,12 @@
   is switched back off if this deploy switched it on. Phone and PC stay off the phone LAN (the
   companion's start-up check moves them back). This skips that; install from iCloud Downloads.
 
+.PARAMETER NoPhoneRestart
+  The USB install normally retries a failed try once and, if that fails too, restarts the phone over
+  USB (you unlock it; LocalDevVPN reconnects) for one last try - a restart is the best fix for
+  SideStore errors other than an offline LocalDevVPN. Never while an export runs. This turns the
+  restart off (the failed install then just says to restart the phone yourself).
+
 .PARAMETER NoWaitEnter
   Do not wait for Enter (child callers). Direct run waits, including on errors.
 
@@ -70,6 +76,7 @@ param(
     [Alias('SkipPhoneWwwCheck')]
     [switch] $SkipPhonePrep,
     [switch] $SkipUsbInstall,
+    [switch] $NoPhoneRestart,
     [switch] $NoWaitEnter
 )
 
@@ -177,7 +184,9 @@ function Invoke-UsbInstall {
     if (-not $script:PhonePrepped) { Invoke-PhonePrep }
     Write-Step 'Installing over USB via SideStore (tap Install on the phone)'
     try {
-        & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 -IpaPath $LocalIpa
+        $installArgs = @('-IpaPath', $LocalIpa)
+        if (-not $NoPhoneRestart) { $installArgs += '-RestartPhoneOnError' }
+        & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 @installArgs
     } catch {
         Write-Warning ("USB install failed: {0}" -f $_.Exception.Message)
     }
