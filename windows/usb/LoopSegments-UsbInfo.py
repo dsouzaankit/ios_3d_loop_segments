@@ -8,11 +8,12 @@
   wifi-ip                  -> WIFI_IP <ipv4> | NO_WIFI_IP   (the phone's own address on en0, DVT network monitor)
   wait-install <build> <old app path> <timeout s>
                            -> INSTALLED <build> <path> | TIMEOUT   (checks every 1 s on one connection)
-  vpn-off                  -> VPN_OFF | VPN_STILL_UP   (localdevvpn://disable via Loop Segments, tunnel
-                              check every 1 s, then Home Screen: one DVT connection)
+  vpn-off                  -> VPN_OFF | VPN_STILL_UP   (quits LocalDevVPN's tunnel extension, then
+                              Home Screen: one DVT connection, no app launch, so no Face ID prompt)
   quit-sidestore           -> QUIT <pids> | NOT_RUNNING   (fresh SideStore for the next install try)
-  vpn-restart              -> VPN_RESTARTED | VPN_DOWN_TIMEOUT | VPN_UP_TIMEOUT   (tunnel off, fresh
-                              LocalDevVPN launch, Auto-connect brings a new tunnel up: one DVT connection)
+  vpn-restart              -> VPN_RESTARTED | VPN_DOWN_TIMEOUT | VPN_UP_TIMEOUT   (quits the tunnel
+                              extension, fresh LocalDevVPN launch, Auto-connect brings a new tunnel up:
+                              one DVT connection; Loop Segments is not launched)
 """
 
 from __future__ import annotations
@@ -156,11 +157,7 @@ def main() -> int:
         return 0
     if cmd == "vpn-restart":
         try:
-            bundle = asyncio.run(resolve_bundle_id("com.loopsegments.app", "Loop Segments"))
-            if not bundle:
-                print("NOT_INSTALLED")
-                return 1
-            result = asyncio.run(vpn_restart(bundle))
+            result = asyncio.run(vpn_restart())
         except Exception as exc:  # noqa: BLE001
             msg = f"{type(exc).__name__}: {exc}"
             print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
@@ -169,11 +166,7 @@ def main() -> int:
         return 0 if result == "RESTARTED" else 1
     if cmd == "vpn-off":
         try:
-            bundle = asyncio.run(resolve_bundle_id("com.loopsegments.app", "Loop Segments"))
-            if not bundle:
-                print("NOT_INSTALLED")
-                return 1
-            down = asyncio.run(vpn_off(bundle))
+            down = asyncio.run(vpn_off())
         except Exception as exc:  # noqa: BLE001
             msg = f"{type(exc).__name__}: {exc}"
             print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)

@@ -25,8 +25,9 @@
      its Install dialog: tap Install. LocalDevVPN must be connected (Prepare-PhoneForSideStoreViaUsb.ps1 does it).
   4. Quits SideStore before every try (LoopSegments-UsbInfo.py quit-sidestore), so the link starts
      a fresh SideStore instead of one left with an error dialog or a stale LocalDevVPN connection,
-     and restarts LocalDevVPN (tunnel off, app relaunched, Auto-connect brings a new tunnel up;
-     LoopSegments-UsbInfo.py vpn-restart, ~15 s), since SideStore signs through that tunnel.
+     and restarts LocalDevVPN (its tunnel extension quit, app relaunched, Auto-connect brings a new
+     tunnel up; LoopSegments-UsbInfo.py vpn-restart, ~12 s), since SideStore signs through that
+     tunnel. Loop Segments is not launched for it, so only the handover asks for Face ID.
      Serves one full download (up to -WaitSec), then waits up to -InstallWaitSec for the phone to
      report the new build (checked every 1 s). A failed try (download cut short, e.g. -1005 - the
      phone's network at the cut is logged - or SideStore never finished) is retried once: both are
@@ -37,8 +38,8 @@
      (marker %TEMP%\loopsegments-export-busy.json from the prep). No download at all (Install not
      tapped) is not retried.
   5. LocalDevVPN back to how it was: if Prepare-PhoneForSideStoreViaUsb.ps1 switched it on for this deploy
-     (marker %TEMP%\loopsegments-vpn-turned-on.json), switches it off again (localdevvpn://disable,
-     opened the same way) once the new build is confirmed. Left on when the install is not confirmed,
+     (marker %TEMP%\loopsegments-vpn-turned-on.json), switches it off again (quits
+     LocalDevVPN's tunnel extension over USB: no app launch, so no Face ID prompt) once the new build is confirmed. Left on when the install is not confirmed,
      so you can still finish it by hand.
 
   The installed app must be build 428+ for step 3 to open SideStore; older builds just launch.
@@ -115,8 +116,8 @@ function Restore-Vpn([bool] $Installed) {
         Write-Inst 'LocalDevVPN left on: the install is not confirmed yet (it was off before this deploy; switch it off in LocalDevVPN when done).' Yellow
         return
     }
-    # One USB connection: launch Loop Segments with localdevvpn://disable, check the tunnel every
-    # second, then the Home Screen (LocalDevVPN is in front after the disable link).
+    # One USB connection: quit LocalDevVPN's tunnel extension (no Loop Segments launch, so no Face ID
+    # prompt), check it is gone, then the Home Screen.
     $out = Invoke-Py @($InfoPy, 'vpn-off')
     # vpn-off ends on the Home Screen whenever it got as far as checking the tunnel.
     if ($out -match '(?m)^VPN_(OFF|STILL_UP)\b') { $script:WentHome = $true }

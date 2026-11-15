@@ -108,28 +108,43 @@ async def wifi_ipv4(seconds: float = 6.0) -> Optional[str]:
     return await with_dvt(_run)
 
 
-async def vpn_off(opener_bundle: str, timeout: float = 20.0) -> bool:
-    """Switch LocalDevVPN off and return to the Home Screen over ONE DVT connection: launch the
-    opener app (Loop Segments 428+) with -openURL localdevvpn://disable, check every second until
-    LocalDevVPN's tunnel process is gone, then bring SpringBoard to the front. True = tunnel down."""
+def _tunnel_pids(procs: list[dict[str, Any]]) -> list[int]:
+    """LocalDevVPN's packet-tunnel extension (LocalDevVPN.app/PlugIns/...): running = VPN connected."""
+    return [int(p["pid"]) for p in procs
+            if isinstance(p.get("pid"), int) and "LocalDevVPN.app/PlugIns/" in str(p.get("realAppName") or "")]
+
+
+async def _stop_tunnel(dvt: Any, info: Any, timeout: float) -> bool:
+    """Quit LocalDevVPN's tunnel extension (DVT kill). Tested: iOS does not restart it by itself,
+    and no app has to open a localdevvpn:// link, so a Face ID lock on Loop Segments never prompts."""
     import asyncio
     import time
 
+    from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
+
+    pids = _tunnel_pids(await info.proclist())
+    if not pids:
+        return True
+    async with ProcessControl(dvt) as pc:
+        for pid in pids:
+            await pc.kill(pid)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        await asyncio.sleep(1)
+        if not _tunnel_pids(await info.proclist()):
+            return True
+    return False
+
+
+async def vpn_off(timeout: float = 15.0) -> bool:
+    """Switch LocalDevVPN off and return to the Home Screen over ONE DVT connection: quit its tunnel
+    extension, then bring SpringBoard to the front. True = tunnel down."""
     from pymobiledevice3.services.dvt.instruments.device_info import DeviceInfo
     from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
 
     async def _run(dvt: Any) -> bool:
-        async with ProcessControl(dvt) as pc:
-            await pc.launch(opener_bundle, arguments=["-openURL", "localdevvpn://disable"], kill_existing=True)
-        down = False
-        deadline = time.monotonic() + timeout
         async with DeviceInfo(dvt) as info:
-            while time.monotonic() < deadline:
-                await asyncio.sleep(1)
-                procs = await info.proclist()
-                if not any("LocalDevVPN.app/PlugIns/" in str(p.get("realAppName") or "") for p in procs):
-                    down = True
-                    break
+            down = await _stop_tunnel(dvt, info, timeout)
         async with ProcessControl(dvt) as pc:
             await pc.launch("com.apple.springboard", kill_existing=False)
         return down
@@ -137,41 +152,36 @@ async def vpn_off(opener_bundle: str, timeout: float = 20.0) -> bool:
     return await with_dvt(_run)
 
 
-async def vpn_restart(opener_bundle: str, down_timeout: float = 15.0, up_timeout: float = 20.0) -> str:
-    """Restart LocalDevVPN (tunnel and app) over ONE DVT connection: tunnel off via the opener app
-    (Loop Segments 428+, -openURL localdevvpn://disable), then a fresh LocalDevVPN launch whose
-    Auto-connect brings a new tunnel up. Returns 'RESTARTED', 'DOWN_TIMEOUT' (old tunnel would not
-    stop) or 'UP_TIMEOUT' (no new tunnel: Auto-connect off?)."""
+async def vpn_restart(down_timeout: float = 15.0, up_timeout: float = 20.0) -> str:
+    """Restart LocalDevVPN (tunnel and app) over ONE DVT connection: quit its tunnel extension, then a
+    fresh LocalDevVPN launch whose Auto-connect brings a new tunnel up. Returns 'RESTARTED',
+    'DOWN_TIMEOUT' (old tunnel would not stop) or 'UP_TIMEOUT' (no new tunnel: Auto-connect off?)."""
     import asyncio
     import time
 
     from pymobiledevice3.services.dvt.instruments.device_info import DeviceInfo
     from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
 
-    def _up(procs: list[dict[str, Any]]) -> bool:
-        return any("LocalDevVPN.app/PlugIns/" in str(p.get("realAppName") or "") for p in procs)
-
-    async def _wait(info: Any, want_up: bool, timeout: float) -> bool:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            await asyncio.sleep(1)
-            if _up(await info.proclist()) == want_up:
-                return True
-        return False
-
     async def _run(dvt: Any) -> str:
         async with DeviceInfo(dvt) as info:
-            if _up(await info.proclist()):
+            was_up = bool(_tunnel_pids(await info.proclist()))
+            if not await _stop_tunnel(dvt, info, down_timeout):
+                return "DOWN_TIMEOUT"
+            if was_up:
+                # iOS still reports the VPN as connected for a moment after its extension is quit, and
+                # LocalDevVPN's Auto-connect only connects when it is not: let that status settle.
+                await asyncio.sleep(4)
+            # Fresh app: its launch-time Auto-connect starts a new tunnel. A second launch covers a
+            # first one that still saw the old "connected" status.
+            for wait in (up_timeout / 2, up_timeout / 2):
                 async with ProcessControl(dvt) as pc:
-                    await pc.launch(opener_bundle, arguments=["-openURL", "localdevvpn://disable"], kill_existing=True)
-                if not await _wait(info, False, down_timeout):
-                    return "DOWN_TIMEOUT"
-            async with ProcessControl(dvt) as pc:
-                # Fresh app: its launch-time Auto-connect starts a new tunnel.
-                await pc.launch("com.jkcoxson.LocalDevVPN", kill_existing=True)
-            if not await _wait(info, True, up_timeout):
-                return "UP_TIMEOUT"
-        return "RESTARTED"
+                    await pc.launch("com.jkcoxson.LocalDevVPN", kill_existing=True)
+                deadline = time.monotonic() + wait
+                while time.monotonic() < deadline:
+                    await asyncio.sleep(1)
+                    if _tunnel_pids(await info.proclist()):
+                        return "RESTARTED"
+        return "UP_TIMEOUT"
 
     return await with_dvt(_run)
 
