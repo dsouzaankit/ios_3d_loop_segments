@@ -14,7 +14,8 @@
   vpn-off                  -> VPN_OFF | VPN_STILL_UP   (quits LocalDevVPN's tunnel extension, then
                               Home Screen: one DVT connection, no app launch, so no Face ID prompt)
   quit-sidestore           -> QUIT <pids> | NOT_RUNNING   (fresh SideStore for the next install try)
-  quit-loopsegments        -> QUIT <pids> | NOT_RUNNING   (DVT kill Loop Segments — stops Keep Alive / :8765)
+  quit-loopsegments        -> QUIT <pids> | NOT_RUNNING | STILL_RUNNING <pids>
+                              (DVT kill+SIGKILL Loop Segments, verify gone — stops Keep Alive / :8765)
   vpn-restart              -> VPN_RESTARTED | VPN_DOWN_TIMEOUT | VPN_UP_TIMEOUT   (quits the tunnel
                               extension, fresh LocalDevVPN launch, Auto-connect brings a new tunnel up:
                               one DVT connection; Loop Segments is not launched)
@@ -27,8 +28,8 @@ import plistlib
 import sys
 import zipfile
 
-from loopsegments_dvt import (go_home, is_no_device, proclist, quit_app, resolve_bundle_id, vpn_off,
-                              vpn_restart, wifi_ipv4)
+from loopsegments_dvt import (go_home, is_no_device, proclist, quit_app, quit_loop_segments,
+                              resolve_bundle_id, vpn_off, vpn_restart, wifi_ipv4)
 
 
 async def installed_build() -> int:
@@ -198,13 +199,22 @@ def main() -> int:
         return 0
     if cmd == "quit-loopsegments":
         try:
-            # AltStore / SideStore may resign as com.loopsegments.app.<TEAMID>.
-            pids = asyncio.run(quit_app("com.loopsegments.app", "Loop Segments"))
+            # Match realAppName / LoopSegments binary too — background Keep Alive often has no
+            # bundleIdentifier and name "LoopSegments" (not "Loop Segments"). Kill + SIGKILL, verify.
+            result = asyncio.run(quit_loop_segments())
         except Exception as exc:  # noqa: BLE001
             msg = f"{type(exc).__name__}: {exc}"
             print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
             return 2
-        print(f"QUIT\t{','.join(map(str, pids))}" if pids else "NOT_RUNNING")
+        killed = result.get("killed") or []
+        if result.get("stillRunning"):
+            left = result.get("remainingPids") or []
+            print(f"STILL_RUNNING\t{','.join(map(str, left))}\tkilled={','.join(map(str, killed)) or '-'}")
+            return 1
+        if killed:
+            print(f"QUIT\t{','.join(map(str, killed))}\tbundle={result.get('bundle') or ''}")
+            return 0
+        print("NOT_RUNNING")
         return 0
     if cmd == "vpn-restart":
         try:

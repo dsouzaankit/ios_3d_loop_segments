@@ -186,9 +186,47 @@ async def vpn_restart(down_timeout: float = 15.0, up_timeout: float = 20.0) -> s
     return await with_dvt(_run)
 
 
+def _bundle_matches(got: str, want: str) -> bool:
+    if not got or not want:
+        return False
+    if got == want or got.startswith(want + ".") or want.startswith(got + "."):
+        return True
+    base = "com.loopsegments.app"
+    if (got == base or got.startswith(base + ".")) and (want == base or want.startswith(base + ".")):
+        return True
+    return False
+
+
+def _is_app_proc(proc: dict[str, Any], bundle_prefix: str, name: str = "") -> bool:
+    """Match by bundle id, exact/compact name, or (for Loop Segments) realAppName path."""
+    bid = str(proc.get("bundleIdentifier") or "").strip()
+    if bid.startswith(bundle_prefix) or _bundle_matches(bid, bundle_prefix):
+        return True
+    proc_name = str(proc.get("name") or "")
+    if name and (proc_name == name or proc_name.replace(" ", "") == name.replace(" ", "")):
+        return True
+    blob = f"{proc_name} {proc.get('realAppName') or ''}".lower().replace(" ", "")
+    if name:
+        compact = name.lower().replace(" ", "")
+        if compact and compact in blob:
+            return True
+    # Background Keep Alive often has empty bundleIdentifier and name "LoopSegments".
+    if bundle_prefix.startswith("com.loopsegments.app") and "loopsegments" in blob:
+        return True
+    return False
+
+
+def _pids_for_app(procs: list[dict[str, Any]], bundle_prefix: str, name: str = "") -> list[int]:
+    return sorted({
+        int(p["pid"]) for p in procs
+        if isinstance(p.get("pid"), int) and _is_app_proc(p, bundle_prefix, name)
+    })
+
+
 async def quit_app(bundle_prefix: str, name: str = "") -> list[int]:
-    """Quit (kill) every running process whose bundle id starts with bundle_prefix, or whose name
-    equals name. One DVT connection. Returns the pids killed (empty = it was not running)."""
+    """Quit (kill) every running process for bundle_prefix / name. One DVT connection.
+    Returns the pids killed (empty = it was not running). Matches realAppName too — background
+    Keep Alive processes often omit bundleIdentifier and use name LoopSegments (no space)."""
     import asyncio
 
     from pymobiledevice3.services.dvt.instruments.device_info import DeviceInfo
@@ -197,16 +235,92 @@ async def quit_app(bundle_prefix: str, name: str = "") -> list[int]:
     async def _run(dvt: Any) -> list[int]:
         async with DeviceInfo(dvt) as info:
             procs = await info.proclist()
-        pids = [int(p["pid"]) for p in procs
-                if isinstance(p.get("pid"), int) and (
-                    str(p.get("bundleIdentifier") or "").startswith(bundle_prefix)
-                    or (name and str(p.get("name") or "") == name))]
+        pids = _pids_for_app(procs, bundle_prefix, name)
+        if not pids:
+            # InstallationProxy-resolved id may differ from prefix; ask ProcessControl directly.
+            async with ProcessControl(dvt) as pc:
+                try:
+                    pid = int(await pc.process_identifier_for_bundle_identifier(bundle_prefix))
+                except Exception:  # noqa: BLE001
+                    pid = 0
+                if pid > 0:
+                    pids = [pid]
         if pids:
             async with ProcessControl(dvt) as pc:
                 for pid in pids:
-                    await pc.kill(pid)
-                await asyncio.sleep(0.5)  # kill is fire-and-forget
+                    try:
+                        await pc.kill(pid)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        await pc.signal(pid, 9)  # SIGKILL — kill() alone can leave audio apps up
+                    except Exception:  # noqa: BLE001
+                        pass
+                await asyncio.sleep(0.8)
         return pids
+
+    return await with_dvt(_run)
+
+
+async def quit_loop_segments(retries: int = 3) -> dict[str, Any]:
+    """Force-quit Loop Segments and verify it is gone (needed to stop Keep Alive / :8765)."""
+    import asyncio
+
+    from pymobiledevice3.services.dvt.instruments.device_info import DeviceInfo
+    from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
+
+    prefix = "com.loopsegments.app"
+    display = "Loop Segments"
+
+    async def _run(dvt: Any) -> dict[str, Any]:
+        bundle = await resolve_bundle_id(prefix, display) or prefix
+        killed: list[int] = []
+        async with DeviceInfo(dvt) as info, ProcessControl(dvt) as pc:
+            for attempt in range(max(1, retries)):
+                procs = await info.proclist()
+                pids = set(_pids_for_app(procs, prefix, display))
+                try:
+                    pid = int(await pc.process_identifier_for_bundle_identifier(bundle))
+                    if pid > 0:
+                        pids.add(pid)
+                except Exception:  # noqa: BLE001
+                    pass
+                if not pids:
+                    return {
+                        "ok": True,
+                        "killed": killed,
+                        "stillRunning": False,
+                        "bundle": bundle,
+                        "attempts": attempt + 1,
+                    }
+                for pid in sorted(pids):
+                    try:
+                        await pc.kill(pid)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        await pc.signal(pid, 9)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if pid not in killed:
+                        killed.append(pid)
+                await asyncio.sleep(0.8 + 0.4 * attempt)
+            procs = await info.proclist()
+            left = _pids_for_app(procs, prefix, display)
+            try:
+                pid = int(await pc.process_identifier_for_bundle_identifier(bundle))
+                if pid > 0 and pid not in left:
+                    left.append(pid)
+            except Exception:  # noqa: BLE001
+                pass
+            return {
+                "ok": not left,
+                "killed": killed,
+                "stillRunning": bool(left),
+                "remainingPids": left,
+                "bundle": bundle,
+                "attempts": retries,
+            }
 
     return await with_dvt(_run)
 

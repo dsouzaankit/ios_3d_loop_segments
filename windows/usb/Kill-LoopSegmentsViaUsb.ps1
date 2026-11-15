@@ -192,6 +192,10 @@ if ($blob -match '(?m)^NO_DEVICE\b' -or $result.ExitCode -eq 2) {
     Write-Host "[kill] No iPhone on USB." -ForegroundColor Yellow
     Exit-Kill 2
 }
+if ($blob -match '(?m)^STILL_RUNNING\b') {
+    Write-Host "[kill] Process still running after kill+SIGKILL — LAN page may stay up. Unlock phone / Developer Mode / retry." -ForegroundColor Red
+    Exit-Kill 1
+}
 if ($blob -match '(?m)^ERROR\b' -or ($result.ExitCode -ne 0 -and $blob -notmatch '(?m)^QUIT\b' -and $blob -notmatch '(?m)^NOT_RUNNING\b')) {
     Write-Host "[kill] Quit failed." -ForegroundColor Red
     Exit-Kill 1
@@ -199,12 +203,13 @@ if ($blob -match '(?m)^ERROR\b' -or ($result.ExitCode -ne 0 -and $blob -notmatch
 
 if ($blob -match '(?m)^NOT_RUNNING\b') {
     Write-Host "[kill] Loop Segments was not running." -ForegroundColor DarkGray
-} elseif ($blob -match '(?m)^QUIT\t(.+)$') {
+} elseif ($blob -match '(?m)^QUIT\t([^\t]+)') {
     Write-Host ("[kill] Killed pid(s): {0}" -f $Matches[1]) -ForegroundColor Green
 } else {
     Write-Host "[kill] Done." -ForegroundColor Green
 }
 
+$lanFailed = $false
 if (-not $SkipLanCheck -and $LanWaitSec -gt 0) {
     $ep = Resolve-KillLanEndpoint
     if ($null -eq $ep) {
@@ -223,9 +228,13 @@ if (-not $SkipLanCheck -and $LanWaitSec -gt 0) {
         if ($down) {
             Write-Host "[kill] LAN page is down." -ForegroundColor Green
         } else {
-            Write-Warning "[kill] LAN page still responding after kill — Keep Alive may have restarted, or host/port is wrong."
+            Write-Warning "[kill] LAN page still responding after kill — process may have respawned, or host/port is wrong."
+            $lanFailed = $true
         }
     }
 }
 
+if ($lanFailed) {
+    Exit-Kill 1
+}
 Exit-Kill 0
