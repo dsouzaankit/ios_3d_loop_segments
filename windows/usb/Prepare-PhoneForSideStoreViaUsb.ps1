@@ -29,7 +29,10 @@ param(
     # Leave Loop Segments running even when it is in the foreground.
     [switch] $NoQuit,
     # Do not connect LocalDevVPN.
-    [switch] $NoVpn
+    [switch] $NoVpn,
+    # End with Loop Segments in front: it keeps the screen on, so the phone does not auto-lock (and
+    # need Face ID) before the install's USB launch. deploy.ps1 passes it with -NoQuit.
+    [switch] $KeepAppInFront
 )
 
 $ErrorActionPreference = 'Stop'
@@ -131,6 +134,19 @@ if ($NoVpn) {
     } else {
         $why = (@($vpn.Lines | Where-Object { $_ -match '^(LAUNCH_FAILED|PROBE_FAILED|NO_DEVICE)' }) | Select-Object -First 1)
         Write-Prep "LocalDevVPN: could not check or launch it over USB ($why). Connect it by hand before installing." Yellow
+    }
+}
+
+# --- 4. Loop Segments in front, so the phone stays awake until the install ---
+if ($KeepAppInFront) {
+    # Not quit (-NoQuit) and possibly sent Home by the VPN step: bring it (back) to the front. It keeps
+    # the screen on, so the phone is still unlocked when the install launches it over USB.
+    $infoPy = Join-Path $PSScriptRoot 'LoopSegments-UsbInfo.py'
+    $fr = Invoke-LoopSegmentsPythonRuntime -Runtime $rt -ArgumentList @($infoPy, 'front-app')
+    if (($fr.Lines -join "`n") -match '(?m)^FRONT\b') {
+        Write-Prep 'Loop Segments is in front: it keeps the screen on, so the phone stays unlocked for the install.' Green
+    } else {
+        Write-Prep 'Could not bring Loop Segments to the front (phone locked?). Open it, so the phone does not lock before the install.' Yellow
     }
 }
 exit 0

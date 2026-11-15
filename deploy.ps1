@@ -34,10 +34,12 @@
   Deprecated alias for the default (skip AltServer prep).
 
 .PARAMETER SkipPhonePrep
-  After triggering the build, with the iPhone on USB, the script normally quits Loop Segments if it
-  is in the foreground (SideStore installs over a running app often hang) and connects LocalDevVPN
-  if it is not (launches it over USB; its "Auto-connect on launch" setting must be on), then goes
-  back to the Home Screen (windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1). No router is touched.
+  After triggering the build, with the iPhone on USB, the script normally connects LocalDevVPN if it
+  is not (launches it over USB; its "Auto-connect on launch" setting must be on), then brings
+  Loop Segments to the front (windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1 -NoQuit
+  -KeepAppInFront): it keeps the screen on, so the phone does not lock (and need Face ID) before the
+  install, which relaunches it fresh for the handover. Only for the USB install: with
+  -SkipUsbInstall (manual iCloud install, at your pace) the phone is left alone. No router is touched.
   This skips that. -SkipPhoneWwwCheck is the old name.
 
 .PARAMETER SkipUsbInstall
@@ -151,18 +153,20 @@ function Invoke-ProjectAltStoreDeployPrep {
 }
 
 function Invoke-PhonePrep {
-    # While the cloud build runs: iPhone on USB -> quit Loop Segments if in front, connect
-    # LocalDevVPN. Never fails the deploy.
-    if ($SkipPhonePrep) { return }
+    # While the cloud build runs, for the USB install only: iPhone on USB -> connect LocalDevVPN.
+    # Loop Segments is left open (the install relaunches it fresh at the handover). A manual
+    # iCloud install (-SkipUsbInstall) happens later at your pace, so the phone is left alone.
+    # Never fails the deploy.
+    if ($SkipPhonePrep -or $SkipUsbInstall) { return }
     $ps1 = Join-Path $ProjectRoot 'windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1'
     $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
     if (-not (Test-Path -LiteralPath $ps1) -or -not $pwsh) {
         Write-Host '[phone-prep] Skipped (needs pwsh 7 and windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1).' -ForegroundColor DarkYellow
         return
     }
-    Write-Step 'Preparing the USB iPhone for SideStore (quit Loop Segments if in front, connect LocalDevVPN)'
+    Write-Step 'Preparing the USB iPhone for SideStore (connect LocalDevVPN, then Loop Segments in front so the phone stays unlocked)'
     try {
-        & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1
+        & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 -NoQuit -KeepAppInFront
     } catch {
         Write-Warning ("Phone prep failed: {0}" -f $_.Exception.Message)
     }
