@@ -7,7 +7,10 @@
 .DESCRIPTION
   Reads phoneLanHost from loop-segments-windows.json (LAN page / app export host).
 
-  Default: if the PC IPv4 default gateway is not on the same subnet as phoneLanHost,
+  Default: if the PC IPv4 default gateway is not on the same subnet as phoneLanHost, first
+  switches this PC's Wi-Fi to a saved profile on that /24 (netsh, about 5 s, no router reboot;
+  lib\Get-LoopSegmentsWifi.ps1 - also ends at once when the PC already has a Wi-Fi IP there but a
+  VPN TUN such as Clash owns the default route). Only when no saved profile reaches it:
   informs you, waits for tcp/23, reboots Wi‑Fi on that current gateway, then polls
   (WaitLanIpChangeSec, default 20s) until the PC gets a new LAN IP / gateway or the AP
   is back on tcp/23 after a drop. Windows can keep a stale Wi‑Fi lease while the radio
@@ -153,6 +156,8 @@ if (-not (Test-Path -LiteralPath $PythonHelper)) {
     throw "Missing shared Python helper: $PythonHelper"
 }
 . $PythonHelper
+$WifiHelper = Join-Path $LibDir "Get-LoopSegmentsWifi.ps1"
+if (Test-Path -LiteralPath $WifiHelper) { . $WifiHelper }
 
 function ConvertTo-Ipv4UInt32 {
     param([Parameter(Mandatory = $true)][string] $IpAddress)
@@ -830,6 +835,24 @@ Phone LAN page: {2}
         -RouterIp $gatewayIp -TelnetWaitSec $WaitLanIpChangeSec -PollSec $PollSecAfterReboot
     Write-Host '[gateway] Reboot script finished (low-throughput / forced). Wait for Wi-Fi to settle, then retry.' -ForegroundColor Green
     Exit-WithEnter 0
+}
+
+# Wrong subnet: first try switching this PC's Wi-Fi to a saved network on the LAN page subnet
+# (about 5 s, no router restart, nothing else knocked off). Only when no saved profile reaches it:
+# reboot -> wait for new LAN IP -> re-check -> loop, as before.
+if (Get-Command Connect-LoopSegmentsPcToSubnet -ErrorAction SilentlyContinue) {
+    Write-Host ""
+    Write-Host ('[gateway] Current gateway {0} is NOT on the same subnet as the app LAN page ({1}) - trying a Wi-Fi switch first...' -f $gatewayIp, $phoneHost) -ForegroundColor Yellow
+    # The phone LAN is a /24 (the gateway's own prefix can be a VPN /30, e.g. Clash TUN).
+    $lanPrefix = if ($PrefixLength -gt 0) { $PrefixLength } else { 24 }
+    $switched = Connect-LoopSegmentsPcToSubnet -HostIp $phoneHost -PrefixLength $lanPrefix -LogPrefix '[gateway]'
+    if ($switched) {
+        # Report the PC's Wi-Fi address: under a VPN TUN (Clash) the default gateway stays the TUN's.
+        $pcIpNow = Get-LoopSegmentsPcIpv4OnSubnet -HostIp $phoneHost -PrefixLength $lanPrefix
+        Write-Host ('[gateway] OK - this PC is on {0} ({1}), the app LAN page subnet ({2}). No router reboot.' -f $switched, $pcIpNow, $phoneHost) -ForegroundColor Green
+        Exit-WithEnter 0
+    }
+    Write-Host '[gateway] No saved Wi-Fi reaches the app LAN page subnet - falling back to a router Wi-Fi reboot.' -ForegroundColor Yellow
 }
 
 # Wrong subnet (with or without -ForceReboot): reboot → wait for new LAN IP → re-check → loop.

@@ -6,6 +6,10 @@
   vpn-tunnel               -> TUNNEL_UP | TUNNEL_DOWN | NO_DEVICE <why>
   home                     -> HOME | HOME_FAILED <why>   (Home Screen to the front)
   wifi-ip                  -> WIFI_IP <ipv4> | NO_WIFI_IP   (the phone's own address on en0, DVT network monitor)
+  wait-install <build> <old app path> <timeout s>
+                           -> INSTALLED <build> <path> | TIMEOUT   (checks every 1 s on one connection)
+  vpn-off                  -> VPN_OFF | VPN_STILL_UP   (localdevvpn://disable via Loop Segments, tunnel
+                              check every 1 s, then Home Screen: one DVT connection)
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import plistlib
 import sys
 import zipfile
 
-from loopsegments_dvt import go_home, is_no_device, proclist, resolve_bundle_id, wifi_ipv4
+from loopsegments_dvt import go_home, is_no_device, proclist, resolve_bundle_id, vpn_off, wifi_ipv4
 
 
 async def installed_build() -> int:
@@ -44,6 +48,52 @@ async def installed_build() -> int:
     # Path (…/Bundle/Application/<UUID>/…) changes on every install, even of the same build.
     print(f"BUILD\t{info.get('CFBundleVersion', '')}\t{bundle}\t{info.get('Path', '')}")
     return 0
+
+
+async def wait_install(want_build: str, old_path: str, timeout: float) -> int:
+    """Check the installed Loop Segments every second over one lockdown connection until it reports
+    want_build with an install path other than old_path (a new install, even of the same build)."""
+    import time
+
+    from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.services.installation_proxy import InstallationProxyService
+
+    deadline = time.monotonic() + timeout
+    lockdown = None
+    try:
+        lockdown = await create_using_usbmux()
+        while time.monotonic() < deadline:
+            try:
+                async with InstallationProxyService(lockdown=lockdown) as iproxy:
+                    apps = await iproxy.get_apps(application_type="User")
+                for bid, info in apps.items():
+                    if not (bid == "com.loopsegments.app" or bid.startswith("com.loopsegments.app.")):
+                        continue
+                    build, path = str(info.get("CFBundleVersion", "")), str(info.get("Path", ""))
+                    if build == want_build and path and path != old_path:
+                        print(f"INSTALLED\t{build}\t{path}")
+                        return 0
+            except Exception as exc:  # noqa: BLE001 - mid-install the lookup can fail; keep polling
+                print(f"POLL_ERR\t{type(exc).__name__}: {exc}", file=sys.stderr)
+                try:
+                    if lockdown is not None:
+                        await lockdown.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                lockdown = await create_using_usbmux()
+            await asyncio.sleep(1)
+    except Exception as exc:  # noqa: BLE001
+        msg = f"{type(exc).__name__}: {exc}"
+        print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
+        return 2
+    finally:
+        try:
+            if lockdown is not None:
+                await lockdown.close()
+        except Exception:  # noqa: BLE001
+            pass
+    print("TIMEOUT")
+    return 1
 
 
 def ipa_build(path: str) -> int:
@@ -88,6 +138,21 @@ def main() -> int:
             return 2
         print(f"WIFI_IP\t{ip}" if ip else "NO_WIFI_IP")
         return 0 if ip else 1
+    if cmd == "wait-install" and len(sys.argv) > 4:
+        return asyncio.run(wait_install(sys.argv[2].strip(), sys.argv[3].strip(), float(sys.argv[4])))
+    if cmd == "vpn-off":
+        try:
+            bundle = asyncio.run(resolve_bundle_id("com.loopsegments.app", "Loop Segments"))
+            if not bundle:
+                print("NOT_INSTALLED")
+                return 1
+            down = asyncio.run(vpn_off(bundle))
+        except Exception as exc:  # noqa: BLE001
+            msg = f"{type(exc).__name__}: {exc}"
+            print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
+            return 2
+        print("VPN_OFF" if down else "VPN_STILL_UP")
+        return 0 if down else 1
     if cmd == "home":
         try:
             asyncio.run(go_home())

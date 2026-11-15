@@ -70,6 +70,7 @@ $RepoRoot = Split-Path -Parent $WindowsDir
 . (Join-Path $WindowsDir 'lib\LoopSegments-Windows.ps1')
 . (Join-Path $WindowsDir 'lib\Get-LoopSegmentsPython.ps1')
 . (Join-Path $WindowsDir 'lib\Get-LoopSegmentsAltServer.ps1')
+. (Join-Path $WindowsDir 'lib\Get-LoopSegmentsWifi.ps1')
 
 $VpnMarker = Join-Path $env:TEMP 'loopsegments-vpn-turned-on.json'
 $InfoPy = Join-Path $PSScriptRoot 'LoopSegments-UsbInfo.py'
@@ -106,32 +107,20 @@ function Restore-Vpn([bool] $Installed) {
         Write-Inst 'LocalDevVPN left on: the install is not confirmed yet (it was off before this deploy; switch it off in LocalDevVPN when done).' Yellow
         return
     }
-    $out = Invoke-Py @($OpenPy, 'localdevvpn://disable')
-    if ($out -notmatch '(?m)^LAUNCHED\b') {
+    # One USB connection: launch Loop Segments with localdevvpn://disable, check the tunnel every
+    # second, then the Home Screen (LocalDevVPN is in front after the disable link).
+    $out = Invoke-Py @($InfoPy, 'vpn-off')
+    if ($out -match '(?m)^VPN_OFF\b') {
+        Write-Inst 'LocalDevVPN switched back off (it was off before this deploy).' Green
+        Remove-Item -LiteralPath $VpnMarker -Force -ErrorAction SilentlyContinue
+    } elseif ($out -match '(?m)^VPN_STILL_UP\b') {
+        Write-Inst 'LocalDevVPN: asked it to disconnect, but its tunnel is still up. Switch it off in LocalDevVPN.' Yellow
+    } else {
         Write-Inst "LocalDevVPN: could not switch it back off ($($out.Trim())). It was off before this deploy." Yellow
-        return
     }
-    foreach ($i in 1..8) {
-        Start-Sleep -Seconds 2
-        if ((Invoke-Py @($InfoPy, 'vpn-tunnel')) -match '(?m)^TUNNEL_DOWN\b') {
-            Write-Inst 'LocalDevVPN switched back off (it was off before this deploy).' Green
-            Remove-Item -LiteralPath $VpnMarker -Force -ErrorAction SilentlyContinue
-            # The disable link left LocalDevVPN in front: back to the Home Screen.
-            [void](Invoke-Py @($InfoPy, 'home'))
-            return
-        }
-    }
-    Write-Inst 'LocalDevVPN: asked it to disconnect, but its tunnel is still up. Switch it off in LocalDevVPN.' Yellow
 }
 
-function Get-WifiState {
-    # Connected profile + saved profiles (netsh lists them in Windows' priority order) + SSIDs in range.
-    $iface = (& netsh wlan show interfaces) -join "`n"
-    $current = if ($iface -match '(?m)^\s+Profile\s+:\s*(.+?)\s*$') { $Matches[1] } else { $null }
-    $profiles = @((& netsh wlan show profiles) | ForEach-Object { if ($_ -match 'All User Profile\s+:\s*(.+?)\s*$') { $Matches[1] } })
-    $visible = @((& netsh wlan show networks) | ForEach-Object { if ($_ -match '^SSID \d+\s+:\s*(.+?)\s*$') { $Matches[1] } })
-    return [pscustomobject]@{ Current = $current; Profiles = $profiles; Visible = $visible }
-}
+function Get-WifiState { Get-LoopSegmentsWifiState }   # lib\Get-LoopSegmentsWifi.ps1
 
 function Get-PcIpOff([string] $PhoneHost) {
     @(Get-LoopSegmentsPcLanIpv4Addresses | Where-Object { -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $_ -IpB $PhoneHost) }) | Select-Object -First 1
@@ -151,24 +140,9 @@ function Get-PhoneWifiIp {
 }
 
 function Move-PcOnPhoneLan([string] $PhoneHost) {
-    # Put this PC on the phone LAN (phoneLanHost /24) and return that Wi-Fi's profile name. Already
-    # there: the current profile. Else each saved profile in range until one gives a phone-LAN IP.
-    $wifi = Get-WifiState
-    if (Get-PcIpOn $PhoneHost) { return $wifi.Current }
-    # In-range profiles first; then the rest, since a scan can briefly miss a restarting AP.
-    $others = @($wifi.Profiles | Where-Object { $_ -ne $wifi.Current })
-    $order = @($others | Where-Object { $wifi.Visible -contains $_ }) + @($others | Where-Object { $wifi.Visible -notcontains $_ })
-    foreach ($p in $order) {
-        Write-Inst "Moving this PC onto the phone LAN to restart its AP: trying $p..."
-        & netsh wlan connect "name=$p" | Out-Null
-        $until = (Get-Date).AddSeconds(20)
-        while ((Get-Date) -lt $until) {
-            Start-Sleep -Seconds 2
-            $ip = Get-PcIpOn $PhoneHost
-            if ($ip) { Write-Inst "PC is on the phone LAN: $p ($ip)." Green; return $p }
-        }
-    }
-    return $null
+    # Put this PC on the phone LAN (phoneLanHost /24) by a saved-Wi-Fi switch; returns the profile or
+    # $null. Shared with the companion's gateway check (lib\Get-LoopSegmentsWifi.ps1).
+    return Connect-LoopSegmentsPcToSubnet -HostIp $PhoneHost -PrefixLength 24 -LogPrefix '[usb-install]'
 }
 
 function Move-PhoneOffPhoneLan([string] $PhoneHost) {
@@ -405,17 +379,10 @@ if (-not $served) {
     exit 1
 }
 
-$installed = $false
-$deadline = (Get-Date).AddSeconds($InstallWaitSec)
-while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Seconds 5
-    $now = Get-InstalledApp
-    if (-not $now -or -not $ipaBuild -or $now.Build -ne $ipaBuild) { continue }
-    # Same build as before (-Force): only a new app path proves SideStore reinstalled it.
-    if ($before -ne $ipaBuild -or ($beforeApp.Path -and $now.Path -and $now.Path -ne $beforeApp.Path)) {
-        $installed = $true; break
-    }
-}
+# Checked every second on one connection; a new install path proves the install even for the same
+# build (-Force).
+$oldPath = if ($beforeApp -and $beforeApp.Path) { $beforeApp.Path } else { '-' }
+$installed = $ipaBuild -and ((Invoke-Py @($InfoPy, 'wait-install', $ipaBuild, $oldPath, [string]$InstallWaitSec)) -match '(?m)^INSTALLED\b')
 if ($installed) {
     Write-Inst "Installed: the phone now has build $ipaBuild." Green
 } else {

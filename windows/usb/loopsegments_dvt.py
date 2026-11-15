@@ -108,6 +108,35 @@ async def wifi_ipv4(seconds: float = 6.0) -> Optional[str]:
     return await with_dvt(_run)
 
 
+async def vpn_off(opener_bundle: str, timeout: float = 20.0) -> bool:
+    """Switch LocalDevVPN off and return to the Home Screen over ONE DVT connection: launch the
+    opener app (Loop Segments 428+) with -openURL localdevvpn://disable, check every second until
+    LocalDevVPN's tunnel process is gone, then bring SpringBoard to the front. True = tunnel down."""
+    import asyncio
+    import time
+
+    from pymobiledevice3.services.dvt.instruments.device_info import DeviceInfo
+    from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
+
+    async def _run(dvt: Any) -> bool:
+        async with ProcessControl(dvt) as pc:
+            await pc.launch(opener_bundle, arguments=["-openURL", "localdevvpn://disable"], kill_existing=True)
+        down = False
+        deadline = time.monotonic() + timeout
+        async with DeviceInfo(dvt) as info:
+            while time.monotonic() < deadline:
+                await asyncio.sleep(1)
+                procs = await info.proclist()
+                if not any("LocalDevVPN.app/PlugIns/" in str(p.get("realAppName") or "") for p in procs):
+                    down = True
+                    break
+        async with ProcessControl(dvt) as pc:
+            await pc.launch("com.apple.springboard", kill_existing=False)
+        return down
+
+    return await with_dvt(_run)
+
+
 async def go_home() -> int:
     """Bring the Home Screen to the front (DVT launch of SpringBoard, keeping it running), which
     backgrounds whatever app is in front. Same path as usb\\Go-IphoneHomeViaUsb.ps1."""
