@@ -1010,6 +1010,54 @@ function Test-PhoneLanPageReachable {
     return $false
 }
 
+function Test-PhonePCloudSignedIn {
+    # LAN page up is not enough — need phone CredentialStore (pCloud WebDAV) for companion exports.
+    param([switch]$Quiet)
+
+    $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
+    if (-not (Test-Path -LiteralPath $lanConfigPath)) { return $false }
+    try {
+        $lan = Get-Content -LiteralPath $lanConfigPath -Raw | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    $hostName = [string]$lan.phoneLanHost
+    if ([string]::IsNullOrWhiteSpace($hostName)) { return $false }
+    $port = 8765
+    if ($null -ne $lan.lanPort -and [int]$lan.lanPort -gt 0) {
+        $port = [int]$lan.lanPort
+    }
+    $uri = "http://${hostName}:${port}/pcloud_list.json?path=/"
+    try {
+        if (-not $Quiet) {
+            Write-Host "[usb] Checking phone pCloud sign-in via $uri ..."
+        }
+        $resp = Invoke-DirectHttpGet -Uri $uri -TimeoutSec 8 -IncludeBody
+        if ($null -eq $resp -or $resp.StatusCode -lt 200 -or $resp.StatusCode -ge 500) {
+            return $false
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$resp.Body)) { return $false }
+        $json = $null
+        try { $json = ([string]$resp.Body) | ConvertFrom-Json } catch { return $false }
+        if ($null -eq $json) { return $false }
+        $signedIn = $false
+        if ($null -ne $json.signedIn) { $signedIn = [bool]$json.signedIn }
+        if (-not $Quiet) {
+            if ($signedIn) {
+                Write-Host '[usb] Phone is signed in to pCloud (LAN).'
+            } else {
+                Write-Host '[usb] Phone is not signed in to pCloud (LAN).'
+            }
+        }
+        return $signedIn
+    } catch {
+        if (-not $Quiet) {
+            Write-Host ("[usb] pCloud sign-in check failed: {0}" -f $_.Exception.Message)
+        }
+        return $false
+    }
+}
+
 function Wait-PhoneLanPageReachable {
     param(
         [int]$TimeoutSec = 45,
@@ -1131,6 +1179,13 @@ function Invoke-LoopSegmentsUsbLaunch {
         return
     }
 
+    # Keep Alive / lock-screen export: leave the app alone when LAN is already serving
+    # and the phone has pCloud credentials (companion can queue exports without foregrounding).
+    if ($lanUp -and (Test-PhonePCloudSignedIn)) {
+        Write-Host "[usb] Skipping USB foreground — LAN page up and phone signed in to pCloud."
+        return
+    }
+
     $launchPs1 = Join-Path $UsbDir "Launch-LoopSegmentsViaUsb.ps1"
     if (-not (Test-Path -LiteralPath $launchPs1)) {
         throw "[usb] Missing $launchPs1 - expected windows/usb/Launch-LoopSegmentsViaUsb.ps1"
@@ -1151,7 +1206,7 @@ function Invoke-LoopSegmentsUsbLaunch {
     }
 
     if ($lanUp) {
-        Write-Host "[usb] Foregrounding Loop Segments on phone..."
+        Write-Host "[usb] Foregrounding Loop Segments on phone (LAN up but not signed in to pCloud, or sign-in check failed)..."
     } else {
         Write-Host "[usb] LAN not reachable - launching Loop Segments on phone..."
     }
