@@ -171,7 +171,7 @@ Default **on**. Loops bundled `KeepAlive_silence.mp3` so export + LAN + trigger 
 
 ## LAN API (`:8765`)
 
-Basic auth for WebDAV and sensitive JSON: **`admin`** / the per-install password from the app's Export screen (same as Quest Skybox). Since build 422 the LAN pages, `/xr`, status/tunnel/debug JSON and export logs all need it; media GET and `/xr-assets/` stay open (Skybox often sends no Authorization).
+Basic auth for WebDAV and sensitive JSON: **`admin`** / the per-install password from the app's Export screen (same as Quest Skybox). Since build 422 the LAN pages, `/xr`, status/tunnel/debug JSON and export logs all need it. So do `keep_alive.json`, the WAN / LAN throughput results (`wan_throughput.json`, `lan_throughput.json`) and the queued / paused export lists (`export_queue.json`, `paused_exports.json`), because they name clips. Every POST and WebDAV write needs it. Media GET and `/xr-assets/` stay open (Skybox often sends no Authorization).
 
 | Endpoint | Role |
 |----------|------|
@@ -179,7 +179,7 @@ Basic auth for WebDAV and sensitive JSON: **`admin`** / the per-install password
 | `GET /xr` (alias `/chroma`) | WebXR 180° SBS + chroma-key player; separate Loop / Working (root `_working*`) / Archive folder playlists (`?mode=…`; usually needs HTTPS) |
 | `GET /status.json` | Live export + pending queue summary |
 | `PUT`/`POST /export_from_folder.json` | Queue by `folderPath` + `displayName` (or filename-only walk) → **202** |
-| `PUT`/`POST /export_queue.json` | Pending FIFO (`append` / `prepend` / `replace`, `startFirst`, remove/clear) |
+| `GET`/`PUT`/`POST /export_queue.json` | Pending FIFO (GET lists it) (`append` / `prepend` / `replace`, `startFirst`, remove/clear) |
 | `PUT`/`POST /export_from_url.json` | Queue HTTPS download export |
 | `GET`/`POST /paused_exports.json` | List / clear paused / `queue_all` (move paused → Queued) |
 | `…/scripts/export_trigger.json` (+ `.ack.json`) | Imperative commands + last ack |
