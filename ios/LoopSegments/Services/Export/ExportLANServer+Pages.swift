@@ -745,6 +745,7 @@ extension ExportLANServer {
             #"<a href="status.json">status.json</a>"#,
             #"<a href="wifi_www_probe.json">wifi_www_probe.json</a>"#,
             #"<a href="wan_throughput.json">wan_throughput.json</a>"#,
+            #"<a href="keep_alive.json">keep_alive.json</a>"#,
             #"<a href="lan_throughput.json">lan_throughput.json</a>"#,
             #"<a href="xr_tunnel.json">xr_tunnel.json</a>"#,
             #"<a href="xr_debug.json">xr_debug.json</a>"#,

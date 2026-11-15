@@ -94,6 +94,150 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         )
     }
 
+    /// LAN status for `GET /keep_alive.json`.
+    func statusPayload() -> [String: Any] {
+        var payload: [String: Any] = [
+            "enabled": ExportKeepAliveSettings.isEnabled,
+            "active": isActive,
+            "loopPlaying": loopPlaying,
+            "exportSession": exportSessionEligible,
+            "sessionDurationSeconds": ExportKeepAliveSettings.sessionDurationSeconds,
+        ]
+        if let ends = sessionAutoStopEndsAt {
+            payload["sessionEndsAt"] = ISO8601DateFormatter().string(from: ends)
+            payload["sessionRemainingSeconds"] = max(0, ends.timeIntervalSinceNow)
+        }
+        if let err = lastStartError, !err.isEmpty {
+            payload["lastStartError"] = err
+        }
+        return payload
+    }
+
+    /// Ensure silence loop is running (toggle on). Returns an error payload when start fails.
+    private func ensurePlaybackForLAN(action: String) -> [String: Any]? {
+        guard ExportKeepAliveSettings.isEnabled else {
+            return [
+                "ok": false,
+                "enabled": false,
+                "reset": false,
+                "extended": false,
+                "error": "Keep Alive disabled",
+            ]
+        }
+        installSessionObserversIfNeeded()
+        userPausedFromLockScreen = false
+        if !isActive {
+            startedAt = Date()
+            startPlayback()
+            guard isActive else {
+                var failed = statusPayload()
+                failed["ok"] = false
+                failed["reset"] = false
+                failed["extended"] = false
+                failed["error"] = lastStartError ?? "Keep Alive failed to start"
+                return failed
+            }
+        } else if let queue = queuePlayer, !isQueuePlaying {
+            try? configureAudioSession()
+            queue.play()
+            syncLoopPlayingFromQueue()
+        }
+        _ = action
+        return nil
+    }
+
+    /// `POST /keep_alive.json` action `reset` — fresh `sessionDurationSeconds` window (default 60 min).
+    /// Skips the timer while an export owns Keep Alive.
+    @discardableResult
+    func resetSessionFromLAN(reason: String) -> [String: Any] {
+        if let failed = ensurePlaybackForLAN(action: "reset") { return failed }
+
+        if exportSessionEligible {
+            logKeepAlive("Keep Alive: LAN reset skipped — export running (\(reason))")
+            var payload = statusPayload()
+            payload["ok"] = true
+            payload["reset"] = false
+            payload["extended"] = false
+            payload["reason"] = reason
+            payload["message"] = "Export running — Keep Alive continues until export ends"
+            return payload
+        }
+
+        let minutes = ExportKeepAliveSettings.sessionDurationSeconds / 60
+        let albumHint = reason.localizedCaseInsensitiveContains("companion")
+            ? "Companion quit"
+            : "LAN reset"
+        scheduleSessionAutoStop(
+            durationSeconds: ExportKeepAliveSettings.sessionDurationSeconds,
+            logMessage: String(
+                format: "Keep Alive: LAN reset — continuing %.0f min (%@)",
+                minutes,
+                reason
+            ),
+            albumHint: albumHint
+        )
+        var payload = statusPayload()
+        payload["ok"] = true
+        payload["reset"] = true
+        payload["extended"] = false
+        payload["reason"] = reason
+        return payload
+    }
+
+    /// `POST /keep_alive.json` action `extend` — add `addSeconds` (default 60 min) to remaining
+    /// session time (or start a new window of that length). Skips while export owns Keep Alive.
+    @discardableResult
+    func extendSessionFromLAN(reason: String, addSeconds: TimeInterval? = nil) -> [String: Any] {
+        if let failed = ensurePlaybackForLAN(action: "extend") { return failed }
+
+        let bump = max(1, addSeconds ?? ExportKeepAliveSettings.sessionDurationSeconds)
+        if exportSessionEligible {
+            logKeepAlive(
+                String(
+                    format: "Keep Alive: LAN extend skipped — export running (+%.0f min, %@)",
+                    bump / 60,
+                    reason
+                )
+            )
+            var payload = statusPayload()
+            payload["ok"] = true
+            payload["reset"] = false
+            payload["extended"] = false
+            payload["addedSeconds"] = bump
+            payload["reason"] = reason
+            payload["message"] = "Export running — Keep Alive continues until export ends"
+            return payload
+        }
+
+        let remaining: TimeInterval
+        if let ends = sessionAutoStopEndsAt {
+            remaining = max(0, ends.timeIntervalSinceNow)
+        } else {
+            remaining = 0
+        }
+        let total = remaining + bump
+        let albumHint = reason.localizedCaseInsensitiveContains("quest")
+            ? "Open on Quest"
+            : "LAN extend"
+        scheduleSessionAutoStop(
+            durationSeconds: total,
+            logMessage: String(
+                format: "Keep Alive: LAN extend — +%.0f min → %.0f min left (%@)",
+                bump / 60,
+                total / 60,
+                reason
+            ),
+            albumHint: albumHint
+        )
+        var payload = statusPayload()
+        payload["ok"] = true
+        payload["reset"] = false
+        payload["extended"] = true
+        payload["addedSeconds"] = bump
+        payload["reason"] = reason
+        return payload
+    }
+
     func startIfEnabled(exportTitle: String) {
         guard ExportKeepAliveSettings.isEnabled else { return }
         startedAt = Date()
@@ -221,12 +365,16 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         )
     }
 
-    private func scheduleSessionAutoStop(logMessage: String, albumHint: String) {
+    private func scheduleSessionAutoStop(
+        durationSeconds: TimeInterval? = nil,
+        logMessage: String,
+        albumHint: String
+    ) {
         guard ExportKeepAliveSettings.isEnabled else {
             if !exportSessionEligible { stopFully() }
             return
         }
-        let seconds = ExportKeepAliveSettings.sessionDurationSeconds
+        let seconds = max(1, durationSeconds ?? ExportKeepAliveSettings.sessionDurationSeconds)
         cancelSessionAutoStop()
         sessionAutoStopEndsAt = Date().addingTimeInterval(seconds)
         sessionAutoStopSubtitle = albumHint
@@ -241,7 +389,9 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         sessionAutoStopTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            logKeepAlive("Keep Alive: session ended (60 min)")
+            logKeepAlive(
+                String(format: "Keep Alive: session ended (%.0f min)", seconds / 60)
+            )
             stopFully()
         }
     }

@@ -313,6 +313,97 @@ extension ExportLANServer {
         )
     }
 
+    static func sendKeepAliveGET(connection: NWConnection, done: @escaping () -> Void) {
+        Task { @MainActor in
+            var payload = ExportBackgroundKeepAlive.shared.statusPayload()
+            payload["endpoint"] = "/keep_alive.json"
+            payload["methods"] = ["GET", "POST"]
+            payload["auth"] = "Basic (LAN WebDAV login)"
+            payload["notes"] = [
+                "GET: current Keep Alive state (active, remaining session seconds).",
+                "POST action=reset (default): set non-export session timer to sessionDurationSeconds (60 min).",
+                "POST action=extend: add seconds (default sessionDurationSeconds) to remaining session time.",
+                "Body examples: { \"reason\": \"companion_quit\" }, { \"action\": \"extend\", \"reason\": \"quest_open\" }.",
+                "While an export owns Keep Alive, POST keeps the loop running and does not attach an auto-stop.",
+            ]
+            sendJSONPayload(payload, connection: connection, done: done, status: 200)
+        }
+    }
+
+    static func handleKeepAlivePOST(
+        requestHeaders: String,
+        bodyPrefix: Data,
+        connection: NWConnection,
+        done: @escaping () -> Void
+    ) {
+        receiveRequestBody(
+            on: connection,
+            requestHeaders: requestHeaders,
+            bodyPrefix: bodyPrefix,
+            maxBytes: 4_096
+        ) { result in
+            var reason = "lan_reset"
+            var action = "reset"
+            var addSeconds: TimeInterval?
+            switch result {
+            case .failure(.missingContentLength):
+                break
+            case .failure(.payloadTooLarge):
+                sendResponse(
+                    connection: connection,
+                    status: 413,
+                    contentType: "text/plain",
+                    body: Data("Body too large".utf8),
+                    done: done
+                )
+                return
+            case .failure(.readFailed):
+                connection.cancel()
+                done()
+                return
+            case .success(let body):
+                if let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    if let raw = object["reason"] as? String {
+                        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            reason = String(trimmed.prefix(120))
+                        }
+                    }
+                    if let raw = object["action"] as? String {
+                        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if trimmed == "extend" || trimmed == "add" {
+                            action = "extend"
+                        } else if trimmed == "reset" {
+                            action = "reset"
+                        }
+                    }
+                    if let n = object["seconds"] as? Double {
+                        addSeconds = n
+                    } else if let n = object["seconds"] as? Int {
+                        addSeconds = TimeInterval(n)
+                    } else if let n = object["addSeconds"] as? Double {
+                        addSeconds = n
+                    } else if let n = object["addSeconds"] as? Int {
+                        addSeconds = TimeInterval(n)
+                    }
+                }
+            }
+            Task { @MainActor in
+                let payload: [String: Any]
+                if action == "extend" {
+                    payload = ExportBackgroundKeepAlive.shared.extendSessionFromLAN(
+                        reason: reason,
+                        addSeconds: addSeconds
+                    )
+                } else {
+                    payload = ExportBackgroundKeepAlive.shared.resetSessionFromLAN(reason: reason)
+                }
+                let ok = (payload["ok"] as? Bool) ?? false
+                sendJSONPayload(payload, connection: connection, done: done, status: ok ? 200 : 409)
+            }
+        }
+    }
+
     static func handleLANThroughputPOST(
         requestHeaders: String,
         bodyPrefix: Data,

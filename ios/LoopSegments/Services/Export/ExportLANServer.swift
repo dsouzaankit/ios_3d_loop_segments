@@ -636,7 +636,8 @@ enum ExportLANServer {
     /// GET/HEAD routes behind the LAN login, besides the export logs.
     static let lanLoginGETRoutes: Set<String> = [
         "", "browse", "xr", "chroma",
-        "status.json", "status_lists.json", "xr_tunnel.json", "xr_debug.json"
+        "status.json", "status_lists.json", "xr_tunnel.json", "xr_debug.json",
+        "keep_alive.json",
     ]
 
     /// Export logs under `pcld_ios_media/logs/`, including legacy aliases like `/export_latest.txt`.
@@ -852,6 +853,10 @@ enum ExportLANServer {
         }
         if normalized == "wan_throughput.json" {
             sendJSONPayload(WanSpeedProbe.currentSnapshot().statusJSON(), connection: connection, done: done, status: 200)
+            return
+        }
+        if normalized == "keep_alive.json" {
+            sendKeepAliveGET(connection: connection, done: done)
             return
         }
         if normalized == "lan_throughput.json" {

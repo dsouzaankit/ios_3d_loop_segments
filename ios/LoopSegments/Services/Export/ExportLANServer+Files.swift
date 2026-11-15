@@ -633,6 +633,16 @@ extension ExportLANServer {
             }
             return
         }
+        if normalized == "keep_alive.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            handleKeepAlivePOST(
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                connection: connection,
+                done: done
+            )
+            return
+        }
         if normalized == "lan_throughput.json" {
             guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
             handleLANThroughputPOST(
@@ -667,7 +677,7 @@ extension ExportLANServer {
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, /wan_throughput.json, /lan_throughput.json, /xr_tunnel.json, and /xr_debug.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, /wan_throughput.json, /keep_alive.json, /lan_throughput.json, /xr_tunnel.json, and /xr_debug.json".utf8),
             done: done
         )
     }

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Open the phone LAN page in Quest Browser over adb; keep its flags set; clear its history.
 
@@ -396,6 +396,79 @@ function Test-QuestBrowserResumed {
     $r = Invoke-Adb -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'activity', 'activities') -TimeoutSec 10
     $resumed = @($r.Out -split "`r?`n" | Where-Object { $_ -match '(?i)ResumedActivity' })
     return (@($resumed | Where-Object { $_ -match [regex]::Escape($BrowserPackage) }).Count -gt 0)
+}
+
+# After Open on Quest succeeds: POST /keep_alive.json action=extend (+60 min) on the phone LAN.
+function Invoke-PhoneKeepAliveExtendAfterQuestOpen {
+    param([string] $LanUrl = $Url)
+    if ([string]::IsNullOrWhiteSpace($LanUrl)) {
+        Write-QuestLog 'Keep Alive: no LAN URL - skip +60 min extend.'
+        return
+    }
+    if (-not (Get-Command Get-LoopSegmentsWebDAVCredentials -ErrorAction SilentlyContinue)) {
+        Write-QuestLog 'Keep Alive: auth helper missing - skip +60 min extend.'
+        return
+    }
+    try {
+        $u = [Uri]$LanUrl
+        $origin = '{0}://{1}' -f $u.Scheme, $u.Authority
+        $endpoint = "$origin/keep_alive.json"
+        $login = Get-QuestLanLogin -ForUrl $LanUrl
+        $pair = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes(('{0}:{1}' -f $login.User, $login.Password))
+        )
+        $req = [System.Net.HttpWebRequest]::Create($endpoint)
+        $req.Method = 'POST'
+        $req.ContentType = 'application/json; charset=utf-8'
+        $req.Timeout = 15000
+        $req.ReadWriteTimeout = 15000
+        $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+        $req.Headers['Authorization'] = "Basic $pair"
+        $bodyBytes = [Text.Encoding]::UTF8.GetBytes('{"action":"extend","reason":"quest_open"}')
+        $req.ContentLength = $bodyBytes.Length
+        $stream = $req.GetRequestStream()
+        $stream.Write($bodyBytes, 0, $bodyBytes.Length)
+        $stream.Close()
+        $resp = $null
+        try {
+            $resp = $req.GetResponse()
+            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+            $text = $reader.ReadToEnd()
+            $reader.Close()
+            $json = $null
+            try { $json = $text | ConvertFrom-Json } catch {}
+            if ($null -ne $json -and $json.ok -eq $true -and $json.extended -eq $true) {
+                $left = if ($null -ne $json.sessionRemainingSeconds) {
+                    ' (~{0:N0}s remaining)' -f [double]$json.sessionRemainingSeconds
+                } else { '' }
+                Write-QuestLog ("Keep Alive: +60 min after Open on Quest{0}." -f $left)
+            } elseif ($null -ne $json -and $json.ok -eq $true -and $json.exportSession -eq $true) {
+                Write-QuestLog 'Keep Alive: export running — +60 min extend skipped.'
+            } elseif ([int]$resp.StatusCode -eq 404 -or [int]$resp.StatusCode -eq 405) {
+                Write-QuestLog 'Keep Alive: phone build missing /keep_alive.json (need 440+) - skip.'
+            } else {
+                $detail = if ($null -ne $json -and $json.error) { [string]$json.error } else { "HTTP $([int]$resp.StatusCode)" }
+                Write-QuestLog "Keep Alive: extend failed ($detail)."
+            }
+        } finally {
+            if ($null -ne $resp) {
+                try { $resp.Close() } catch {}
+                try { $resp.Dispose() } catch {}
+            }
+        }
+    } catch [System.Net.WebException] {
+        $code = $null
+        if ($null -ne $_.Exception.Response) {
+            try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+        }
+        if ($code -eq 404 -or $code -eq 405) {
+            Write-QuestLog 'Keep Alive: phone build missing /keep_alive.json (need 440+) - skip.'
+        } else {
+            Write-QuestLog ("Keep Alive: extend request failed: {0}" -f $_.Exception.Message)
+        }
+    } catch {
+        Write-QuestLog ("Keep Alive: extend request failed: {0}" -f $_.Exception.Message)
+    }
 }
 
 # The phone's LAN login for -ForUrl (default -Url): webdavUser + per-phone
@@ -1506,7 +1579,13 @@ while ($true) {
         if ($state -eq 'Awake') {
             if ($queuedLogged) { Write-QuestLog 'Headset woke - opening the queued page.' }
             Set-QuestOpenStatus 'opening'
-            if (Open-QuestLanTab -DeviceSerial $dev) { exit 0 } else { exit 3 }
+            if (Open-QuestLanTab -DeviceSerial $dev) {
+                Set-QuestOpenStatus 'opened'
+                Invoke-PhoneKeepAliveExtendAfterQuestOpen
+                exit 0
+            } else {
+                exit 3
+            }
         }
     } catch {
         Write-QuestLog "Poll error: $($_.Exception.Message)"

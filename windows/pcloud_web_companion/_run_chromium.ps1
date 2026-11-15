@@ -1163,6 +1163,52 @@ function Invoke-GatewayWifiRebootIfNeeded {
     }
 }
 
+function Invoke-BackgroundLoopSegmentsViaUsb {
+    # Soft: USB Home when Loop Segments is still foreground (same as finish-time Home).
+    param(
+        [string]$Label = 'home',
+        [switch]$FailNeedsEnter
+    )
+    if ($SkipGoHome) {
+        Write-Host "[$Label] Skipping iPhone Home press (-SkipGoHome)"
+        return
+    }
+    $homePs1 = Join-Path $UsbDir "Go-IphoneHomeViaUsb.ps1"
+    if (-not (Test-Path -LiteralPath $homePs1)) {
+        Write-Warning "[$Label] Missing $homePs1"
+        return
+    }
+    Write-Host "[$Label] USB Home if Loop Segments is still foreground (skip when backgrounded or locked)..."
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $code = 1
+    try {
+        & $homePs1 -NoWaitEnter
+        $code = 0
+    } catch {
+        $msg = [string]$_.Exception.Message
+        if ($msg -match 'HOME_USB_EXIT:(\d+)') {
+            $code = [int]$Matches[1]
+        } else {
+            Write-Warning "[$Label] $($_.Exception.Message)"
+            $code = 1
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+        $global:LASTEXITCODE = 0
+    }
+    if ($code -eq 0) {
+        Write-Host "[$Label] Done"
+    } elseif ($code -eq 2) {
+        Write-Host "[$Label] Skipped (no USB device)"
+    } else {
+        Write-Warning "[$Label] Home press did not succeed (exit $code) - phone may still show Loop Segments"
+        if ($FailNeedsEnter) {
+            $script:HomeFailedNeedEnter = $true
+        }
+    }
+}
+
 function Invoke-LoopSegmentsUsbLaunch {
     # AltServer is opt-in (-EnsureAltServer) for AltStore users. SideStore needs LocalDevVPN only.
     [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureStarted -EnsureAltServer:$EnsureAltServer)
@@ -1206,9 +1252,9 @@ function Invoke-LoopSegmentsUsbLaunch {
     }
 
     if ($lanUp) {
-        Write-Host "[usb] Foregrounding Loop Segments on phone (LAN up but not signed in to pCloud, or sign-in check failed)..."
+        Write-Host "[usb] Foregrounding Loop Segments on phone briefly (LAN up but not signed in to pCloud, or sign-in check failed)..."
     } else {
-        Write-Host "[usb] LAN not reachable - launching Loop Segments on phone..."
+        Write-Host "[usb] LAN not reachable - launching Loop Segments on phone briefly to enable LAN..."
     }
     Write-Host "[usb] > pwsh $($psArgs -join ' ')"
     & (Get-LoopSegmentsPwshExe) @psArgs
@@ -1254,6 +1300,14 @@ Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launc
 "@
     }
     Write-Host "[usb] Loop Segments launch OK"
+
+    # Brief foreground only: wait for :8765, then Home so Keep Alive can hold LAN in background.
+    if (Wait-PhoneLanPageReachable -TimeoutSec 60 -Label 'usb') {
+        Write-Host "[usb] LAN page reachable after foreground"
+    } else {
+        Write-Warning "[usb] LAN page still not reachable after foreground — backgrounding anyway"
+    }
+    Invoke-BackgroundLoopSegmentsViaUsb -Label 'usb'
 }
 
 function Get-CompanionMountDriveLetter {
@@ -2267,44 +2321,73 @@ function Invoke-PhoneWifiWwwProbeBeforeHome {
     }
 }
 
-function Invoke-GoIphoneHome {
-    if ($SkipGoHome) {
-        Write-Host "[home] Skipping iPhone Home press (-SkipGoHome)"
+function Invoke-KeepAliveResetOnFinish {
+    # Soft: POST /keep_alive.json so the phone gets a fresh 60 min Keep Alive window before Home / AP bounce.
+    $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
+    if (-not (Test-Path -LiteralPath $lanConfigPath)) {
+        Write-Warning "[keep-alive] Missing lan_config.json - skip reset"
         return
     }
-    $homePs1 = Join-Path $UsbDir "Go-IphoneHomeViaUsb.ps1"
-    if (-not (Test-Path -LiteralPath $homePs1)) {
-        Write-Warning "[home] Missing $homePs1"
-        return
-    }
-    Write-Host "[home] USB Home if Loop Segments is still foreground (skip when backgrounded or locked)..."
-    # In-process: a fresh pwsh hangs on FileSystem InitializeDefaultDrives when WinFsp L: is dead.
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    $code = 1
     try {
-        & $homePs1 -NoWaitEnter
-        $code = 0
+        $lan = Get-Content -LiteralPath $lanConfigPath -Raw | ConvertFrom-Json
     } catch {
-        $msg = [string]$_.Exception.Message
-        if ($msg -match 'HOME_USB_EXIT:(\d+)') {
-            $code = [int]$Matches[1]
-        } else {
-            Write-Warning "[home] $($_.Exception.Message)"
-            $code = 1
+        Write-Warning "[keep-alive] Could not read lan_config.json: $_"
+        return
+    }
+    $hostName = [string]$lan.phoneLanHost
+    if ([string]::IsNullOrWhiteSpace($hostName)) {
+        Write-Warning "[keep-alive] phoneLanHost empty - skip reset"
+        return
+    }
+    $port = 8765
+    if ($null -ne $lan.lanPort -and [int]$lan.lanPort -gt 0) {
+        $port = [int]$lan.lanPort
+    }
+    if (-not (Test-PhoneLanPageReachable -Quiet)) {
+        Write-Warning "[keep-alive] Phone LAN not reachable - skip reset"
+        return
+    }
+    if (-not (Get-Command Get-LoopSegmentsPhoneWebDavAuthHeader -ErrorAction SilentlyContinue)) {
+        Write-Warning "[keep-alive] Auth helper missing - skip reset"
+        return
+    }
+
+    $uri = "http://${hostName}:${port}/keep_alive.json"
+    Write-Host "[keep-alive] POST $uri (reset session to 60 min before Home)..."
+    try {
+        $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
+        $resp = Invoke-DirectHttpPostJson -Uri $uri -Headers $auth -Body '{"action":"reset","reason":"companion_quit"}' -TimeoutSec 15
+        $json = $null
+        if (-not [string]::IsNullOrWhiteSpace([string]$resp.Body)) {
+            try { $json = ([string]$resp.Body) | ConvertFrom-Json } catch {}
         }
-    } finally {
-        $ErrorActionPreference = $prev
-        $global:LASTEXITCODE = 0
+        if ($null -ne $json -and $json.ok -eq $true) {
+            if ($json.reset -eq $true) {
+                $left = if ($null -ne $json.sessionRemainingSeconds) {
+                    ' (~{0:N0}s remaining)' -f [double]$json.sessionRemainingSeconds
+                } else { '' }
+                Write-Host ("[keep-alive] Reset to 60 min session{0}" -f $left) -ForegroundColor Green
+            } elseif ($json.exportSession -eq $true) {
+                Write-Host '[keep-alive] Export running — Keep Alive left alone until export ends'
+            } else {
+                Write-Host '[keep-alive] OK (no timer reset needed)'
+            }
+            return
+        }
+        if ([int]$resp.StatusCode -eq 404 -or [int]$resp.StatusCode -eq 405) {
+            Write-Warning '[keep-alive] Phone build missing /keep_alive.json (need app build 440+) - skip'
+            return
+        }
+        $detail = if ($null -ne $json -and $json.error) { [string]$json.error } else { "HTTP $($resp.StatusCode)" }
+        Write-Warning "[keep-alive] Reset failed: $detail"
+    } catch {
+        Write-Warning "[keep-alive] Reset request failed: $($_.Exception.Message)"
     }
-    if ($code -eq 0) {
-        Write-Host "[home] Done"
-    } elseif ($code -eq 2) {
-        Write-Host "[home] Skipped (no USB device)"
-    } else {
-        Write-Warning "[home] Home press did not succeed (exit $code) - phone may still show Loop Segments"
-        $script:HomeFailedNeedEnter = $true
-    }
+}
+
+function Invoke-GoIphoneHome {
+    # Finish-time Home; shared implementation also used after brief startup USB foreground.
+    Invoke-BackgroundLoopSegmentsViaUsb -Label 'home' -FailNeedsEnter
 }
 
 function Invoke-CompanionGracefulFinish {
@@ -2314,7 +2397,7 @@ function Invoke-CompanionGracefulFinish {
     $script:CompanionFinished = $true
 
     Write-Host ""
-    Write-Host "[run] Finishing companion ($Reason): Quest cleanup in the background (LAN tabs, history, SKYBOX WebDAV server, proximity sensor), close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
+    Write-Host "[run] Finishing companion ($Reason): Quest cleanup in the background (LAN tabs, history, SKYBOX WebDAV server, proximity sensor), close Chromium, unmap Skybox AirScreen, quit Skybox if we started it, stop rclone mount+DLNA, sync profile, clear local, Keep Alive reset, Wi-Fi->www probe, Home on phone..." -ForegroundColor Cyan
 
     try {
         # Quest cleanup (LAN tabs, history, proximity sensor) runs in the background while Chromium
@@ -2341,6 +2424,8 @@ function Invoke-CompanionGracefulFinish {
         }
         # The Wi-Fi probe can restart the router (drops the Quest's adb): finish the Quest cleanup first.
         if (Get-Command Wait-QuestCleanupOnExit -ErrorAction SilentlyContinue) { try { Wait-QuestCleanupOnExit } catch {} }
+        # Fresh 60 min Keep Alive before Home / AP bounce (needs :8765 still up).
+        Invoke-KeepAliveResetOnFinish
         # Probe while Loop Segments is still foreground (Home/background can kill :8765 if Keep Alive is off).
         Invoke-PhoneWifiWwwProbeBeforeHome
         Invoke-GoIphoneHome
