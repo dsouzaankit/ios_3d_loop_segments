@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 442 (1.3.1):** GET /export_queue.json and /paused_exports.json need the LAN login (they list queued / paused clip names).
+
 **Build 441 (1.3.1):** Keep Alive sessions capped at 24 h (a huge /keep_alive.json extend crashed the app); GET /wan_throughput.json and /lan_throughput.json need the LAN login.
 
 **Build 440 (1.3.1):** `GET`/`POST /keep_alive.json` — companion quit **resets** Keep Alive to **60 min**; successful **Open on Quest** **adds** **60 min** to the remaining session (`action=extend`). Skips the timer while export owns Keep Alive.
