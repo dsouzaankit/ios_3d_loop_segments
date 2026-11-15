@@ -48,7 +48,8 @@
   Segments (build 428+) with a sidestore://install link, so SideStore shows Install and you tap once
   (windows\usb\Install-LoopSegmentsIpaViaUsb.ps1). Once the phone reports the new build, LocalDevVPN
   is switched back off if this deploy switched it on. Phone and PC stay off the phone LAN (the
-  companion's start-up check moves them back). This skips that; install from iCloud Downloads.
+  companion's start-up check moves them back — or run
+  windows\lan\Invoke-LoopSegmentsCompanionWifiReorientAfterIpa.ps1). This skips that; install from iCloud Downloads.
 
 .PARAMETER NoPhoneRestart
   The USB install normally retries a failed try once and, if that fails too, restarts the phone over
