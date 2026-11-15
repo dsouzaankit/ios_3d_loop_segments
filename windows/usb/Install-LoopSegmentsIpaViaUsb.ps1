@@ -142,12 +142,14 @@ function Get-PcIpOn([string] $PhoneHost) {
     @(Get-LoopSegmentsPcLanIpv4Addresses | Where-Object { Test-LoopSegmentsSameIpv4Slash24 -IpA $_ -IpB $PhoneHost }) | Select-Object -First 1
 }
 
-function Get-PhoneWifiIp {
+function Get-PhoneWifiIp([int] $ListenSec = 6) {
     # The phone's Wi-Fi IPv4 over USB from its TCP connections on en0 (DVT network monitor, exact).
     # $null = no TCP over Wi-Fi: on a Wi-Fi with www the phone always has some, so that means the
     # phone LAN (no gateway; internet over 5G) or Wi-Fi off. No pcapd fallback here: sniffing
-    # guesses, and a wrong guess bounces the AP for nothing.
-    if ((Invoke-Py @($InfoPy, 'wifi-ip')) -match '(?m)^WIFI_IP\t(\S+)') { return $Matches[1] }
+    # guesses, and a wrong guess bounces the AP for nothing. Listens 6 s by default: the check that
+    # decides whether to bounce at all must not miss an idle phone; the wait loops use 3 s and
+    # simply check again.
+    if ((Invoke-Py @($InfoPy, 'wifi-ip', [string]$ListenSec)) -match '(?m)^WIFI_IP\t(\S+)') { return $Matches[1] }
     return $null
 }
 
@@ -210,8 +212,10 @@ function Wait-PhoneOnOtherWifi([string] $PhoneHost, [int] $Seconds, [string] $Wh
     $until = $t0.AddSeconds($Seconds)
     $asked = $false
     while ((Get-Date) -lt $until) {
-        Start-Sleep -Seconds 10
-        $ip = Get-PhoneWifiIp
+        # Short pause and short listen (about 8-10 s per check): the phone often hops within
+        # seconds, and a miss only means the next check.
+        Start-Sleep -Seconds 3
+        $ip = Get-PhoneWifiIp 3
         if ($ip -and -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneHost)) {
             Write-Inst "Phone is on another Wi-Fi ($ip)." Green
             return $ip

@@ -5,7 +5,8 @@
   ipa-build <path.ipa>     -> BUILD <CFBundleVersion> | ERROR <why>   (reads the IPA, no phone needed)
   vpn-tunnel               -> TUNNEL_UP | TUNNEL_DOWN | NO_DEVICE <why>
   home                     -> HOME | HOME_FAILED <why>   (Home Screen to the front)
-  wifi-ip                  -> WIFI_IP <ipv4> | NO_WIFI_IP   (the phone's own address on en0, DVT network monitor)
+  wifi-ip [listen s]       -> WIFI_IP <ipv4> | NO_WIFI_IP   (the phone's own address on en0, DVT network monitor;
+                              listens 6 s by default)
   wifi-assoc               -> ASSOCIATED channel=<n> band=<b> | NOT_ASSOCIATED | UNKNOWN <why>
                               (joined to any Wi-Fi at all? diagnostics IORegistry)
   wait-install <build> <old app path> <timeout s>
@@ -174,7 +175,8 @@ def main() -> int:
         return asyncio.run(wifi_assoc())
     if cmd == "wifi-ip":
         try:
-            ip = asyncio.run(wifi_ipv4())
+            secs = float(sys.argv[2]) if len(sys.argv) > 2 else 6.0
+            ip = asyncio.run(wifi_ipv4(secs))
         except Exception as exc:  # noqa: BLE001
             msg = f"{type(exc).__name__}: {exc}"
             print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
