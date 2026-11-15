@@ -58,7 +58,8 @@
 
 .PARAMETER ForceUsbInstall
   Reinstall over USB even when the phone already has the IPA's build (the install confirms it by the
-  app's new install path). install-latest.ps1 -Force passes this.
+  app's new install path). reinstall-latest.ps1 always passes this. An IPA older than the phone's
+  build is never installed, with or without it.
 
 .PARAMETER NoWaitEnter
   Do not wait for Enter (child callers). Direct run waits, including on errors.

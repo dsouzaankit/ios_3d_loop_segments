@@ -45,7 +45,7 @@
   The installed app must be build 428+ for step 3 to open SideStore; older builds just launch.
 
 .EXITCODES
-  0  installed (or skipped: no USB phone, same build already installed)
+  0  installed (or skipped: no USB phone, same build already installed, IPA older than the phone's build)
   1  not confirmed (no download, no tap, or the phone did not report the new build in time)
   2  could not start (no IPA, could not leave the phone LAN, port busy, launch failed)
 
@@ -62,7 +62,8 @@ param(
     [int] $InstallWaitSec = 180,
     # Leave LocalDevVPN on even if this deploy switched it on.
     [switch] $KeepVpn,
-    # Install even when the phone already has this IPA's build (testing / reinstall).
+    # Install even when the phone already has this IPA's build (reinstall). An older IPA is never
+    # installed, -Force or not.
     [switch] $Force,
     # Never bounce the phone LAN AP; the phone must already be on another Wi-Fi.
     [switch] $NoBounce,
@@ -329,7 +330,13 @@ if ((Invoke-Py @($InfoPy, 'ipa-build', $IpaPath)) -match '(?m)^BUILD\t(\S+)') { 
 $beforeApp = Get-InstalledApp
 $before = if ($beforeApp) { $beforeApp.Build } else { $null }
 if ($ipaBuild -and $before -eq $ipaBuild -and -not $Force) {
-    Write-Inst "Build $ipaBuild is already installed - nothing to do."
+    Write-Inst "Build $ipaBuild is already installed - nothing to do (-Force reinstalls it)."
+    Restore-Vpn $true
+    exit 0
+}
+# Never downgrade, -Force or not: an IPA older than the phone's build is skipped.
+if ($ipaBuild -and $before -and ($ipaBuild -as [int]) -and ($before -as [int]) -and [int]$ipaBuild -lt [int]$before) {
+    Write-Inst "IPA build $ipaBuild is older than the phone's build $before - not downgrading." Yellow
     Restore-Vpn $true
     exit 0
 }

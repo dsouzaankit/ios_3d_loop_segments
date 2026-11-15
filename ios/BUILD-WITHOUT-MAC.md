@@ -91,7 +91,7 @@ Pick one:
 .\deploy.ps1 -SkipPhonePrep      # no USB foreground app quit / LocalDevVPN connect after the trigger
 .\deploy.ps1 -SkipUsbInstall     # no USB SideStore install (install from iCloud Downloads)
 .\deploy.ps1 -NoPhoneRestart     # USB install: no phone restart after a failed retry
-.\install-latest.ps1       # deploy.ps1 -UseLatest: newest built IPA, no GitHub build, no bump (-Force: reinstall the same build)
+.\reinstall-latest.ps1     # deploy.ps1 -UseLatest -ForceUsbInstall: newest built IPA, no GitHub build, no bump; installs when its build is the same as or newer than the phone's
 .\bump-build.ps1           # build number + 1, commit + push, then deploy.ps1 (new IPA, no app changes; a built IPA newer than the USB phone's build is installed with -UseLatest instead; -DryRun / -NoDeploy / -ForceBump)
 .\copy-to-icloud.ps1      # iCloud paste only — unique LoopSegments-b{build}-{time}.ipa (like web_auto_parking)
 .\copy-to-icloud.ps1 -FetchIfMissing   # if local IPA missing, gh -UseLatest first then paste
