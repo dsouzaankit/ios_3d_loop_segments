@@ -101,7 +101,7 @@ param(
     [switch] $EnsureAltServer,
     [switch] $SkipOpenLanTabOnStart,
     [switch] $NoTranscript,
-    [string] $StartUrl = "https://my.pcloud.com"
+    [string] $StartUrl = "https://my.pcloud.com/#/speedtest"
 )
 
 Set-StrictMode -Version Latest

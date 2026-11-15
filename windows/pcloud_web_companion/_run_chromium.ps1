@@ -44,7 +44,7 @@ param(
     [switch]$SkipOpenLanTabOnStart,
     # Do not Start-Transcript companion console to logs\companion-console-*.log.
     [switch]$NoTranscript,
-    [string]$StartUrl = "https://my.pcloud.com"
+    [string]$StartUrl = "https://my.pcloud.com/#/speedtest"
 )
 
 $script:CompanionBrowserStarted = $false
@@ -506,6 +506,7 @@ function Sync-ExtensionToLocalDisk {
         "background.js"
         "pcloud_fileid_hook_main.js"
         "pcloud_folder_tracker.js"
+        "pcloud_speedtest_autorun.js"
         "lan_quest_button.js"
         "offscreen.html"
         "offscreen.js"

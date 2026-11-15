@@ -858,6 +858,33 @@ extension ExportLANServer {
             : items.joined()
     }
 
+    /// pCloud WAN speed test embed (`my.pcloud.com/#/speedtest`). pCloud sends
+    /// `X-Frame-Options: SAMEORIGIN`, so the iframe is often blank outside that origin —
+    /// the Open link / companion Chromium start tab is the reliable path.
+    static func htmlWANSpeedTestBlock() -> String {
+        let url = "https://my.pcloud.com/#/speedtest"
+        return """
+        <div class="panel lan-wan-speedtest" id="lan-wan-speedtest">
+          <h2>WAN speed test (pCloud)</h2>
+          <p class="muted" style="margin:0 0 0.45rem">PC ↔ internet via pCloud (not phone cellular). Companion opens this URL at Chromium startup. If the frame stays blank, pCloud blocked embedding — use <strong>Open</strong>.</p>
+          <div class="lan-wan-frame-wrap">
+            <iframe
+              id="lan-wan-speedtest-frame"
+              title="pCloud WAN speed test"
+              src="\(url)"
+              referrerpolicy="no-referrer-when-downgrade"
+              allow="fullscreen"
+              loading="eager"
+            ></iframe>
+          </div>
+          <p class="lan-wan-fallback muted">
+            <a class="btn" href="\(url)" target="_blank" rel="noopener noreferrer">Open WAN speed test</a>
+            <span> · <a href="\(url)" target="_blank" rel="noopener noreferrer"><code>my.pcloud.com/#/speedtest</code></a></span>
+          </p>
+        </div>
+        """
+    }
+
     /// Browser Range download → POST `/lan_throughput.json` (same sidecars as Measure HTTP leg).
     /// Pass `buttonId` to auto-bind (monitor `/`); `/browse` calls `bindLANSpeedTestButton` from the export panel.
     static func htmlLANSpeedTestScript(
@@ -873,9 +900,9 @@ extension ExportLANServer {
         (function () {
           var MIN_BYTES = \(minBytes);
           var MAX_BYTES = \(maxBytes);
-          /// 10×64 MB ≈ one ~640 MB dense VR window; median damps Wi‑Fi noise.
-          var RUN_COUNT = 10;
-          var MIN_OK_RUNS = 5;
+          /// 5×64 MB ≈ one ~320 MB dense VR half-window; median damps Wi‑Fi noise.
+          var RUN_COUNT = 5;
+          var MIN_OK_RUNS = 3;
           function isMediaName(name) {
             return /\\.(mp4|m4v|mov|mkv|webm)$/i.test(String(name || ""));
           }
@@ -1440,6 +1467,17 @@ extension ExportLANServer {
               display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0 0;
             }
             .lan-loop-player #lan-loop-label { font-size: 0.9em; word-break: break-all; }
+            .lan-wan-speedtest { margin: 0.75rem 0 1rem; max-width: 56rem; }
+            .lan-wan-speedtest h2 { margin: 0 0 0.35rem; font-size: 1.1rem; }
+            .lan-wan-speedtest .lan-wan-frame-wrap {
+              position: relative; width: 100%; height: min(28rem, 70vh);
+              border: 1px solid var(--panel-border); border-radius: 8px; overflow: hidden;
+              background: var(--scroll-bg);
+            }
+            .lan-wan-speedtest iframe {
+              display: block; width: 100%; height: 100%; border: 0; background: var(--panel-bg);
+            }
+            .lan-wan-speedtest .lan-wan-fallback { margin: 0.45rem 0 0; }
             </style>
             <script>
             (function () {
@@ -2137,6 +2175,7 @@ extension ExportLANServer {
                 <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
                 <p id="lan-speed-test-result" class="muted" role="status"></p>
                 \(htmlLANSpeedTestScript(resultElementId: "lan-speed-test-result", buttonId: "lan-speed-test"))
+                \(htmlWANSpeedTestBlock())
                 \(htmlLANLoopPlayerBlock())
                 <h2>On phone (playback)</h2>
                 <ul id="lan-playback-files">
@@ -2224,6 +2263,7 @@ extension ExportLANServer {
             </div>
             </div>
             \(htmlLANSpeedTestScript())
+            \(htmlWANSpeedTestBlock())
             \(htmlExportControlPanel())
             \(htmlURLDownloadPanel())
             \(htmlLANCloudflareTunnelBlock())
@@ -2391,7 +2431,7 @@ extension ExportLANServer {
           <button type="button" id="export-clear-media">Clear media</button>
           <button type="button" id="export-lan-speed-test">LAN speed test</button>
         </div>
-        <p class="muted" style="margin:0.25rem 0 0;font-size:0.85em">LAN speed test: <strong>10×</strong> browser Range downloads (up to 64&nbsp;MB each ≈ <strong>640&nbsp;MB</strong> total, same file) → <strong>median</strong> Mbps → <code>lan_throughput.json</code> sidecars. Available during export. No other-router reboot — use companion Measure for that.</p>
+        <p class="muted" style="margin:0.25rem 0 0;font-size:0.85em">LAN speed test: <strong>5×</strong> browser Range downloads (up to 64&nbsp;MB each ≈ <strong>320&nbsp;MB</strong> total, same file) → <strong>median</strong> Mbps → <code>lan_throughput.json</code> sidecars. Available during export. No other-router reboot — use companion Measure for that.</p>
         <p id="trigger-status" class="muted"></p>
         <div class="row">
           <button type="button" id="pcloud-up" disabled>↑ Up</button>
