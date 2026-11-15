@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 430 (1.3.1):** No app changes: a new build number to test the deploy and the USB install.
+
 **Build 429 (1.3.1):** No app changes: a new build number to test the deploy and the USB install.
 
 **Build 428 (1.3.1):** The PC can now start a SideStore install over USB. `deploy.ps1` launches the app with `-openURL sidestore://install?url=http://<PC>:8766/LoopSegments.ipa`; the app opens that link (SideStore then shows its Install dialog: one tap) and quits itself 1.5 s later, so SideStore never installs over a running copy. After the install it opens `localdevvpn://disable` the same way when the deploy had switched LocalDevVPN on, so the VPN ends as it started. Only `sidestore://`, `shortcuts://` and `localdevvpn://` links are accepted, only a USB-trusted PC can pass launch arguments, and the app stays open while an export runs. Tapping the icon launches as before. Install this build the old way once; later builds can use the USB path.
