@@ -688,8 +688,32 @@ function Get-LoopSegmentsIphoneLanIpv4ViaUsb {
         }
     }
 
+    # First: the phone's own address on en0 (Wi-Fi) from the DVT network monitor. Exact; pcapd below
+    # sniffs packets and can pick a peer (this PC, a headset). Empty when nothing is open on Wi-Fi.
+    $netmonPy = Join-Path $script:LoopSegmentsWindowsRoot 'usb\LoopSegments-UsbInfo.py'
+    if (Test-Path -LiteralPath $netmonPy) {
+        if (-not $Quiet) {
+            Write-Host "[lan-discover] USB: reading the phone's Wi-Fi IPv4 from its network monitor ($($rt.Display))…"
+        }
+        $nm = Invoke-LoopSegmentsPythonRuntime -Runtime $rt -ArgumentList @($netmonPy, 'wifi-ip')
+        $nmLine = @($nm.Lines | Where-Object { $_ -match '^WIFI_IP\t' }) | Select-Object -Last 1
+        if ($nmLine -and $nmLine -match '^WIFI_IP\t(\d+\.\d+\.\d+\.\d+)') {
+            return [pscustomobject]@{
+                Ok       = $true
+                Ip       = $Matches[1]
+                Source   = 'usb-dvt-netmon'
+                ExitCode = 0
+                Error    = ''
+            }
+        }
+    }
+
     if (-not $Quiet) {
         Write-Host "[lan-discover] USB pcapd: reading phone Wi-Fi IPv4 ($($rt.Display))…"
+    }
+    # pcapd often sees this PC as a peer: never report the PC's own addresses as the phone.
+    if ([string]::IsNullOrWhiteSpace($env:LOOP_SEGMENTS_EXCLUDE_LAN_IPS)) {
+        $env:LOOP_SEGMENTS_EXCLUDE_LAN_IPS = (@(Get-LoopSegmentsPcLanIpv4Addresses) -join ',')
     }
 
     $result = Invoke-LoopSegmentsPythonRuntime -Runtime $rt -ArgumentList @('-u', $scriptPath)
@@ -741,17 +765,17 @@ function Update-LoopSegmentsLANHostFromDiscovery {
             return $current
         }
         if (-not $Quiet) {
-            Write-Warning "[lan-discover] configured $current not reachable — USB pcapd for phone Wi-Fi IP…"
+            Write-Warning "[lan-discover] configured $current not reachable — reading the phone Wi-Fi IP over USB…"
         }
     } elseif (-not $Quiet) {
-        Write-Host "[lan-discover] resolving phone Wi-Fi IP via USB (pcapd)"
+        Write-Host "[lan-discover] resolving phone Wi-Fi IP via USB (network monitor, pcapd fallback)"
     }
 
     $usb = Get-LoopSegmentsIphoneLanIpv4ViaUsb -Quiet:$Quiet
     if (-not $usb.Ok -or [string]::IsNullOrWhiteSpace($usb.Ip)) {
         if (-not $Quiet) {
             $hint = if ($usb.Error) { $usb.Error.Trim() } else { "exit $($usb.ExitCode)" }
-            Write-Warning "[lan-discover] USB pcapd did not return a phone Wi-Fi IP ($hint). Plug in USB, unlock phone, join Wi-Fi."
+            Write-Warning "[lan-discover] USB did not return a phone Wi-Fi IP ($hint). Plug in USB, unlock phone, join Wi-Fi."
         }
         return $null
     }

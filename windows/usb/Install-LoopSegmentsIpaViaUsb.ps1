@@ -141,10 +141,8 @@ function Get-PcIpOn([string] $PhoneHost) {
 }
 
 function Get-PhoneWifiIp {
-    # The phone's current Wi-Fi IPv4 over USB: the local address of its connections on en0 (DVT
-    # network monitor, exact). Fallback when nothing is open on Wi-Fi: pcapd sniffing, which is a
-    # guess (it also sees peers), minus this PC's own addresses.
-    if ((Invoke-Py @($InfoPy, 'wifi-ip')) -match '(?m)^WIFI_IP\t(\S+)') { return $Matches[1] }
+    # The phone's current Wi-Fi IPv4 over USB (shared lookup: DVT network monitor on en0, exact;
+    # pcapd sniffing as the fallback). The PC's addresses are refreshed each time it may have moved.
     $env:LOOP_SEGMENTS_EXCLUDE_LAN_IPS = (@(Get-LoopSegmentsPcLanIpv4Addresses) -join ',')
     $u = Get-LoopSegmentsIphoneLanIpv4ViaUsb -Quiet
     if ($u.Ok -and $u.Ip) { return [string]$u.Ip }

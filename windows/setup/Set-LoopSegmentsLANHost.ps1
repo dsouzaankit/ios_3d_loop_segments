@@ -5,7 +5,8 @@
 
 .DESCRIPTION
   With no -PhoneHost, reads the USB-connected phone's Wi-Fi IPv4 via pymobiledevice3
-  pcapd (env_setup Get-IphoneLanIpv4.py) and writes phoneLanHost. Pass an IP to set
+  its network monitor (its own address on en0; pcapd sniffing via env_setup Get-IphoneLanIpv4.py
+  as the fallback) and writes phoneLanHost. Pass an IP to set
   explicitly. Subnet align (phone + PC same LAN) is separate:
   lan\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1
 
@@ -41,7 +42,7 @@ if (-not [string]::IsNullOrWhiteSpace($PhoneHost)) {
 } else {
     $found = Update-LoopSegmentsLANHostFromDiscovery -Force:$ForceDiscover
     if ([string]::IsNullOrWhiteSpace($found)) {
-        throw 'USB pcapd did not return a phone Wi-Fi IP. Plug in USB, unlock phone, join Wi-Fi — or pass an IP: .\Set-LoopSegmentsLANHost.ps1 <phone-ip>'
+        throw 'Reading the phone Wi-Fi IP over USB failed. Plug in USB, unlock phone, join Wi-Fi — or pass an IP: .\Set-LoopSegmentsLANHost.ps1 <phone-ip>'
     }
 }
 
