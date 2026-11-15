@@ -90,6 +90,7 @@ Pick one:
 .\deploy.ps1 -SkipICloud  # local ios\build artifacts\ipa\ only (no iCloud)
 .\deploy.ps1 -SkipPhonePrep      # no USB foreground app quit / LocalDevVPN connect after the trigger
 .\deploy.ps1 -SkipUsbInstall     # no USB SideStore install (install from iCloud Downloads)
+.\bump-build.ps1           # build number + 1, commit + push, then deploy.ps1 (new IPA, no app changes; -DryRun / -NoDeploy)
 .\copy-to-icloud.ps1      # iCloud paste only — unique LoopSegments-b{build}-{time}.ipa (like web_auto_parking)
 .\copy-to-icloud.ps1 -FetchIfMissing   # if local IPA missing, gh -UseLatest first then paste
 ```
