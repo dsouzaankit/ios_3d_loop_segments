@@ -2,7 +2,7 @@
 """Exit 0 if Loop Segments is already the foreground app over USB (DVT proclist).
 
 --kill: also quit it when it is foreground (DVT kill of its pid; prints KILLED / KILL_FAILED).
-deploy.ps1 uses this (via Test-PhoneWwwViaUsb.ps1) so SideStore can install over it.
+deploy.ps1 uses this (via Prepare-PhoneForSideStoreViaUsb.ps1) so SideStore can install over it.
 
 Exit codes:
   0  FOREGROUND — app already frontmost; caller may skip relaunch

@@ -4,7 +4,7 @@
 Connected = the VPN's packet-tunnel extension (LocalDevVPN.app/PlugIns/...) is running (DVT proclist).
 Not connected: launch LocalDevVPN over USB (DVT, --userspace tunnel first, then lockdown). Its
 "Auto-connect on launch" setting (LocalDevVPN > Settings, switch it on once) then starts the tunnel,
-and this waits up to --wait seconds for it. The app ends up in the foreground.
+and this waits up to --wait seconds for it, then goes back to the Home Screen.
 
 Prints one result line:
   VPN_ALREADY_CONNECTED
@@ -22,7 +22,7 @@ import sys
 import time
 from typing import Any
 
-from loopsegments_dvt import is_no_device, launch, proclist
+from loopsegments_dvt import go_home, is_no_device, launch, proclist
 
 BUNDLE = "com.jkcoxson.LocalDevVPN"
 
@@ -59,6 +59,10 @@ async def run(wait_sec: int) -> int:
         try:
             if _tunnel_up(await proclist()):
                 print("VPN_CONNECTED")
+                try:
+                    await go_home()  # the launch left LocalDevVPN in front
+                except Exception as exc:  # noqa: BLE001
+                    print(f"HOME_FAILED\t{exc}", file=sys.stderr)
                 return 0
         except Exception as exc:  # noqa: BLE001
             print(f"PROCLIST_ERR\t{exc}", file=sys.stderr)

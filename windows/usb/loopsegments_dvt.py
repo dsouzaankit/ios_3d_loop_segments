@@ -64,6 +64,12 @@ async def launch(bundle_id: str, arguments: Optional[list[str]] = None, kill_exi
     return await with_dvt(_run)
 
 
+async def go_home() -> int:
+    """Bring the Home Screen to the front (DVT launch of SpringBoard, keeping it running), which
+    backgrounds whatever app is in front. Same path as usb\\Go-IphoneHomeViaUsb.ps1."""
+    return await launch("com.apple.springboard", kill_existing=False)
+
+
 async def resolve_bundle_id(want: str, display_name: str = "") -> Optional[str]:
     """Installed bundle id for want (SideStore / AltStore may append .TEAMID), else None."""
     from pymobiledevice3.lockdown import create_using_usbmux

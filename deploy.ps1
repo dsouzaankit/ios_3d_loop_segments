@@ -33,19 +33,20 @@
 .PARAMETER SkipAltStorePrep
   Deprecated alias for the default (skip AltServer prep).
 
-.PARAMETER SkipPhoneWwwCheck
-  After triggering the build, the script normally checks the iPhone if it is on USB: the app's
-  Wi-Fi -> www probe (same as the LAN page), and a bounce of the phone's Wi-Fi AP if www is down
-  (windows\usb\Test-PhoneWwwViaUsb.ps1), then quits Loop Segments if it is in the foreground so
-  SideStore can install over it, and connects LocalDevVPN if it is not (launches it over USB; its
-  "Auto-connect on launch" setting must be on). This skips all of that.
+.PARAMETER SkipPhonePrep
+  After triggering the build, with the iPhone on USB, the script normally quits Loop Segments if it
+  is in the foreground (SideStore installs over a running app often hang) and connects LocalDevVPN
+  if it is not (launches it over USB; its "Auto-connect on launch" setting must be on), then goes
+  back to the Home Screen (windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1). No router is touched.
+  This skips that. -SkipPhoneWwwCheck is the old name.
 
 .PARAMETER SkipUsbInstall
-  After the download, with the iPhone on USB, the script normally serves the IPA on this PC's LAN
-  and launches Loop Segments (build 428+) with a sidestore://install link, so SideStore shows Install
-  and you tap once (windows\usb\Install-LoopSegmentsIpaViaUsb.ps1). Once the phone reports the new
-  build, LocalDevVPN is switched back off if this deploy switched it on. This skips that; install
-  from iCloud Downloads instead.
+  After the download, with the iPhone on USB, the script normally moves this PC off the phone LAN
+  (SideStore signs over Wi-Fi www, which that LAN lacks), serves the IPA there and launches Loop
+  Segments (build 428+) with a sidestore://install link, so SideStore shows Install and you tap once
+  (windows\usb\Install-LoopSegmentsIpaViaUsb.ps1). Once the phone reports the new build, LocalDevVPN
+  is switched back off if this deploy switched it on, and the PC returns to the phone LAN. This
+  skips that; install from iCloud Downloads instead.
 
 .PARAMETER NoWaitEnter
   Do not wait for Enter (child callers). Direct run waits, including on errors.
@@ -65,7 +66,8 @@ param(
     [switch] $SkipICloud,
     [switch] $EnsureAltStorePrep,
     [switch] $SkipAltStorePrep,
-    [switch] $SkipPhoneWwwCheck,
+    [Alias('SkipPhoneWwwCheck')]
+    [switch] $SkipPhonePrep,
     [switch] $SkipUsbInstall,
     [switch] $NoWaitEnter
 )
@@ -140,23 +142,23 @@ function Invoke-ProjectAltStoreDeployPrep {
     }
 }
 
-function Invoke-PhoneWwwCheck {
-    # While the cloud build runs: iPhone on USB -> its Wi-Fi -> www probe -> AP bounce if down,
-    # so iCloud / SideStore can fetch the IPA. Never fails the deploy.
-    if ($SkipPhoneWwwCheck) { return }
-    $ps1 = Join-Path $ProjectRoot 'windows\usb\Test-PhoneWwwViaUsb.ps1'
+function Invoke-PhonePrep {
+    # While the cloud build runs: iPhone on USB -> quit Loop Segments if in front, connect
+    # LocalDevVPN. Never fails the deploy.
+    if ($SkipPhonePrep) { return }
+    $ps1 = Join-Path $ProjectRoot 'windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1'
     $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
     if (-not (Test-Path -LiteralPath $ps1) -or -not $pwsh) {
-        Write-Host '[phone-www] Skipped (needs pwsh 7 and windows\usb\Test-PhoneWwwViaUsb.ps1).' -ForegroundColor DarkYellow
+        Write-Host '[phone-prep] Skipped (needs pwsh 7 and windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1).' -ForegroundColor DarkYellow
         return
     }
-    Write-Step 'Checking the USB iPhone''s Wi-Fi -> www (bounces its AP if down), quitting Loop Segments if in front, connecting LocalDevVPN'
+    Write-Step 'Preparing the USB iPhone for SideStore (quit Loop Segments if in front, connect LocalDevVPN)'
     try {
         & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1
     } catch {
-        Write-Warning ("Phone www check failed: {0}" -f $_.Exception.Message)
+        Write-Warning ("Phone prep failed: {0}" -f $_.Exception.Message)
     }
-    $script:PhoneWwwChecked = $true
+    $script:PhonePrepped = $true
     $global:LASTEXITCODE = 0
 }
 
@@ -170,8 +172,8 @@ function Invoke-UsbInstall {
         Write-Host '[usb-install] Skipped (needs pwsh 7 and windows\usb\Install-LoopSegmentsIpaViaUsb.ps1).' -ForegroundColor DarkYellow
         return
     }
-    # -UseLatest / -RunId skip the trigger, so the www / VPN check has not run yet.
-    if (-not $script:PhoneWwwChecked) { Invoke-PhoneWwwCheck }
+    # -UseLatest / -RunId skip the trigger, so the phone prep has not run yet.
+    if (-not $script:PhonePrepped) { Invoke-PhonePrep }
     Write-Step 'Installing over USB via SideStore (tap Install on the phone)'
     try {
         & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 -IpaPath $LocalIpa
@@ -291,7 +293,7 @@ if (-not $resolvedRunId) {
         } finally {
             Pop-Location
         }
-        Invoke-PhoneWwwCheck
+        Invoke-PhonePrep
         Wait-ForIpaRun $resolvedRunId
     }
 } else {

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Small USB queries for Install-LoopSegmentsIpaViaUsb.ps1. Prints one line per call.
 
-  installed-build          -> BUILD <CFBundleVersion> | NOT_INSTALLED | NO_DEVICE <why>
+  installed-build          -> BUILD <CFBundleVersion> <bundle id> <app path> | NOT_INSTALLED | NO_DEVICE <why>
   ipa-build <path.ipa>     -> BUILD <CFBundleVersion> | ERROR <why>   (reads the IPA, no phone needed)
   vpn-tunnel               -> TUNNEL_UP | TUNNEL_DOWN | NO_DEVICE <why>
+  home                     -> HOME | HOME_FAILED <why>   (Home Screen to the front)
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import plistlib
 import sys
 import zipfile
 
-from loopsegments_dvt import is_no_device, proclist, resolve_bundle_id
+from loopsegments_dvt import go_home, is_no_device, proclist, resolve_bundle_id
 
 
 async def installed_build() -> int:
@@ -39,7 +40,8 @@ async def installed_build() -> int:
         print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
         return 2
     info = apps.get(bundle) or {}
-    print(f"BUILD\t{info.get('CFBundleVersion', '')}\t{bundle}")
+    # Path (…/Bundle/Application/<UUID>/…) changes on every install, even of the same build.
+    print(f"BUILD\t{info.get('CFBundleVersion', '')}\t{bundle}\t{info.get('Path', '')}")
     return 0
 
 
@@ -76,6 +78,14 @@ def main() -> int:
         return ipa_build(sys.argv[2])
     if cmd == "vpn-tunnel":
         return asyncio.run(vpn_tunnel())
+    if cmd == "home":
+        try:
+            asyncio.run(go_home())
+        except Exception as exc:  # noqa: BLE001
+            print(f"HOME_FAILED\t{type(exc).__name__}: {exc}")
+            return 1
+        print("HOME")
+        return 0
     print(__doc__, file=sys.stderr)
     return 1
 
