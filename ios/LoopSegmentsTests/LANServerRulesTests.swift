@@ -179,6 +179,31 @@ final class LANServerRulesTests: XCTestCase {
         XCTAssertLessThan(cap * 1_000_000_000, Double(UInt64.max))
     }
 
+    /// DNS rebinding: only names public DNS cannot serve, or the saved tunnel host, may reach the server.
+    func testRequestHostAllowList() {
+        let noTunnel: () -> String = { "" }
+        for host in [
+            nil, "", "10.0.100.10", "10.0.100.10:8765", "127.0.0.1:8765", "localhost", "LOCALHOST:8765",
+            "[::1]:8765", "[fe80::1%en0]", "Ankits-iPhone.local", "ankits-iphone.local.:8765", "iphone", "iphone:8765",
+        ] {
+            XCTAssertTrue(ExportLANServer.isAllowedRequestHost(host, tunnelHost: noTunnel), host ?? "nil")
+        }
+        for host in [
+            "evil.example", "evil.example:8765", "10.0.100.10.evil.example", "local.evil.example", "10.0.100",
+            "10.0.100.10:", "10.0.100.10:80a", "[::1", "[]", ":8765",
+        ] {
+            XCTAssertFalse(ExportLANServer.isAllowedRequestHost(host, tunnelHost: noTunnel), host)
+        }
+        let tunnel: () -> String = { "abc-def.trycloudflare.com" }
+        XCTAssertTrue(ExportLANServer.isAllowedRequestHost("abc-def.trycloudflare.com", tunnelHost: tunnel))
+        XCTAssertTrue(ExportLANServer.isAllowedRequestHost("ABC-DEF.trycloudflare.com:443", tunnelHost: tunnel))
+        XCTAssertFalse(ExportLANServer.isAllowedRequestHost("other.trycloudflare.com", tunnelHost: tunnel))
+        // The tunnel file is read only for names the cheap checks refuse.
+        var reads = 0
+        XCTAssertTrue(ExportLANServer.isAllowedRequestHost("10.0.100.10:8765", tunnelHost: { reads += 1; return "" }))
+        XCTAssertEqual(reads, 0)
+    }
+
     func testWebDAVClientDetection() {
         XCTAssertTrue(ExportLANServer.isWebDAVClient(requestHeaders: headers("Depth: 1")))
         XCTAssertTrue(ExportLANServer.isWebDAVClient(requestHeaders: headers("User-Agent: Microsoft-WebDAV-MiniRedir/10.0")))

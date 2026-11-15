@@ -171,7 +171,7 @@ Default **on**. Loops bundled `KeepAlive_silence.mp3` so export + LAN + trigger 
 
 ## LAN API (`:8765`)
 
-Basic auth for WebDAV and sensitive JSON: **`admin`** / the per-install password from the app's Export screen (same as Quest Skybox). Since build 422 the LAN pages, `/xr`, status/tunnel/debug JSON and export logs all need it. So do `keep_alive.json`, the WAN / LAN throughput results (`wan_throughput.json`, `lan_throughput.json`) and the queued / paused export lists (`export_queue.json`, `paused_exports.json`), because they name clips. Every POST and WebDAV write needs it. Media GET and `/xr-assets/` stay open (Skybox often sends no Authorization).
+Basic auth for WebDAV and sensitive JSON: **`admin`** / the per-install password from the app's Export screen (same as Quest Skybox). Since build 422 the LAN pages, `/xr`, status/tunnel/debug JSON and export logs all need it. So do `keep_alive.json`, the WAN / LAN throughput results (`wan_throughput.json`, `lan_throughput.json`) and the queued / paused export lists (`export_queue.json`, `paused_exports.json`), because they name clips. Every POST and WebDAV write needs it. Media GET and `/xr-assets/` stay open (Skybox often sends no Authorization). Since build 443 every request's `Host` must be an IP address, `localhost`, a `.local` or single-label name, or the saved tunnel host (`xr_tunnel.json`); anything else gets **421**. That blocks DNS rebinding, where a web page points its own name at the phone to read the open media.
 
 | Endpoint | Role |
 |----------|------|

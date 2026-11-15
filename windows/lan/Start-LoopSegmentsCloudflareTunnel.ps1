@@ -4,10 +4,14 @@
   DEPRECATED. Start a Cloudflare quick tunnel to the configured phone LAN page (:8765).
 
 .DESCRIPTION
-  Deprecated 2026-11-08. While it runs, anyone with the URL reaches the whole phone server:
-  media, pCloud folder listing and export controls, and the LAN password is public in this repo.
-  Prefer the Quest insecure-origin flag, which needs no tunnel. The script asks you to type YES
-  before starting, or takes -AcceptPublicExposure; without either it does not start.
+  Deprecated 2026-11-08. While it runs, the phone server is on the internet: anyone with the URL
+  can download your media (media needs no login), and anyone who also has the LAN login reaches
+  the pCloud folder listing and export controls. Prefer the Quest insecure-origin flag, which
+  needs no tunnel. The script asks you to type YES before starting, or takes
+  -AcceptPublicExposure; without either it does not start.
+
+  Build 443+: the phone only answers the tunnel's host name once it is saved in the LAN page's
+  Cloudflare tunnel box (xr_tunnel.json); until then the tunnel gets HTTP 421.
 
   Reads phoneLanHost + lanPort from loop-segments-windows.json (or -PhoneHost / -Port).
   Runs: cloudflared tunnel --url http://<phone>:<port>
@@ -141,8 +145,9 @@ function Test-LoopSegmentsPhoneLanReachable {
 # Deprecated: confirm before anything opens a public URL.
 Write-Host ''
 Write-Host 'DEPRECATED: Cloudflare quick tunnel' -ForegroundColor Red
-Write-Host '  While it runs, anyone with the URL reaches the whole phone server: media,' -ForegroundColor Yellow
-Write-Host '  pCloud folder listing and export controls. The LAN password is public in this repo.' -ForegroundColor Yellow
+Write-Host '  While it runs, anyone with the URL can download your media (no login needed), and anyone' -ForegroundColor Yellow
+Write-Host '  who also has the LAN login reaches the pCloud folder listing and export controls.' -ForegroundColor Yellow
+Write-Host '  Save the printed host in the LAN page''s Cloudflare tunnel box, or the phone refuses it (421).' -ForegroundColor Yellow
 Write-Host '  Prefer the Quest insecure-origin flag, which needs no tunnel. Close this window when done.' -ForegroundColor Yellow
 Write-Host ''
 if (-not $AcceptPublicExposure) {

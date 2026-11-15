@@ -259,7 +259,7 @@ extension ExportLANServer {
             return """
             \(htmlPlaybackStatusLine(line))
             \(htmlDashboardStatsBlock())
-            <p><em>Vanilla download — <code>\(rel)</code> (full file, original extension; not sparse <code>_working.mp4</code>).</em></p>
+            <p><em>Vanilla download — <code>\(htmlEscape(rel))</code> (full file, original extension; not sparse <code>_working.mp4</code>).</em></p>
             \(seekNote)
             <p>Prefer <code>loop/op_00.mp4</code> when segments exist.</p>
             """

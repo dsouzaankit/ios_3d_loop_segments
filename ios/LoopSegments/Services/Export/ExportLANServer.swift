@@ -471,6 +471,17 @@ enum ExportLANServer {
         connection: NWConnection,
         done: @escaping () -> Void
     ) {
+        let hostHeader = headerValue(named: "Host", in: requestHeaders)
+        if !isAllowedRequestHost(hostHeader, tunnelHost: { readXRTunnelHostFromDisk() }) {
+            sendResponse(
+                connection: connection,
+                status: 421,
+                contentType: "text/plain",
+                body: Data("Open this server by the phone's IP address or its .local name.".utf8),
+                done: done
+            )
+            return
+        }
         if !enforceLANWebDAVAuth(method: method, path: path, requestHeaders: requestHeaders, connection: connection, done: done) {
             return
         }
@@ -510,6 +521,46 @@ enum ExportLANServer {
         default:
             sendResponse(connection: connection, status: 405, contentType: "text/plain", body: Data("Allowed: GET, HEAD, PUT, POST, MKCOL, DELETE, MOVE, OPTIONS, PROPFIND, LOCK, UNLOCK".utf8), done: done)
         }
+    }
+
+    /// Blocks DNS rebinding: a web page that points its own name at this phone's IP can make the
+    /// browser treat the phone as that site, and then read whatever needs no login (media). Such a
+    /// request carries the attacker's DNS name in `Host`, so only names that public DNS cannot serve
+    /// pass: IP literals, `localhost`, `.local` (Bonjour) and single-label names, plus the saved
+    /// Cloudflare tunnel host (`xr_tunnel.json`). A missing `Host` passes (HTTP/1.0 clients); every
+    /// browser sends one. `tunnelHost` is read only when the cheap checks fail.
+    static func isAllowedRequestHost(_ hostHeader: String?, tunnelHost: () -> String) -> Bool {
+        guard let raw = hostHeader?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return true }
+        let lower = raw.lowercased()
+        let name: String
+        if lower.hasPrefix("[") {
+            // [IPv6] or [IPv6]:port
+            guard let close = lower.firstIndex(of: "]") else { return false }
+            let inner = lower[lower.index(after: lower.startIndex)..<close]
+            // Check the address only; a zone ID after `%` (fe80::1%en0) may hold any interface name.
+            let address = inner.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+            return address.contains(":") && address.allSatisfy { $0.isHexDigit || $0 == ":" || $0 == "." }
+        }
+        if let colon = lower.lastIndex(of: ":") {
+            let port = lower[lower.index(after: colon)...]
+            guard !port.isEmpty, port.allSatisfy(\.isNumber) else { return false }
+            name = String(lower[..<colon])
+        } else {
+            name = lower
+        }
+        let trimmedName = name.hasSuffix(".") ? String(name.dropLast()) : name
+        guard !trimmedName.isEmpty else { return false }
+        let labels = trimmedName.split(separator: ".", omittingEmptySubsequences: false)
+        if labels.count == 4, labels.allSatisfy({ !$0.isEmpty && $0.count <= 3 && $0.allSatisfy(\.isNumber) }) {
+            return true // IPv4 literal
+        }
+        if trimmedName == "localhost" || !trimmedName.contains(".") || trimmedName.hasSuffix(".local") {
+            return true
+        }
+        let tunnel = tunnelHost().lowercased()
+        guard !tunnel.isEmpty else { return false }
+        // The saved tunnel host may carry a port; compare with and without it.
+        return lower == tunnel || trimmedName == tunnel
     }
 
     static func requestBaseURL(from requestHeaders: String) -> String {
@@ -1310,6 +1361,7 @@ enum ExportLANServer {
         case 411: phrase = "Length Required"
         case 413: phrase = "Payload Too Large"
         case 416: phrase = "Range Not Satisfiable"
+        case 421: phrase = "Misdirected Request"
         case 503: phrase = "Service Unavailable"
         default: phrase = "Error"
         }
