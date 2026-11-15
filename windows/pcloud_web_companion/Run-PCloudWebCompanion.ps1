@@ -88,6 +88,7 @@ param(
     [switch] $EnableRcloneDlna,
     [switch] $SkipGatewayReboot,
     [switch] $SkipLanThroughput,
+    [switch] $SkipWanThroughput,
     [switch] $SkipLowThroughputGatewayReboot,
     [switch] $SkipProfileSync,
     [switch] $DetachChromium,
@@ -101,7 +102,7 @@ param(
     [switch] $EnsureAltServer,
     [switch] $SkipOpenLanTabOnStart,
     [switch] $NoTranscript,
-    [string] $StartUrl = "https://my.pcloud.com/#/speedtest"
+    [string] $StartUrl = "https://my.pcloud.com"
 )
 
 Set-StrictMode -Version Latest
@@ -143,6 +144,7 @@ try {
         EnableRcloneDlna                = $EnableRcloneDlna
         SkipGatewayReboot               = $SkipGatewayReboot
         SkipLanThroughput               = $SkipLanThroughput
+        SkipWanThroughput               = $SkipWanThroughput
         SkipLowThroughputGatewayReboot  = $SkipLowThroughputGatewayReboot
         SkipProfileSync                 = $SkipProfileSync
         DetachChromium                  = $DetachChromium

@@ -744,6 +744,7 @@ extension ExportLANServer {
             #"<a href="export_latest.txt">export_latest.txt</a>"#,
             #"<a href="status.json">status.json</a>"#,
             #"<a href="wifi_www_probe.json">wifi_www_probe.json</a>"#,
+            #"<a href="wan_throughput.json">wan_throughput.json</a>"#,
             #"<a href="lan_throughput.json">lan_throughput.json</a>"#,
             #"<a href="xr_tunnel.json">xr_tunnel.json</a>"#,
             #"<a href="xr_debug.json">xr_debug.json</a>"#,
@@ -858,30 +859,141 @@ extension ExportLANServer {
             : items.joined()
     }
 
-    /// pCloud WAN speed test embed (`my.pcloud.com/#/speedtest`). pCloud sends
-    /// `X-Frame-Options: SAMEORIGIN`, so the iframe is often blank outside that origin —
-    /// the Open link / companion Chromium start tab is the reliable path.
-    static func htmlWANSpeedTestBlock() -> String {
-        let url = "https://my.pcloud.com/#/speedtest"
+    /// Phone WAN probe UI: POST `/wan_throughput.json` (random pCloud video, ~30 s Range GETs → Mbps).
+    static func htmlWANSpeedTestScript(
+        resultElementId: String? = nil,
+        buttonId: String? = nil,
+        autoRunFromQuery: Bool = true
+    ) -> String {
+        let resultIdJS = resultElementId.map { "\"\($0)\"" } ?? "null"
+        let buttonIdJS = buttonId.map { "\"\($0)\"" } ?? "null"
+        let autoRunJS = autoRunFromQuery ? "true" : "false"
         return """
-        <div class="panel lan-wan-speedtest" id="lan-wan-speedtest">
-          <h2>WAN speed test (pCloud)</h2>
-          <p class="muted" style="margin:0 0 0.45rem">PC ↔ internet via pCloud (not phone cellular). Companion opens this URL at Chromium startup. If the frame stays blank, pCloud blocked embedding — use <strong>Open</strong>.</p>
-          <div class="lan-wan-frame-wrap">
-            <iframe
-              id="lan-wan-speedtest-frame"
-              title="pCloud WAN speed test"
-              src="\(url)"
-              referrerpolicy="no-referrer-when-downgrade"
-              allow="fullscreen"
-              loading="eager"
-            ></iframe>
-          </div>
-          <p class="lan-wan-fallback muted">
-            <a class="btn" href="\(url)" target="_blank" rel="noopener noreferrer">Open WAN speed test</a>
-            <span> · <a href="\(url)" target="_blank" rel="noopener noreferrer"><code>my.pcloud.com/#/speedtest</code></a></span>
-          </p>
-        </div>
+        <script>
+        (function () {
+          var POLL_MS = 2000;
+          var pollTimer = null;
+          function reportWAN(msg, isErr, opts) {
+            opts = opts || {};
+            var rid = opts.resultElementId;
+            if (!rid) return;
+            var el = document.getElementById(rid);
+            if (!el) return;
+            el.textContent = msg;
+            if (window.__lanStatusColor) {
+              el.style.color = window.__lanStatusColor(!!isErr);
+            } else {
+              el.style.color = isErr ? "#b00020" : "";
+            }
+          }
+          function formatWanSnap(j) {
+            if (!j) return "WAN speed test: not run yet";
+            if (j.running) {
+              return "WAN speed test running (~30 s Random pCloud Range download)…";
+            }
+            if (j.ok === true && j.measuredMbps != null) {
+              var mb = ((Number(j.transferredBytes) || 0) / (1024 * 1024)).toFixed(1);
+              var sec = (Number(j.elapsedSeconds) || 0).toFixed(1);
+              var name = j.displayName ? (" from " + j.displayName) : "";
+              return "WAN " + Number(j.measuredMbps).toFixed(1) + " Mbps (" + mb + " MB in " + sec + " s)" + name;
+            }
+            if (j.ok === false) {
+              return "WAN speed test FAIL: " + (j.error || "unknown");
+            }
+            return "WAN speed test: not run yet";
+          }
+          function applyWanThroughput(j, opts) {
+            opts = opts || {};
+            reportWAN(formatWanSnap(j), j && j.ok === false, opts);
+          }
+          function stopWanPoll() {
+            if (pollTimer) {
+              clearInterval(pollTimer);
+              pollTimer = null;
+            }
+          }
+          function startWanPoll(opts) {
+            stopWanPoll();
+            pollTimer = setInterval(function () {
+              fetch("wan_throughput.json", { cache: "no-store" })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                  applyWanThroughput(j, opts);
+                  if (!j || !j.running) stopWanPoll();
+                })
+                .catch(function () {});
+            }, POLL_MS);
+          }
+          async function runWANSpeedTest(opts) {
+            opts = opts || {};
+            var btn = opts.buttonId ? document.getElementById(opts.buttonId) : null;
+            if (btn) btn.disabled = true;
+            reportWAN("WAN speed test: picking random pCloud video (~30 s)…", false, opts);
+            startWanPoll(opts);
+            try {
+              var body = {};
+              if (opts.folderPath) body.folderPath = opts.folderPath;
+              var post = await fetch("wan_throughput.json", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+                cache: "no-store"
+              });
+              var j = null;
+              try { j = await post.json(); } catch (e) {}
+              applyWanThroughput(j, opts);
+              if (!post.ok && !(j && j.running)) {
+                throw new Error((j && j.error) || ("POST HTTP " + post.status));
+              }
+            } catch (e) {
+              stopWanPoll();
+              reportWAN((e && e.message) ? e.message : String(e), true, opts);
+            } finally {
+              if (btn) btn.disabled = false;
+            }
+          }
+          window.runWANSpeedTest = runWANSpeedTest;
+          window.applyWanThroughput = applyWanThroughput;
+          window.bindWANSpeedTestButton = function (opts) {
+            opts = opts || {};
+            var id = opts.buttonId;
+            if (!id) return;
+            var btn = document.getElementById(id);
+            if (!btn) return;
+            btn.onclick = function () {
+              var folder = null;
+              try {
+                var pathEl = document.getElementById("pcloud-path");
+                if (pathEl) folder = String(pathEl.textContent || "").trim() || null;
+              } catch (e) {}
+              runWANSpeedTest({
+                buttonId: opts.buttonId,
+                resultElementId: opts.resultElementId,
+                folderPath: folder && folder !== "/" ? folder : null
+              });
+            };
+          };
+          var autoButtonId = \(buttonIdJS);
+          var autoResultId = \(resultIdJS);
+          var opts = { buttonId: autoButtonId, resultElementId: autoResultId };
+          if (autoButtonId) window.bindWANSpeedTestButton(opts);
+          fetch("wan_throughput.json", { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+              applyWanThroughput(j, opts);
+              if (j && j.running) startWanPoll(opts);
+            })
+            .catch(function () {});
+          if (\(autoRunJS)) {
+            try {
+              var q = new URLSearchParams(window.location.search || "");
+              if (q.get("autorunWan") === "1") {
+                setTimeout(function () { runWANSpeedTest(opts); }, 800);
+              }
+            } catch (e) {}
+          }
+        })();
+        </script>
         """
     }
 
@@ -1173,6 +1285,9 @@ extension ExportLANServer {
                 applyPendingQueue(j.pendingExportQueue);
                 applyPausedExports(j.pausedExports);
                 if (j.wifiWwwProbe) applyWifiWwwProbe(j.wifiWwwProbe);
+                if (j.wanThroughput && window.applyWanThroughput) {
+                  window.applyWanThroughput(j.wanThroughput, { resultElementId: "lan-wan-speed-test-result" });
+                }
                 if (typeof j.playbackStatusHTML === "string") {
                   var status = document.getElementById("lan-playback-status");
                   if (status) status.innerHTML = j.playbackStatusHTML;
@@ -1467,17 +1582,6 @@ extension ExportLANServer {
               display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0 0;
             }
             .lan-loop-player #lan-loop-label { font-size: 0.9em; word-break: break-all; }
-            .lan-wan-speedtest { margin: 0.75rem 0 1rem; max-width: 56rem; }
-            .lan-wan-speedtest h2 { margin: 0 0 0.35rem; font-size: 1.1rem; }
-            .lan-wan-speedtest .lan-wan-frame-wrap {
-              position: relative; width: 100%; height: min(28rem, 70vh);
-              border: 1px solid var(--panel-border); border-radius: 8px; overflow: hidden;
-              background: var(--scroll-bg);
-            }
-            .lan-wan-speedtest iframe {
-              display: block; width: 100%; height: 100%; border: 0; background: var(--panel-bg);
-            }
-            .lan-wan-speedtest .lan-wan-fallback { margin: 0.45rem 0 0; }
             </style>
             <script>
             (function () {
@@ -2171,11 +2275,14 @@ extension ExportLANServer {
                   <button type="button" id="lan-refresh-lists">Refresh file list</button>
                   <button type="button" id="lan-wifi-www-probe">Probe Phone Wi‑Fi → www</button>
                   <button type="button" id="lan-speed-test">LAN speed test</button>
+                  <button type="button" id="lan-wan-speed-test">WAN speed test</button>
                 </p>
                 <p id="lan-wifi-www-probe-result" class="muted" role="status"></p>
                 <p id="lan-speed-test-result" class="muted" role="status"></p>
+                <p id="lan-wan-speed-test-result" class="muted" role="status"></p>
+                <p class="muted" style="margin:0.25rem 0 0.75rem;font-size:0.85em">WAN speed test: phone downloads a <strong>random</strong> pCloud video (≥<strong>375&nbsp;MB</strong>, enough for <strong>~30&nbsp;s</strong> at 100&nbsp;Mbps) via WebDAV Range → Mbps on this page. Companion runs it at startup.</p>
                 \(htmlLANSpeedTestScript(resultElementId: "lan-speed-test-result", buttonId: "lan-speed-test"))
-                \(htmlWANSpeedTestBlock())
+                \(htmlWANSpeedTestScript(resultElementId: "lan-wan-speed-test-result", buttonId: "lan-wan-speed-test"))
                 \(htmlLANLoopPlayerBlock())
                 <h2>On phone (playback)</h2>
                 <ul id="lan-playback-files">
@@ -2263,7 +2370,7 @@ extension ExportLANServer {
             </div>
             </div>
             \(htmlLANSpeedTestScript())
-            \(htmlWANSpeedTestBlock())
+            \(htmlWANSpeedTestScript())
             \(htmlExportControlPanel())
             \(htmlURLDownloadPanel())
             \(htmlLANCloudflareTunnelBlock())
@@ -2430,8 +2537,11 @@ extension ExportLANServer {
           <button type="button" id="export-trim-media">Trim media (keep last 2)</button>
           <button type="button" id="export-clear-media">Clear media</button>
           <button type="button" id="export-lan-speed-test">LAN speed test</button>
+          <button type="button" id="export-wan-speed-test">WAN speed test</button>
         </div>
         <p class="muted" style="margin:0.25rem 0 0;font-size:0.85em">LAN speed test: <strong>5×</strong> browser Range downloads (up to 64&nbsp;MB each ≈ <strong>320&nbsp;MB</strong> total, same file) → <strong>median</strong> Mbps → <code>lan_throughput.json</code> sidecars. Available during export. No other-router reboot — use companion Measure for that.</p>
+        <p class="muted" style="margin:0.25rem 0 0;font-size:0.85em">WAN speed test: random video from the current folder (else bookmarks), ≥<strong>375&nbsp;MB</strong> (30&nbsp;s × 100&nbsp;Mbps) → Mbps. Companion runs it at startup.</p>
+        <p id="export-wan-speed-test-result" class="muted" role="status"></p>
         <p id="trigger-status" class="muted"></p>
         <div class="row">
           <button type="button" id="pcloud-up" disabled>↑ Up</button>
@@ -2805,6 +2915,12 @@ extension ExportLANServer {
             window.bindLANSpeedTestButton({
               buttonId: "export-lan-speed-test",
               setStatus: setStatus
+            });
+          }
+          if (window.bindWANSpeedTestButton) {
+            window.bindWANSpeedTestButton({
+              buttonId: "export-wan-speed-test",
+              resultElementId: "export-wan-speed-test-result"
             });
           }
           document.getElementById("pcloud-sort").onchange = function (ev) {

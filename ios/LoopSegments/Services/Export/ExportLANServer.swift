@@ -850,6 +850,10 @@ enum ExportLANServer {
             sendJSONPayload(WifiWwwProbe.currentSnapshot().statusJSON(), connection: connection, done: done, status: 200)
             return
         }
+        if normalized == "wan_throughput.json" {
+            sendJSONPayload(WanSpeedProbe.currentSnapshot().statusJSON(), connection: connection, done: done, status: 200)
+            return
+        }
         if normalized == "lan_throughput.json" {
             sendLANThroughputGET(connection: connection, done: done)
             return

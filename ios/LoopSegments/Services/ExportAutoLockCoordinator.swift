@@ -1,7 +1,10 @@
 import UIKit
 
-/// Keeps the screen on while the app is in the foreground (`isIdleTimerDisabled`).
-/// System Auto-Lock cannot be read or set by the app; deep links to Auto-Lock often fail on iOS 18+.
+/// Idle-timer policy for Loop Segments.
+/// - Foreground, **not** exporting: keep the screen on (`isIdleTimerDisabled = true`).
+/// - Foreground, **export running**: allow system Auto-Lock / screen timeout so Keep Alive can
+///   continue under a locked screen (export already holds the audio session).
+/// System Auto-Lock delay cannot be read or set by the app; deep links often fail on iOS 18+.
 @MainActor
 enum ExportAutoLockCoordinator {
     static let manualPath = "Settings → Display & Brightness → Auto-Lock"
@@ -36,7 +39,8 @@ enum ExportAutoLockCoordinator {
     }
 
     private static func applyIdleTimer() {
-        UIApplication.shared.isIdleTimerDisabled = appIsActiveState
+        // Allow dim/lock while export runs; Keep Alive covers background work after lock.
+        UIApplication.shared.isIdleTimerDisabled = appIsActiveState && !exportRunning
     }
 
     /// Best-effort open Settings near Display / Auto-Lock. Returns false if nothing accepted the URL.

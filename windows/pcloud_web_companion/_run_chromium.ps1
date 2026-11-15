@@ -16,6 +16,8 @@ param(
     [switch]$SkipGatewayReboot,
     # Do not time a media copy off L: after a successful rclone mount (default: up to 64 MB).
     [switch]$SkipLanThroughput,
+    # Do not POST /wan_throughput.json after phone LAN is up (default: ~30 s random pCloud Range → Mbps).
+    [switch]$SkipWanThroughput,
     # Do not reboot other routers / re-check when LAN throughput is below minLanThroughputMbps.
     [switch]$SkipLowThroughputGatewayReboot,
     [switch]$SkipProfileSync,
@@ -44,7 +46,7 @@ param(
     [switch]$SkipOpenLanTabOnStart,
     # Do not Start-Transcript companion console to logs\companion-console-*.log.
     [switch]$NoTranscript,
-    [string]$StartUrl = "https://my.pcloud.com/#/speedtest"
+    [string]$StartUrl = "https://my.pcloud.com"
 )
 
 $script:CompanionBrowserStarted = $false
@@ -506,7 +508,6 @@ function Sync-ExtensionToLocalDisk {
         "background.js"
         "pcloud_fileid_hook_main.js"
         "pcloud_folder_tracker.js"
-        "pcloud_speedtest_autorun.js"
         "lan_quest_button.js"
         "offscreen.html"
         "offscreen.js"
@@ -1571,6 +1572,78 @@ function Invoke-AttemptRcloneMountCore {
     return $false
 }
 
+function Invoke-WanSpeedProbeIfPhoneLan {
+    # Soft: POST /wan_throughput.json (phone random pCloud Range ~30 s → Mbps). LAN page polls the result.
+    if ($SkipWanThroughput) {
+        Write-Host "[wan-bw] Skipping WAN throughput probe (-SkipWanThroughput)"
+        return
+    }
+
+    $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
+    if (-not (Test-Path -LiteralPath $lanConfigPath)) {
+        Write-Warning "[wan-bw] Missing lan_config.json - skip WAN probe"
+        return
+    }
+    try {
+        $lan = Get-Content -LiteralPath $lanConfigPath -Raw | ConvertFrom-Json
+    } catch {
+        Write-Warning "[wan-bw] Could not read lan_config.json: $_"
+        return
+    }
+    $hostName = [string]$lan.phoneLanHost
+    if ([string]::IsNullOrWhiteSpace($hostName)) {
+        Write-Warning "[wan-bw] phoneLanHost empty - skip WAN probe"
+        return
+    }
+    $port = 8765
+    if ($null -ne $lan.lanPort -and [int]$lan.lanPort -gt 0) {
+        $port = [int]$lan.lanPort
+    }
+    if (-not (Test-PhoneLanPageReachable -Quiet)) {
+        Write-Warning "[wan-bw] Phone LAN not reachable - skip WAN probe"
+        return
+    }
+    if (-not (Get-Command Get-LoopSegmentsPhoneWebDavAuthHeader -ErrorAction SilentlyContinue)) {
+        Write-Warning "[wan-bw] Auth helper missing - skip WAN probe"
+        return
+    }
+
+    $uri = "http://${hostName}:${port}/wan_throughput.json"
+    $resultFile = Join-Path $env:TEMP 'loopsegments-wan-throughput.json'
+    Write-Host "[wan-bw] POST $uri (random pCloud video ≥375 MB, ~30 s Range download on phone)..."
+    try {
+        $auth = Get-LoopSegmentsPhoneWebDavAuthHeader
+        $resp = Invoke-DirectHttpPostJson -Uri $uri -Headers $auth -Body '{}' -TimeoutSec 120
+        $json = $null
+        if (-not [string]::IsNullOrWhiteSpace([string]$resp.Body)) {
+            try { $json = ([string]$resp.Body) | ConvertFrom-Json } catch {}
+        }
+        if ($null -ne $json) {
+            try {
+                ([string]$resp.Body) | Set-Content -LiteralPath $resultFile -Encoding utf8
+            } catch {}
+        }
+        if ($null -ne $json -and $json.ok -eq $true -and $null -ne $json.measuredMbps) {
+            $mb = if ($null -ne $json.transferredBytes) {
+                '{0:N1} MB' -f ([double]$json.transferredBytes / 1MB)
+            } else { '' }
+            $name = if ($json.displayName) { " ($($json.displayName))" } else { '' }
+            Write-Host ("[wan-bw] WAN {0:N1} Mbps{1}{2}" -f [double]$json.measuredMbps, $(if ($mb) { " in $mb" } else { '' }), $name) -ForegroundColor Green
+            return
+        }
+        $detail = if ($null -ne $json -and $json.error) {
+            [string]$json.error
+        } elseif ($null -ne $json -and $json.running) {
+            'still running (timeout?)'
+        } else {
+            "HTTP $($resp.StatusCode)"
+        }
+        Write-Warning "[wan-bw] FAIL: $detail"
+    } catch {
+        Write-Warning "[wan-bw] Probe request failed: $($_.Exception.Message)"
+    }
+}
+
 function Invoke-MeasureLanThroughputIfMounted {
     # Soft: prefer HTTP+mount when L: is up; otherwise HTTP-only. Failures only warn.
     if ($SkipLanThroughput) {
@@ -1641,6 +1714,7 @@ if ($NoLaunch) {
     Invoke-LoopSegmentsUsbLaunch
     [void](Invoke-AttemptRcloneMount)
     [void](Invoke-AttemptRcloneDlnaServe)
+    Invoke-WanSpeedProbeIfPhoneLan
     Invoke-MeasureLanThroughputIfMounted
     Write-Host "[run] Setup complete (-NoLaunch). Extension: $ExtensionDir"
     try { Stop-CompanionConsoleTranscript } catch {}
@@ -2577,6 +2651,13 @@ if (-not $script:CompanionShutdownRequested) {
         [void](Invoke-AttemptRcloneDlnaServe)
     } catch {
         Write-Warning "[rclone-dlna] $($_.Exception.Message)"
+    }
+}
+if (-not $script:CompanionShutdownRequested) {
+    try {
+        Invoke-WanSpeedProbeIfPhoneLan
+    } catch {
+        Write-Warning "[wan-bw] $($_.Exception.Message)"
     }
 }
 if (-not $script:CompanionShutdownRequested) {

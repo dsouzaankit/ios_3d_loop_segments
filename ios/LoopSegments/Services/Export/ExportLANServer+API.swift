@@ -946,6 +946,7 @@ extension ExportLANServer {
         payload["pendingExportQueue"] = pendingExportQueueStatusPayload()
         payload["pausedExports"] = pausedExportsStatusPayload()
         payload["wifiWwwProbe"] = WifiWwwProbe.currentSnapshot().statusJSON()
+        payload["wanThroughput"] = WanSpeedProbe.currentSnapshot().statusJSON()
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             sendResponse(connection: connection, status: 500, contentType: "text/plain", body: Data("JSON error".utf8), done: done)
             return

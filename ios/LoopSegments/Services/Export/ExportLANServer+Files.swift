@@ -601,6 +601,38 @@ extension ExportLANServer {
             }
             return
         }
+        if normalized == "wan_throughput.json" {
+            guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
+            receiveRequestBody(
+                on: connection,
+                requestHeaders: requestHeaders,
+                bodyPrefix: bodyPrefix,
+                maxBytes: 4_096
+            ) { result in
+                var folderPath: String?
+                switch result {
+                case .failure(.missingContentLength):
+                    break
+                case .failure(.payloadTooLarge):
+                    sendResponse(connection: connection, status: 413, contentType: "text/plain", body: Data("Body too large".utf8), done: done)
+                    return
+                case .failure(.readFailed):
+                    connection.cancel()
+                    done()
+                    return
+                case .success(let body):
+                    if let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                        folderPath = object["folderPath"] as? String
+                    }
+                }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let snap = WanSpeedProbe.runBlocking(folderPath: folderPath)
+                    let status = snap.ok == true ? 200 : (snap.running ? 409 : 500)
+                    sendJSONPayload(snap.statusJSON(), connection: connection, done: done, status: status)
+                }
+            }
+            return
+        }
         if normalized == "lan_throughput.json" {
             guard enforceLANProxyAuth(requestHeaders: requestHeaders, connection: connection, done: done) else { return }
             handleLANThroughputPOST(
@@ -635,7 +667,7 @@ extension ExportLANServer {
             connection: connection,
             status: 405,
             contentType: "text/plain",
-            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, /lan_throughput.json, /xr_tunnel.json, and /xr_debug.json".utf8),
+            body: Data("POST is only supported for /export_from_url.json, /export_from_folder.json, /export_queue.json, /paused_exports.json, /wifi_www_probe.json, /wan_throughput.json, /lan_throughput.json, /xr_tunnel.json, and /xr_debug.json".utf8),
             done: done
         )
     }
