@@ -297,7 +297,7 @@ extension ExportLANServer {
             [
                 "endpoint": "/lan_throughput.json",
                 "methods": ["GET", "POST"],
-                "auth": "Basic (LAN WebDAV login), POST only",
+                "auth": "Basic (LAN WebDAV login)",
                 "schema": LANThroughputSidecar.schema,
                 "notes": [
                     "GET returns last recommendation sidecar (same JSON as Measure-LoopSegmentsLanThroughput.ps1).",

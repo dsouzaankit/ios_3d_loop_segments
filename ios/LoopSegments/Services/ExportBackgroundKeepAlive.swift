@@ -190,7 +190,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     func extendSessionFromLAN(reason: String, addSeconds: TimeInterval? = nil) -> [String: Any] {
         if let failed = ensurePlaybackForLAN(action: "extend") { return failed }
 
-        let bump = max(1, addSeconds ?? ExportKeepAliveSettings.sessionDurationSeconds)
+        let bump = ExportKeepAliveSettings.clampedSessionSeconds(addSeconds)
         if exportSessionEligible {
             logKeepAlive(
                 String(
@@ -215,7 +215,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         } else {
             remaining = 0
         }
-        let total = remaining + bump
+        let total = ExportKeepAliveSettings.clampedSessionSeconds(remaining + bump)
         let albumHint = reason.localizedCaseInsensitiveContains("quest")
             ? "Open on Quest"
             : "LAN extend"
@@ -374,7 +374,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
             if !exportSessionEligible { stopFully() }
             return
         }
-        let seconds = max(1, durationSeconds ?? ExportKeepAliveSettings.sessionDurationSeconds)
+        let seconds = ExportKeepAliveSettings.clampedSessionSeconds(durationSeconds)
         cancelSessionAutoStop()
         sessionAutoStopEndsAt = Date().addingTimeInterval(seconds)
         sessionAutoStopSubtitle = albumHint

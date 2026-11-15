@@ -146,6 +146,7 @@ final class LANServerRulesTests: XCTestCase {
         let browser = headers("User-Agent: Mozilla/5.0", "Accept: text/html")
         let paths = [
             "/xr", "/xr?mode=archive", "/chroma", "/status.json", "/status_lists.json", "/xr_tunnel.json", "/xr_debug.json",
+            "/keep_alive.json", "/wan_throughput.json", "/lan_throughput.json",
             "/export_latest.txt", "/export_progress.txt", "/search_debug.txt", "/logs/export_1.txt",
             "/pcld_ios_media/logs/export_latest.txt", "/pcld_ios_media/logs/export_1700000000.txt"
         ]
@@ -162,6 +163,19 @@ final class LANServerRulesTests: XCTestCase {
             XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "GET", path: path, requestHeaders: skybox), path)
         }
         XCTAssertFalse(ExportLANServer.requiresLANWebDAVAuth(method: "PATCH", path: "/", requestHeaders: headers()))
+    }
+
+    /// A huge `POST /keep_alive.json` extend once overflowed the auto-stop timer and crashed the app.
+    func testKeepAliveSessionSecondsAreClamped() {
+        let cap = ExportKeepAliveSettings.maxSessionAutoStopSeconds
+        XCTAssertEqual(ExportKeepAliveSettings.clampedSessionSeconds(nil), ExportKeepAliveSettings.sessionDurationSeconds)
+        XCTAssertEqual(ExportKeepAliveSettings.clampedSessionSeconds(600), 600)
+        XCTAssertEqual(ExportKeepAliveSettings.clampedSessionSeconds(1e11), cap)
+        XCTAssertEqual(ExportKeepAliveSettings.clampedSessionSeconds(.greatestFiniteMagnitude), cap)
+        XCTAssertEqual(ExportKeepAliveSettings.clampedSessionSeconds(-50), 1)
+        XCTAssertEqual(ExportKeepAliveSettings.clampedSessionSeconds(.infinity), ExportKeepAliveSettings.sessionDurationSeconds)
+        // The timer's nanosecond count must fit in UInt64 for every clamped value.
+        XCTAssertLessThan(cap * 1_000_000_000, Double(UInt64.max))
     }
 
     func testWebDAVClientDetection() {

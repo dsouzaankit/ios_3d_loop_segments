@@ -638,6 +638,8 @@ enum ExportLANServer {
         "", "browse", "xr", "chroma",
         "status.json", "status_lists.json", "xr_tunnel.json", "xr_debug.json",
         "keep_alive.json",
+        // Both name the clip they measured with (displayName / sourcePath / folderPath).
+        "wan_throughput.json", "lan_throughput.json",
     ]
 
     /// Export logs under `pcld_ios_media/logs/`, including legacy aliases like `/export_latest.txt`.
