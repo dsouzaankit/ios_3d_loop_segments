@@ -41,12 +41,13 @@
   This skips that. -SkipPhoneWwwCheck is the old name.
 
 .PARAMETER SkipUsbInstall
-  After the download, with the iPhone on USB, the script normally moves this PC off the phone LAN
-  (SideStore signs over Wi-Fi www, which that LAN lacks), serves the IPA there and launches Loop
+  After the download, with the iPhone on USB, the script normally moves the phone (phone LAN AP
+  bounce) and this PC off the phone LAN (SideStore signs over Wi-Fi www, which that LAN lacks),
+  serves the IPA there and launches Loop
   Segments (build 428+) with a sidestore://install link, so SideStore shows Install and you tap once
   (windows\usb\Install-LoopSegmentsIpaViaUsb.ps1). Once the phone reports the new build, LocalDevVPN
-  is switched back off if this deploy switched it on, and the PC returns to the phone LAN. This
-  skips that; install from iCloud Downloads instead.
+  is switched back off if this deploy switched it on. Phone and PC stay off the phone LAN (the
+  companion's start-up check moves them back). This skips that; install from iCloud Downloads.
 
 .PARAMETER NoWaitEnter
   Do not wait for Enter (child callers). Direct run waits, including on errors.

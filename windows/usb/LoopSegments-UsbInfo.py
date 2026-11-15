@@ -5,6 +5,7 @@
   ipa-build <path.ipa>     -> BUILD <CFBundleVersion> | ERROR <why>   (reads the IPA, no phone needed)
   vpn-tunnel               -> TUNNEL_UP | TUNNEL_DOWN | NO_DEVICE <why>
   home                     -> HOME | HOME_FAILED <why>   (Home Screen to the front)
+  wifi-ip                  -> WIFI_IP <ipv4> | NO_WIFI_IP   (the phone's own address on en0, DVT network monitor)
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import plistlib
 import sys
 import zipfile
 
-from loopsegments_dvt import go_home, is_no_device, proclist, resolve_bundle_id
+from loopsegments_dvt import go_home, is_no_device, proclist, resolve_bundle_id, wifi_ipv4
 
 
 async def installed_build() -> int:
@@ -78,6 +79,15 @@ def main() -> int:
         return ipa_build(sys.argv[2])
     if cmd == "vpn-tunnel":
         return asyncio.run(vpn_tunnel())
+    if cmd == "wifi-ip":
+        try:
+            ip = asyncio.run(wifi_ipv4())
+        except Exception as exc:  # noqa: BLE001
+            msg = f"{type(exc).__name__}: {exc}"
+            print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
+            return 2
+        print(f"WIFI_IP\t{ip}" if ip else "NO_WIFI_IP")
+        return 0 if ip else 1
     if cmd == "home":
         try:
             asyncio.run(go_home())

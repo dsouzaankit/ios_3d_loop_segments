@@ -6,19 +6,26 @@
 .DESCRIPTION
   deploy.ps1 runs this after it downloads the IPA. Steps:
   1. iPhone on USB (usbmux)? No: skipped (exit 0). Already on this IPA's build: skipped.
-  2. Moves this PC off the phone LAN: SideStore needs www over Wi-Fi to sign, and the phone LAN
-     Wi-Fi has no gateway on the phone (LAN only, 5G for internet). The phone LAN is phoneLanHost's
-     /24 from loop-segments-windows.json. Already off it: stays. Otherwise connects to
-     ipaInstallWifiProfile (config, optional) or else each saved Wi-Fi profile in range, in Windows'
-     priority order, until it has an IP off that subnet. The phone has to be on that same Wi-Fi
-     (its USB-read Wi-Fi IP is compared and a mismatch is reported). The PC goes back to the phone
-     LAN profile at the end, whatever the outcome.
+  2. Moves the phone AND this PC off the phone LAN: SideStore needs www over Wi-Fi to sign, and the
+     phone LAN Wi-Fi has no gateway on the phone (LAN only, 5G for internet). The phone LAN is
+     phoneLanHost's /24 from loop-segments-windows.json.
+     Phone: its Wi-Fi IP is read over USB (DVT network monitor: its own address on en0). On the phone LAN: bounces that AP (lan\Invoke-LoopSegments-
+     GatewayWifiRebootIfNeeded.ps1 -BouncePhoneLanAp), and the phone hops to another saved Wi-Fi
+     (waits up to 150 s). Then waits for the bounced AP to show up again in this PC's Wi-Fi scan,
+     plus 15 s (cap -SettleSec 120), so a hop back happens before SideStore downloads; a hop back
+     means another bounce (2 rounds). -NoBounce skips the bounce.
+     PC: needs an IP on the phone's new /24. Already there (the bounce usually moves it too): stays.
+     Otherwise connects to ipaInstallWifiProfile (config, optional) or else each saved Wi-Fi
+     profile in range, in Windows' priority order. Both stay on that Wi-Fi afterwards: the web
+     companion's start-up network check moves them back to the phone LAN.
      Then serves the IPA once at http://<PC IP>:<Port>/<random>/LoopSegments.ipa (plain TCP
      listener: no admin / URL ACL; PowerShell 7 needs an inbound firewall allow).
   3. Launches Loop Segments over USB with -openURL sidestore://install?url=<that link>
      (Open-LinkViaLoopSegments.py). Build 428+ opens the link and quits itself, and SideStore shows
      its Install dialog: tap Install. LocalDevVPN must be connected (Prepare-PhoneForSideStoreViaUsb.ps1 does it).
-  4. Stops serving once SideStore has downloaded the whole file (or after -WaitSec), then waits up to
+  4. A download cut short (-1005: the phone hopped Wi-Fi mid-transfer) is retried: both are put
+     back off the phone LAN and the install link is opened again (-Attempts 3; tap Install each
+     time). Stops serving once SideStore has downloaded the whole file (or after -WaitSec), then waits up to
      -InstallWaitSec for the phone to report the new build.
   5. LocalDevVPN back to how it was: if Prepare-PhoneForSideStoreViaUsb.ps1 switched it on for this deploy
      (marker %TEMP%\loopsegments-vpn-turned-on.json), switches it off again (localdevvpn://disable,
@@ -46,7 +53,14 @@ param(
     # Leave LocalDevVPN on even if this deploy switched it on.
     [switch] $KeepVpn,
     # Install even when the phone already has this IPA's build (testing / reinstall).
-    [switch] $Force
+    [switch] $Force,
+    # Never bounce the phone LAN AP; the phone must already be on another Wi-Fi.
+    [switch] $NoBounce,
+    # After a bounce: the longest wait for the bounced AP to show up again in this PC's Wi-Fi scan
+    # (then 15 s), or a fixed wait when its network name is unknown. Keeps a hop back off the download.
+    [int] $SettleSec = 120,
+    # Install link launches: a download cut short (-1005, e.g. the phone hopped Wi-Fi) is retried.
+    [int] $Attempts = 3
 )
 
 $ErrorActionPreference = 'Stop'
@@ -126,16 +140,86 @@ function Get-PcIpOn([string] $PhoneHost) {
     @(Get-LoopSegmentsPcLanIpv4Addresses | Where-Object { Test-LoopSegmentsSameIpv4Slash24 -IpA $_ -IpB $PhoneHost }) | Select-Object -First 1
 }
 
-function Move-PcOffPhoneLan([string] $PhoneHost) {
+function Get-PhoneWifiIp {
+    # The phone's current Wi-Fi IPv4 over USB: the local address of its connections on en0 (DVT
+    # network monitor, exact). Fallback when nothing is open on Wi-Fi: pcapd sniffing, which is a
+    # guess (it also sees peers), minus this PC's own addresses.
+    if ((Invoke-Py @($InfoPy, 'wifi-ip')) -match '(?m)^WIFI_IP\t(\S+)') { return $Matches[1] }
+    $env:LOOP_SEGMENTS_EXCLUDE_LAN_IPS = (@(Get-LoopSegmentsPcLanIpv4Addresses) -join ',')
+    $u = Get-LoopSegmentsIphoneLanIpv4ViaUsb -Quiet
+    if ($u.Ok -and $u.Ip) { return [string]$u.Ip }
+    return $null
+}
+
+function Move-PhoneOffPhoneLan([string] $PhoneHost) {
+    # SideStore needs www over Wi-Fi, which the phone LAN lacks. There is no way to pick the phone's
+    # Wi-Fi over USB, so bounce the phone LAN AP: the phone hops to another saved Wi-Fi (the PC on
+    # that AP does too). Returns the phone's Wi-Fi IP off the LAN, or $null.
+    $ip = Get-PhoneWifiIp
+    if ($ip -and -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneHost)) {
+        Write-Inst "Phone is already off the phone LAN ($ip)."
+        return $ip
+    }
+    if (-not $ip) { Write-Inst 'Could not read the phone Wi-Fi IP over USB; assuming it is on the phone LAN.' Yellow }
+    if ($NoBounce) {
+        Write-Inst "Phone is on the phone LAN ($ip) and -NoBounce is set: switch the phone to another Wi-Fi by hand." Yellow
+        return $null
+    }
+    $reboot = Join-Path $WindowsDir 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
+    # The phone LAN's network name: the PC's Wi-Fi when it is on the phone LAN now (else unknown).
+    $lanSsid = if (Get-PcIpOn $PhoneHost) { (Get-WifiState).Current } else { $null }
+    foreach ($round in 1..2) {
+        Write-Inst "Phone is on the phone LAN ($ip): bouncing the phone LAN AP so it hops to another Wi-Fi (round $round)..." Yellow
+        & (Get-Command pwsh).Source -NoProfile -ExecutionPolicy Bypass -File $reboot -BouncePhoneLanAp -NoWaitEnter -PhoneLanHost $PhoneHost | Out-Host
+        $moved = $null
+        $until = (Get-Date).AddSeconds(150)
+        while ((Get-Date) -lt $until) {
+            Start-Sleep -Seconds 10
+            $ip = Get-PhoneWifiIp
+            if ($ip -and -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneHost)) { $moved = $ip; break }
+        }
+        if (-not $moved) { Write-Inst 'The phone did not leave the phone LAN within 150 s of the AP bounce.' Yellow; return $null }
+        # The bounced AP comes back after a minute or so and the phone may hop back to it: wait that
+        # out before SideStore starts, so the hop does not cut its download (-1005).
+        if ($lanSsid) {
+            # Until the bounced AP shows in this PC's Wi-Fi scan again, then 15 s for the phone to
+            # decide whether to hop back (cap: -SettleSec).
+            Write-Inst "Phone moved off the phone LAN ($moved). Waiting for $lanSsid to come back (up to $SettleSec s)..."
+            $t0 = Get-Date
+            $capAt = $t0.AddSeconds($SettleSec)
+            while ((Get-Date) -lt $capAt -and -not ((Get-WifiState).Visible -contains $lanSsid)) { Start-Sleep -Seconds 5 }
+            $back = (Get-WifiState).Visible -contains $lanSsid
+            Write-Inst ("{0} after {1:N0} s; giving the phone 15 s to settle..." -f $(if ($back) { "$lanSsid is back" } else { "$lanSsid not seen yet" }), ((Get-Date) - $t0).TotalSeconds)
+            Start-Sleep -Seconds 15
+        } else {
+            Write-Inst "Phone moved off the phone LAN ($moved). Waiting $SettleSec s for the bounced AP to come back..."
+            Start-Sleep -Seconds $SettleSec
+        }
+        $ip = Get-PhoneWifiIp
+        if ($ip -and -not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneHost)) {
+            Write-Inst "Phone stayed off the phone LAN ($ip)." Green
+            return $ip
+        }
+        Write-Inst "Phone went back to the phone LAN ($ip)." Yellow
+    }
+    Write-Inst 'The phone keeps going back to the phone LAN: switch it to another Wi-Fi by hand.' Yellow
+    return $null
+}
+
+function Move-PcOffPhoneLan([string] $PhoneHost, [string] $PhoneIp = '') {
     # The phone LAN = phoneLanHost's /24 (from the config), so this follows whatever network that is.
-    # Already off it: stay. On it: try ipaInstallWifiProfile (config) first, then each saved profile in
-    # range, until the PC has an IP off that subnet.
+    # Goal: an IP off that subnet and, when the phone's Wi-Fi IP is known, on the phone's /24.
+    # Already there: stay. Else try ipaInstallWifiProfile (config) first, then each saved profile in
+    # range, until the PC gets such an IP.
     $wifi = Get-WifiState
-    $onLan = Get-PcIpOn $PhoneHost
-    $off = Get-PcIpOff $PhoneHost
-    if (-not $onLan -and $off) {
-        Write-Inst "PC is already off the phone LAN: $($wifi.Current) ($off)."
-        return [pscustomobject]@{ Ok = $true; Ip = $off; Profile = $wifi.Current; Moved = $false; From = $null }
+    $good = {
+        $ip = Get-PcIpOff $PhoneHost
+        if ($ip -and -not (Get-PcIpOn $PhoneHost) -and (-not $PhoneIp -or (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $PhoneIp))) { $ip } else { $null }
+    }
+    $now = & $good
+    if ($now) {
+        Write-Inst "PC is off the phone LAN, on the phone's network: $($wifi.Current) ($now)."
+        return [pscustomobject]@{ Ok = $true; Ip = $now; Profile = $wifi.Current }
     }
     $pinned = ''
     try { $pinned = ([string](Get-LoopSegmentsWindowsSettings).ipaInstallWifiProfile).Trim() } catch {}
@@ -145,36 +229,24 @@ function Move-PcOffPhoneLan([string] $PhoneHost) {
     if (-not $candidates) {
         return [pscustomobject]@{ Ok = $false; Error = "No other saved Wi-Fi in range to leave the phone LAN ($PhoneHost /24) for the install." }
     }
+    $want = if ($PhoneIp) { "the phone's network ($PhoneIp /24)" } else { 'a network off the phone LAN' }
     foreach ($p in $candidates) {
-        Write-Inst "Moving this PC off the phone LAN ($($wifi.Current)) to $p for the install..."
+        Write-Inst "Moving this PC to $p for the install (want $want)..."
         & netsh wlan connect "name=$p" | Out-Null
         $until = (Get-Date).AddSeconds(25)
         while ((Get-Date) -lt $until) {
             Start-Sleep -Seconds 2
-            $ip = Get-PcIpOff $PhoneHost
-            if ($ip -and -not (Get-PcIpOn $PhoneHost)) {
+            $ip = & $good
+            if ($ip) {
                 Write-Inst "PC is on $p ($ip)." Green
-                return [pscustomobject]@{ Ok = $true; Ip = $ip; Profile = $p; Moved = $true; From = $wifi.Current }
+                return [pscustomobject]@{ Ok = $true; Ip = $ip; Profile = $p }
             }
         }
-        Write-Inst "No IP off the phone LAN on $p within 25 s." Yellow
+        Write-Inst "$p did not give $want within 25 s." Yellow
     }
-    & netsh wlan connect "name=$($wifi.Current)" | Out-Null
-    return [pscustomobject]@{ Ok = $false; Error = "Could not move this PC off the phone LAN (tried: $($candidates -join ', '))." }
+    return [pscustomobject]@{ Ok = $false; Error = "Could not move this PC onto $want (tried: $($candidates -join ', '))." }
 }
 
-function Restore-PcWifi($Move) {
-    if (-not $Move -or -not $Move.Moved -or -not $Move.From) { return }
-    Write-Inst "Moving this PC back to the phone LAN ($($Move.From))..."
-    & netsh wlan connect "name=$($Move.From)" | Out-Null
-    $until = (Get-Date).AddSeconds(30)
-    while ((Get-Date) -lt $until) {
-        Start-Sleep -Seconds 2
-        $ip = Get-PcIpOn $phoneHost
-        if ($ip) { Write-Inst "PC is back on $($Move.From) ($ip)." Green; return }
-    }
-    Write-Inst "PC did not get an IP on the phone LAN within 30 s - check its Wi-Fi ($($Move.From))." Yellow
-}
 
 function Write-HttpHead($Stream, [int] $Code, [string] $Reason, [long] $Length, [string] $Type) {
     $head = "HTTP/1.1 $Code $Reason`r`nContent-Type: $Type`r`nContent-Length: $Length`r`nConnection: close`r`nCache-Control: no-store`r`n`r`n"
@@ -210,71 +282,79 @@ if ($before -and [int]$before -lt 428) {
 $phoneHost = ([string](Get-LoopSegmentsWindowsSettings).phoneLanHost).Trim()
 if (-not $phoneHost) { Write-Inst 'phoneLanHost is empty in loop-segments-windows.json.' Red; exit 2 }
 # SideStore signs over Wi-Fi www, which the phone LAN Wi-Fi does not give (no gateway on purpose),
-# so the install runs on another Wi-Fi: move this PC off the phone LAN first, back afterwards.
-$move = Move-PcOffPhoneLan $phoneHost
+# so the phone AND this PC go to another Wi-Fi for the install. They stay there: the web companion's
+# start-up network check moves both back to the phone LAN.
+$phoneIp = Move-PhoneOffPhoneLan $phoneHost
+if (-not $phoneIp) { Write-Inst 'The phone is not on a Wi-Fi off the phone LAN, so SideStore could not sign the app there.' Red; exit 2 }
+$move = Move-PcOffPhoneLan $phoneHost $phoneIp
 if (-not $move.Ok) { Write-Inst $move.Error Red; exit 2 }
-try {
 $pcIp = $move.Ip
-$usbIp = Get-LoopSegmentsIphoneLanIpv4ViaUsb -Quiet
-if ($usbIp.Ok -and $usbIp.Ip) {
-    if (Test-LoopSegmentsSameIpv4Slash24 -IpA $usbIp.Ip -IpB $pcIp) {
-        Write-Inst "Phone Wi-Fi is on the same network ($($usbIp.Ip))." Green
-    } else {
-        Write-Inst "Phone Wi-Fi reads as $($usbIp.Ip), not on $($move.Profile) ($pcIp): switch the phone to $($move.Profile) if SideStore cannot download." Yellow
-    }
-}
 $token = [Guid]::NewGuid().ToString('N').Substring(0, 12)
 $path = "/$token/LoopSegments.ipa"
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
 try { $listener.Start() } catch { Write-Inst "Port $Port is busy ($($_.Exception.Message)); pass -Port." Red; exit 2 }
-$ipaUrl = "http://${pcIp}:$Port$path"
-$link = 'sidestore://install?url=' + [Uri]::EscapeDataString($ipaUrl)
 $size = (Get-Item -LiteralPath $IpaPath).Length
-Write-Inst "Serving $([math]::Round($size / 1MB, 1)) MB at $ipaUrl"
 
-# --- 3. Launch Loop Segments with the install link ---
-$out = Invoke-Py @($OpenPy, $link)
-if ($out -notmatch '(?m)^LAUNCHED\b') {
-    $listener.Stop()
-    Write-Inst "Could not launch Loop Segments over USB: $($out.Trim())" Red
-    exit 2
-}
-Write-Inst 'SideStore should show Install now - tap Install on the phone.' Cyan
-
-# --- 4. Serve until one full download, then wait for the new build ---
+# --- 3 + 4. Launch the install link, serve until one full download (retried when cut short) ---
 $served = $false
 $deadline = (Get-Date).AddSeconds($WaitSec)
 try {
-    while (-not $served -and (Get-Date) -lt $deadline) {
-        if (-not $listener.Pending()) { Start-Sleep -Milliseconds 200; continue }
-        $client = $listener.AcceptTcpClient()
-        try {
-            $client.ReceiveTimeout = 10000
-            $client.SendTimeout = 60000
-            $stream = $client.GetStream()
-            $reader = [System.IO.StreamReader]::new($stream, [Text.Encoding]::ASCII, $false, 4096, $true)
-            $requestLine = $reader.ReadLine()
-            while (($h = $reader.ReadLine())) { }   # skip headers
-            $parts = "$requestLine".Split(' ')
-            $method = $parts[0]; $reqPath = if ($parts.Count -gt 1) { $parts[1] } else { '' }
-            $from = $client.Client.RemoteEndPoint.ToString()
-            if ($reqPath -ne $path -or ($method -ne 'GET' -and $method -ne 'HEAD')) {
-                Write-HttpHead $stream 404 'Not Found' 0 'text/plain'
-                Write-Inst "Refused $method $reqPath from $from" DarkGray
-                continue
-            }
-            Write-HttpHead $stream 200 'OK' $size 'application/octet-stream'
-            if ($method -eq 'HEAD') { continue }
-            Write-Inst "Download started by $from..."
-            $fs = [System.IO.File]::OpenRead($IpaPath)
-            try { $fs.CopyTo($stream); $stream.Flush() } finally { $fs.Dispose() }
-            $served = $true
-            Write-Inst 'Download finished.' Green
-        } catch {
-            Write-Inst "Transfer error: $($_.Exception.Message)" Yellow
-        } finally {
-            $client.Close()
+    foreach ($attempt in 1..([Math]::Max(1, $Attempts))) {
+        if ($attempt -gt 1) {
+            # A cut download (-1005) usually means the phone hopped Wi-Fi: put both back off the
+            # phone LAN on one network, then ask SideStore again.
+            Write-Inst "Retrying the install (attempt $attempt of $Attempts)..." Yellow
+            $phoneIp = Move-PhoneOffPhoneLan $phoneHost
+            if (-not $phoneIp) { break }
+            $move = Move-PcOffPhoneLan $phoneHost $phoneIp
+            if (-not $move.Ok) { Write-Inst $move.Error Red; break }
+            $pcIp = $move.Ip
+            $deadline = (Get-Date).AddSeconds($WaitSec)
         }
+        $ipaUrl = "http://${pcIp}:$Port$path"
+        $link = 'sidestore://install?url=' + [Uri]::EscapeDataString($ipaUrl)
+        Write-Inst "Serving $([math]::Round($size / 1MB, 1)) MB at $ipaUrl"
+        $out = Invoke-Py @($OpenPy, $link)
+        if ($out -notmatch '(?m)^LAUNCHED\b') {
+            Write-Inst "Could not launch Loop Segments over USB: $($out.Trim())" Red
+            exit 2
+        }
+        Write-Inst 'SideStore should show Install now - tap Install on the phone.' Cyan
+
+        $cut = $false
+        while (-not $served -and -not $cut -and (Get-Date) -lt $deadline) {
+            if (-not $listener.Pending()) { Start-Sleep -Milliseconds 200; continue }
+            $client = $listener.AcceptTcpClient()
+            try {
+                $client.ReceiveTimeout = 10000
+                $client.SendTimeout = 60000
+                $stream = $client.GetStream()
+                $reader = [System.IO.StreamReader]::new($stream, [Text.Encoding]::ASCII, $false, 4096, $true)
+                $requestLine = $reader.ReadLine()
+                while (($h = $reader.ReadLine())) { }   # skip headers
+                $parts = "$requestLine".Split(' ')
+                $method = $parts[0]; $reqPath = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+                $from = $client.Client.RemoteEndPoint.ToString()
+                if ($reqPath -ne $path -or ($method -ne 'GET' -and $method -ne 'HEAD')) {
+                    Write-HttpHead $stream 404 'Not Found' 0 'text/plain'
+                    Write-Inst "Refused $method $reqPath from $from" DarkGray
+                    continue
+                }
+                Write-HttpHead $stream 200 'OK' $size 'application/octet-stream'
+                if ($method -eq 'HEAD') { continue }
+                Write-Inst "Download started by $from..."
+                $fs = [System.IO.File]::OpenRead($IpaPath)
+                try { $fs.CopyTo($stream); $stream.Flush() } finally { $fs.Dispose() }
+                $served = $true
+                Write-Inst 'Download finished.' Green
+            } catch {
+                Write-Inst "Download cut short: $($_.Exception.Message)" Yellow
+                $cut = $true
+            } finally {
+                $client.Close()
+            }
+        }
+        if ($served -or -not $cut) { break }
     }
 } finally {
     $listener.Stop()
@@ -303,7 +383,3 @@ if ($installed) {
 }
 Restore-Vpn $installed
 exit $(if ($installed) { 0 } else { 1 })
-} finally {
-    # Runs on every exit above: back to the phone LAN Wi-Fi if this script left it.
-    Restore-PcWifi $move
-}

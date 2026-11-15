@@ -64,6 +64,45 @@ async def launch(bundle_id: str, arguments: Optional[list[str]] = None, kill_exi
     return await with_dvt(_run)
 
 
+async def wifi_ipv4(seconds: float = 6.0) -> Optional[str]:
+    """The phone's own Wi-Fi IPv4: the local address of its connections on en0 (Wi-Fi), from the
+    DVT network monitor. Exact, unlike pcapd sniffing (which also sees peers such as this PC).
+    None when no Wi-Fi connection shows up within `seconds` (Wi-Fi off, or nothing open on it)."""
+    import asyncio
+    import ipaddress
+    from collections import Counter
+
+    from pymobiledevice3.services.dvt.instruments.network_monitor import (
+        ConnectionDetectionEvent,
+        InterfaceDetectionEvent,
+        NetworkMonitor,
+    )
+
+    async def _run(dvt: Any) -> Optional[str]:
+        names: dict[int, str] = {}
+        seen: list[tuple[int, str]] = []
+
+        async def _collect() -> None:
+            async with NetworkMonitor(dvt) as monitor:
+                async for event in monitor:
+                    if isinstance(event, InterfaceDetectionEvent):
+                        names[event.interface_index] = event.name
+                    elif isinstance(event, ConnectionDetectionEvent):
+                        addr = getattr(event.local_address.data, "address", None)
+                        if isinstance(addr, ipaddress.IPv4Address) and addr.is_private and not addr.is_loopback \
+                                and not addr.is_link_local and str(addr) != "0.0.0.0":
+                            seen.append((event.interface_index, str(addr)))
+
+        try:
+            await asyncio.wait_for(_collect(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+        wifi = [ip for idx, ip in seen if names.get(idx) == "en0"]
+        return Counter(wifi).most_common(1)[0][0] if wifi else None
+
+    return await with_dvt(_run)
+
+
 async def go_home() -> int:
     """Bring the Home Screen to the front (DVT launch of SpringBoard, keeping it running), which
     backgrounds whatever app is in front. Same path as usb\\Go-IphoneHomeViaUsb.ps1."""
