@@ -6,7 +6,7 @@
   var VOL_KEY = "loopsegments.lan.xrVolume.v1";
   var KEY_KEY = "loopsegments.lan.xrChromaKey.v1";
   var MODE_KEY = "loopsegments.lan.xrChromaMode.v2";
-  var RATES = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3];
+  var RATES = [0.7, 0.8, 0.85, 0.9, 1, 1.1, 1.2, 1.3];
   var loopPlaylist = [];
   var workingPlaylist = [];
   var archivePlaylist = [];
@@ -458,7 +458,7 @@
     if (e.key === "Escape") closeArchiveDropdown();
   });
   function snapRate(v) {
-    var r = Math.round(Number(v) * 10) / 10;
+    var r = Math.round(Number(v) * 20) / 20;
     if (!isFinite(r)) return 1;
     for (var i = 0; i < RATES.length; i++) {
       if (Math.abs(RATES[i] - r) < 0.001) return RATES[i];
