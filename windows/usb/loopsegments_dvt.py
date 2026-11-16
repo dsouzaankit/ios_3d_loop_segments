@@ -325,6 +325,38 @@ async def quit_loop_segments(retries: int = 3) -> dict[str, Any]:
     return await with_dvt(_run)
 
 
+async def wifi_ssid(timeout: float = 8.0) -> Optional[tuple[str, str]]:
+    """The phone's current Wi-Fi network as (name, AP address), from its live system log: the Wi-Fi
+    daemon (wifid) logs `CurrentBSS {<name> - <bssid>}` about every 2.5 s, unredacted (the IORegistry
+    hides both). None when no such line arrives within `timeout` (Wi-Fi off, or nothing logged).
+    The log service needs the iOS 17+ userspace tunnel; plain lockdown says "not connected"."""
+    import asyncio
+    import posixpath
+    import re
+
+    from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
+    from pymobiledevice3.services.os_trace import OsTraceService
+
+    pat = re.compile(r"CurrentBSS \{(.+?) - ([0-9a-fA-F:]{17})\}")
+    found: list[tuple[str, str]] = []
+
+    async def _read(rsd: Any) -> None:
+        async for entry in OsTraceService(lockdown=rsd).syslog():
+            if posixpath.basename(str(entry.filename or "")) != "wifid":
+                continue
+            m = pat.search(str(entry.message or ""))
+            if m:
+                found.append((m.group(1), m.group(2).lower()))
+                return
+
+    async with UserspaceRsdTunnel() as rsd:
+        try:
+            await asyncio.wait_for(_read(rsd), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+    return found[0] if found else None
+
+
 async def go_home() -> int:
     """Bring the Home Screen to the front (DVT launch of SpringBoard, keeping it running), which
     backgrounds whatever app is in front. Same path as usb\\Go-IphoneHomeViaUsb.ps1."""

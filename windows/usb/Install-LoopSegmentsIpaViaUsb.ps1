@@ -32,9 +32,10 @@
      report the new build (checked every 1 s). A failed try (download cut short, e.g. -1005 - the
      phone's network at the cut is logged - or SideStore never finished) is retried once: both are
      put back off the phone LAN and the link is opened again (tap Install). Right before the link,
-     and every 30 s until the download starts, it checks the phone is still on the install Wi-Fi
+     and every 10 s until the download starts, it checks the phone is still on the install Wi-Fi
      (same Wi-Fi address as when it got there - iOS uses a private address per network - and not
-     dropped to 5G); if it left (e.g. back to the phone LAN AP: SideStore -1001), the phone is moved
+     dropped to 5G; right before the link, and to confirm a "left", also the phone's network name
+     from its live Wi-Fi log against this PC's, when the log names one within 8 s); if it left (e.g. back to the phone LAN AP: SideStore -1001), the phone is moved
      again before the link, or the try ends and is retried like a cut download. If that fails too and
      -RestartPhoneOnError is set (deploy.ps1 sets it): restarts the phone over USB (the best fix for
      SideStore errors other than an offline LocalDevVPN), waits for it to come back, for you to
@@ -215,10 +216,35 @@ function Get-PhoneWifiState {
 
 function Get-PhoneWifiAssoc { (Get-PhoneWifiState).State }
 
-function Get-PhoneLeftInstallWifi {
+function Get-PcWifiSsid {
+    # The network name this PC's Wi-Fi is on now (netsh), or $null.
+    $iface = (& netsh wlan show interfaces) -join "`n"
+    if ($iface -match '(?m)^\s+SSID\s+:\s*(.+?)\s*$') { return $Matches[1] }
+    return $null
+}
+
+function Get-PhoneWifiName([int] $TimeoutSec = 8) {
+    # The phone's network name from its live Wi-Fi log (wifi-ssid), or $null when nothing is logged
+    # in time (an idle phone often logs nothing for a while).
+    if ((Invoke-Py @($InfoPy, 'wifi-ssid', [string]$TimeoutSec)) -match '(?m)^WIFI_SSID\t([^\t]+)\t') { return $Matches[1] }
+    return $null
+}
+
+function Get-PhoneLeftInstallWifi([switch] $UseName) {
     # Why the phone is no longer on the Wi-Fi it was on when the install link was opened, or $null.
-    # Cheap (~2-3 s, no network monitor). With "Private Wi-Fi Address" off the Mac is the same on every
-    # network, so only a drop to 5G is seen here.
+    # -UseName: first the phone's logged network name against this PC's (exact, but up to ~8 s and
+    # not always available); a match means "still here", a different name means "left". Without a
+    # name (or without -UseName): the cheap check (~1-2 s) of its per-network Wi-Fi address and a
+    # drop to 5G. With "Private Wi-Fi Address" off the address is the same on every network, so then
+    # only the name or a drop to 5G shows a switch.
+    if ($UseName) {
+        $phoneName = Get-PhoneWifiName
+        $pcName = Get-PcWifiSsid
+        if ($phoneName -and $pcName) {
+            if ($phoneName -eq $pcName) { return $null }
+            return "it is on $phoneName, not on this PC's $pcName (its Wi-Fi log)"
+        }
+    }
     $st = Get-PhoneWifiState
     if ($st.State -eq 'NOT_ASSOCIATED') { return 'it dropped to 5G (no Wi-Fi)' }
     if ($script:InstallWifiMac -and $st.Mac -and $st.Mac -ne $script:InstallWifiMac) {
@@ -432,7 +458,7 @@ try {
         # Still on the install Wi-Fi right before the link? The phone can hop back to the phone LAN AP
         # (iOS prefers it) between the move and here; SideStore then cannot reach this PC (-1001).
         if (-not $script:InstallWifiMac) { $script:InstallWifiMac = (Get-PhoneWifiState).Mac }
-        $gone = Get-PhoneLeftInstallWifi
+        $gone = Get-PhoneLeftInstallWifi -UseName
         if ($gone) {
             Write-Inst "The phone left the install Wi-Fi before the install link: $gone. Moving it off the phone LAN again..." Yellow
             $phoneIp = Move-PhoneOffPhoneLan $phoneHost
@@ -460,15 +486,18 @@ try {
         $cut = $false
         $left = $null
         $deadline = (Get-Date).AddSeconds($WaitSec)
-        $nextWifiCheck = (Get-Date).AddSeconds(30)
+        $nextWifiCheck = (Get-Date).AddSeconds(10)
         while (-not $served -and -not $cut -and -not $left -and (Get-Date) -lt $deadline) {
             if (-not $listener.Pending()) {
-                # Every 30 s until the download starts: if the phone left the install Wi-Fi, SideStore
-                # cannot reach this PC, so end this try now instead of waiting out -WaitSec.
+                # Every 10 s until the download starts (the cheap address check, ~1-2 s): if the phone
+                # left the install Wi-Fi, SideStore cannot reach this PC, so end this try now instead of
+                # waiting out -WaitSec. A "left" is confirmed by the phone's logged network name when
+                # one comes through (a name matching this PC's network clears it).
                 if ((Get-Date) -ge $nextWifiCheck) {
                     $left = Get-PhoneLeftInstallWifi
+                    if ($left) { $left = Get-PhoneLeftInstallWifi -UseName }
                     if ($left) { Write-Inst "The phone left the install Wi-Fi while waiting for the download: $left." Yellow; break }
-                    $nextWifiCheck = (Get-Date).AddSeconds(30)
+                    $nextWifiCheck = (Get-Date).AddSeconds(10)
                 }
                 Start-Sleep -Milliseconds 200; continue
             }

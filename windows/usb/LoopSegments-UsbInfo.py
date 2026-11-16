@@ -11,6 +11,8 @@
                               (joined to any Wi-Fi at all? diagnostics IORegistry. mac = the phone's Wi-Fi
                               address now: iOS uses a separate private address per network, so a new mac
                               means the phone switched network; SSID and BSSID are redacted by iOS)
+  wifi-ssid [timeout s]    -> WIFI_SSID <network name> <AP address> | NO_SSID   (from the phone's live log:
+                              wifid's `CurrentBSS {name - bssid}`, ~every 2.5 s; waits 8 s by default)
   wait-install <build> <old app path> <timeout s>
                            -> INSTALLED <build> <path> | TIMEOUT   (checks every 1 s on one connection)
   vpn-off                  -> VPN_OFF | VPN_STILL_UP   (quits LocalDevVPN's tunnel extension, then
@@ -31,7 +33,7 @@ import sys
 import zipfile
 
 from loopsegments_dvt import (go_home, is_no_device, proclist, quit_app, quit_loop_segments,
-                              resolve_bundle_id, vpn_off, vpn_restart, wifi_ipv4)
+                              resolve_bundle_id, vpn_off, vpn_restart, wifi_ipv4, wifi_ssid)
 
 
 async def installed_build() -> int:
@@ -177,6 +179,16 @@ def main() -> int:
         return ipa_build(sys.argv[2])
     if cmd == "vpn-tunnel":
         return asyncio.run(vpn_tunnel())
+    if cmd == "wifi-ssid":
+        try:
+            secs = float(sys.argv[2]) if len(sys.argv) > 2 else 8.0
+            res = asyncio.run(wifi_ssid(secs))
+        except Exception as exc:  # noqa: BLE001
+            msg = f"{type(exc).__name__}: {exc}"
+            print(("NO_DEVICE\t" if is_no_device(msg) else "ERROR\t") + msg)
+            return 2
+        print(f"WIFI_SSID\t{res[0]}\t{res[1]}" if res else "NO_SSID")
+        return 0 if res else 1
     if cmd == "wifi-assoc":
         return asyncio.run(wifi_assoc())
     if cmd == "wifi-ip":
