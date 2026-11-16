@@ -214,8 +214,9 @@ function Invoke-LanRecoverUsbLaunch {
         return $false
     }
     Write-Host '[lan-recover] Same subnet but :8765 down — USB-launching Loop Segments briefly (then Home)...'
+    # -ForceRelaunch: "already foreground" skip would leave :8765 dead; restart the process.
     $psArgs = @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launchPs1, '-SkipMount'
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launchPs1, '-SkipMount', '-ForceRelaunch'
     )
     Write-Host ("[lan-recover] > pwsh {0}" -f ($psArgs -join ' '))
     $prev = $ErrorActionPreference
@@ -229,7 +230,7 @@ function Invoke-LanRecoverUsbLaunch {
         $global:LASTEXITCODE = 0
     }
     if ($code -eq 0) {
-        Write-Host '[lan-recover] USB launch OK'
+        Write-Host '[lan-recover] USB launch OK — waiting for LAN server to bind :8765...'
         return $true
     }
     if ($code -eq 2) {
@@ -306,8 +307,10 @@ function Wait-PhoneLanPageReachable {
             return $true
         }
         if ([datetime]::UtcNow -ge $nextStatus) {
-            $left = [int][Math]::Ceiling(($deadline - [datetime]::UtcNow).TotalSeconds)
-            Write-Host ("[{0}] Still waiting for :{1} ({2} s left)..." -f $Label, $Port, $left)
+            $left = [Math]::Max(0, [int][Math]::Ceiling(($deadline - [datetime]::UtcNow).TotalSeconds))
+            if ($left -gt 0) {
+                Write-Host ("[{0}] Still waiting for :{1} ({2} s left)..." -f $Label, $Port, $left)
+            }
             $nextStatus = [datetime]::UtcNow.AddSeconds(5)
         }
     }
