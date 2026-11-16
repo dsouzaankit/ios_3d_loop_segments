@@ -7,11 +7,14 @@
 .DESCRIPTION
   Prefers USB/pcapd via env_setup\lan\Invoke-PhonePcSubnetIfNeeded.ps1
   (pymobiledevice3 phone Wi-Fi IP vs this PC's LAN). If the phone is already on a PC subnet,
-  waits for http://phoneLanHost:8765/ and does not reboot routers just because the app is down.
+  does a short :8765 probe (default 5 s — Wi-Fi is already right). If :8765 is still down,
+  USB-launches Loop Segments briefly (like the web companion), waits for the LAN page, then
+  USB Home backgrounds the app again so Keep Alive can hold :8765. Does not reboot routers
+  just because the app was down.
 
-  If USB is missing or pcapd finds no Wi-Fi IPv4, falls back to: wait for :8765,
-  then sequentially reboot routers whose ROUTER_IP is outside that subnet (via
-  Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -RebootOffSubnetRouters), then wait again.
+  If USB is missing or pcapd finds no Wi-Fi IPv4, falls back to: wait WaitBeforeRebootSec
+  (default 45 s) for :8765, then sequentially reboot routers whose ROUTER_IP is outside that
+  subnet (via Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -RebootOffSubnetRouters), then wait again.
 
   When run directly, waits for Enter before closing. Pass -NoWaitEnter when invoked
   in-process (companion / rclone) so Exit-WithEnter throws LAN_RECOVER_EXIT:<code>
@@ -27,13 +30,22 @@
 param(
     [string] $PhoneLanHost = '',
     [int] $LanPort = 0,
+    # Grace before off-subnet router reboot when USB did not confirm same-subnet.
     [ValidateRange(0, 600)]
     [int] $WaitBeforeRebootSec = 45,
+    # When USB already proved same-subnet, only this short :8765 wait (app start), not 45 s.
+    [ValidateRange(0, 120)]
+    [int] $WaitOnSubnetSec = 5,
+    # After a same-subnet USB launch, wait this long for :8765 before giving up.
+    [ValidateRange(5, 180)]
+    [int] $WaitAfterUsbLaunchSec = 60,
     [ValidateRange(5, 600)]
     [int] $WaitAfterRebootSec = 90,
     [int] $IntervalMs = 1500,
     [string] $RebootScriptsRoot = 'P:\all_scripts\5g_router_reboot',
     [switch] $SkipRecover,
+    [switch] $SkipUsbLaunch,
+    [switch] $SkipGoHome,
     [switch] $NoWaitEnter
 )
 
@@ -190,6 +202,85 @@ function Test-PhoneLanPageReachable {
     return $false
 }
 
+function Invoke-LanRecoverUsbLaunch {
+    # Soft: bring Loop Segments up briefly so :8765 starts (same idea as companion USB launch).
+    if ($SkipUsbLaunch) {
+        Write-Host '[lan-recover] Skipping USB launch (-SkipUsbLaunch)'
+        return $false
+    }
+    $launchPs1 = Join-Path $WindowsDir 'usb\Launch-LoopSegmentsViaUsb.ps1'
+    if (-not (Test-Path -LiteralPath $launchPs1)) {
+        Write-Warning "[lan-recover] Missing $launchPs1 - cannot USB-launch for :8765"
+        return $false
+    }
+    Write-Host '[lan-recover] Same subnet but :8765 down — USB-launching Loop Segments briefly (then Home)...'
+    $psArgs = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launchPs1, '-SkipMount'
+    )
+    Write-Host ("[lan-recover] > pwsh {0}" -f ($psArgs -join ' '))
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & (Get-LoopSegmentsPwshExe) @psArgs
+        $code = 0
+        if ($null -ne $LASTEXITCODE) { $code = [int]$LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prev
+        $global:LASTEXITCODE = 0
+    }
+    if ($code -eq 0) {
+        Write-Host '[lan-recover] USB launch OK'
+        return $true
+    }
+    if ($code -eq 2) {
+        Write-Warning '[lan-recover] USB launch skipped (no iPhone on USB)'
+    } elseif ($code -eq 3) {
+        Write-Warning '[lan-recover] USB launch failed — phone locked'
+    } else {
+        Write-Warning ("[lan-recover] USB launch failed (exit {0})" -f $code)
+    }
+    return $false
+}
+
+function Invoke-LanRecoverUsbHome {
+    # Soft: background after brief foreground (companion-style Keep Alive).
+    if ($SkipGoHome) {
+        Write-Host '[lan-recover] Skipping USB Home (-SkipGoHome)'
+        return
+    }
+    $homePs1 = Join-Path $WindowsDir 'usb\Go-IphoneHomeViaUsb.ps1'
+    if (-not (Test-Path -LiteralPath $homePs1)) {
+        Write-Warning "[lan-recover] Missing $homePs1"
+        return
+    }
+    Write-Host '[lan-recover] USB Home if Loop Segments is still foreground...'
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $code = 1
+    try {
+        & $homePs1 -NoWaitEnter
+        $code = 0
+    } catch {
+        $msg = [string]$_.Exception.Message
+        if ($msg -match 'HOME_USB_EXIT:(\d+)') {
+            $code = [int]$Matches[1]
+        } else {
+            Write-Warning ("[lan-recover] USB Home: {0}" -f $_.Exception.Message)
+            $code = 1
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+        $global:LASTEXITCODE = 0
+    }
+    if ($code -eq 0) {
+        Write-Host '[lan-recover] USB Home done'
+    } elseif ($code -eq 2) {
+        Write-Host '[lan-recover] USB Home skipped (no USB device)'
+    } else {
+        Write-Warning ("[lan-recover] USB Home did not succeed (exit {0}) — phone may still show Loop Segments" -f $code)
+    }
+}
+
 function Wait-PhoneLanPageReachable {
     param(
         [Parameter(Mandatory = $true)][string] $HostName,
@@ -280,13 +371,32 @@ try {
 
     Write-Host ("[lan-recover] Expected phone LAN page: http://{0}:{1}/" -f $hostName, $port)
 
-    if (Wait-PhoneLanPageReachable -HostName $hostName -Port $port -TimeoutSec $WaitBeforeRebootSec -PollMs $IntervalMs -Label 'lan-recover') {
+    # Same-subnet: Wi-Fi is already right — only a short :8765 grace (app may still be starting).
+    # Off-subnet / no USB: keep the longer WaitBeforeRebootSec before bouncing routers.
+    $pageWaitSec = if ($usbSubnetOk) { $WaitOnSubnetSec } else { $WaitBeforeRebootSec }
+    if ($usbSubnetOk -and $pageWaitSec -lt $WaitBeforeRebootSec) {
+        Write-Host ("[lan-recover] Same subnet — short :8765 wait ({0}s), not full pre-reboot wait ({1}s)." -f $pageWaitSec, $WaitBeforeRebootSec)
+    }
+
+    if (Wait-PhoneLanPageReachable -HostName $hostName -Port $port -TimeoutSec $pageWaitSec -PollMs $IntervalMs -Label 'lan-recover') {
         Write-Host '[lan-recover] Phone LAN page is reachable - no off-subnet router reboot.'
         Exit-WithEnter 0
     }
 
     if ($usbSubnetOk) {
-        Write-Warning '[lan-recover] Phone is on the PC subnet but :8765 is still down (open Loop Segments / Keep Alive). Skipping off-subnet router reboots.'
+        # Wi-Fi is right; app is not serving. Companion-style: brief USB foreground → wait → Home.
+        $launched = Invoke-LanRecoverUsbLaunch
+        if ($launched) {
+            if (Wait-PhoneLanPageReachable -HostName $hostName -Port $port -TimeoutSec $WaitAfterUsbLaunchSec -PollMs $IntervalMs -Label 'lan-recover-usb') {
+                Write-Host '[lan-recover] Phone LAN page is up after USB launch.' -ForegroundColor Green
+                Invoke-LanRecoverUsbHome
+                Exit-WithEnter 0
+            }
+            Write-Warning '[lan-recover] :8765 still down after USB launch — backgrounding anyway.'
+            Invoke-LanRecoverUsbHome
+        } else {
+            Write-Warning '[lan-recover] Phone is on the PC subnet but :8765 is still down (open Loop Segments / Keep Alive). Skipping off-subnet router reboots.'
+        }
         Exit-WithEnter 1
     }
 
