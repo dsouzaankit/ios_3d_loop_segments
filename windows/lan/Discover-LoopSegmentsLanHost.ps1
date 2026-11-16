@@ -5,7 +5,8 @@
 
 .DESCRIPTION
   Over USB: the phone's own address on en0 (Wi-Fi) from its DVT network monitor
-  (usb\LoopSegments-UsbInfo.py wifi-ip); when nothing is open on Wi-Fi, falls back to
+  (usb\LoopSegments-UsbInfo.py wifi-ip); when nothing is open on Wi-Fi, its Wi-Fi hardware
+  address in this PC's ARP table after a ping sweep (exact on a shared network); last fallback
   env_setup\lan\Get-IphoneLanIpv4.py (pcapd packet sniffing, a guess). Does not TCP-scan the LAN. Phone + PC same-subnet recovery:
   .\Invoke-LoopSegmentsPhoneLanRecoverIfNeeded.ps1
 

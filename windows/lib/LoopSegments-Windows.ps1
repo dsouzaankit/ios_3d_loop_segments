@@ -652,6 +652,49 @@ function Get-LoopSegmentsPcLanIpv4Addresses {
     return @($out.ToArray())
 }
 
+function Find-LoopSegmentsPhoneIpByWifiMac {
+    # The USB iPhone's IPv4 on a network this PC is on, found by its Wi-Fi hardware address: read the
+    # address over USB (LoopSegments-UsbInfo.py wifi-assoc; iOS uses a private address per network,
+    # this is the current one), ping every host of each PC /24 once so Windows resolves them, then
+    # look the address up in the neighbour (ARP) table. $null when the phone is not on Wi-Fi or not
+    # on any network of this PC. Needs no traffic from the phone.
+    param(
+        [Parameter(Mandatory = $true)] $Runtime,
+        [Parameter(Mandatory = $true)][string] $InfoPy,
+        [switch] $Quiet
+    )
+    $a = Invoke-LoopSegmentsPythonRuntime -Runtime $Runtime -ArgumentList @($InfoPy, 'wifi-assoc')
+    $line = @($a.Lines | Where-Object { $_ -match '^ASSOCIATED\t' }) | Select-Object -Last 1
+    if (-not $line -or $line -notmatch 'mac=([0-9a-fA-F:]{17})') { return $null }
+    $mac = $Matches[1].ToUpperInvariant().Replace(':', '-')
+    $pcIps = @(Get-LoopSegmentsPcLanIpv4Addresses)
+    if (-not $pcIps) { return $null }
+    if (-not $Quiet) { Write-Host "[lan-discover] USB: phone Wi-Fi address $mac - looking it up on this PC's network(s)…" }
+    # Two sweeps: a sleeping phone can answer the first address request too late (seen right after
+    # this PC switched networks), the second one, slower, usually catches it.
+    foreach ($pingMs in 400, 1000) {
+        $tasks = [System.Collections.Generic.List[object]]::new()
+        foreach ($pc in $pcIps) {
+            $p = $pc.Split('.')
+            foreach ($h in 1..254) {
+                $ip = "$($p[0]).$($p[1]).$($p[2]).$h"
+                if ($ip -ne $pc) { [void]$tasks.Add([System.Net.NetworkInformation.Ping]::new().SendPingAsync($ip, $pingMs)) }
+            }
+        }
+        try { [void][System.Threading.Tasks.Task]::WaitAll($tasks.ToArray(), $pingMs + 2600) } catch {}
+        # Only an entry on one of this PC's current /24s: the table can keep entries from a network the
+        # PC has left.
+        foreach ($n in @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue)) {
+            if ($n.LinkLayerAddress -ne $mac -or $n.State -in @('Unreachable', 'Incomplete')) { continue }
+            $nIp = [string]$n.IPAddress
+            foreach ($pc in $pcIps) {
+                if (Test-LoopSegmentsSameIpv4Slash24 -IpA $pc -IpB $nIp) { return $nIp }
+            }
+        }
+    }
+    return $null
+}
+
 function Get-LoopSegmentsIphoneLanIpv4ViaUsb {
     param([switch] $Quiet)
 
@@ -702,6 +745,20 @@ function Get-LoopSegmentsIphoneLanIpv4ViaUsb {
                 Ok       = $true
                 Ip       = $Matches[1]
                 Source   = 'usb-dvt-netmon'
+                ExitCode = 0
+                Error    = ''
+            }
+        }
+
+        # Second (no Wi-Fi traffic, e.g. idle on the phone LAN, which has no gateway): the phone's
+        # Wi-Fi hardware address over USB, then this PC's neighbour table after one ping sweep of its
+        # own /24s. Exact when the phone is on a network this PC is on.
+        $arpIp = Find-LoopSegmentsPhoneIpByWifiMac -Runtime $rt -InfoPy $netmonPy -Quiet:$Quiet
+        if ($arpIp) {
+            return [pscustomobject]@{
+                Ok       = $true
+                Ip       = $arpIp
+                Source   = 'usb-mac-arp'
                 ExitCode = 0
                 Error    = ''
             }
@@ -768,7 +825,7 @@ function Update-LoopSegmentsLANHostFromDiscovery {
             Write-Warning "[lan-discover] configured $current not reachable — reading the phone Wi-Fi IP over USB…"
         }
     } elseif (-not $Quiet) {
-        Write-Host "[lan-discover] resolving phone Wi-Fi IP via USB (network monitor, pcapd fallback)"
+        Write-Host "[lan-discover] resolving phone Wi-Fi IP via USB (network monitor, then ARP by Wi-Fi address, then pcapd)"
     }
 
     $usb = Get-LoopSegmentsIphoneLanIpv4ViaUsb -Quiet:$Quiet
