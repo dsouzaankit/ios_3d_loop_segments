@@ -16,7 +16,7 @@
      answers there). -NoBounce skips the bounce.
      PC: needs an IP on the phone's new /24. Already there (the bounce usually moves it too): stays.
      Otherwise connects to ipaInstallWifiProfile (config, optional) or else each saved Wi-Fi
-     profile in range, in Windows' priority order. Both stay on that Wi-Fi afterwards: the web
+     profile, those in range first (Windows' in-range list is often stale), in Windows' priority order. Both stay on that Wi-Fi afterwards: the web
      companion's start-up network check moves them back to the phone LAN.
      Then serves the IPA once at http://<PC IP>:<Port>/<random>/LoopSegments.ipa (plain TCP
      listener: no admin / URL ACL; PowerShell 7 needs an inbound firewall allow).
@@ -357,9 +357,12 @@ function Move-PcOffPhoneLan([string] $PhoneHost, [string] $PhoneIp = '') {
     try { $pinned = ([string](Get-LoopSegmentsWindowsSettings).ipaInstallWifiProfile).Trim() } catch {}
     $candidates = @()
     if ($pinned) { $candidates += $pinned }
-    $candidates += @($wifi.Profiles | Where-Object { $_ -ne $wifi.Current -and $_ -ne $pinned -and ($wifi.Visible -contains $_) })
+    # In range first, then the other saved profiles: Windows' list of networks in range is often stale
+    # (it can show only the current one), like the companion's gateway switch (lib\Get-LoopSegmentsWifi.ps1).
+    $others = @($wifi.Profiles | Where-Object { $_ -ne $wifi.Current -and $_ -ne $pinned })
+    $candidates += @($others | Where-Object { $wifi.Visible -contains $_ }) + @($others | Where-Object { $wifi.Visible -notcontains $_ })
     if (-not $candidates) {
-        return [pscustomobject]@{ Ok = $false; Error = "No other saved Wi-Fi in range to leave the phone LAN ($PhoneHost /24) for the install." }
+        return [pscustomobject]@{ Ok = $false; Error = "No other saved Wi-Fi to leave the phone LAN ($PhoneHost /24) for the install." }
     }
     $want = if ($PhoneIp) { "the phone's network ($PhoneIp /24)" } else { 'a network off the phone LAN' }
     foreach ($p in $candidates) {
