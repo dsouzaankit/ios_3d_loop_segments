@@ -2682,6 +2682,9 @@ if (-not $NoDarkMode) {
     [void]$chromeArgList.Add("--force-dark-mode")
     Write-Host "[run] Dark mode: Chromium UI only (omit with -NoDarkMode; pages keep site theme)"
 }
+# Playwright's Chromium is a Chrome for Testing build: without this every window shows the
+# "Chrome for Testing ... is only for automated testing" bar (--test-type does not hide it).
+[void]$chromeArgList.Add("--disable-infobars")
 [void]$chromeArgList.Add("--disable-restore-session-state")
 [void]$chromeArgList.Add("--no-first-run")
 [void]$chromeArgList.Add("--no-default-browser-check")
