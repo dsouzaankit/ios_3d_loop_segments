@@ -47,6 +47,16 @@
      LocalDevVPN's tunnel extension over USB: no app launch, so no Face ID prompt) once the new build is confirmed. Left on when the install is not confirmed,
      so you can still finish it by hand.
 
+  1b. Before any of 2-4: when SideStore's exported certificate is at -SigningP12 (password in Credential
+     Manager as -SigningCredTarget) and zsign is found (..\env_setup\zsign\zsign.exe next to the repo, or
+     PATH), signs the IPA on this PC with it and the phone's newest profile for the installed bundle id,
+     and installs it over USB (LoopSegments-UsbSign.py): no tap, no Wi-Fi moves. Confirmed by the new
+     build as in step 4. Not set up, or it fails: steps 2-5 as usual. -NoSignedInstall skips it.
+     No LocalDevVPN needed: the phone prep skips it when this is ready, and before steps 2-5 the
+     VPN is connected if it is not (Prepare-PhoneForSideStoreViaUsb.ps1 -ForceVpn).
+     One-time setup: SideStore > Settings > Export Signing Certificate... > copy the .p12 to -SigningP12,
+     then: cmdkey /generic:LoopSegments-signing /user:p12 /pass   (prompts for the password)
+
   The installed app must be build 428+ for step 3 to open SideStore; older builds just launch.
 
 .EXITCODES
@@ -74,7 +84,14 @@ param(
     [switch] $NoBounce,
     # A failed try (download cut short, or SideStore never finished) is retried once; if that fails
     # too, restart the phone over USB (you unlock it), reconnect LocalDevVPN and try a last time.
-    [switch] $RestartPhoneOnError
+    [switch] $RestartPhoneOnError,
+    # Skip the PC-signed install (step 1b) and always use the SideStore link.
+    [switch] $NoSignedInstall,
+    # SideStore's exported signing certificate; empty = windows\signing\signing.p12
+    # (lib\Get-LoopSegmentsSigning.ps1).
+    [string] $SigningP12 = '',
+    # Windows Credential Manager generic credential holding the .p12 password; empty = LoopSegments-signing.
+    [string] $SigningCredTarget = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,6 +101,9 @@ $RepoRoot = Split-Path -Parent $WindowsDir
 . (Join-Path $WindowsDir 'lib\Get-LoopSegmentsPython.ps1')
 . (Join-Path $WindowsDir 'lib\Get-LoopSegmentsAltServer.ps1')
 . (Join-Path $WindowsDir 'lib\Get-LoopSegmentsWifi.ps1')
+. (Join-Path $WindowsDir 'lib\Get-LoopSegmentsSigning.ps1')
+if (-not $SigningP12) { $SigningP12 = $LoopSegmentsSigningP12 }
+if (-not $SigningCredTarget) { $SigningCredTarget = $LoopSegmentsSigningCredTarget }
 
 $VpnMarker = Join-Path $env:TEMP 'loopsegments-vpn-turned-on.json'
 # Left by Prepare-PhoneForSideStoreViaUsb.ps1 while an export runs: never restart the phone then.
@@ -392,6 +412,47 @@ if ($ipaBuild -and $before -and ($ipaBuild -as [int]) -and ($before -as [int]) -
     exit 0
 }
 Write-Inst "IPA build $ipaBuild; phone has $(if ($before) { $before } else { 'no Loop Segments' })."
+
+# --- 1b. Signed on this PC with SideStore's certificate, installed over USB (no tap) ---
+$zsign = Find-LoopSegmentsZsign
+if ($NoSignedInstall) {
+    Write-Inst 'PC-signed install skipped (-NoSignedInstall).'
+} elseif (-not (Test-Path -LiteralPath $SigningP12)) {
+    Write-Inst "PC-signed install not set up (no $SigningP12) - using SideStore." DarkGray
+} elseif (-not $zsign) {
+    Write-Inst 'PC-signed install: zsign not found - using SideStore.' Yellow
+} else {
+    Write-Inst 'Signing on this PC with SideStore''s certificate and installing over USB...' Cyan
+    $signPy = Join-Path $PSScriptRoot 'LoopSegments-UsbSign.py'
+    # Local disk, not P: (pCloud holds new files while it uploads them; the USB install then hung) and
+    # not AppData (the Store Python's private copy).
+    $work = Join-Path $env:USERPROFILE '.loopsegments-sign-work'
+    $oldPath = if ($beforeApp) { $beforeApp.Path } else { '' }
+    $out = Invoke-Py @($signPy, 'sign-install', $IpaPath, $zsign, $SigningP12, $SigningCredTarget, $work)
+    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    $ready = [regex]::Match($out, '(?m)^READY\t(\S+)\t\S*\t([^\t]+)\t(\S+)')
+    if ($ready.Success) {
+        Write-Inst "Profile for $($ready.Groups[1].Value) valid until $($ready.Groups[2].Value) UTC; certificate until $($ready.Groups[3].Value)."
+    }
+    if ($out -match '(?m)^INSTALLED\b') {
+        $ok = $ipaBuild -and ((Invoke-Py @($InfoPy, 'wait-install', $ipaBuild, $oldPath, '60')) -match '(?m)^INSTALLED\b')
+        if ($ok) {
+            Write-Inst "Installed (PC-signed): the phone now has build $ipaBuild." Green
+            Restore-Vpn $true
+            exit 0
+        }
+        Write-Inst "The phone did not report build $ipaBuild after the PC-signed install - trying SideStore." Yellow
+    } else {
+        $last = (($out -split "`n") | Where-Object { $_ -match '^[A-Z_]+(\t|$)' } | Select-Object -Last 1)
+        Write-Inst "PC-signed install failed ($($last -replace "`t", ': ')) - using SideStore." Yellow
+    }
+}
+# The phone prep skips LocalDevVPN when the PC-signed install is ready; SideStore needs it, so make sure
+# it is connected now (quick when it already is; the prep leaves the marker when it switches it on,
+# so Restore-Vpn switches it off again after the install).
+Write-Inst 'Checking LocalDevVPN for the SideStore install...'
+& (Join-Path $PSScriptRoot 'Prepare-PhoneForSideStoreViaUsb.ps1') -NoQuit -ForceVpn
+
 if ($before -and [int]$before -lt 428) {
     Write-Inst "Note: the phone's build $before cannot open SideStore for you (needs 428+); it will just launch. Install this one from iCloud Downloads." Yellow
 }

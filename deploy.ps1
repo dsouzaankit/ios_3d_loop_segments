@@ -170,7 +170,7 @@ function Invoke-PhonePrep {
         Write-Host '[phone-prep] Skipped (needs pwsh 7 and windows\usb\Prepare-PhoneForSideStoreViaUsb.ps1).' -ForegroundColor DarkYellow
         return
     }
-    Write-Step 'Preparing the USB iPhone for SideStore (connect LocalDevVPN; Loop Segments stays open until the install)'
+    Write-Step 'Preparing the USB iPhone (LocalDevVPN only if the PC-signed install is not ready; Loop Segments stays open until the install)'
     try {
         & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $ps1 -NoQuit
     } catch {
@@ -192,7 +192,7 @@ function Invoke-UsbInstall {
     }
     # -UseLatest / -RunId skip the trigger, so the phone prep has not run yet.
     if (-not $script:PhonePrepped) { Invoke-PhonePrep }
-    Write-Step 'Installing over USB via SideStore (tap Install on the phone)'
+    Write-Step 'Installing over USB (PC-signed if set up, else via SideStore: tap Install on the phone)'
     try {
         $installArgs = @('-IpaPath', $LocalIpa)
         if (-not $NoPhoneRestart) { $installArgs += '-RestartPhoneOnError' }

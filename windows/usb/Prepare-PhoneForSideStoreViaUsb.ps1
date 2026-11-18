@@ -16,7 +16,10 @@
      (Connect-LocalDevVPNViaUsb.py); its "Auto-connect on launch" setting (switch it on once in
      LocalDevVPN) then connects, this waits up to 15 s, and the phone goes back to the Home Screen.
      When it switched the VPN on, it leaves %TEMP%\loopsegments-vpn-turned-on.json so the install
-     switches it off again afterwards. -NoVpn skips it.
+     switches it off again afterwards. -NoVpn skips it. Also skipped when the PC-signed install is
+     ready (lib\Get-LoopSegmentsSigning.ps1: zsign + SideStore's .p12 + an unexpired profile on the
+     phone), which needs no VPN; the install connects it only if it falls back to SideStore
+     (it runs this with -ForceVpn then).
 
 .EXITCODES
   0  done or skipped (warnings are printed; they never fail the deploy)
@@ -29,7 +32,9 @@ param(
     # Leave Loop Segments running even when it is in the foreground.
     [switch] $NoQuit,
     # Do not connect LocalDevVPN.
-    [switch] $NoVpn
+    [switch] $NoVpn,
+    # Connect LocalDevVPN even when the PC-signed install is ready (its SideStore fallback).
+    [switch] $ForceVpn
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,6 +42,7 @@ $WindowsDir = Split-Path -Parent $PSScriptRoot
 . (Join-Path $WindowsDir 'lib\LoopSegments-Windows.ps1')
 . (Join-Path $WindowsDir 'lib\Get-LoopSegmentsPython.ps1')
 . (Join-Path $WindowsDir 'lib\Get-LoopSegmentsAltServer.ps1')
+. (Join-Path $WindowsDir 'lib\Get-LoopSegmentsSigning.ps1')
 
 function Write-Prep([string] $Text, [string] $Color = 'Gray') {
     Write-Host "[phone-prep] $Text" -ForegroundColor $Color
@@ -113,6 +119,8 @@ if ($NoQuit) {
 # --- 3. LocalDevVPN connected (SideStore installs / refreshes need it) ---
 if ($NoVpn) {
     Write-Prep 'LocalDevVPN step skipped (-NoVpn).'
+} elseif (-not $ForceVpn -and (Test-LoopSegmentsSignedInstallReady -Runtime $rt)) {
+    Write-Prep 'LocalDevVPN not needed: the PC-signed USB install is ready (connected only if it falls back to SideStore).' Green
 } else {
     $vpnPy = Join-Path $PSScriptRoot 'Connect-LocalDevVPNViaUsb.py'
     $vpn = Invoke-LoopSegmentsPythonRuntime -Runtime $rt -ArgumentList @($vpnPy, '--wait', '15')

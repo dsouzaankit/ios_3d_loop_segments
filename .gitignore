@@ -56,3 +56,7 @@ windows/rclone/loopsegments-rclone-mount.log
 # Debug logs pulled from the phone. They list private clip names, and this repo is public.
 xr_debug*.json
 search_debug_pull*.txt
+
+# PC-signed USB install: SideStore's exported certificate + zsign (windows\usb\Install-LoopSegmentsIpaViaUsb.ps1)
+windows/signing/
+.zsign_cache/
