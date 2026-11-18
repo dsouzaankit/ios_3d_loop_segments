@@ -331,23 +331,26 @@ $script:PageHtml = @'
   h1 { font-size: 26px; margin: 0; }
   .sub { color: var(--muted); margin: 0; font-size: 15px; }
   /* Tiles side by side on a wide window (Quest Browser is landscape), one column on a phone. */
-  .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
-  .tiles .wide { grid-column: 1 / -1; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0; }
+  /* Two columns that each stack their own tiles (no shared row height, so no gap under a short
+     tile), wrapping to one column on a phone. */
+  .tiles { display:flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+  .tiles .col { flex: 1 1 420px; min-width: 0; display:flex; flex-direction: column; gap: 12px; }
+  .tiles .wide { flex-basis: 100%; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; min-width: 0; }
   #log { max-height: 7.5em; overflow-y: auto; }
   #msg:empty, .msg:empty { display: none; }
   #bwLines { max-height: 9em; overflow-y: auto; }
-  h2 { font-size: 19px; margin: 0 0 12px; }
-  dl { display:grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 16px; font-size: 16px; }
+  h2 { font-size: 19px; margin: 0 0 10px; }
+  dl { display:grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 12px; font-size: 16px; }
   dt { color: var(--muted); }
   dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; font-size: 15px; }
   .buttons { display:flex; flex-wrap: wrap; gap: 12px; }
-  button { font: inherit; font-weight: 600; min-height: 56px; min-width: 140px; padding: 0 22px; border-radius: 10px; border: 1px solid var(--line); background: #252c35; color: var(--text); cursor: pointer; }
+  button { font: inherit; font-size: 16px; font-weight: 600; min-height: 40px; min-width: 96px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: #252c35; color: var(--text); cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #0b1320; }
   button.danger { border-color: #6e2b2b; color: #ffb4ae; }
   button:disabled { opacity: .45; cursor: default; }
-  .note { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
-  #msg, .msg { margin-top: 14px; min-height: 1.4em; font-size: 16px; }
+  .note { color: var(--muted); font-size: 14px; margin: 10px 0 0; }
+  #msg, .msg { margin-top: 10px; min-height: 1.4em; font-size: 16px; }
   .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
   #bwLines { margin-top: 10px; }
   pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, Consolas, monospace; color: var(--muted); }
@@ -361,47 +364,50 @@ $script:PageHtml = @'
   </header>
 
   <div class="tiles">
-  <section>
-    <h2>SKYBOX: phone as a WebDAV server</h2>
-    <dl>
-      <dt>Phone LAN page</dt><dd id="lan">-</dd>
-      <dt>SKYBOX server</dt><dd id="dav">-</dd>
-      <dt>Login</dt><dd id="user">-</dd>
-      <dt>Added by this PC</dt><dd id="added">-</dd>
-    </dl>
-    <div class="buttons">
-      <button id="push" class="primary" data-action="push">Push</button>
-      <button id="update" data-action="update">Update</button>
-      <button id="clear" class="danger" data-action="clear">Clear</button>
-    </div>
-    <div id="msg" role="status" aria-live="polite"></div>
-    <p class="note">Push adds "Loop Segments" to SKYBOX's Network list at the phone's current address with the current login (and removes older addresses). Update does the same only if it is already there. Clear removes it. SKYBOX restarts if it is open when the server changes; it is also removed when the companion quits.</p>
-  </section>
+  <div class="col">
+    <section>
+      <h2>SKYBOX: phone as a WebDAV server</h2>
+      <dl>
+        <dt>Phone LAN page</dt><dd id="lan">-</dd>
+        <dt>SKYBOX server</dt><dd id="dav">-</dd>
+        <dt>Login</dt><dd id="user">-</dd>
+        <dt>Added by this PC</dt><dd id="added">-</dd>
+      </dl>
+      <div class="buttons">
+        <button id="push" class="primary" data-action="push">Push</button>
+        <button id="update" data-action="update">Update</button>
+        <button id="clear" class="danger" data-action="clear">Clear</button>
+      </div>
+      <div id="msg" role="status" aria-live="polite"></div>
+      <p class="note">Push adds "Loop Segments" to SKYBOX's Network list at the phone's current address with the current login (and removes older addresses). Update does the same only if it is already there. Clear removes it. SKYBOX restarts if it is open when the server changes; it is also removed when the companion quits.</p>
+    </section>
+    <section>
+      <h2>3d_playlist_local</h2>
+      <div class="buttons">
+        <button id="plSpace" class="primary">Space: pause / resume export</button>
+      </div>
+      <div id="plMsg" class="msg" role="status" aria-live="polite"></div>
+      <p class="note">Presses Space once in the 3d_playlist_local PowerShell window on the PC (run_batch_*.ps1 / Run-TranscodeOrchestrator.ps1), the same as pressing it there: while a clip runs it pauses or resumes the leaf DLNA export. The window does not need focus.</p>
+    </section>
+  </div>
 
-  <section>
-    <h2>LAN bandwidth: PC &harr; phone</h2>
-    <dl>
-      <dt>Result</dt><dd id="bwMbps">-</dd>
-      <dt>HTTP / mount</dt><dd id="bwPaths">-</dd>
-      <dt>Max segment bitrate</dt><dd id="bwRec">-</dd>
-      <dt>Measured</dt><dd id="bwAt">-</dd>
-    </dl>
-    <div class="buttons">
-      <button id="bwMeasure" class="primary">Measure LAN</button>
-    </div>
-    <div id="bwMsg" class="msg" role="status" aria-live="polite"></div>
-    <pre id="bwLines" hidden></pre>
-    <p class="note">Runs the same probe as the companion at startup (lan\Measure-LoopSegmentsLanThroughput.ps1): downloads up to 64 MB of a phone video over HTTP, and copies it from the rclone mount when the mount is up, then uses the lower number. It never reboots routers from here. Takes about 10-60 s; pause a Virtual Desktop session first or the number comes out low.</p>
-  </section>
-
-  <section>
-    <h2>3d_playlist_local</h2>
-    <div class="buttons">
-      <button id="plSpace" class="primary">Space: pause / resume export</button>
-    </div>
-    <div id="plMsg" class="msg" role="status" aria-live="polite"></div>
-    <p class="note">Presses Space once in the 3d_playlist_local PowerShell window on the PC (run_batch_*.ps1 / Run-TranscodeOrchestrator.ps1), the same as pressing it there: while a clip runs it pauses or resumes the leaf DLNA export. The window does not need focus.</p>
-  </section>
+  <div class="col">
+    <section>
+      <h2>LAN bandwidth: PC &harr; phone</h2>
+      <dl>
+        <dt>Result</dt><dd id="bwMbps">-</dd>
+        <dt>HTTP / mount</dt><dd id="bwPaths">-</dd>
+        <dt>Max segment bitrate</dt><dd id="bwRec">-</dd>
+        <dt>Measured</dt><dd id="bwAt">-</dd>
+      </dl>
+      <div class="buttons">
+        <button id="bwMeasure" class="primary">Measure LAN</button>
+      </div>
+      <div id="bwMsg" class="msg" role="status" aria-live="polite"></div>
+      <pre id="bwLines" hidden></pre>
+      <p class="note">Runs the same probe as the companion at startup (lan\Measure-LoopSegmentsLanThroughput.ps1): downloads up to 64 MB of a phone video over HTTP, and copies it from the rclone mount when the mount is up, then uses the lower number. It never reboots routers from here. Takes about 10-60 s; pause a Virtual Desktop session first or the number comes out low.</p>
+    </section>
+  </div>
 
   <section class="wide">
     <h2>Recent SKYBOX log</h2>
