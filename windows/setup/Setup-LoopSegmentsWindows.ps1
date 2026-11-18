@@ -10,6 +10,7 @@
   - Clears foreign/standard absolute rcloneConfigPath values
   - Builds the pCloud companion venv under %LOCALAPPDATA% (not on P:)
   - Installs Playwright Chromium into the machine-local cache
+  - PC-signed USB install: zsign, SideStore's .p12, its password (setup\Set-LoopSegmentsSigning.ps1)
 
 .PARAMETER PhoneHost
   Optional iPhone LAN IP to write into loop-segments-windows.json.
@@ -22,6 +23,10 @@
 
 .PARAMETER ForceCompanionVenv
   Recreate the companion venv even if it looks healthy.
+
+.PARAMETER SkipSigning
+  Skip the PC-signed USB install setup (setup\Set-LoopSegmentsSigning.ps1: zsign download, SideStore
+  .p12 check, its password in this PC's Credential Manager).
 
 .PARAMETER EnsureAltServer
   Opt-in: print AltServer install/status (AltStore). Default skips (SideStore).
@@ -38,7 +43,8 @@ param(
     [switch] $SkipCompanion,
     [switch] $SkipUsbTools,
     [switch] $ForceCompanionVenv,
-    [switch] $EnsureAltServer
+    [switch] $EnsureAltServer,
+    [switch] $SkipSigning
 )
 
 Set-StrictMode -Version Latest
@@ -144,6 +150,16 @@ If you are on Python 3.13/3.14 and build tools are missing, install 3.12 instead
     }
 }
 
+# --- PC-signed USB install (zsign + SideStore's .p12; password per PC) ---
+if (-not $SkipSigning) {
+    Write-Host "[signing] PC-signed USB install (no Install tap; deploy.ps1 falls back to SideStore without it) ..."
+    & (Join-Path $PSScriptRoot 'Set-LoopSegmentsSigning.ps1')
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[signing] Not fully set up (see above); deploys use the SideStore install until it is. Re-run .\setup\Set-LoopSegmentsSigning.ps1 later." -ForegroundColor Yellow
+    }
+    $global:LASTEXITCODE = 0
+}
+
 # --- companion venv + Chromium ---
 if (-not $SkipCompanion) {
     if (-not (Test-Path -LiteralPath $runChromium)) {
@@ -176,6 +192,8 @@ Portable notes:
   - Companion venv/browsers/extension live under %LOCALAPPDATA%\pcloud_web_companion (not P:).
   - chromium-profile on P: is intentional (shared pCloud login cookies across your PCs).
   - On a new PC: run this Setup again; do not copy another user's .venv.
+  - PC-signed USB install: windows\signing\signing.p12 syncs with the repo folder; the password is
+    per PC (Credential Manager): .\setup\Set-LoopSegmentsSigning.ps1 asks for it.
   - Install AltServer (https://altstore.io) and keep it running for AltStore refresh;
     without weekly refresh, free/Personal Team Loop Segments stops opening after ~7 days.
   - If the app becomes unavailable: AltServer running -> USB + unlock -> AltStore Refresh All

@@ -87,6 +87,8 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         webdavUser              = 'admin'
         webdavPassword          = ''
         iCloudDownloads         = ''
+        # PC-signed USB install: empty = auto (lib\Get-LoopSegmentsSigning.ps1 Find-LoopSegmentsZsign).
+        zsignExe                = ''
         notes                   = ''
     }
 }

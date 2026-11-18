@@ -28,7 +28,8 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 ```powershell
 cd <repo>\windows
 
-# 1) Once per PC (Python 3.12, pymobiledevice3, companion venv/Chromium, portable json)
+# 1) Once per PC (Python 3.12, pymobiledevice3, companion venv/Chromium, portable json,
+#    PC-signed USB install: zsign + SideStore .p12 + its password, via setup\Set-LoopSegmentsSigning.ps1)
 .\setup\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
 
 # 2) Once (optional, AltStore only): AltServer at logon — ~7-day sideload refresh
@@ -72,7 +73,11 @@ If Loop Segments won’t open after ~7 days: **SideStore** (LocalDevVPN → Refr
 cd <repo>\windows   # e.g. where this README lives
 
 # One shot: Python 3.12 + pymobiledevice3 + companion venv/Chromium + portable json
+# + PC-signed USB install (zsign, SideStore .p12, password prompt; -SkipSigning to skip)
 .\setup\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
+
+# PC-signed USB install only (re-check, new .p12 export, or a new PC's password)
+.\setup\Set-LoopSegmentsSigning.ps1 [-P12 <SideStore export .p12>]
 
 .\setup\Set-LoopSegmentsWindows.ps1 -Show
 .\rclone\Mount-LoopSegmentsRclone.ps1 -TestOnly
@@ -133,36 +138,44 @@ Details: [`pcloud_web_companion\README.md`](pcloud_web_companion/README.md).
 
 **SideStore markers:** before signing, it adds the Info.plist keys SideStore adds when it signs an app: the URL scheme `sidestore-<bundle id>`, the exported type `io.sidestore.Installed.<bundle id>` (`UTExportedTypeDeclarations`), `ALTBundleIdentifier` (the original ID), `ALTAppGroups` and `ALTPairingFile`. SideStore uses the URL scheme and the exported type to tell whether its apps are still installed. Without them, SideStore treats the app as deleted and **drops it from My Apps**, which the first PC-signed builds did. If Loop Segments is missing from My Apps, add it back once with **My Apps → +** and the IPA (data is kept). Later PC installs keep it listed.
 
-**Stuck installer:** the phone's installer once stopped answering USB installs: the upload finished but the install never did, until the phone was restarted. The helper now gives up after 120 s (`INSTALL_FAILED … restart the phone`) and the deploy falls back to SideStore. Fix: `py -3.12 -m pymobiledevice3 diagnostics restart`, unlock the phone, then run `.\reinstall-latest.ps1`.
+**Stuck installer:** the phone's installer once stopped answering USB installs: the upload finished but the install never did, until the phone was restarted. The helper now gives up after 120 s (`INSTALL_FAILED … restart the phone`) and the deploy falls back to SideStore. Fix: restart the phone (`<python> -m pymobiledevice3 diagnostics restart`, with the Python that Setup set up, e.g. `py -3.12`), unlock it, then run `.\reinstall-latest.ps1`.
 
-**One-time setup.** The certificate goes in **`windows\signing\`** (gitignored), and zsign goes in `env_setup\` next to this repo:
+**Setup (any Windows PC):** `.\setup\Set-LoopSegmentsSigning.ps1` does steps 2-5 and skips what is already done. `Setup-LoopSegmentsWindows.ps1` runs it too (`-SkipSigning` to skip). What lives where:
 
-1. **Export the certificate:** iPhone → **SideStore → Settings → Certificate Management** → **long-press iLoader (R)** → **Export Certificate** → **Export Full (.p12)** → choose a password → save to **iCloud Drive → Downloads**. Pick **Full**: zsign needs the private key. The file is named `iPhone Developer_ <Apple ID> (<cert ID>).p12`. Older SideStore builds have **Export Signing Certificate...** near the bottom of Settings instead. iloader gave SideStore this certificate when it installed it. iloader itself can't export it; it only keeps the private key in Windows Credential Manager (`<sha256 of Apple ID>/key.iloader`).
-2. **Copy it to** `windows\signing\signing.p12`. Then **delete the copy in iCloud Drive**: it's your signing key.
-3. **Save its password** in Credential Manager (this prompts for it, so it stays out of history):
+| What | Where | Per PC? |
+|---|---|---|
+| Certificate | `windows\signing\signing.p12` (gitignored) | No: syncs with the repo folder (e.g. pCloud) |
+| zsign | `zsignExe` in `loop-segments-windows.json`, else `..\env_setup\zsign\zsign.exe` next to the repo, else `windows\signing\zsign\zsign.exe`, else `PATH` | No when in a synced folder |
+| Password | Credential Manager, generic credential `LoopSegments-signing` | **Yes**: set it on each PC |
+| Work files | `%USERPROFILE%\.loopsegments-sign-work` (deleted after each install) | Yes |
+
+1. **Export the certificate:** iPhone → **SideStore → Settings → Certificate Management** → **long-press the certificate** (named after the tool that made it, e.g. **iLoader (R)**) → **Export Certificate** → **Export Full (.p12)** → choose a password → save to **iCloud Drive → Downloads**. Pick **Full**: zsign needs the private key. The file is named `iPhone Developer_ <Apple ID> (<cert ID>).p12`. Older SideStore builds have **Export Signing Certificate...** near the bottom of Settings instead. iloader gave SideStore this certificate when it installed it. iloader itself can't export it; it only keeps the private key in Windows Credential Manager (`<sha256 of Apple ID>/key.iloader`).
+2. **Run the setup with the export** (copies it to `windows\signing\signing.p12`, asks for the password, downloads zsign if missing, runs the check):
    ```powershell
-   cmdkey /generic:LoopSegments-signing /user:p12 /pass
+   .\setup\Set-LoopSegmentsSigning.ps1 -P12 "<path to the exported .p12>"
    ```
-4. **zsign:** download `zsign-windows-x64.zip` from [zhlynn/zsign releases](https://github.com/zhlynn/zsign/releases) (v1.1.3 used here), check it against the release's `SHA256SUMS.txt`, and unzip it to `P:\all_scripts\iOS apps\env_setup\zsign\zsign.exe` (the folder next to this repo, shared with the other iOS apps). A `zsign` on `PATH` also works.
-5. **Check:** `py -3.12 usb\LoopSegments-UsbSign.py check signing\signing.p12 LoopSegments-signing` should print `READY <bundle id> <profile UUID> <profile expiry UTC> <cert expiry>`.
+   Then **delete the export in iCloud Drive**: it's your signing key.
+3. **Password:** the setup asks for it with `cmdkey`'s own prompt, so it stays out of history. It is stored per PC: on another PC, just run `.\setup\Set-LoopSegmentsSigning.ps1` (no `-P12` if the folder synced). `-ResetPassword` asks again. By hand: `cmdkey /generic:LoopSegments-signing /user:p12 /pass`.
+4. **zsign:** when none is found, the setup downloads `zsign-windows-x64.zip` (the version pinned in `lib\Get-LoopSegmentsSigning.ps1`, v1.1.3) from [zhlynn/zsign releases](https://github.com/zhlynn/zsign/releases), checks it against the SHA-256 pinned there (from the release's `SHA256SUMS.txt`), and unzips it to `..\env_setup\zsign\` when an `env_setup` folder sits next to the repo (shared with the sibling iOS app repos; ignored by that repo's git), else to `windows\signing\zsign\`. Elsewhere: set `zsignExe`, or put `zsign` on `PATH`.
+5. **Check:** the setup ends with `READY <bundle id>; profile valid until …; certificate until …` (needs the iPhone on USB; without it, it only says everything is set up). Run `.\setup\Set-LoopSegmentsSigning.ps1` again any time to re-check.
 
-**Not under `%LOCALAPPDATA%`:** the Microsoft Store Python (`py` from WindowsApps) sees its own private copy of `AppData\Local`, so it can't read files placed there from outside. That's why these files live on `P:`.
+**Not under `%LOCALAPPDATA%`:** the Microsoft Store Python (`py` from WindowsApps) sees its own private copy of `AppData\Local`, so it can't read files placed there from outside. That's why the certificate and zsign live in the repo's folder or next to it, and the work files in `%USERPROFILE%`.
 
 **Profile expiry (7 days):** free-account profiles last 7 days, and every SideStore refresh puts a new one on the phone, so each deploy reads the current one from the phone. With no SideStore refresh for 7 days, the check reports `NO_PROFILE … expired` and the deploy uses the SideStore path. **Keep refreshing in SideStore** (LocalDevVPN on, or the Shortcuts automation). The **certificate** lasts a year (the check prints its expiry date). If it is revoked (e.g. in iloader) or SideStore makes a new one, the check reports `NO_PROFILE … another certificate`: export it again (steps 1-2).
 
 | Check result | Meaning / fix |
 |---|---|
-| `NO_P12` / `NO_PASSWORD` | Steps 2 / 3 not done |
-| `BAD_P12` | Wrong password (redo step 3) or expired certificate |
+| `NO_P12` / `NO_PASSWORD` | Run `.\setup\Set-LoopSegmentsSigning.ps1` (with `-P12 <file>` if the certificate is missing) |
+| `BAD_P12` | Wrong password (`-ResetPassword`) or expired certificate |
 | `NO_PROFILE … expired` | Refresh Loop Segments in SideStore |
 | `NO_PROFILE … another certificate` | SideStore's certificate changed: export again |
 | `NOT_INSTALLED` | Install once via SideStore first (it registers the app ID and profile) |
 
-**iCloud sync is slow (export not on the PC yet):** iCloud for Windows has no sync command. Restarting its Drive process makes it check again:
+**iCloud sync is slow (export not on the PC yet):** iCloud for Windows has no sync command. Restarting its Drive process makes it check again. This works for Apple's installer and the Microsoft Store version, since it restarts whatever is running:
 ```powershell
-Stop-Process -Name iCloudDrive -Force; Start-Process 'C:\Program Files (x86)\Common Files\Apple\Internet Services\iCloudDrive.exe'
+$p = (Get-Process iCloudDrive -ErrorAction Stop).Path; Stop-Process -Name iCloudDrive -Force; Start-Process $p
 ```
-Or right-click the file in File Explorer → **Always keep on this device**. On the phone, the Files app must show the upload as finished (no cloud-arrow icon) first.
+If it doesn't come back (the Store version may refuse a direct start), open **iCloud** from the Start menu. Or right-click the file in File Explorer → **Always keep on this device**. On the phone, the Files app must show the upload as finished (no cloud-arrow icon) first.
 
 ## Open Loop Segments over USB (pymobiledevice3)
 
@@ -277,6 +290,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `webdavUser` / `webdavPassword` | Phone LAN WebDAV (defaults match app) |
 | `ipaInstallWifiProfile` | **Empty** = each saved Windows Wi‑Fi profile in turn, those in range first (Windows' in-range list is often stale), until one gives an address off the `phoneLanHost` /24. `deploy.ps1`'s USB install moves the PC there when the phone's network after the phone LAN bounce is not already the PC's (SideStore needs www over Wi‑Fi) |
 | `iCloudDownloads` | **Empty** = `%USERPROFILE%\iCloudDrive\Downloads` — target for repo-root **`copy-to-icloud.ps1`** (also used by **`deploy.ps1`**) |
+| `zsignExe` | **Empty** = auto: `..\env_setup\zsign\zsign.exe` next to the repo, else `windows\signing\zsign\zsign.exe`, else `zsign` on `PATH` (PC-signed USB install; `setup\Set-LoopSegmentsSigning.ps1` downloads it when none is found). Set it only when zsign lives elsewhere on this PC |
 | `dlnaFolder` | Optional legacy note / junction target (Explorer); Quest uses `rclone serve dlna` instead |
 | `rcloneDlnaAddr` | rclone serve dlna bind address (default `:7879`) |
 | `rcloneDlnaName` | DLNA friendly name advertised on LAN (default `Loop Segments`) |
@@ -310,12 +324,14 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 2. On the new PC: `.\setup\Setup-LoopSegmentsWindows.ps1 -PhoneHost <ip>` (clears foreign `rcloneConfigPath`, builds a local companion venv).
 3. Leave **`rcloneConfigPath`** empty unless this PC stores rclone.conf somewhere non-standard.
 4. Do **not** rely on a synced `pcloud_web_companion\.venv` — it embeds absolute Python paths from the old user/PC.
+5. **PC-signed USB install:** Setup runs `.\setup\Set-LoopSegmentsSigning.ps1`. `windows\signing\signing.p12` comes with the synced repo folder (a fresh git clone has none: pass `-P12 <export>`), zsign with the synced `env_setup` folder (else it downloads it), and it asks for the .p12 password, which each PC keeps in its own Credential Manager.
 
 | Stays on P: / repo (intentional) | Machine-local only |
 |----------------------------------|--------------------|
 | Extension source, scripts | `%LOCALAPPDATA%\pcloud_web_companion\venv` |
 | `chromium-profile.zip` (shared pCloud login) | Playwright browsers, unpacked extension, REST log |
 | | `loop-segments-windows.json` (per-PC phone IP) |
+| `windows\signing\signing.p12`, `..\env_setup\zsign\` | .p12 password (Credential Manager `LoopSegments-signing`) |
 
 ## Scripts
 
@@ -328,6 +344,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `lib\Get-LoopSegmentsSkybox.ps1` | Companion Skybox setup/teardown: dotsources repo-root **`Skybox_vr_pc`** submodule ([skybox-vr-pc](https://github.com/dsouzaankit/skybox-vr-pc); fallback `P:\all_scripts\Skybox_vr_pc`) for start/hide/quit + AirScreen `p_cld_media` (clears stale phone-rclone Add-folders; Quest phone media uses rclone DLNA) (`-SkipSkybox` to skip) |
 | `lib\Get-LoopSegmentsVirtualDesktop.ps1` | Locate/start **Virtual Desktop Streamer**, start the service if it is stopped, and hide the Streamer window to the **tray** (`-SkipVirtualDesktop` to skip). Companion finish does not quit Streamer |
 | `lib\Get-LoopSegmentsClash.ps1` | Optional: if Clash/mihomo is running, UAC-run **`env_setup\altserver_refresh\VpnMulticast\Remove-VpnMulticastRoute.ps1`** so TUN `224.0.0.0/4` does not steal `.local` mDNS. Phone-IP / `:8765` use numeric IPs and do not need this. |
+| `setup\Set-LoopSegmentsSigning.ps1` | PC-signed USB install setup on any PC (Setup runs it; `-SkipSigning` there): downloads zsign (pinned version, SHA-256 checked) when none is found, `-P12 <export>` copies SideStore's certificate to `windows\signing\signing.p12`, asks for its password via `cmdkey` (per PC; `-ResetPassword`), then runs the check. `-NoPrompt`, `-SkipZsign`. Exit 0 ready (or set up, no iPhone on USB), 1 something missing |
 | `setup\Set-LoopSegmentsWindows.ps1` | Edit per-PC json |
 | `setup\Set-LoopSegmentsPhoneLanHostSource.ps1` | **Super-config** before companion: bare run / double-click **toggles** `usb`↔`config`; also `-Usb` / `-Config` / `-Show` |
 | `setup\Set-LoopSegmentsLANHost.ps1` | Set `phoneLanHost` (no args = read over USB; or pass IP; `-ForceDiscover` re-reads USB even if `:8765` up) |
@@ -357,7 +374,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `usb\Prepare-PhoneForSideStoreViaUsb.ps1` | Run by repo-root `deploy.ps1` after it triggers the IPA build (and before the USB install with `-UseLatest` / `-RunId`). iPhone on USB (usbmux) → quits Loop Segments if it is the **foreground** app (`deploy.ps1` always passes `-NoQuit`, and skips this script with `-SkipUsbInstall`: the USB install relaunches the app at the handover, so it stays open during the build; the quit is for running this script by hand) (DVT kill via `usb\Probe-LoopSegmentsForeground.py --kill`; not while an export or the pending queue runs, checked on the LAN page when reachable) → connects LocalDevVPN if its tunnel process is not running (`usb\Connect-LocalDevVPNViaUsb.py`: launches it, its **Auto-connect on launch** connects in ~5 s, then Home Screen) and leaves `%TEMP%\loopsegments-vpn-turned-on.json` so the install switches it back off. Also leaves `%TEMP%\loopsegments-export-busy.json` while an export or the pending queue runs, so the install never restarts the phone then. No router is touched (the phone LAN Wi‑Fi has no gateway on purpose). LocalDevVPN is skipped when the PC-signed install is ready (`lib\Get-LoopSegmentsSigning.ps1`). `-NoQuit`, `-NoVpn`, `-ForceVpn` (connect anyway: the install's SideStore fallback). Always exit 0 |
 | `usb\Install-LoopSegmentsIpaViaUsb.ps1` | Run by repo-root `deploy.ps1` after the IPA download. iPhone on USB, not already on the IPA's build (`-Force`: the same build is reinstalled; an IPA older than the phone's build is never installed) → moves the phone and the PC **off** the phone LAN (`phoneLanHost` /24; SideStore signs over Wi‑Fi www, which the phone LAN lacks): phone on it (read over USB from the DVT network monitor: its address on its **TCP** connections over `en0`; none = no www on Wi‑Fi = the phone LAN, since leftover UDP sockets can keep an old address; `wifi-assoc` tells that apart from no Wi‑Fi at all, 5G only, where a bounce is skipped and the script waits for the phone to join a Wi‑Fi, asking you to tap it; every check during these waits prints the phone's state) → PC onto the phone LAN first (the AP's restart command, telnet, only answers there; `netsh wlan connect` to saved profiles, in range first) → `lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -BouncePhoneLanAp` so the phone hops to another saved Wi‑Fi, (no wait for the bounced AP to come back, which can take minutes; `-NoBounce` skips); PC not on the phone's new /24 → `netsh wlan connect` to `ipaInstallWifiProfile` or each saved profile (in range first; the in-range list is often stale) → quits SideStore and restarts LocalDevVPN (tunnel extension quit, fresh app, Auto-connect, ~12 s; no Loop Segments launch) so every try starts both fresh → checks the phone is still on the install Wi‑Fi (its Wi‑Fi address from `wifi-assoc` — iOS uses a private address per network, and redacts SSID/BSSID — and not dropped to 5G), right before the link and every 10 s until the download starts; right before the link and to confirm a "left" it also compares the phone's network name from its live Wi‑Fi log (`wifi-ssid`: wifid's `CurrentBSS {name - bssid}`, unredacted, but an idle phone may log none for a while) with the PC's; if it left (e.g. back to the phone LAN AP, SideStore -1001) it is moved again, or the try is retried like a cut download → launches the link (a launch refused on a locked phone is retried every 10 s for ~1 min) → serves the IPA once at `http://<PC IP>:8766/<random>/LoopSegments.ipa` (TcpListener: no URL ACL / admin; PowerShell 7 inbound firewall allow) → launches Loop Segments over USB with `-openURL sidestore://install?url=…` (`usb\Open-LinkViaLoopSegments.py`; build **428+** opens it and quits) → you tap **Install** in SideStore → a failed try (download cut short, e.g. -1005 — the phone's network at the cut is logged — or SideStore never finished) is retried once (both re-checked, link reopened, tap again); if that fails too, `-RestartPhoneOnError` (set by `deploy.ps1`, off with `-NoPhoneRestart`) restarts the phone over USB, waits for you to unlock it and for LocalDevVPN to reconnect, then tries a last time (not while an export runs: `%TEMP%\loopsegments-export-busy.json` from the prep) → stops serving after one full download (`-WaitSec`, 300) → waits for the phone to report the new build (checked every 1 s on one USB connection; `-InstallWaitSec`, 180) → if the www check switched LocalDevVPN on (`%TEMP%\loopsegments-vpn-turned-on.json`, under 3 h old), quits LocalDevVPN's tunnel extension (no app launch, so no Face ID prompt), then goes back to the Home Screen, all on one USB connection (`usb\LoopSegments-UsbInfo.py vpn-off`, about 4 s; the VPN connect step also ends on the Home Screen). `-KeepVpn` leaves it on. Nothing moves them back afterwards: the phone usually rejoins the phone LAN by itself once that AP's Wi‑Fi is back (iOS auto-join), and the companion's start-up network check moves the PC, and the phone if still needed. The VPN marker is kept up to 3 h, so a deploy that could not switch the VPN off (e.g. timed out) is cleaned up by the next one, even if the VPN was on when that one started. SideStore's *"Some sources were unable to load"* pop-up is harmless here (sources are not used; it only matters if all fail = no internet). **Tried first:** the [PC-signed USB install](#pc-signed-usb-install-zsign-no-install-tap) (`usb\LoopSegments-UsbSign.py`: no tap, no Wi‑Fi moves); not set up or failed → it connects LocalDevVPN (`Prepare-PhoneForSideStoreViaUsb.ps1 -ForceVpn`) and runs the SideStore flow above. `-NoSignedInstall`, `-SigningP12`, `-SigningCredTarget`. Exit 0 installed / skipped, 1 not confirmed, 2 could not start |
 | `usb\LoopSegments-UsbSign.py` | PC-signed USB install. `check <p12> <cred target>` → `READY` / `NO_P12` / `NO_PASSWORD` / `BAD_P12` / `NO_PROFILE` / `NOT_INSTALLED`. `sign-install <ipa> <zsign> <p12> <cred target> <work dir>`: newest matching profile from the phone, SideStore's Info.plist markers, zsign, installation_proxy (120 s limit) → `INSTALLED` / `SIGN_FAILED` / `INSTALL_FAILED`. See [PC-signed USB install](#pc-signed-usb-install-zsign-no-install-tap) |
-| `lib\Get-LoopSegmentsSigning.ps1` | Shared by the prep and the install: `windows\signing\signing.p12`, the `LoopSegments-signing` credential, `Find-LoopSegmentsZsign` (`..\env_setup\zsign\zsign.exe` next to the repo, else `PATH`), `Test-LoopSegmentsSignedInstallReady` |
+| `lib\Get-LoopSegmentsSigning.ps1` | Shared by the prep, the install and the signing setup: `windows\signing\signing.p12`, the `LoopSegments-signing` credential, the pinned zsign version + SHA-256, `Find-LoopSegmentsZsign` (`zsignExe`, else `..\env_setup\zsign\zsign.exe` next to the repo, else `windows\signing\zsign\zsign.exe`, else `PATH`), `Invoke-LoopSegmentsSigningCheck`, `Test-LoopSegmentsSignedInstallReady` |
 | `usb\Connect-LocalDevVPNViaUsb.py`, `usb\Open-LinkViaLoopSegments.py`, `usb\LoopSegments-UsbInfo.py` | USB helpers (shared code in `usb\loopsegments_dvt.py`): connect LocalDevVPN (launch it; its tunnel extension in the process list = connected), launch Loop Segments with a link, and read the installed / IPA build and VPN tunnel state |
 | `usb\Go-IphoneHomeViaUsb.ps1` | Background the app on companion finish if it is still foreground (skip when backgrounded or lock screen; DVT `--userspace` first; HID `--userspace` skipped unless `-TryUserspaceHid`); no USB → skip. Direct run waits for Enter on error; companion/watchdog pass `-NoWaitEnter` (**in-process**, throws `HOME_USB_EXIT:<code>`) and companion pauses itself after a Home fail |
 | `usb\Probe-IphoneUnlock.py` / `usb\Resolve-LoopSegmentsBundleId.py` / `usb\Probe-LoopSegmentsForeground.py` | Helpers for USB unlock probe, AltStore bundle-id suffix, and foreground skip |

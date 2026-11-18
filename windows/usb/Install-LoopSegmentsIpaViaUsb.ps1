@@ -54,8 +54,9 @@
      build as in step 4. Not set up, or it fails: steps 2-5 as usual. -NoSignedInstall skips it.
      No LocalDevVPN needed: the phone prep skips it when this is ready, and before steps 2-5 the
      VPN is connected if it is not (Prepare-PhoneForSideStoreViaUsb.ps1 -ForceVpn).
-     One-time setup: SideStore > Settings > Export Signing Certificate... > copy the .p12 to -SigningP12,
-     then: cmdkey /generic:LoopSegments-signing /user:p12 /pass   (prompts for the password)
+     Setup on any PC: ..\setup\Set-LoopSegmentsSigning.ps1 [-P12 <SideStore export>] (zsign download,
+     certificate copy, password prompt per PC, check). zsign: zsignExe in loop-segments-windows.json,
+     else ..\env_setup\zsign next to the repo, else windows\signing\zsign, else PATH.
 
   The installed app must be build 428+ for step 3 to open SideStore; older builds just launch.
 
