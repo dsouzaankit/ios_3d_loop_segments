@@ -1081,8 +1081,9 @@ function Wait-PhoneLanPageReachable {
             return $true
         }
         if ([datetime]::UtcNow -ge $nextStatus) {
+            # A probe can take a few seconds, so the deadline may already have passed here.
             $left = [int][Math]::Ceiling(($deadline - [datetime]::UtcNow).TotalSeconds)
-            Write-Host "[$Label] Still waiting for :8765 ($left s left)..."
+            if ($left -gt 0) { Write-Host "[$Label] Still waiting for :8765 ($left s left)..." }
             $nextStatus = [datetime]::UtcNow.AddSeconds(5)
         }
     }
@@ -1209,6 +1210,28 @@ function Invoke-BackgroundLoopSegmentsViaUsb {
     }
 }
 
+function Get-PhoneOffPhoneLanViaUsb {
+    # The phone's Wi-Fi IPv4 over USB (its own address on its TCP connections over en0, ~6 s). Returns
+    # @{ PhoneIp; LanHost } when it is on a Wi-Fi off the lan_config phoneLanHost /24, else $null
+    # (on the phone LAN, no Wi-Fi traffic seen - which also means the phone LAN - or unknown).
+    try {
+        $lanConfigPath = Join-Path $ExtensionDir "lan_config.json"
+        if (-not (Test-Path -LiteralPath $lanConfigPath)) { return $null }
+        $lanHost = [string](Get-Content -LiteralPath $lanConfigPath -Raw | ConvertFrom-Json).phoneLanHost
+        if ([string]::IsNullOrWhiteSpace($lanHost)) { return $null }
+        $rt = Get-LoopSegmentsPythonRuntime -RequirePymobiledevice3
+        if ($null -eq $rt) { return $null }
+        $r = Invoke-LoopSegmentsPythonRuntime -Runtime $rt -ArgumentList @((Join-Path $UsbDir 'LoopSegments-UsbInfo.py'), 'wifi-ip')
+        if ((($r.Lines -join "`n") -match '(?m)^WIFI_IP\t(\d+\.\d+\.\d+\.\d+)')) {
+            $ip = $Matches[1]
+            if (-not (Test-LoopSegmentsSameIpv4Slash24 -IpA $ip -IpB $lanHost)) {
+                return [pscustomobject]@{ PhoneIp = $ip; LanHost = $lanHost }
+            }
+        }
+    } catch {}
+    return $null
+}
+
 function Invoke-LoopSegmentsUsbLaunch {
     # AltServer is opt-in (-EnsureAltServer) for AltStore users. SideStore needs LocalDevVPN only.
     [void](Write-LoopSegmentsAltServerNotice -AlwaysStatus -EnsureStarted -EnsureAltServer:$EnsureAltServer)
@@ -1302,7 +1325,12 @@ Chromium was not started. Use -SkipUsbLaunch to start Chromium without USB launc
     Write-Host "[usb] Loop Segments launch OK"
 
     # Brief foreground only: wait for :8765, then Home so Keep Alive can hold LAN in background.
-    if (Wait-PhoneLanPageReachable -TimeoutSec 60 -Label 'usb') {
+    # A phone on another Wi-Fi can never answer on the phone LAN: skip the wait (LAN recover, next,
+    # moves the phone back) instead of spending 60 s on it.
+    $off = Get-PhoneOffPhoneLanViaUsb
+    if ($off) {
+        Write-Host "[usb] Phone is on $($off.PhoneIp), not the phone LAN ($($off.LanHost) /24) - skipping the :8765 wait; LAN recover moves it back next."
+    } elseif (Wait-PhoneLanPageReachable -TimeoutSec 60 -Label 'usb') {
         Write-Host "[usb] LAN page reachable after foreground"
     } else {
         Write-Warning "[usb] LAN page still not reachable after foreground — backgrounding anyway"
