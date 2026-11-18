@@ -19,7 +19,7 @@ Companion: `pcloud_web_companion\Run-PCloudWebCompanion.ps1`. Mount: `rclone\Mou
 | `sideload/` | AltServer logon task; Sideloadly fallback |
 | `lan/` | Multi-phone unified listing / PC index on `:8766`; gateway Wi‑Fi reboot (wrong-subnet / other-router / off-subnet); LAN throughput |
 | `rclone/` | Optional WinFsp `L:` mount + `rclone serve dlna` for Quest |
-| `quest/` | Quest Browser over adb: **Open on Quest** (signed-in normal tab), insecure-origin flag checked through `isSecureContext` in the opened tab, keep the headset awake during the session, the **Quest control page** on this PC's LAN address (SKYBOX WebDAV server Push / Update / Clear, PC ↔ phone LAN bandwidth test, opened on the Quest with Open on Quest), deletion of the Loop Segments history entries on companion close. Setup: [quest/README.md](quest/README.md) |
+| `quest/` | Quest Browser over adb: **Open on Quest** (signed-in normal tab), insecure-origin flag checked through `isSecureContext` in the opened tab, keep the headset awake during the session, the **Quest control page** on this PC's LAN address (SKYBOX WebDAV server Push / Update / Clear, PC ↔ phone LAN bandwidth test, Space in the 3d_playlist_local window to pause / resume its export, opened on the Quest with Open on Quest), deletion of the Loop Segments history entries on companion close. Setup: [quest/README.md](quest/README.md) |
 | `pcloud_web_companion/` | Chromium MV3 companion + `Run-PCloudWebCompanion.ps1` |
 | `archive/` | Legacy `net use` / sync scripts |
 

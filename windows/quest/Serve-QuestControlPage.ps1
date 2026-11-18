@@ -252,6 +252,41 @@ function Get-ControlLanBwStatus {
     return $out
 }
 
+# ---- 3d_playlist_local: press Space in its PowerShell window (pause / resume leaf DLNA export) ----
+
+$script:SpaceScript = Join-Path $PSScriptRoot 'Send-PlaylistLocalSpaceKey.ps1'
+
+# Runs the helper in its own process (it detaches from its console to attach to the target's) and
+# waits for it: a few seconds at most. Returns the helper's JSON object.
+function Invoke-ControlPlaylistSpace {
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = (Get-Process -Id $PID).Path
+    foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script:SpaceScript)) { [void]$psi.ArgumentList.Add($a) }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    if (-not $proc.WaitForExit(20000)) {
+        try { $proc.Kill($true) } catch {}
+        Write-ControlLog 'PLAYLIST_SPACE timed out'
+        return [ordered]@{ ok = $false; sent = 0; error = 'timed out' }
+    }
+    $text = ($outTask.Result -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
+    $r = $null
+    if ($text) { try { $r = $text | ConvertFrom-Json } catch {} }
+    if (-not $r) {
+        $e = ($errTask.Result + ' ' + $outTask.Result).Trim()
+        if ($e.Length -gt 300) { $e = $e.Substring(0, 300) }
+        $r = [pscustomobject]@{ ok = $false; sent = 0; error = $(if ($e) { $e } else { "exit $($proc.ExitCode)" }) }
+    }
+    $who = @(@($r.PSObject.Properties['consoles'] | ForEach-Object { $_.Value }) | Where-Object { $_ } | ForEach-Object { '{0} pid {1}' -f $_.script, $_.pid }) -join ', '
+    Write-ControlLog ("PLAYLIST_SPACE sent={0} {1}{2}" -f $r.sent, $who, $(if ($r.PSObject.Properties['error'] -and $r.error) { " error: $($r.error)" } else { '' }))
+    return $r
+}
+
 function Get-ControlStatus {
     $s = Get-ControlSettings
     $lan = Get-ControlLanUrl
@@ -359,6 +394,15 @@ $script:PageHtml = @'
     <p class="note">Runs the same probe as the companion at startup (lan\Measure-LoopSegmentsLanThroughput.ps1): downloads up to 64 MB of a phone video over HTTP, and copies it from the rclone mount when the mount is up, then uses the lower number. It never reboots routers from here. Takes about 10-60 s; pause a Virtual Desktop session first or the number comes out low.</p>
   </section>
 
+  <section>
+    <h2>3d_playlist_local</h2>
+    <div class="buttons">
+      <button id="plSpace" class="primary">Space: pause / resume export</button>
+    </div>
+    <div id="plMsg" class="msg" role="status" aria-live="polite"></div>
+    <p class="note">Presses Space once in the 3d_playlist_local PowerShell window on the PC (run_batch_*.ps1 / Run-TranscodeOrchestrator.ps1), the same as pressing it there: while a clip runs it pauses or resumes the leaf DLNA export. The window does not need focus.</p>
+  </section>
+
   <section class="wide">
     <h2>Recent SKYBOX log</h2>
     <pre id="log">-</pre>
@@ -438,6 +482,21 @@ $script:PageHtml = @'
       if (!r.ok) { m.textContent = j.error || ('HTTP ' + r.status); m.className = 'msg bad'; }
     } catch (e) { m.textContent = 'Request failed: ' + e.message; m.className = 'msg bad'; }
     schedule(800);
+  });
+
+  $('plSpace').addEventListener('click', async () => {
+    const b = $('plSpace'), m = $('plMsg');
+    b.disabled = true; m.textContent = 'Pressing Space...'; m.className = 'msg warn';
+    try {
+      const r = await fetch('playlist/space', { method: 'POST', headers: { 'X-Quest-Control': '1' } });
+      const j = await r.json().catch(() => ({}));
+      const t = new Date().toLocaleTimeString();
+      if (r.ok && j.ok) {
+        const who = (j.consoles || []).filter(c => c.ok).map(c => c.script + ' (pid ' + c.pid + ')').join(', ');
+        m.textContent = 'Space sent at ' + t + ' to ' + who + '.'; m.className = 'msg ok';
+      } else { m.textContent = 'Not sent at ' + t + ': ' + (j.error || ('HTTP ' + r.status)) + '.'; m.className = 'msg bad'; }
+    } catch (e) { m.textContent = 'Request failed: ' + e.message; m.className = 'msg bad'; }
+    b.disabled = false;
   });
 
   async function refresh() {
@@ -542,6 +601,14 @@ function Invoke-ControlClient {
         } else {
             Write-ControlResponse -Stream $s -StatusCode 409 -Body '{"ok":false,"error":"a measurement is already running"}'
         }
+    } elseif ($path -eq '/playlist/space') {
+        if ($method -ne 'POST') { Write-ControlResponse -Stream $s -StatusCode 405 -Body '{"ok":false,"error":"POST only"}'; return }
+        if ((Get-ControlHeader -HeaderText $req.HeaderText -Name 'X-Quest-Control') -ne '1') {
+            Write-ControlResponse -Stream $s -StatusCode 403 -Body '{"ok":false,"error":"missing X-Quest-Control header"}'
+            return
+        }
+        $r = Invoke-ControlPlaylistSpace
+        Write-ControlResponse -Stream $s -StatusCode $(if ($r.ok) { 200 } else { 409 }) -Body (ConvertTo-ControlJson $r)
     } elseif ($method -eq 'OPTIONS') {
         # No CORS: cross-origin preflights fail, so other sites cannot send the action header.
         Write-ControlResponse -Stream $s -StatusCode 405 -Body '{"ok":false}'
