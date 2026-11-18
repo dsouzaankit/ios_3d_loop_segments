@@ -200,6 +200,47 @@ $(Get-LoopSegmentsPythonInstallHint)
 "@
 }
 
+# Fast path: one Python process, one userspace tunnel for lock probe + foreground probe + Home +
+# post-check (each separate step used to pay its own ~2-3 s tunnel handshake). Anything it cannot
+# settle (tunnel/DVT error, timeout, still foreground) falls through to the per-step path below.
+$singleTunnelPy = Join-Path $PSScriptRoot "Home-LoopSegmentsViaUsb.py"
+if (-not $UseTunneld -and -not $TryUserspaceHid -and (Test-Path -LiteralPath $singleTunnelPy)) {
+    Write-Host "[home] Single-tunnel Home (timeout ${AttemptTimeoutSec}s)..."
+    $fast = Invoke-PythonRuntimeTimed -Runtime $rt -ArgumentList @($singleTunnelPy) -TimeoutSec $AttemptTimeoutSec
+    $fastBlob = ($fast.Lines -join "`n")
+    if (-not $fast.TimedOut) {
+        switch -Regex ($fastBlob) {
+            '(?m)^HOME_OK\b' {
+                Write-Host "[home] Home pressed - Loop Segments should be backgrounded." -ForegroundColor Green
+                Exit-Home 0
+            }
+            '(?m)^SETTINGS_OK\b' {
+                Write-Host "[home] Opened Settings to background Loop Segments." -ForegroundColor Green
+                Exit-Home 0
+            }
+            '(?m)^SKIP_LOCKED\b' {
+                Write-Host "[home] Phone locked (app already backgrounded) - skip Home press" -ForegroundColor DarkGray
+                Exit-Home 0
+            }
+            '(?m)^SKIP_NOT_FOREGROUND\b' {
+                Write-Host "[home] Loop Segments already backgrounded - skip Home press" -ForegroundColor DarkGray
+                Exit-Home 0
+            }
+        }
+        if ($fast.ExitCode -eq 2) {
+            Write-Host "[home] No USB iPhone - skip Home press" -ForegroundColor Yellow
+            Exit-Home 2
+        }
+        if ($fast.ExitCode -eq 3) {
+            Write-HomeAttemptOutput -Lines $fast.Lines
+            Write-Host "[home] Phone locked - cannot press Home." -ForegroundColor Yellow
+            Exit-Home 3
+        }
+    }
+    Write-HomeAttemptOutput -Lines $fast.Lines -CollapseIfFailed
+    Write-Host "[home] Single-tunnel Home did not finish - falling back to per-step path." -ForegroundColor DarkGray
+}
+
 $importCheck = Invoke-PythonRuntimeTimed -Runtime $rt -ArgumentList @(
     "-c", "import pymobiledevice3; print('import-ok')"
 ) -TimeoutSec ([Math]::Min(20, $AttemptTimeoutSec))
