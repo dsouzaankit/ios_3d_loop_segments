@@ -595,6 +595,8 @@ function Get-QuestLanOrigins {
             } catch {}
         }
     }
+    # The PC-served helper page (Get-QuestHelperUrl, phone not answering): deleted with the others.
+    if ($script:HelperFallbackOrigin) { $list.Add($script:HelperFallbackOrigin) }
     return @($list | Select-Object -Unique)
 }
 
@@ -602,8 +604,94 @@ function Get-QuestLanOrigins {
 # land in Quest Browser history (the delete of the phone origin is what removes the helper's
 # Recently closed items): /xr-assets/aframe.min.js (1.4 MB script) stopped being recorded, a small
 # page there (404, no login) is.
+#
+# Phone not answering (Loop Segments app closed, phone off the LAN): the page never loads, so no
+# visit is recorded and the swept Recently closed items stay behind as two ".../xr-assets/lsclean"
+# entries (seen 2026-11-19 at an End session without the companion). Then the same small 404 page is
+# served from this PC (Start-QuestHelperFallback, questControlPort + 1, pwsh's firewall rule) and its
+# origin joins Get-QuestLanOrigins, so the history delete removes it too. Decided once per process.
+$script:HelperUrlCached = $null
+$script:HelperFallbackOrigin = $null
+
+function Test-QuestTcpOpen {
+    param([string] $HostName, [int] $Port, [int] $TimeoutMs = 2000)
+    $c = [System.Net.Sockets.TcpClient]::new()
+    try { return ($c.ConnectAsync($HostName, $Port).Wait($TimeoutMs) -and $c.Connected) } catch { return $false } finally { $c.Dispose() }
+}
+
+$script:HelperFallbackMarker = '<!-- loopsegments-lsclean -->'
+
+function Test-QuestHelperFallbackServing {
+    param([string] $Origin)
+    try {
+        $r = Invoke-WebRequest -Uri "$Origin/lsclean" -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck
+        return ([string]$r.Content).Contains($script:HelperFallbackMarker)
+    } catch { return $false }
+}
+
+# Static 404 page on all addresses, port -Port, from a hidden pwsh that exits with this process (or
+# after 30 min). A separate process: a listener in this one kept it from exiting after its work
+# (callers then waited out their timeouts). A second watcher reuses one already serving it.
+# $true when it answers.
+function Start-QuestHelperFallback {
+    param([int] $Port)
+    $origin = "http://127.0.0.1:$Port"
+    if (Test-QuestHelperFallbackServing -Origin $origin) { return $true }
+    $server = @'
+param([int] $Port, [int] $ParentPid, [string] $Marker)
+$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
+try { $l.Start() } catch { exit 1 }
+$body = [System.Text.Encoding]::ASCII.GetBytes("<!doctype html><title>Loop Segments</title>$Marker")
+$until = [DateTime]::UtcNow.AddMinutes(30)
+try {
+    while ([DateTime]::UtcNow -lt $until -and (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
+        if (-not $l.Pending()) { Start-Sleep -Milliseconds 100; continue }
+        $c = $l.AcceptTcpClient()
+        try {
+            $s = $c.GetStream()
+            $s.ReadTimeout = 3000
+            $buf = [byte[]]::new(8192)
+            [void]$s.Read($buf, 0, $buf.Length)
+            $hdr = [System.Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nContent-Type: text/html; charset=utf-8`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nConnection: close`r`n`r`n")
+            $s.Write($hdr, 0, $hdr.Length)
+            $s.Write($body, 0, $body.Length)
+            $s.Flush()
+        } catch {} finally { $c.Close() }
+    }
+} finally { $l.Stop() }
+'@
+    $file = Join-Path $env:TEMP 'loopsegments-quest-helper-page.ps1'
+    try { Set-Content -LiteralPath $file -Value $server -Encoding utf8 } catch { return $false }
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = (Get-Process -Id $PID).Path
+    foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $file, '-Port', "$Port", '-ParentPid', "$PID", '-Marker', $script:HelperFallbackMarker)) { [void]$psi.ArgumentList.Add($a) }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    try { [void][System.Diagnostics.Process]::Start($psi) } catch { return $false }
+    for ($i = 0; $i -lt 25; $i++) {
+        Start-Sleep -Milliseconds 200
+        if (Test-QuestHelperFallbackServing -Origin $origin) { return $true }
+    }
+    return $false
+}
+
 function Get-QuestHelperUrl {
-    try { $u = [Uri]$Url; return ('{0}://{1}/xr-assets/lsclean' -f $u.Scheme, $u.Authority) } catch { return $Url }
+    if ($script:HelperUrlCached) { return $script:HelperUrlCached }
+    $phone = $null
+    try { $u = [Uri]$Url; $phone = ('{0}://{1}/xr-assets/lsclean' -f $u.Scheme, $u.Authority) } catch { return $Url }
+    if (Test-QuestTcpOpen -HostName $u.Host -Port $u.Port) { $script:HelperUrlCached = $phone; return $phone }
+    $ip = $null
+    try { $ip = Get-QuestControlPcAddress -DeviceSerial (Get-OnlineQuestSerial) } catch {}
+    $port = (Get-QuestControlPort) + 1
+    if ($ip -and (Start-QuestHelperFallback -Port $port)) {
+        $script:HelperFallbackOrigin = "http://${ip}:$port"
+        $script:HelperUrlCached = "$($script:HelperFallbackOrigin)/lsclean"
+        Write-QuestLog "Helper page: phone $($u.Authority) not answering - serving it from this PC at $($script:HelperUrlCached)."
+    } else {
+        $script:HelperUrlCached = $phone
+        Write-QuestLog "Helper page: phone $($u.Authority) not answering and no PC fallback ($(if ($ip) { "port $port not served" } else { 'no route to the headset' })) - Recently closed items may stay."
+    }
+    return $script:HelperUrlCached
 }
 
 function Invoke-QuestFlagSync {
@@ -1380,6 +1468,9 @@ function Invoke-QuestHelperVisitInOpenTab {
 function Clear-QuestHistoryAndClosed {
     param([string] $DeviceSerial, [string[]] $Origins, [double] $BudgetSec, [string] $FallbackRange)
     $t0 = [DateTime]::UtcNow
+    # Callers build -Origins before the helper page is picked: add the PC-served one if it is used.
+    [void](Get-QuestHelperUrl)
+    if ($script:HelperFallbackOrigin) { $Origins = @(@($Origins) + $script:HelperFallbackOrigin | Select-Object -Unique) }
     $res = Clear-QuestBrowserHistory -DeviceSerial $DeviceSerial -HelperUrl (Get-QuestHelperUrl) -Origins $Origins -BudgetSec $BudgetSec -FallbackRange $FallbackRange
     if ($res -ne 'cleared' -and $res -ne 'fallback') { return $res }
     $left = $BudgetSec - ([DateTime]::UtcNow - $t0).TotalSeconds
