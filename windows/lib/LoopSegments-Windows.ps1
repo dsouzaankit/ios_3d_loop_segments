@@ -87,13 +87,11 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         # 3d_playlist_local workflows (run_batch_vr_hybrid / run_batch_fisheye_v360 / Run-TranscodeOrchestrator):
         # at start, hold the proximity sensor off and push the control page to the headset
         # (3d_playlist_local\individual_transcode\quest\Start-PlaylistLocalQuestSession.ps1); the page's
-        # Enter button runs Invoke-PlaylistLocalQuestShutdown.ps1 there.
+        # End session button runs Invoke-PlaylistLocalQuestShutdown.ps1 there.
         questPlaylistSession    = $true
-        # Also open the control page in this PC's default browser at workflow start.
-        questPlaylistOpenOnPc   = $true
-        # Minutes the workflow start waits for an asleep / off-adb headset before giving up on opening the page
-        # (7 = the companion's Open on Quest wait, _rest_log_sink.ps1 QuestOpenWaitMinutes).
-        questPlaylistOpenWaitMinutes = 7
+        # Minutes the workflow start waits for an asleep / off-adb headset before giving up on opening the page;
+        # 0 = until the workflow ends (its Wi-Fi is usually off at a workflow start). Checked every 5 s.
+        questPlaylistOpenWaitMinutes = 0
         # Enter button: Quest media players force-stopped whether or not they read the workflow output.
         questPlaylistMediaPlayers = @('xyz.skybox.player.ovr')
         # Enter button: never force-stopped, even with a connection to this PC (browser, PC streaming, system UI).

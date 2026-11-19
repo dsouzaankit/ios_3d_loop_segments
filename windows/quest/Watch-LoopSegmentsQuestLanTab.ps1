@@ -1548,7 +1548,10 @@ function Invoke-QuestHistoryRetry {
 # -OpenControlPage: wait (up to -WaitMinutes) for an awake headset, then open the control page in
 # its own signed-in tab. 0 opened, 1 headset not awake in time, 3 failed.
 function Invoke-QuestOpenControlPageOnly {
-    $deadline = [DateTime]::UtcNow.AddMinutes([Math]::Max(0, $WaitMinutes))
+    # -WaitMinutes 0 with -ParentPid: no time limit, keep waiting until the workflow ends (the headset's
+    # Wi-Fi is usually off at a workflow start: the last cleanup switched it off).
+    $untilParent = ($WaitMinutes -le 0 -and $ParentPid -gt 0)
+    $deadline = if ($untilParent) { [DateTime]::MaxValue } else { [DateTime]::UtcNow.AddMinutes([Math]::Max(0, $WaitMinutes)) }
     $lastState = ''
     $queuedLogged = $false
     Set-QuestOpenStatus 'checking'
@@ -1586,7 +1589,7 @@ function Invoke-QuestOpenControlPageOnly {
             return 1
         }
         if (-not $queuedLogged) {
-            Write-QuestLog "Control page only: queued - opening when the headset is awake (up to $WaitMinutes min)."
+            Write-QuestLog ("Control page only: queued - opening when the headset is awake ({0})." -f $(if ($untilParent) { 'until the workflow ends' } else { "up to $WaitMinutes min" }))
             Set-QuestOpenStatus 'queued'
             $queuedLogged = $true
         }

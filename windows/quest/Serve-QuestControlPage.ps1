@@ -554,7 +554,7 @@ $script:PageHtml = @'
       <div id="plMsg" class="msg" role="status" aria-live="polite"></div>
       <pre id="plStop" hidden></pre>
       <p class="note">Space presses Space once in the 3d_playlist_local PowerShell window on the PC (run_batch_*.ps1 / Run-TranscodeOrchestrator.ps1), the same as pressing it there: while a clip runs it pauses or resumes the leaf DLNA export. The window does not need focus.</p>
-      <p class="note">End session stops whatever is running, in this order, and skips what is not: force-stops the Quest apps reading the segments and the configured players (SKYBOX); presses Enter in every 3d_playlist_local window and waits for it to exit (killed after a few minutes); closes the control page Chromium on the PC; closes the Loop Segments companion's Chromium, so its normal quit runs (Quest tabs, history, SKYBOX, sensor, Wi-Fi off, the phone mount, iPhone Home). Without the companion it cleans up the headset itself: closes these tabs, deletes their history, turns the sensor back on, switches the Wi-Fi off. The Quest history is deleted once either way.</p>
+      <p class="note">End session stops whatever is running, in this order, and skips what is not: force-stops the Quest apps reading the segments and the configured players (SKYBOX); presses Enter in every 3d_playlist_local window and waits for it to exit (killed after a few minutes); closes the Loop Segments companion's Chromium, so its normal quit runs (Quest tabs, history, SKYBOX, sensor, Wi-Fi off, the phone mount, iPhone Home). Without the companion it cleans up the headset itself: closes these tabs, deletes their history, turns the sensor back on, switches the Wi-Fi off. The Quest history is deleted once either way.</p>
     </section>
   </div>
 
@@ -751,7 +751,6 @@ $script:PageHtml = @'
   }
 
   $('plEnter').addEventListener('click', async () => {
-    if (!confirm('End session: stop ' + partsText + ', then clean up the headset (players, tabs, history, sensor, Wi-Fi off)?')) return;
     const b = $('plEnter'), m = $('plMsg');
     b.disabled = true; m.textContent = 'Starting End session...'; m.className = 'msg warn';
     try {
