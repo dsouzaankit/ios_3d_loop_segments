@@ -275,7 +275,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 
 | Field | Purpose |
 |-------|---------|
-| `phoneLanHost` | Saved iPhone Wi‑Fi IP (fallback / forced when `phoneLanHostSource=config`) |
+| `phoneLanHost` | Saved iPhone Wi‑Fi IP (fallback / forced when `phoneLanHostSource=config`). **Empty by default** (no built-in phone IP): `setup\Setup-LoopSegmentsWindows.ps1` and the Quest helpers read it from whichever iPhone is on USB and save it. New phone: `.\setup\Set-LoopSegmentsLANHost.ps1 -ForceDiscover` |
 | `phoneLanHostSource` | **Super-config:** `config` (default) = force `phoneLanHost`; `usb` = current Wi‑Fi read over USB at companion start (the phone's network monitor: its own address on `en0`; then its Wi‑Fi hardware address looked up in this PC's ARP table after one ping sweep of its own /24s (exact when they share a network); pcapd sniffing as the last fallback). Bare run of `setup\Set-LoopSegmentsPhoneLanHostSource.ps1` toggles |
 | `preferUsbPhoneLanHost` | Mirror of `phoneLanHostSource` (`true`↔`usb`) for older callers |
 | `phoneLanHosts` | Optional array `{ host, label?, port? }` — unified LAN listing across multiple iPhones |

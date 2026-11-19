@@ -21,7 +21,9 @@ function Get-LoopSegmentsWindowsExamplePath {
 
 function Get-DefaultLoopSegmentsWindowsSettings {
     [ordered]@{
-        phoneLanHost            = '10.0.100.10'
+        # Empty = not set yet: Setup / lan\Discover-LoopSegmentsLanHost.ps1 read it from whichever
+        # iPhone is on USB. No built-in phone IP, so a new phone or network is never aimed at an old one.
+        phoneLanHost            = ''
         phoneLanHosts           = @()
         lanPort                 = 8765
         mountDriveLetter        = 'L'

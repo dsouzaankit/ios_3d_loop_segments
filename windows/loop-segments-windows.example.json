@@ -1,9 +1,6 @@
 {
-  "phoneLanHost": "10.0.100.10",
-  "phoneLanHosts": [
-    { "host": "10.0.100.10", "label": "iPhone A" },
-    { "host": "10.0.100.11", "label": "iPhone B", "webdavPassword": "<iPhone B's password, if it differs from webdavPassword>" }
-  ],
+  "phoneLanHost": "",
+  "phoneLanHosts": [],
   "lanPort": 8765,
   "mountDriveLetter": "L",
   "rcloneRemoteName": "loopsegments",

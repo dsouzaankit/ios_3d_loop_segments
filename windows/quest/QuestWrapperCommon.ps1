@@ -9,12 +9,19 @@ try {
     $script:QuestWrapperCfg = Get-LoopSegmentsWindowsSettings
 } catch {}
 
-# http://<phoneLanHost>:<lanPort>/ from windows\loop-segments-windows.json.
+# http://<phoneLanHost>:<lanPort>/ from windows\loop-segments-windows.json. Not set: read the IP from
+# the iPhone on USB (saved for next time), else stop with the setup hint.
 function Get-QuestWrapperPhoneUrl {
-    $phone = '10.0.100.10'; $port = 8765
+    $phone = ''; $port = 8765
     if ($script:QuestWrapperCfg) {
-        if ($script:QuestWrapperCfg.phoneLanHost) { $phone = [string]$script:QuestWrapperCfg.phoneLanHost }
+        if ($script:QuestWrapperCfg.phoneLanHost) { $phone = ([string]$script:QuestWrapperCfg.phoneLanHost).Trim() }
         if ([int]$script:QuestWrapperCfg.lanPort -gt 0) { $port = [int]$script:QuestWrapperCfg.lanPort }
+    }
+    if ([string]::IsNullOrWhiteSpace($phone)) {
+        if (-not (Get-Command Get-LoopSegmentsLANHost -ErrorAction SilentlyContinue)) {
+            throw 'phoneLanHost is not set and windows\lib\LoopSegments-Windows.ps1 did not load. Set phoneLanHost in windows\loop-segments-windows.json.'
+        }
+        $phone = Get-LoopSegmentsLANHost -AllowDiscover
     }
     return "http://${phone}:$port/"
 }

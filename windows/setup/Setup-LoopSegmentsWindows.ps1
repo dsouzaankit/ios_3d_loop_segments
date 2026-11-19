@@ -13,7 +13,8 @@
   - PC-signed USB install: zsign, SideStore's .p12, its password (setup\Set-LoopSegmentsSigning.ps1)
 
 .PARAMETER PhoneHost
-  Optional iPhone LAN IP to write into loop-segments-windows.json.
+  Optional iPhone LAN IP to write into loop-segments-windows.json. Without it (and with no saved
+  phoneLanHost), setup reads the Wi-Fi IP of whichever iPhone is on USB once pymobiledevice3 is ready.
 
 .PARAMETER SkipCompanion
   Skip companion venv / Chromium install.
@@ -110,7 +111,7 @@ if ($configDirty) {
 }
 
 if ([string]::IsNullOrWhiteSpace($settings.phoneLanHost)) {
-    Write-Warning "[config] phoneLanHost is empty. Set it with: .\setup\Set-LoopSegmentsWindows.ps1 -PhoneHost <ip>"
+    Write-Host "[config] phoneLanHost not set yet; read from the iPhone on USB after the USB tools step"
 } else {
     Write-Host "[config] phoneLanHost = $($settings.phoneLanHost)"
 }
@@ -147,6 +148,21 @@ If you are on Python 3.13/3.14 and build tools are missing, install 3.12 instead
         }
     } else {
         Write-Host "[usb] pymobiledevice3 already available for $($pyRt.Display)"
+    }
+}
+
+# --- phone LAN host (any iPhone: read from the one on USB when not configured) ---
+if ([string]::IsNullOrWhiteSpace([string](Get-LoopSegmentsWindowsSettings).phoneLanHost)) {
+    $found = $null
+    if (-not $SkipUsbTools) {
+        try { $found = Update-LoopSegmentsLANHostFromDiscovery } catch {
+            Write-Host "[config] USB phone IP lookup failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$found)) {
+        Write-Warning "[config] phoneLanHost is empty. Plug in the iPhone (unlocked, on Wi-Fi) and run .\setup\Set-LoopSegmentsLANHost.ps1, or .\setup\Set-LoopSegmentsWindows.ps1 -PhoneHost <ip>"
+    } else {
+        Write-Host "[config] phoneLanHost = $found (from the iPhone on USB)"
     }
 }
 
