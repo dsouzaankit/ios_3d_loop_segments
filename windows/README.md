@@ -30,7 +30,8 @@ cd <repo>\windows
 
 # 1) Once per PC (Python 3.12, pymobiledevice3, companion venv/Chromium, portable json,
 #    PC-signed USB install: zsign + SideStore .p12 + its password, via setup\Set-LoopSegmentsSigning.ps1)
-.\setup\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
+#    Any iPhone: with it on USB (unlocked, on Wi-Fi) setup reads and saves its LAN IP; or pass -PhoneHost <phone-ip>
+.\setup\Setup-LoopSegmentsWindows.ps1
 
 # 2) Once (optional, AltStore only): AltServer at logon — ~7-day sideload refresh
 .\sideload\Register-AltServerAtLogon.ps1
@@ -74,7 +75,8 @@ cd <repo>\windows   # e.g. where this README lives
 
 # One shot: Python 3.12 + pymobiledevice3 + companion venv/Chromium + portable json
 # + PC-signed USB install (zsign, SideStore .p12, password prompt; -SkipSigning to skip)
-.\setup\Setup-LoopSegmentsWindows.ps1 -PhoneHost 10.0.100.10
+# + phoneLanHost from whichever iPhone is on USB (no built-in IP; -PhoneHost <phone-ip> to set it yourself)
+.\setup\Setup-LoopSegmentsWindows.ps1
 
 # PC-signed USB install only (re-check, new .p12 export, or a new PC's password)
 .\setup\Set-LoopSegmentsSigning.ps1 [-P12 <SideStore export .p12>]
