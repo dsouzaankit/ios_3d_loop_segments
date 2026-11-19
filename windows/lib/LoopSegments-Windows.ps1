@@ -91,8 +91,9 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questPlaylistSession    = $true
         # Also open the control page in this PC's default browser at workflow start.
         questPlaylistOpenOnPc   = $true
-        # Minutes the workflow start waits for an asleep / off-adb headset before giving up on opening the page.
-        questPlaylistOpenWaitMinutes = 30
+        # Minutes the workflow start waits for an asleep / off-adb headset before giving up on opening the page
+        # (7 = the companion's Open on Quest wait, _rest_log_sink.ps1 QuestOpenWaitMinutes).
+        questPlaylistOpenWaitMinutes = 7
         # Enter button: Quest media players force-stopped whether or not they read the workflow output.
         questPlaylistMediaPlayers = @('xyz.skybox.player.ovr')
         # Enter button: never force-stopped, even with a connection to this PC (browser, PC streaming, system UI).

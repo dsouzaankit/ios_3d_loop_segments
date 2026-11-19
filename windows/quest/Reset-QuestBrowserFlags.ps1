@@ -15,7 +15,7 @@
 
   Runs quest\Watch-LoopSegmentsQuestLanTab.ps1 -ResetFlags, so it finds the headset the same way (adb
   devices, last known address, mDNS). Needs the phone LAN page up: the helper tab opens a no-login
-  phone page (/xr-assets/aframe.min.js) before going to chrome://flags.
+  phone page (/xr-assets/lsclean) before going to chrome://flags.
 
   Like Set-QuestProximitySensor.ps1 (shared code in quest\QuestWrapperCommon.ps1): first makes sure
   this PC is on the phone's network (lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1;

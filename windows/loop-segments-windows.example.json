@@ -40,7 +40,7 @@
   "questSkyboxWebDav": true,
   "questPlaylistSession": true,
   "questPlaylistOpenOnPc": true,
-  "questPlaylistOpenWaitMinutes": 30,
+  "questPlaylistOpenWaitMinutes": 7,
   "questPlaylistMediaPlayers": ["xyz.skybox.player.ovr"],
   "questPlaylistKeepPackages": ["com.oculus.browser", "VirtualDesktop.Android", "com.oculus.xrstreamingclient", "com.oculus.systemux", "com.oculus.vrshell"],
   "questPlaylistHistoryOrigins": [],

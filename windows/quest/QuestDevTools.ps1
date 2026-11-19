@@ -459,7 +459,10 @@ function Invoke-QuestRecentlyClosedSweep {
     $ui = Get-QuestBrowserUi
     if (-not $ui) { return -1 }
     $os = ConvertTo-Json -Compress -InputObject @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/').ToLowerInvariant() })
-    $listJs = "(() => {`n$($script:QuestClosedCommonJs)`n  if (!store) return JSON.stringify({ ok: false });`n  const O = new Set($os);`n  const mine = u => { if (u === 'about:blank' || /^chrome:\/\/(flags|panel-app-nav\/ntp)/.test(u)) return true; try { return O.has(new URL(u).origin.toLowerCase()); } catch (e) { return false; } };`n  const ids = (store.getState().history.recentlyClosedTabs || []).filter(e => e.type === 'tab' && e.tabs && e.tabs.length && e.tabs.every(t => mine(String(t.url || '')))).map(e => e.sessionId);`n  return JSON.stringify({ ok: true, menu: !!menu, ids });`n})()"
+    # The UI's store holds the Recently closed list only after it was requested (the menu does that
+    # when it opens), and keeps the last answer: ask for it and wait, or the sweep sees an empty /
+    # stale list (seen: nothing swept while the menu still showed 2 phone-page items).
+    $listJs = "(async () => {`n$($script:QuestClosedCommonJs)`n  if (!store) return JSON.stringify({ ok: false });`n  try { if (menu) Object.getPrototypeOf(menu).requestRecentlyClosedTabsData.call(menu); } catch (e) {}`n  await new Promise(r => setTimeout(r, 1500));`n  const O = new Set($os);`n  const mine = u => { if (u === 'about:blank' || /^chrome:\/\/(flags|panel-app-nav\/ntp)/.test(u)) return true; try { return O.has(new URL(u).origin.toLowerCase()); } catch (e) { return false; } };`n  const ids = (store.getState().history.recentlyClosedTabs || []).filter(e => e.type === 'tab' && e.tabs && e.tabs.length && e.tabs.every(t => mine(String(t.url || '')))).map(e => e.sessionId);`n  return JSON.stringify({ ok: true, menu: !!menu, ids });`n})()"
     try { $l = Invoke-QuestEval -Tab $ui -Expression $listJs -TimeoutSec 8 | ConvertFrom-Json } catch { return -1 }
     if (-not $l.ok) { return -1 }
     $ids = @($l.ids)

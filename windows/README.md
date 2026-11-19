@@ -313,7 +313,7 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `questSkyboxWebDav` | `true` (default) = the control page's SKYBOX **Push / Update / Clear** buttons (the phone as WebDAV server **Loop Segments**, signed in, at the address in `lan_config.json`), and removal of the Loop Segments entries from SKYBOX at companion close (phone WebDAV servers, any WebDAV server named Loop Segments, the rclone DLNA entry). Edits SKYBOX's database over adb and restarts SKYBOX (if open) only when the server changes |
 | `questPlaylistSession` | `true` (default) = 3d_playlist_local workflows (hybrid / fisheye batch, flat orchestrator) hold the Quest sensor off at start, open the control page on the Quest and on the PC, and get the **End session** button; see [quest/README.md](quest/README.md#3d_playlist_local-workflow-session-sensor-off-control-page-end-session) |
 | `questPlaylistOpenOnPc` | `true` (default) = also open the control page in a fresh Chromium on the PC at workflow start |
-| `questPlaylistOpenWaitMinutes` | `30` (default) = workflow start: minutes to wait for an awake headset before giving up on opening the page there |
+| `questPlaylistOpenWaitMinutes` | `7` (default, the same as the companion's **Open on Quest**) = workflow start: minutes to wait for an awake headset before giving up on opening the page there |
 | `questPlaylistMediaPlayers` | `["xyz.skybox.player.ovr"]` (default) = Quest players force-stopped at End session / workflow quit, besides apps connected to this PC |
 | `questPlaylistKeepPackages` | Quest Browser, Virtual Desktop, Air Link, system UI (default) = never force-stopped |
 | `questPlaylistHistoryOrigins` | `[]` (default) = extra Quest Browser history origins to delete (`{pc}` = this PC's address) |

@@ -190,7 +190,10 @@ param(
     [switch] $ListHistory,
     # Read-only: print open tabs, Recently closed items and the browser UI's handlers / store actions
     # that look like they remove Recently closed items (to fix the sweep). Nothing is changed.
-    [switch] $ProbeRecentlyClosed
+    [switch] $ProbeRecentlyClosed,
+    # Diagnostic: is a helper-page visit recorded in history when made from the open new-tab page
+    # directly, and via about:blank? (Restores the new-tab page afterwards.)
+    [switch] $TestHelperVisit
 )
 
 Set-StrictMode -Version Latest
@@ -595,9 +598,12 @@ function Get-QuestLanOrigins {
     return @($list | Select-Object -Unique)
 }
 
-# A page on the phone that needs no login (XR assets stay open), used for helper tabs.
+# A page on the phone that needs no login (XR assets stay open), used for helper tabs. It has to
+# land in Quest Browser history (the delete of the phone origin is what removes the helper's
+# Recently closed items): /xr-assets/aframe.min.js (1.4 MB script) stopped being recorded, a small
+# page there (404, no login) is.
 function Get-QuestHelperUrl {
-    try { $u = [Uri]$Url; return ('{0}://{1}/xr-assets/aframe.min.js' -f $u.Scheme, $u.Authority) } catch { return $Url }
+    try { $u = [Uri]$Url; return ('{0}://{1}/xr-assets/lsclean' -f $u.Scheme, $u.Authority) } catch { return $Url }
 }
 
 function Invoke-QuestFlagSync {
@@ -1340,12 +1346,17 @@ function Start-QuestHistoryRetry {
 function Invoke-QuestHelperVisitInOpenTab {
     param([string] $HelperUrl)
     $tab = Get-QuestTabs | Where-Object { $u = [string]$_.url; $u -like 'chrome://panel-app-nav/ntp*' -or $u -eq 'about:blank' } | Select-Object -First 1
-    if (-not $tab -or -not $HelperUrl) { return }
+    if (-not $HelperUrl) { return }
+    if (-not $tab) {
+        $urls = @(Get-QuestTabs | ForEach-Object { (ConvertTo-QuestBareUrl ([string]$_.url)) -replace '\?.*$', '' }) -join ', '
+        Write-QuestLog "Recently closed: no new-tab / blank tab open for the helper visit (tabs: $urls)."
+        return
+    }
     $was = [string]$tab.url
     try {
         [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $HelperUrl } -TimeoutSec 8)
         $t = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 6 -Match { param($u) $u -like 'http*' }
-        if ($t) { $tab = $t }
+        if ($t) { $tab = $t } else { Write-QuestLog "Recently closed: the helper page did not load in the open tab (was $was)." }
         Start-Sleep -Milliseconds 1500
         $back = if ($was -like 'chrome://panel-app-nav/ntp*') { 'chrome://panel-app-nav/ntp' } else { 'about:blank' }
         [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $back } -TimeoutSec 8)
@@ -1370,9 +1381,20 @@ function Clear-QuestHistoryAndClosed {
         # were not recorded (seen every time an item already on the helper page was swept). The
         # history delete drops Recently closed items by URL, so one recorded visit is enough: make it
         # in a tab that stays open (the kept new-tab page), then put that tab back.
-        Invoke-QuestHelperVisitInOpenTab -HelperUrl (Get-QuestHelperUrl)
-        # The visit shows up in the History list about 2 s after the page loads.
-        Start-Sleep -Seconds 2
+        # Checked: the visit must be in the History list before the delete (one retry), and logged
+        # either way (a silent miss left the swept items in place, seen at an End session).
+        $helper = Get-QuestHelperUrl
+        $recorded = $false
+        for ($try = 1; $try -le 2 -and -not $recorded; $try++) {
+            Invoke-QuestHelperVisitInOpenTab -HelperUrl $helper
+            $w0 = [DateTime]::UtcNow
+            while (-not $recorded -and ([DateTime]::UtcNow - $w0).TotalSeconds -lt 8) {
+                Start-Sleep -Seconds 2
+                $l = Clear-QuestBrowserHistory -DeviceSerial $DeviceSerial -Origins $Origins -BudgetSec 8 -FallbackRange '' -ListOnly
+                if ($l -and $l.PSObject.Properties['items']) { $recorded = @(@($l.items) | Where-Object { $_.ours -and ([string]$_.u) -eq $helper }).Count -gt 0 }
+            }
+            Write-QuestLog ("Recently closed: helper visit {0} in the History list (try {1})." -f $(if ($recorded) { 'is' } else { 'NOT' }), $try)
+        }
         $left = $BudgetSec - ([DateTime]::UtcNow - $t0).TotalSeconds
         [void](Clear-QuestBrowserHistory -DeviceSerial $DeviceSerial -HelperUrl (Get-QuestHelperUrl) -Origins $Origins -BudgetSec ([Math]::Max(3, $left)) -FallbackRange '')
     }
@@ -1726,6 +1748,44 @@ if ([string]::IsNullOrWhiteSpace($Url)) {
     exit 2
 }
 if ($RetryHistory) { exit (Invoke-QuestHistoryRetry) }
+if ($TestHelperVisit) {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-Host 'headset not reachable over adb'; exit 1 }
+    if (-not (Open-QuestDevTools -DeviceSerial $dev)) { exit 3 }
+    $out = [ordered]@{}
+    try {
+        $helper = Get-QuestHelperUrl
+        $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial $dev) | Where-Object { $_ } | Select-Object -Unique)
+        $seen = {
+            $r = Clear-QuestBrowserHistory -DeviceSerial $dev -Origins $origins -BudgetSec 10 -FallbackRange '' -ListOnly
+            if ($r -and $r.PSObject.Properties['items']) { return (@(@($r.items) | Where-Object { $_.ours }).Count) } else { return -1 }
+        }
+        $go = {
+            param($tab, [string] $u, [scriptblock] $match)
+            [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $u } -TimeoutSec 8)
+            $t = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 8 -Match $match
+            if ($t) { return $t } else { return $tab }
+        }
+        foreach ($mode in 'ntp-direct', 'via-blank') {
+            $tab = Get-QuestTabs | Where-Object { ([string]$_.url) -like 'chrome://panel-app-nav/ntp*' -or ([string]$_.url) -eq 'about:blank' } | Select-Object -First 1
+            if (-not $tab) { $out[$mode] = 'no new-tab / blank tab'; continue }
+            $startUrl = [string]$tab.url
+            if ($mode -eq 'via-blank') { $tab = & $go $tab 'about:blank' { param($x) $x -eq 'about:blank' } }
+            $tab = & $go $tab $helper { param($x) $x -like 'http*' }
+            $loaded = [string]$tab.url
+            Start-Sleep -Seconds 3
+            $n = & $seen
+            $out[$mode] = "start $startUrl, loaded '$loaded', entries on our origins after 3 s: $n"
+            # Delete what it made and go back to the new-tab page for the next mode.
+            [void](Clear-QuestBrowserHistory -DeviceSerial $dev -Origins $origins -BudgetSec 10 -FallbackRange '')
+            $tab = Get-QuestTabs | Where-Object { $_.id -eq $tab.id } | Select-Object -First 1
+            if ($tab) { $tab = & $go $tab 'chrome://panel-app-nav/ntp' { param($x) $x -like 'chrome://*' }; try { [void](Invoke-QuestCdp -Tab $tab -Method 'Page.resetNavigationHistory' -TimeoutSec 5) } catch {} }
+        }
+    } finally { Close-QuestDevTools }
+    $out | ConvertTo-Json
+    exit 0
+}
 if ($ProbeRecentlyClosed) {
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
@@ -1736,8 +1796,12 @@ if ($ProbeRecentlyClosed) {
         $ui = Get-QuestBrowserUi
         $probe = $null
         if ($ui) {
-            $js = "(() => {`n$($script:QuestClosedCommonJs)`n" + @'
+            $js = "(async () => {`n$($script:QuestClosedCommonJs)`n" + @'
   if (!store) return JSON.stringify({ ok: false, error: 'no store' });
+  // Ask the browser for the list first (the menu does that when it opens), then read it.
+  const before = (store.getState().history.recentlyClosedTabs || []).length;
+  let asked = false; try { if (menu) { Object.getPrototypeOf(menu).requestRecentlyClosedTabsData.call(menu); asked = true; } } catch (e) {}
+  await new Promise(r => setTimeout(r, 1500));
   const strip = u => { try { const x = new URL(u); return x.origin + x.pathname; } catch (e) { return String(u); } };
   const rc = (store.getState().history.recentlyClosedTabs || []).map(e => ({ type: e.type, sessionId: e.sessionId, keys: Object.keys(e), tabs: (e.tabs || []).map(t => ({ url: strip(String(t.url || '')), q: (() => { try { return new URL(String(t.url || '')).search.slice(0, 40); } catch (x) { return ''; } })(), title: String(t.title || '').slice(0, 50), keys: Object.keys(t) })) }));
   const protoNames = o => { const r = new Set(); let p = o ? Object.getPrototypeOf(o) : null; for (let i = 0; p && i < 4; i++, p = Object.getPrototypeOf(p)) Object.getOwnPropertyNames(p).forEach(n => r.add(n)); return [...r]; };
@@ -1761,10 +1825,10 @@ if ($ProbeRecentlyClosed) {
       const near = [...new Set((all.match(/[A-Za-z_]*(?:[Rr]ecently[_]?[Cc]losed|[Tt]ab[Rr]estore|recently_closed|ClosedTab)[A-Za-z_]*/g) || []))].slice(0, 80);
       const sends = [...new Set((all.match(/chrome\.send\(\s*["'][A-Za-z_]+["']/g) || []))].slice(0, 120);
       actions = actions.concat(sends);
-      return JSON.stringify({ ok: true, historyKeys: Object.keys(store.getState().history || {}), recentlyClosed: rc, menuMethods, comps, actions, near, srcs, menuSrc, delSrc, globals, inlineLen: texts[0].length, tags, href, bundleHits: (() => { const out = []; const re = /webui_action_[a-zA-Z_]+/g; let m; while ((m = re.exec(all)) && out.length < 300) out.push(m[0]); return [...new Set(out)]; })(), totalLen: all.length });
+      return JSON.stringify({ ok: true, asked, before, historyKeys: Object.keys(store.getState().history || {}), recentlyClosed: rc, menuMethods, comps, actions, near, srcs, menuSrc, delSrc, globals, inlineLen: texts[0].length, tags, href, bundleHits: (() => { const out = []; const re = /webui_action_[a-zA-Z_]+/g; let m; while ((m = re.exec(all)) && out.length < 300) out.push(m[0]); return [...new Set(out)]; })(), totalLen: all.length });
     })();
   } catch (e) {}
-  return JSON.stringify({ ok: true, historyKeys: Object.keys(store.getState().history || {}), recentlyClosed: rc, menuMethods, comps, actions });
+  return JSON.stringify({ ok: true, asked, before, historyKeys: Object.keys(store.getState().history || {}), recentlyClosed: rc, menuMethods, comps, actions });
 })()
 '@
             try { $probe = Invoke-QuestEval -Tab $ui -Expression $js -TimeoutSec 10 | ConvertFrom-Json } catch { $probe = @{ ok = $false; error = $_.Exception.Message } }
