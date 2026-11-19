@@ -701,13 +701,22 @@ function Open-QuestControlTab {
         } catch {}
     }
     try {
+        # Keep-awake may have the notifications list open (proximity OFF toast); bring the browser
+        # forward so the VIEW intent is not dropped behind that UI.
+        Show-QuestBrowserTab -DeviceSerial $DeviceSerial
         if (Open-QuestSignedInTab -DeviceSerial $DeviceSerial -PlainUrl $plain -LoginUrl $loginUrl -Origins @($origin)) {
             $which = if ($script:QuestReusedTab) { 'reused open tab' } else { 'new tab' }
             Write-QuestLog "Control page: opened $plain in Quest browser ($which)."
             $script:ControlTabOpened = $true
             Add-QuestSavedControlOrigin -Origin $origin
         } else {
-            Write-QuestLog "Control page: $plain did not load on the Quest (Windows Firewall blocking port $(Get-QuestControlPort)? see quest\README.md)."
+            # VIEW can fail to open a tab, or the tab can open on chrome-error (firewall / server down).
+            $haveTab = @(Get-QuestLanTabs -Origins @($origin)).Count -gt 0
+            if ($haveTab) {
+                Write-QuestLog "Control page: $plain did not load on the Quest (Windows Firewall blocking port $(Get-QuestControlPort)? see quest\README.md)."
+            } else {
+                Write-QuestLog "Control page: Quest Browser did not open a tab for $plain (VIEW intent dropped; try Open on Quest again)."
+            }
         }
     } catch {
         Write-QuestLog "Control page: $($_.Exception.Message)"

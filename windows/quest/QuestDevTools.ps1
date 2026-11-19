@@ -113,18 +113,29 @@ function Invoke-QuestEval {
 }
 
 # Open a new normal tab with a VIEW intent and return it (retried: the browser sometimes drops
-# the first intent while it is busy).
+# the first intent while it is busy). Also accepts an already-open empty new-tab / blank page that
+# the VIEW navigated to the URL: after a quit the browser is often left on only a new-tab page, and
+# Quest Browser reuses that tab instead of creating one - looking only for a new tab id then misses
+# the open (logged "VIEW intent never opened a tab" / a false Windows Firewall hint).
 function New-QuestViewTab {
     param([string] $DeviceSerial, [string] $PlainUrl, [int] $Attempts = 3)
     $want = ConvertTo-QuestBareUrl $PlainUrl
-    $before = @(Get-QuestTabs | ForEach-Object { $_.id })
+    $beforeBare = @{}
+    foreach ($t0 in @(Get-QuestTabs)) { $beforeBare[[string]$t0.id] = ConvertTo-QuestBareUrl $t0.url }
     for ($a = 1; $a -le $Attempts; $a++) {
         $r = Invoke-Adb -TimeoutSec 15 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'start',
             '-a', 'android.intent.action.VIEW', '-d', ("'" + ($PlainUrl -replace "'", '') + "'"), '-p', $BrowserPackage)
         if ($r.Code -ne 0) { Write-QuestLog "am start failed (code $($r.Code))"; continue }
         for ($i = 0; $i -lt 16; $i++) {
             Start-Sleep -Milliseconds 500
-            $t = (Get-QuestTabs | Where-Object { $before -notcontains $_.id -and (ConvertTo-QuestBareUrl $_.url) -eq $want } | Select-Object -First 1)
+            $t = Get-QuestTabs | Where-Object {
+                    $bare = ConvertTo-QuestBareUrl $_.url
+                    if ($bare -ne $want) { return $false }
+                    $id = [string]$_.id
+                    # New tab, or an existing tab (usually the kept new-tab page) that navigated here.
+                    if (-not $beforeBare.ContainsKey($id)) { return $true }
+                    return $beforeBare[$id] -ne $want
+                } | Select-Object -First 1
             if ($t) { return $t }
         }
         Write-QuestLog "VIEW intent attempt $a opened no new tab - retrying."
