@@ -341,23 +341,48 @@ function Sync-QuestInsecureOriginFlag {
 # Close our tabs (on -Origins). Quest Browser's History list only answers while the browser has at
 # least one tab open (seen: deleted with one tab open, 'history query never answered' right after
 # its last tab was closed), so when our tabs are the only ones the last of them is kept, turned into
-# a blank page with no back/forward entries (about:blank is never in history) instead of closed.
-# The force-stop that closes a browser Loop Segments started removes it without a Recently closed
-# item. Returns the number of tabs closed (the blanked one not counted).
+# a new-tab page with no back/forward entries instead of closed. Empty tabs (about:blank, new-tab
+# pages) are closed too: a force-stopped browser restores its open tabs, so they came back as blank
+# tabs on the next start; their Recently closed items go in the sweep that follows. Returns the
+# number of tabs closed (the kept one not counted).
 function Close-QuestOurTabs {
     param([string[]] $Origins)
-    $ours = @(Get-QuestLanTabs -Origins $Origins)
+    $all = @(Get-QuestTabs)
+    $isEmpty = { param($t) $u = [string]$t.url; $u -eq '' -or $u -eq 'about:blank' -or $u -like 'chrome://panel-app-nav/ntp*' -or $u -like 'chrome://newtab*' }
+    $lan = @(Get-QuestLanTabs -Origins $Origins)
+    # Id lists, not $array.id: under Set-StrictMode -Version Latest a member or [0] on an empty array
+    # throws (that crashed the companion's quit cleanup: "Quest not on adb - cleanup skipped").
+    $lanIds = @($lan | ForEach-Object { [string]$_.id })
+    $empty = @($all | Where-Object { (& $isEmpty $_) -and $lanIds -notcontains [string]$_.id })
+    $ours = @($lan) + @($empty)
     if ($ours.Count -eq 0) { return 0 }
-    $others = @(Get-QuestTabs | Where-Object { $ours.id -notcontains $_.id })
+    # A lone new-tab page is the browser's normal state: nothing to do.
+    if ($lan.Count -eq 0 -and $ours.Count -eq 1 -and ([string]$ours[0].url) -like 'chrome://panel-app-nav/ntp*' -and $all.Count -eq 1) { return 0 }
+    $ourIds = @($ours | ForEach-Object { [string]$_.id })
+    $others = @($all | Where-Object { $ourIds -notcontains [string]$_.id })
     $keep = $null
     if ($others.Count -eq 0) {
-        $keep = $ours[0]
+        # Keep a new-tab page if one is open (nothing to load), else the first of ours.
+        $ntp = @($empty | Where-Object { ([string]$_.url) -like 'chrome://panel-app-nav/ntp*' } | Select-Object -First 1)
+        $keep = if ($ntp.Count) { $ntp[0] } else { $ours[0] }
         try {
-            [void](Invoke-QuestCdp -Tab $keep -Method 'Page.navigate' -Params @{ url = 'about:blank' } -TimeoutSec 8)
-            $b = Wait-QuestTabUrl -Id $keep.id -TimeoutSec 6 -Match { param($u) $u -eq 'about:blank' }
+            # A new-tab page: the force-stop that closes the browser afterwards keeps its open tabs, so
+            # this is what Quest Browser shows when it next starts (a blank page there looked broken).
+            # about:blank when the new-tab page cannot be loaded this way.
+            $kind = 'a new-tab page'
+            $b = $null
+            try {
+                [void](Invoke-QuestCdp -Tab $keep -Method 'Page.navigate' -Params @{ url = 'chrome://panel-app-nav/ntp' } -TimeoutSec 8)
+                $b = Wait-QuestTabUrl -Id $keep.id -TimeoutSec 6 -Match { param($u) $u -like 'chrome://panel-app-nav/ntp*' }
+            } catch {}
+            if (-not $b) {
+                $kind = 'a blank page'
+                [void](Invoke-QuestCdp -Tab $keep -Method 'Page.navigate' -Params @{ url = 'about:blank' } -TimeoutSec 8)
+                $b = Wait-QuestTabUrl -Id $keep.id -TimeoutSec 6 -Match { param($u) $u -eq 'about:blank' }
+            }
             if ($b) { $keep = $b }
             try { [void](Invoke-QuestCdp -Tab $keep -Method 'Page.resetNavigationHistory' -TimeoutSec 5) } catch {}
-            Write-QuestLog 'Tabs: kept one tab as a blank page (the History list needs an open tab).'
+            Write-QuestLog "Tabs: kept one tab as $kind (the History list needs an open tab)."
         } catch {
             $keep = $null
         }
@@ -372,13 +397,43 @@ function Close-QuestOurTabs {
 # from history - chrome:// pages are never in history. So the tab first goes back to the phone page
 # (a page in history) with its back/forward list reset: the item then holds only that page, and the
 # quit-time history delete of the phone origin removes it.
+# Always a NEW visit (unique ?lsclean=...): a reopened Recently closed item that already sits on the
+# helper page is only restored, which records no visit, so the history delete would not find it and
+# its new item would stay (seen: the same 2 phone-page items carried over by every cleanup).
 function Close-QuestHelperTab {
     param($Tab, [string] $HelperUrl)
     try {
-        if ($HelperUrl -and ([string]$Tab.url) -notlike "$(ConvertTo-QuestBareUrl $HelperUrl)*") {
-            [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.navigate' -Params @{ url = $HelperUrl } -TimeoutSec 8)
+        if ($HelperUrl) {
+            # The plain helper URL: visits with a query string (?lsclean=...) were never recorded.
+            $fresh = $HelperUrl
+            # Via about:blank first, so a reopened tab that already sits on the helper page makes a
+            # new visit (a restore alone records none).
+            try {
+                [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.navigate' -Params @{ url = 'about:blank' } -TimeoutSec 8)
+                $mid = Wait-QuestTabUrl -Id $Tab.id -TimeoutSec 6 -Match { param($u) $u -eq 'about:blank' }
+                if ($mid) { $Tab = $mid }
+            } catch {}
+            [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.navigate' -Params @{ url = $fresh } -TimeoutSec 8)
             $back = Wait-QuestTabUrl -Id $Tab.id -TimeoutSec 6 -Match { param($u) $u -like 'http*' }
             if ($back) { $Tab = $back }
+            # The visit is written once the page has loaded: a tab closed right when its URL changed
+            # left no history entry (and so an item the history delete could not remove).
+            Start-Sleep -Milliseconds 1500
+        }
+        [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.resetNavigationHistory' -TimeoutSec 5)
+    } catch {}
+    Close-QuestTab -Id $Tab.id
+}
+
+# Close a tab as a blank page: navigate to about:blank, drop its back/forward entries, close it.
+# Used where no Recently closed item should be left behind (see Invoke-QuestRecentlyClosedSweep).
+function Close-QuestTabAsBlank {
+    param($Tab)
+    try {
+        if (([string]$Tab.url) -ne 'about:blank') {
+            [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.navigate' -Params @{ url = 'about:blank' } -TimeoutSec 8)
+            $b = Wait-QuestTabUrl -Id $Tab.id -TimeoutSec 6 -Match { param($u) $u -eq 'about:blank' }
+            if ($b) { $Tab = $b }
         }
         [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.resetNavigationHistory' -TimeoutSec 5)
     } catch {}
@@ -416,7 +471,8 @@ function Invoke-QuestRecentlyClosedSweep {
         $before = @(Get-QuestTabs | ForEach-Object { $_.id })
         try { [void](Invoke-QuestEval -Tab $ui -TimeoutSec 5 -Expression "(() => {`n$($script:QuestClosedCommonJs)`n  Object.getPrototypeOf(menu).handleReopenClosedTab.call(menu, $sid); return 1;`n})()") } catch { continue }
         $new = $null
-        for ($i = 0; $i -lt 20 -and -not $new; $i++) { Start-Sleep -Milliseconds 300; $new = @(Get-QuestTabs | Where-Object { $before -notcontains $_.id })[0] }
+        # Select-Object, not [0]: an empty result indexed under Set-StrictMode -Version Latest throws.
+        for ($i = 0; $i -lt 20 -and -not $new; $i++) { Start-Sleep -Milliseconds 300; $new = Get-QuestTabs | Where-Object { $before -notcontains $_.id } | Select-Object -First 1 }
         if (-not $new) { continue }
         Close-QuestHelperTab -Tab $new -HelperUrl $HelperUrl
         $done++
@@ -436,6 +492,7 @@ $script:QuestDeleteHistoryJs = @'
 (async () => {
   const ORIGINS = __ORIGINS__;
   const WAIT_MS = __WAIT_MS__;
+  const LIST_ONLY = __LIST_ONLY__;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const t0 = Date.now();
   const left = () => WAIT_MS - (Date.now() - t0);
@@ -476,6 +533,13 @@ $script:QuestDeleteHistoryJs = @'
   }
   if (!answered) return finish({ ok: false, error: "history query never answered" });
   const total = H().items.length;
+  if (LIST_ONLY) {
+    // Read-only: origin + path of every entry (no userinfo, no query string), whether it matches,
+    // and the field names of the first entry (to see how the browser stores them).
+    const strip = u => { try { const x = new URL(u); return x.origin + x.pathname; } catch (e) { return String(u).replace(/\/\/[^/@]*@/, "//").split("?")[0]; } };
+    const items = H().items.map(it => ({ u: strip(it.url), o: originOf(it.url), ours: isOurs(it), t: (it.title || "").slice(0, 60), d: it.dateRelativeDay || it.dateShort || "" }));
+    return finish({ ok: true, list: true, total, reachedBeginning: !!H().queryReachedBeginning, keys: H().items.length ? Object.keys(H().items[0]) : [], items });
+  }
   let ours = H().items.filter(isOurs);
   const found = ours.length;
   if (!found) return finish({ ok: true, found: 0, total, kept: total });
@@ -578,7 +642,9 @@ function Test-QuestBrowserInFront {
 # the front (and started, if it was closed) first. A cold start rarely fits a short budget.
 function Clear-QuestBrowserHistory {
     param([string] $DeviceSerial, [string] $HelperUrl, [string[]] $Origins, [double] $BudgetSec = 25,
-        [ValidateSet('', 'hour', 'day', 'week', 'fourweeks', 'all')] [string] $FallbackRange = 'day')
+        [ValidateSet('', 'hour', 'day', 'week', 'fourweeks', 'all')] [string] $FallbackRange = 'day',
+        # Read-only: return the parsed listing (every entry's origin + path) instead of deleting.
+        [switch] $ListOnly)
     $deadline = [DateTime]::UtcNow.AddSeconds($BudgetSec)
     $left = { [Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalSeconds) }
     $Origins = @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/') } | Select-Object -Unique)
@@ -619,8 +685,9 @@ function Clear-QuestBrowserHistory {
         $evalSec = [Math]::Max(3, (& $left) - $fallbackSec)
         # The page script's own deadline: its share of what is left, minus a little for the reply.
         $waitMs = [int][Math]::Max(2000, ($evalSec - 1.5) * 1000)
-        $js = $script:QuestDeleteHistoryJs.Replace('__ORIGINS__', (ConvertTo-Json -InputObject @($Origins) -Compress)).Replace('__WAIT_MS__', "$waitMs")
+        $js = $script:QuestDeleteHistoryJs.Replace('__ORIGINS__', (ConvertTo-Json -InputObject @($Origins) -Compress)).Replace('__WAIT_MS__', "$waitMs").Replace('__LIST_ONLY__', $(if ($ListOnly) { 'true' } else { 'false' }))
         $r = Invoke-QuestEval -Tab $ui -Expression $js -TimeoutSec ([int][Math]::Ceiling($evalSec) + 2) | ConvertFrom-Json
+        if ($ListOnly) { return $r }
         $on = $Origins -join ', '
         if ($r.ok) {
             if ([int]$r.found -eq 0) { Write-QuestLog ("History: no entries on {0} (kept {1})." -f $on, $r.kept) }

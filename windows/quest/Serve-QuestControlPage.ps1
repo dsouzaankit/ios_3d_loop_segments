@@ -14,6 +14,18 @@
     Clear  : remove every SKYBOX server this PC added
   Each runs quest\Watch-LoopSegmentsQuestLanTab.ps1 in the background; the page polls /status.json.
 
+  3d_playlist_local: Space presses Space in the workflow's PowerShell window (pause / resume the leaf
+  export); Enter runs 3d_playlist_local's Invoke-PlaylistLocalQuestShutdown.ps1 in the background (force-stop the
+  Quest apps reading the workflow output and the configured players, Enter in the workflow window,
+  Quest Browser tabs / history, sensor back on, Quest Wi-Fi off, then make sure the window exits).
+  Also started without the companion by a 3d_playlist_local workflow
+  (3d_playlist_local\individual_transcode\quest\Start-PlaylistLocalQuestSession.ps1, -CompanionPid = the workflow's PID).
+
+  LAN bandwidth (PC -> Quest): on the headset the page downloads GET /speedtest/blob (64 MB) and posts
+  bytes + milliseconds to POST /speedtest/result (only recorded from a non-loopback client, i.e. the
+  headset). The result, with the recommended segment bitrate (80% of the measured Mbps, 5-100), goes
+  to %TEMP%\loopsegments-quest-lan-throughput.json; 3d_playlist_local's segment encodes read it.
+
   LAN bandwidth (PC <-> phone): Measure LAN runs lan\Measure-LoopSegmentsLanThroughput.ps1 (HTTP,
   plus the rclone mount when it is up; never reboots routers) and shows its result file
   %TEMP%\loopsegments-lan-throughput.json, which the companion's startup probe also writes.
@@ -127,6 +139,33 @@ function Test-ControlAuth {
     return [System.Security.Cryptography.CryptographicOperations]::FixedTimeEquals($want, $got)
 }
 
+# ---- PC browser sign-in (3d_playlist_local workflow start opens http://127.0.0.1:<port>/pc?t=<token>) ----
+
+# Token written by 3d_playlist_local's Start-PlaylistLocalQuestSession.ps1; re-read per request (also works for the
+# companion's server). Loopback clients only: /pc?t=<token> sets an HttpOnly cookie and redirects to
+# the page, so the PC tab needs no Basic login and its session history stays one entry (the page
+# can then close its own tab after Enter).
+$script:PcTokenPath = Join-Path $env:TEMP 'loopsegments-quest-control-pctoken.txt'
+
+function Get-ControlPcToken {
+    try { $t = (Get-Content -LiteralPath $script:PcTokenPath -Raw -ErrorAction Stop).Trim(); if ($t.Length -ge 32) { return $t } } catch {}
+    return $null
+}
+
+function Test-ControlTokenEqual {
+    param([string] $A, [string] $B)
+    if ([string]::IsNullOrEmpty($A) -or [string]::IsNullOrEmpty($B)) { return $false }
+    return [System.Security.Cryptography.CryptographicOperations]::FixedTimeEquals([Text.Encoding]::UTF8.GetBytes($A), [Text.Encoding]::UTF8.GetBytes($B))
+}
+
+function Test-ControlPcCookie {
+    param([string] $HeaderText, [System.Net.IPAddress] $Remote)
+    if (-not [System.Net.IPAddress]::IsLoopback($Remote)) { return $false }
+    $c = Get-ControlHeader -HeaderText $HeaderText -Name 'Cookie'
+    if (-not $c -or $c -notmatch '(?:^|;\s*)qcpc=([A-Za-z0-9]+)') { return $false }
+    return (Test-ControlTokenEqual -A $Matches[1] -B (Get-ControlPcToken))
+}
+
 # ---- HTTP ----
 
 function Read-ControlRequest {
@@ -158,7 +197,7 @@ function Write-ControlResponse {
         [string] $ContentType = 'application/json; charset=utf-8',
         [string[]] $ExtraHeaders = @()
     )
-    $reason = @{ 200 = 'OK'; 202 = 'Accepted'; 400 = 'Bad Request'; 401 = 'Unauthorized'; 403 = 'Forbidden'; 404 = 'Not Found'; 405 = 'Method Not Allowed'; 409 = 'Conflict' }[$StatusCode]
+    $reason = @{ 200 = 'OK'; 202 = 'Accepted'; 302 = 'Found'; 400 = 'Bad Request'; 401 = 'Unauthorized'; 403 = 'Forbidden'; 404 = 'Not Found'; 405 = 'Method Not Allowed'; 409 = 'Conflict' }[$StatusCode]
     if (-not $reason) { $reason = 'Error' }
     $payload = [Text.Encoding]::UTF8.GetBytes($Body)
     $h = "HTTP/1.1 $StatusCode $reason`r`nContent-Type: $ContentType`r`nContent-Length: $($payload.Length)`r`n" +
@@ -287,6 +326,127 @@ function Invoke-ControlPlaylistSpace {
     return $r
 }
 
+# ---- LAN bandwidth PC -> Quest (the page on the headset downloads a blob from here) ----
+
+$script:QuestLanResultPath = Join-Path $env:TEMP 'loopsegments-quest-lan-throughput.json'
+$script:BlobChunk = $null
+
+# Raw octet-stream body of -Bytes bytes (random 1 MiB chunk repeated: not compressible).
+function Write-ControlBlob {
+    param([System.IO.Stream] $Stream, [long] $Bytes)
+    if (-not $script:BlobChunk) {
+        $script:BlobChunk = [byte[]]::new(1MB)
+        [System.Security.Cryptography.RandomNumberGenerator]::Fill($script:BlobChunk)
+    }
+    try { $Stream.WriteTimeout = 20000 } catch {}
+    $h = "HTTP/1.1 200 OK`r`nContent-Type: application/octet-stream`r`nContent-Length: $Bytes`r`nCache-Control: no-store`r`n" +
+         "X-Content-Type-Options: nosniff`r`nConnection: close`r`n`r`n"
+    $hb = [Text.Encoding]::ASCII.GetBytes($h)
+    $Stream.Write($hb, 0, $hb.Length)
+    $left = $Bytes
+    while ($left -gt 0) {
+        $n = [int][Math]::Min([long]$script:BlobChunk.Length, $left)
+        $Stream.Write($script:BlobChunk, 0, $n)
+        $left -= $n
+    }
+    $Stream.Flush()
+}
+
+function Save-ControlQuestLanResult {
+    param([long] $Bytes, [double] $Ms, [string] $Client)
+    $mbps = [Math]::Round(($Bytes * 8.0) / ($Ms / 1000.0) / 1e6, 1)
+    $rec = [int][Math]::Floor($mbps * 0.8)
+    if ($rec -lt 5) { $rec = 5 }
+    if ($rec -gt 100) { $rec = 100 }
+    $o = [ordered]@{
+        ok = $true; path = 'pc->quest'; measuredMbps = $mbps; recommendedMaxMediaBitrateMbps = $rec; recommendHeadroom = 0.8
+        bytes = $Bytes; seconds = [Math]::Round($Ms / 1000.0, 2); client = $Client; measuredAtUtc = [DateTime]::UtcNow.ToString('o')
+    }
+    $tmp = "$($script:QuestLanResultPath).tmp"
+    ($o | ConvertTo-Json -Compress) | Set-Content -LiteralPath $tmp -Encoding utf8
+    Move-Item -LiteralPath $tmp -Destination $script:QuestLanResultPath -Force
+    Write-ControlLog ("QUEST_LAN {0} Mbps from {1} ({2} bytes in {3} ms) -> segment bitrate {4} Mbps" -f $mbps, $Client, $Bytes, [int]$Ms, $rec)
+    return $o
+}
+
+function Get-ControlQuestLanStatus {
+    if (-not (Test-Path -LiteralPath $script:QuestLanResultPath)) { return $null }
+    try {
+        $j = Get-Content -LiteralPath $script:QuestLanResultPath -Raw | ConvertFrom-Json
+        $at = [DateTime]::Parse([string]$j.measuredAtUtc, $null, [Globalization.DateTimeStyles]::RoundtripKind)
+        $j | Add-Member -NotePropertyName ageSec -NotePropertyValue ([int]([DateTime]::UtcNow - $at.ToUniversalTime()).TotalSeconds) -Force
+        return $j
+    } catch { return $null }
+}
+
+# ---- 3d_playlist_local Enter: stop the workflow + Quest cleanup (Invoke-PlaylistLocalQuestShutdown.ps1) ----
+
+# The script lives in 3d_playlist_local (individual_transcode\quest); each workflow registers its
+# own copy in %TEMP%\loopsegments-playlist-session.json. Newest running one wins.
+$script:PlaylistSessionPath = Join-Path $env:TEMP 'loopsegments-playlist-session.json'
+$script:DefaultShutdownScript = 'P:\all_scripts\3d_playlist_local\individual_transcode\quest\Invoke-PlaylistLocalQuestShutdown.ps1'
+
+function Get-ControlShutdownScript {
+    try {
+        $list = @((Get-Content -LiteralPath $script:PlaylistSessionPath -Raw -ErrorAction Stop | ConvertFrom-Json).sessions)
+        [array]::Reverse($list)
+        foreach ($e in $list) {
+            if (-not $e -or -not $e.PSObject.Properties['shutdownScript']) { continue }
+            if (-not (Get-Process -Id ([int]$e.pid) -ErrorAction SilentlyContinue)) { continue }
+            if (Test-Path -LiteralPath ([string]$e.shutdownScript) -PathType Leaf) { return [string]$e.shutdownScript }
+        }
+    } catch {}
+    if (Test-Path -LiteralPath $script:DefaultShutdownScript -PathType Leaf) { return $script:DefaultShutdownScript }
+    return $null
+}
+$script:ShutdownStatusPath = Join-Path $env:TEMP 'loopsegments-playlist-shutdown.json'
+
+function Get-ControlPlaylistStop {
+    if (-not (Test-Path -LiteralPath $script:ShutdownStatusPath)) { return $null }
+    try { $j = Get-Content -LiteralPath $script:ShutdownStatusPath -Raw | ConvertFrom-Json } catch { return $null }
+    # A run that died mid-way (killed, PC restarted) is not 'running' any more.
+    if ($j.state -eq 'running' -and -not (Get-Process -Id ([int]$j.pid) -ErrorAction SilentlyContinue)) { $j.state = 'stopped' }
+    return $j
+}
+
+# Detached from this server on purpose: the workflow exits during the run, and this server stops
+# with it (-CompanionPid), while the run goes on with the Quest steps.
+function Start-ControlPlaylistShutdown {
+    $cur = Get-ControlPlaylistStop
+    if ($cur -and $cur.state -eq 'running') { return 'running' }
+    $shutdownPath = Get-ControlShutdownScript
+    if (-not $shutdownPath) { Write-ControlLog 'PLAYLIST_ENTER no Invoke-PlaylistLocalQuestShutdown.ps1 found'; return 'missing' }
+    # Started through WMI (Win32_Process.Create), so its parent is not this server: the companion's
+    # quit kills this server with its whole process tree, and the run has to outlive that.
+    $exe = (Get-Process -Id $PID).Path
+    $cmd = '"{0}" -NoProfile -NoLogo -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{1}"' -f $exe, $shutdownPath
+    $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $startup }
+    if ($r.ReturnValue -ne 0) { Write-ControlLog "PLAYLIST_ENTER Win32_Process.Create failed ($($r.ReturnValue))"; return 'missing' }
+    $newPid = [int]$r.ProcessId
+    try { @{ pid = $newPid; state = 'running'; startedAt = (Get-Date -Format 'HH:mm:ss'); steps = @() } | ConvertTo-Json -Compress | Set-Content -LiteralPath $script:ShutdownStatusPath -Encoding utf8 } catch {}
+    Write-ControlLog "PLAYLIST_ENTER started End session (pid $newPid, detached, $shutdownPath)"
+    return 'started'
+}
+
+# For the End session button: registered 3d_playlist_local workflows still running, and the companion
+# (its launcher shell or its Chromium; not its REST log sink, which can outlive it).
+function Get-ControlSessionParts {
+    $wf = @()
+    try {
+        foreach ($e in @((Get-Content -LiteralPath $script:PlaylistSessionPath -Raw -ErrorAction Stop | ConvertFrom-Json).sessions)) {
+            if ($e -and (Get-Process -Id ([int]$e.pid) -ErrorAction SilentlyContinue)) { $wf += [string]$e.name }
+        }
+    } catch {}
+    $comp = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe' OR Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+            Where-Object {
+                $c = [string]$_.CommandLine
+                ($_.Name -ne 'chrome.exe' -and $c -match '(?i)pcloud_web_companion[\\/]+(Run-PCloudWebCompanion|_run_chromium)\.ps1') -or
+                ($_.Name -eq 'chrome.exe' -and $c -notlike '*--type=*' -and $c -match '(?i)pcloud_web_companion[\\/]+chromium-profile')
+            }).Count -gt 0
+    return [ordered]@{ workflows = @($wf); companion = $comp }
+}
+
 function Get-ControlStatus {
     $s = Get-ControlSettings
     $lan = Get-ControlLanUrl
@@ -310,6 +470,9 @@ function Get-ControlStatus {
         action        = (Get-ControlActionStatus)
         log           = $log
         lanBw         = (Get-ControlLanBwStatus)
+        playlistStop  = (Get-ControlPlaylistStop)
+        session       = (Get-ControlSessionParts)
+        questLan      = (Get-ControlQuestLanStatus)
     }
 }
 
@@ -360,7 +523,7 @@ $script:PageHtml = @'
 <main>
   <header>
     <h1>Quest control</h1>
-    <p class="sub">Loop Segments PC companion</p>
+    <p class="sub">Loop Segments PC companion / 3d_playlist_local</p>
   </header>
 
   <div class="tiles">
@@ -385,13 +548,30 @@ $script:PageHtml = @'
       <h2>3d_playlist_local</h2>
       <div class="buttons">
         <button id="plSpace" class="primary">Space: pause / resume export</button>
+        <button id="plEnter" class="danger">End session: stop all</button>
       </div>
+      <div id="plParts" class="msg"></div>
       <div id="plMsg" class="msg" role="status" aria-live="polite"></div>
-      <p class="note">Presses Space once in the 3d_playlist_local PowerShell window on the PC (run_batch_*.ps1 / Run-TranscodeOrchestrator.ps1), the same as pressing it there: while a clip runs it pauses or resumes the leaf DLNA export. The window does not need focus.</p>
+      <pre id="plStop" hidden></pre>
+      <p class="note">Space presses Space once in the 3d_playlist_local PowerShell window on the PC (run_batch_*.ps1 / Run-TranscodeOrchestrator.ps1), the same as pressing it there: while a clip runs it pauses or resumes the leaf DLNA export. The window does not need focus.</p>
+      <p class="note">End session stops whatever is running, in this order, and skips what is not: force-stops the Quest apps reading the segments and the configured players (SKYBOX); presses Enter in every 3d_playlist_local window and waits for it to exit (killed after a few minutes); closes the control page Chromium on the PC; closes the Loop Segments companion's Chromium, so its normal quit runs (Quest tabs, history, SKYBOX, sensor, Wi-Fi off, the phone mount, iPhone Home). Without the companion it cleans up the headset itself: closes these tabs, deletes their history, turns the sensor back on, switches the Wi-Fi off. The Quest history is deleted once either way.</p>
     </section>
   </div>
 
   <div class="col">
+    <section>
+      <h2>LAN bandwidth: PC &rarr; Quest</h2>
+      <dl>
+        <dt>Result</dt><dd id="qlMbps">-</dd>
+        <dt>Segment bitrate</dt><dd id="qlRec">-</dd>
+        <dt>Measured</dt><dd id="qlAt">-</dd>
+      </dl>
+      <div class="buttons">
+        <button id="qlMeasure" class="primary">Measure PC &rarr; Quest</button>
+      </div>
+      <div id="qlMsg" class="msg" role="status" aria-live="polite"></div>
+      <p class="note">The headset downloads 64 MB from this PC (the same Wi-Fi path DLNA uses). Runs by itself each time this page opens on the Quest at a 3d_playlist_local workflow start; 3d_playlist_local encodes the next minute segments at 80% of the result (5-100 Mbps). Only the headset can run it.</p>
+    </section>
     <section>
       <h2>LAN bandwidth: PC &harr; phone</h2>
       <dl>
@@ -444,7 +624,10 @@ $script:PageHtml = @'
       if (key !== lastShown || $('msg').textContent === '') { setMsg(text, ok ? 'ok' : 'bad'); lastShown = key; }
     }
     const bwRunning = renderBw(s.lanBw || {});
-    schedule((running || bwRunning) ? 1500 : 10000);
+    const stopRunning = renderStop(s.playlistStop);
+    renderParts(s.session);
+    renderQuestLan(s.questLan);
+    schedule((running || bwRunning || stopRunning) ? 1500 : 10000);
   }
 
   function mbps(v) { return (v === null || v === undefined) ? '-' : Number(v).toFixed(1) + ' Mbps'; }
@@ -490,6 +673,99 @@ $script:PageHtml = @'
     schedule(800);
   });
 
+  // ---- PC -> Quest bandwidth (runs on the headset only) ----
+  let qlRunning = false, qlAutoDone = false;
+  function renderQuestLan(q) {
+    if (q && q.ok) {
+      $('qlMbps').textContent = Number(q.measuredMbps).toFixed(1) + ' Mbps (' + (q.bytes / 1048576).toFixed(0) + ' MB in ' + q.seconds + ' s, ' + q.client + ')';
+      $('qlMbps').className = 'ok';
+      $('qlRec').textContent = q.recommendedMaxMediaBitrateMbps + ' Mbps (80%, 5-100)';
+      $('qlAt').textContent = new Date(q.measuredAtUtc).toLocaleString();
+    }
+    $('qlMeasure').disabled = qlRunning || !onQuest;
+    if (!onQuest && !qlRunning && !$('qlMsg').textContent) { $('qlMsg').textContent = 'Run it from the headset (this page on the Quest measures by itself when it opens).'; $('qlMsg').className = 'msg'; }
+    // A fresh page on the headset measures once (unless a result under 2 min old exists).
+    if (onQuest && !qlAutoDone && !qlRunning) { qlAutoDone = true; if (!(q && q.ok && q.ageSec < 120)) measureQuestLan(); }
+  }
+
+  async function measureQuestLan() {
+    const m = $('qlMsg');
+    qlRunning = true; $('qlMeasure').disabled = true;
+    m.textContent = 'Measuring PC -> Quest (64 MB)...'; m.className = 'msg warn';
+    try {
+      const r = await fetch('speedtest/blob?bytes=' + (64 * 1048576) + '&n=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const reader = r.body.getReader();
+      let got = 0, t0 = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (t0 === null) t0 = performance.now();   // from the first byte: leaves out the request latency
+        got += value.length;
+      }
+      const ms = performance.now() - t0;
+      const p = await fetch('speedtest/result?bytes=' + got + '&ms=' + ms.toFixed(1), { method: 'POST', headers: { 'X-Quest-Control': '1' } });
+      const j = await p.json().catch(() => ({}));
+      if (!p.ok) throw new Error(j.error || ('HTTP ' + p.status));
+      m.textContent = 'Measured ' + Number(j.measuredMbps).toFixed(1) + ' Mbps at ' + new Date().toLocaleTimeString() + ': segments now ' + j.recommendedMaxMediaBitrateMbps + ' Mbps.'; m.className = 'msg ok';
+      renderQuestLan(j);
+    } catch (e) { m.textContent = 'Measurement failed: ' + e.message; m.className = 'msg bad'; }
+    qlRunning = false; $('qlMeasure').disabled = !onQuest;
+  }
+  $('qlMeasure').addEventListener('click', () => { if (!qlRunning) measureQuestLan(); });
+
+  // Enter run progress; returns true while it runs.
+  function renderStop(j) {
+    const pre = $('plStop'), b = $('plEnter');
+    if (!j) { pre.hidden = true; b.disabled = false; return false; }
+    const running = j.state === 'running';
+    b.disabled = running;
+    const mark = { ok: 'ok  ', warn: 'warn', bad: 'FAIL', running: '... ', skip: '--  ' };
+    const lines = ['End session ' + (running ? 'running' : j.state) + ' (started ' + j.startedAt + (j.doneAt ? ', done ' + j.doneAt : '') + ')'];
+    (j.steps || []).forEach(st => lines.push((mark[st.level] || '    ') + ' ' + st.name + ': ' + st.result));
+    pre.textContent = lines.join('\n');
+    pre.hidden = false;
+    return running;
+  }
+
+  // After Enter: on the PC the tab closes itself (one history entry, so the browser allows it). On the
+  // Quest the cleanup's history step closes it within seconds: it keeps one tab open, which Quest
+  // Browser's History list needs, so closing it from here could leave no tab and block the delete.
+  const onQuest = /OculusBrowser|Quest/i.test(navigator.userAgent);
+  function closeOwnTab() {
+    if (onQuest) { $('plMsg').textContent += ' (closed by the Quest cleanup in a few seconds)'; return; }
+    setTimeout(() => {
+      window.close();
+      setTimeout(() => { $('plMsg').textContent = 'End session started. The browser did not let this tab close itself: close it by hand.'; }, 600);
+    }, 1200);
+  }
+
+  // What End session would stop right now.
+  let partsText = '';
+  function renderParts(p) {
+    const list = [];
+    if (p && p.workflows && p.workflows.length) list.push('3d_playlist_local (' + p.workflows.join(', ') + ')');
+    if (p && p.companion) list.push('Loop Segments companion');
+    partsText = list.length ? list.join(' + ') : 'nothing running: Quest cleanup only';
+    $('plParts').textContent = 'End session stops: ' + partsText;
+  }
+
+  $('plEnter').addEventListener('click', async () => {
+    if (!confirm('End session: stop ' + partsText + ', then clean up the headset (players, tabs, history, sensor, Wi-Fi off)?')) return;
+    const b = $('plEnter'), m = $('plMsg');
+    b.disabled = true; m.textContent = 'Starting End session...'; m.className = 'msg warn';
+    try {
+      const r = await fetch('playlist/enter', { method: 'POST', headers: { 'X-Quest-Control': '1' } });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        m.textContent = 'End session started at ' + new Date().toLocaleTimeString() + '. This tab closes now.'; m.className = 'msg ok';
+        closeOwnTab();
+      }
+      else { m.textContent = 'Not started: ' + (j.error || ('HTTP ' + r.status)) + '.'; m.className = 'msg bad'; b.disabled = false; }
+    } catch (e) { m.textContent = 'Request failed: ' + e.message; m.className = 'msg bad'; b.disabled = false; }
+    schedule(800);
+  });
+
   $('plSpace').addEventListener('click', async () => {
     const b = $('plSpace'), m = $('plMsg');
     b.disabled = true; m.textContent = 'Pressing Space...'; m.className = 'msg warn';
@@ -511,7 +787,7 @@ $script:PageHtml = @'
       if (!r.ok) throw new Error('HTTP ' + r.status);
       render(await r.json());
     } catch (e) {
-      setMsg('Companion not reachable (' + e.message + '). It stops when the companion quits.', 'bad');
+      setMsg('PC not reachable (' + e.message + '). This page stops when the companion or the 3d_playlist_local workflow quits.', 'bad');
       buttons.forEach(b => b.disabled = true);
       $('bwMeasure').disabled = true;
       schedule(5000);
@@ -563,12 +839,26 @@ function Invoke-ControlClient {
     $s = $req.Stream
     if ($req.RequestLine -notmatch '^(\S+)\s+(\S+)') { Write-ControlResponse -Stream $s -StatusCode 400 -Body '{"ok":false}'; return }
     $method = $Matches[1].ToUpperInvariant()
-    $path = ($Matches[2] -split '\?')[0]
+    $target = $Matches[2]
+    $path = ($target -split '\?')[0]
+    $query = if ($target.Contains('?')) { $target.Substring($target.IndexOf('?') + 1) } else { '' }
     if (-not (Test-ControlHostHeader -HeaderText $req.HeaderText)) {
         Write-ControlResponse -Stream $s -StatusCode 400 -Body '{"ok":false,"error":"use the IP address"}'
         return
     }
-    if (-not (Test-ControlAuth -HeaderText $req.HeaderText)) {
+    if ($method -eq 'GET' -and $path -eq '/pc') {
+        $given = if ($query -match '(?:^|&)t=([A-Za-z0-9]+)') { $Matches[1] } else { '' }
+        $tok = Get-ControlPcToken
+        if ([System.Net.IPAddress]::IsLoopback($remote) -and (Test-ControlTokenEqual -A $given -B $tok)) {
+            Write-ControlResponse -Stream $s -StatusCode 302 -Body '' -ContentType 'text/plain' -ExtraHeaders @('Location: /', "Set-Cookie: qcpc=$tok; Path=/; HttpOnly; SameSite=Strict")
+        } else {
+            Write-ControlLog "PC_TOKEN_REFUSED from $remote"
+            Start-Sleep -Seconds 1
+            Write-ControlResponse -Stream $s -StatusCode 403 -Body '{"ok":false,"error":"bad or expired link"}'
+        }
+        return
+    }
+    if (-not (Test-ControlPcCookie -HeaderText $req.HeaderText -Remote $remote) -and -not (Test-ControlAuth -HeaderText $req.HeaderText)) {
         if (Get-ControlHeader -HeaderText $req.HeaderText -Name 'Authorization') {
             Write-ControlLog "AUTH_FAILED from $remote"
             Start-Sleep -Seconds 1
@@ -615,6 +905,46 @@ function Invoke-ControlClient {
         }
         $r = Invoke-ControlPlaylistSpace
         Write-ControlResponse -Stream $s -StatusCode $(if ($r.ok) { 200 } else { 409 }) -Body (ConvertTo-ControlJson $r)
+    } elseif ($method -eq 'GET' -and $path -eq '/speedtest/blob') {
+        $n = [long](64MB)
+        if ($query -match '(?:^|&)bytes=(\d+)') { $n = [long]$Matches[1] }
+        $n = [Math]::Max([long]1MB, [Math]::Min([long]128MB, $n))
+        Write-ControlLog ("QUEST_LAN_BLOB {0} bytes to {1}" -f $n, $remote)
+        Write-ControlBlob -Stream $s -Bytes $n
+    } elseif ($path -eq '/speedtest/result') {
+        if ($method -ne 'POST') { Write-ControlResponse -Stream $s -StatusCode 405 -Body '{"ok":false,"error":"POST only"}'; return }
+        if ((Get-ControlHeader -HeaderText $req.HeaderText -Name 'X-Quest-Control') -ne '1') {
+            Write-ControlResponse -Stream $s -StatusCode 403 -Body '{"ok":false,"error":"missing X-Quest-Control header"}'
+            return
+        }
+        # PC -> PC (loopback) says nothing about the headset's link.
+        if ([System.Net.IPAddress]::IsLoopback($remote)) {
+            Write-ControlResponse -Stream $s -StatusCode 409 -Body '{"ok":false,"error":"run the test from the headset"}'
+            return
+        }
+        $b = 0L; $ms = 0.0
+        if ($query -match '(?:^|&)bytes=(\d+)') { $b = [long]$Matches[1] }
+        if ($query -match '(?:^|&)ms=(\d+(?:\.\d+)?)') { $ms = [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture) }
+        if ($b -lt 1MB -or $b -gt 128MB -or $ms -lt 20 -or $ms -gt 600000) {
+            Write-ControlResponse -Stream $s -StatusCode 400 -Body '{"ok":false,"error":"bad measurement"}'
+            return
+        }
+        $o = Save-ControlQuestLanResult -Bytes $b -Ms $ms -Client ([string]$remote)
+        Write-ControlResponse -Stream $s -StatusCode 200 -Body (ConvertTo-ControlJson $o)
+    } elseif ($path -eq '/playlist/enter') {
+        if ($method -ne 'POST') { Write-ControlResponse -Stream $s -StatusCode 405 -Body '{"ok":false,"error":"POST only"}'; return }
+        if ((Get-ControlHeader -HeaderText $req.HeaderText -Name 'X-Quest-Control') -ne '1') {
+            Write-ControlResponse -Stream $s -StatusCode 403 -Body '{"ok":false,"error":"missing X-Quest-Control header"}'
+            return
+        }
+        $st = Start-ControlPlaylistShutdown
+        if ($st -eq 'started') {
+            Write-ControlResponse -Stream $s -StatusCode 202 -Body '{"ok":true,"action":"playlist-enter","state":"running"}'
+        } elseif ($st -eq 'missing') {
+            Write-ControlResponse -Stream $s -StatusCode 409 -Body '{"ok":false,"error":"3d_playlist_local Invoke-PlaylistLocalQuestShutdown.ps1 not found"}'
+        } else {
+            Write-ControlResponse -Stream $s -StatusCode 409 -Body '{"ok":false,"error":"End session is already running"}'
+        }
     } elseif ($method -eq 'OPTIONS') {
         # No CORS: cross-origin preflights fail, so other sites cannot send the action header.
         Write-ControlResponse -Stream $s -StatusCode 405 -Body '{"ok":false}'

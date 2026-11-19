@@ -84,6 +84,23 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questControlPageOnQuest = $true
         # Control page SKYBOX Push / Update / Clear buttons, and removal of the server at companion close.
         questSkyboxWebDav       = $true
+        # 3d_playlist_local workflows (run_batch_vr_hybrid / run_batch_fisheye_v360 / Run-TranscodeOrchestrator):
+        # at start, hold the proximity sensor off and push the control page to the headset
+        # (3d_playlist_local\individual_transcode\quest\Start-PlaylistLocalQuestSession.ps1); the page's
+        # Enter button runs Invoke-PlaylistLocalQuestShutdown.ps1 there.
+        questPlaylistSession    = $true
+        # Also open the control page in this PC's default browser at workflow start.
+        questPlaylistOpenOnPc   = $true
+        # Minutes the workflow start waits for an asleep / off-adb headset before giving up on opening the page.
+        questPlaylistOpenWaitMinutes = 30
+        # Enter button: Quest media players force-stopped whether or not they read the workflow output.
+        questPlaylistMediaPlayers = @('xyz.skybox.player.ovr')
+        # Enter button: never force-stopped, even with a connection to this PC (browser, PC streaming, system UI).
+        questPlaylistKeepPackages = @('com.oculus.browser', 'VirtualDesktop.Android', 'com.oculus.xrstreamingclient', 'com.oculus.systemux', 'com.oculus.vrshell')
+        # Enter button: extra Quest Browser history origins to delete ({pc} = this PC's address), e.g. 'http://{pc}:8200'.
+        questPlaylistHistoryOrigins = @()
+        # Enter button: seconds the workflow window gets to exit after Enter before it is killed (0 = never kill).
+        questPlaylistEnterExitSec = 180
         webdavUser              = 'admin'
         webdavPassword          = ''
         iCloudDownloads         = ''

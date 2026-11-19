@@ -64,6 +64,13 @@
                    would wake it); it gets the override once someone puts it on. Re-applies after a headset reboot. Never re-enables
                    the sensor itself (the companion's cleanup does, after clearing history).
 
+  -OpenControlPage : 3d_playlist_local workflow start: wait (-WaitMinutes) for an awake headset and open
+                   only the Quest control page, signed in (ignores questControlPageOnQuest).
+  -StopMediaApps : control page Enter button: force-stop the Quest apps with a TCP connection to this PC
+                   (players reading the workflow output) plus questPlaylistMediaPlayers / -MediaPackages;
+                   never questPlaylistKeepPackages.
+  -KeepAwakeSession -RestoreProximity : as -KeepAwakeSession, and turn the sensor back on once -ParentPid exits.
+
   Without a mode switch it opens the page once, like -Once (there is no keep-watching mode).
 
   Needs developer mode on the Quest and adb on this PC (winget install Google.PlatformTools).
@@ -161,7 +168,29 @@ param(
     # entries saved in %TEMP%\loopsegments-quest-history-pending.json; gives up after
     # questHistoryRetryMinutes (120) or when the companion starts again. A Wi-Fi->www AP bounce the
     # quit handed over (%TEMP%\loopsegments-wifi-bounce-pending.json) runs after the delete / give-up.
-    [switch] $RetryHistory
+    [switch] $RetryHistory,
+    # 3d_playlist_local workflow start: open only the Quest control page (signed in), waiting up to
+    # -WaitMinutes for the headset to be awake. Ignores questControlPageOnQuest.
+    [switch] $OpenControlPage,
+    # Control page Enter button: force-stop Quest apps with a TCP connection to this PC (reading the
+    # workflow output, e.g. over DLNA) plus -MediaPackages / questPlaylistMediaPlayers.
+    [switch] $StopMediaApps,
+    [string[]] $MediaPackages = @(),
+    # With -ClearHistory: more origins to delete (http://host:port; {pc} = this PC's address).
+    [string[]] $ExtraOrigins = @(),
+    # With -KeepAwakeSession: once -ParentPid exits, turn the sensor back on (3d_playlist_local
+    # workflow session; the companion's cleanup does that itself).
+    [switch] $RestoreProximity,
+    # With -ClearHistory -ExtraOrigins: delete only those origins' history entries (no tabs, sensor,
+    # Wi-Fi or range fallback). The end-session button runs it before the companion's own quit
+    # cleanup, which does not know questPlaylistHistoryOrigins.
+    [switch] $OnlyExtraOrigins,
+    # Read-only: print every Quest Browser history entry (origin + path, no login, no query string)
+    # and whether the history delete would match it. Nothing is deleted or logged.
+    [switch] $ListHistory,
+    # Read-only: print open tabs, Recently closed items and the browser UI's handlers / store actions
+    # that look like they remove Recently closed items (to fix the sweep). Nothing is changed.
+    [switch] $ProbeRecentlyClosed
 )
 
 Set-StrictMode -Version Latest
@@ -613,6 +642,30 @@ function Get-QuestControlOrigin {
     return ('http://{0}:{1}' -f $ip, (Get-QuestControlPort))
 }
 
+# Control page origins actually opened on the headset (%TEMP%\loopsegments-quest-control-origins.json,
+# last 8). The current one is worked out from this PC's route to the headset, which changes when
+# the headset moves to another network (e.g. after the phone LAN AP was restarted): the history
+# delete and the tab closing use these too, so an entry from the address the page was opened on is
+# still found.
+$script:ControlOriginsPath = Join-Path $env:TEMP 'loopsegments-quest-control-origins.json'
+
+function Get-QuestSavedControlOrigins {
+    try { return @((Get-Content -LiteralPath $script:ControlOriginsPath -Raw -ErrorAction Stop | ConvertFrom-Json).origins | Where-Object { $_ }) } catch { return @() }
+}
+
+function Add-QuestSavedControlOrigin {
+    param([string] $Origin)
+    if (-not $Origin) { return }
+    $list = @(@($Origin) + @(Get-QuestSavedControlOrigins | Where-Object { $_ -ne $Origin }) | Select-Object -First 8)
+    try { @{ origins = $list } | ConvertTo-Json | Set-Content -LiteralPath $script:ControlOriginsPath -Encoding utf8 } catch {}
+}
+
+# The current control page origin (when the route to the headset is known) plus the saved ones.
+function Get-QuestControlOrigins {
+    param([string] $DeviceSerial)
+    return @(@(Get-QuestControlOrigin -DeviceSerial $DeviceSerial) + @(Get-QuestSavedControlOrigins) | Where-Object { $_ } | Select-Object -Unique)
+}
+
 # Is the companion's control page server running? (it writes %TEMP%\loopsegments-quest-control.json)
 function Test-QuestControlPageRunning {
     $state = Join-Path $env:TEMP 'loopsegments-quest-control.json'
@@ -622,9 +675,12 @@ function Test-QuestControlPageRunning {
 
 # Open on Quest: also open the control page in its own normal tab, signed in with the LAN login
 # (reused if already open). Needs an open DevTools session. Never fails the LAN page.
+$script:ControlTabOpened = $false
 function Open-QuestControlTab {
-    param([string] $DeviceSerial)
-    if ($script:Cfg -and $script:Cfg.Contains('questControlPageOnQuest') -and $script:Cfg.questControlPageOnQuest -eq $false) { return }
+    # -Force: open even with questControlPageOnQuest=false (-OpenControlPage). Sets $script:ControlTabOpened.
+    param([string] $DeviceSerial, [switch] $Force)
+    $script:ControlTabOpened = $false
+    if (-not $Force -and $script:Cfg -and $script:Cfg.Contains('questControlPageOnQuest') -and $script:Cfg.questControlPageOnQuest -eq $false) { return }
     if (-not (Test-QuestControlPageRunning)) { Write-QuestLog 'Control page: not running on this PC - not opened.'; return }
     $origin = Get-QuestControlOrigin -DeviceSerial $DeviceSerial
     if (-not $origin) { Write-QuestLog 'Control page: no PC address on the route to the headset - not opened.'; return }
@@ -642,6 +698,8 @@ function Open-QuestControlTab {
         if (Open-QuestSignedInTab -DeviceSerial $DeviceSerial -PlainUrl $plain -LoginUrl $loginUrl -Origins @($origin)) {
             $which = if ($script:QuestReusedTab) { 'reused open tab' } else { 'new tab' }
             Write-QuestLog "Control page: opened $plain in Quest browser ($which)."
+            $script:ControlTabOpened = $true
+            Add-QuestSavedControlOrigin -Origin $origin
         } else {
             Write-QuestLog "Control page: $plain did not load on the Quest (Windows Firewall blocking port $(Get-QuestControlPort)? see quest\README.md)."
         }
@@ -834,7 +892,7 @@ function Save-QuestBrowserOurs {
     $user = 0
     if ($running -and (Open-QuestDevTools -DeviceSerial $DeviceSerial)) {
         try {
-            $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigin -DeviceSerial $DeviceSerial) | Where-Object { $_ })
+            $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial $DeviceSerial) | Where-Object { $_ })
             $user = @(Get-QuestUserTabs -Origins $origins).Count
         } finally { Close-QuestDevTools }
     }
@@ -862,7 +920,7 @@ function Close-QuestBrowserIfEmpty {
     Start-Sleep -Seconds 5
     $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'force-stop', $BrowserPackage)
     if ($r.Code -ne 0) { Write-QuestLog "Browser: force-stop failed (code $($r.Code))."; return 'failed' }
-    Write-QuestLog 'Browser: closed Quest Browser (it was started for Loop Segments and no other tabs were open).'
+    Write-QuestLog 'Browser: closed Quest Browser (no tab of yours was open, only empty / blank pages).'
     return 'closed'
 }
 
@@ -1065,6 +1123,19 @@ function Invoke-QuestKeepAwakeSession {
         if ($note -ne $lastNote) { Write-QuestLog "Keep-awake: $note"; $lastNote = $note }
         for ($i = 0; $i -lt 20 -and (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
     }
+    if ($RestoreProximity) {
+        # 3d_playlist_local workflow ended by itself (the Enter button stops this process first and
+        # turns the sensor on in its own order). Leave it held off while a companion session runs.
+        $companion = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { ([string]$_.CommandLine) -like '*-KeepAwakeSession*' -and ([string]$_.CommandLine) -notlike '*-RestoreProximity*' -and [int]$_.ProcessId -ne $PID })
+        if ($companion.Count) {
+            Write-QuestLog 'Keep-awake: workflow gone - sensor left off (the companion session still holds it).'
+        } else {
+            Write-QuestLog 'Keep-awake: workflow gone - turning the proximity sensor back on.'
+            [void](Invoke-QuestEnableProximity)
+        }
+        return 0
+    }
     Write-QuestLog 'Keep-awake: companion gone - stopping (sensor is re-enabled by the companion cleanup).'
     return 0
 }
@@ -1264,6 +1335,28 @@ function Start-QuestHistoryRetry {
 
 # The history delete, then the Recently closed sweep (Invoke-QuestRecentlyClosedSweep) and, when the
 # sweep moved items onto the phone page, one more delete for those. DevTools must be open.
+# Visit -HelperUrl in an open empty tab (new-tab / blank page) and put the tab back as it was,
+# without back/forward entries. DevTools must be open.
+function Invoke-QuestHelperVisitInOpenTab {
+    param([string] $HelperUrl)
+    $tab = Get-QuestTabs | Where-Object { $u = [string]$_.url; $u -like 'chrome://panel-app-nav/ntp*' -or $u -eq 'about:blank' } | Select-Object -First 1
+    if (-not $tab -or -not $HelperUrl) { return }
+    $was = [string]$tab.url
+    try {
+        [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $HelperUrl } -TimeoutSec 8)
+        $t = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 6 -Match { param($u) $u -like 'http*' }
+        if ($t) { $tab = $t }
+        Start-Sleep -Milliseconds 1500
+        $back = if ($was -like 'chrome://panel-app-nav/ntp*') { 'chrome://panel-app-nav/ntp' } else { 'about:blank' }
+        [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $back } -TimeoutSec 8)
+        $t = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 6 -Match { param($u) $u -notlike 'http*' }
+        if ($t) { $tab = $t }
+        [void](Invoke-QuestCdp -Tab $tab -Method 'Page.resetNavigationHistory' -TimeoutSec 5)
+    } catch {
+        Write-QuestLog "Recently closed: helper visit in the open tab failed - $($_.Exception.Message)"
+    }
+}
+
 function Clear-QuestHistoryAndClosed {
     param([string] $DeviceSerial, [string[]] $Origins, [double] $BudgetSec, [string] $FallbackRange)
     $t0 = [DateTime]::UtcNow
@@ -1273,6 +1366,13 @@ function Clear-QuestHistoryAndClosed {
     if ($left -lt 4) { return $res }
     $n = Invoke-QuestRecentlyClosedSweep -Origins $Origins -HelperUrl (Get-QuestHelperUrl) -BudgetSec ($left - 3)
     if ($n -gt 0) {
+        # The swept items now point at the helper page, but the visits made in those reopened tabs
+        # were not recorded (seen every time an item already on the helper page was swept). The
+        # history delete drops Recently closed items by URL, so one recorded visit is enough: make it
+        # in a tab that stays open (the kept new-tab page), then put that tab back.
+        Invoke-QuestHelperVisitInOpenTab -HelperUrl (Get-QuestHelperUrl)
+        # The visit shows up in the History list about 2 s after the page loads.
+        Start-Sleep -Seconds 2
         $left = $BudgetSec - ([DateTime]::UtcNow - $t0).TotalSeconds
         [void](Clear-QuestBrowserHistory -DeviceSerial $DeviceSerial -HelperUrl (Get-QuestHelperUrl) -Origins $Origins -BudgetSec ([Math]::Max(3, $left)) -FallbackRange '')
     }
@@ -1306,6 +1406,16 @@ function Invoke-QuestWifiOff {
     $w = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'cmd', 'wifi', 'set-wifi-enabled', 'disabled')
     if ($w.Code -eq 0) {
         Write-QuestLog 'Wi-Fi: switched the headset''s Wi-Fi off (switch it on in quick settings before the next session).'
+        return 'off'
+    }
+    # Wireless adb runs over that Wi-Fi: the command often never returns because the link dropped
+    # as Wi-Fi went off (timeout, code -1 / 1). The headset gone from adb (offline / not listed) right
+    # after means it took it.
+    Start-Sleep -Seconds 2
+    $st = Invoke-Adb -TimeoutSec 8 -Arguments @('devices')
+    $line = @(([string]$st.Out) -split "`r?`n" | Where-Object { $_ -match ('^' + [regex]::Escape($DeviceSerial) + '\s') }) | Select-Object -First 1
+    if ($DeviceSerial -match '^\d{1,3}(\.\d{1,3}){3}:\d+$' -and (-not $line -or $line -notmatch '\sdevice\s*$')) {
+        Write-QuestLog ("Wi-Fi: switched the headset's Wi-Fi off (adb dropped during the command, code {0}; switch it on in quick settings before the next session)." -f $w.Code)
         return 'off'
     }
     Write-QuestLog "Wi-Fi: could not switch it off (code $($w.Code))."
@@ -1411,6 +1521,167 @@ function Invoke-QuestHistoryRetry {
     }
 }
 
+# ---- 3d_playlist_local workflow session (3d_playlist_local\individual_transcode\quest: Start-PlaylistLocalQuestSession.ps1 / Invoke-PlaylistLocalQuestShutdown.ps1) ----
+
+# -OpenControlPage: wait (up to -WaitMinutes) for an awake headset, then open the control page in
+# its own signed-in tab. 0 opened, 1 headset not awake in time, 3 failed.
+function Invoke-QuestOpenControlPageOnly {
+    $deadline = [DateTime]::UtcNow.AddMinutes([Math]::Max(0, $WaitMinutes))
+    $lastState = ''
+    $queuedLogged = $false
+    Set-QuestOpenStatus 'checking'
+    while ($true) {
+        # -ParentPid = the workflow: stop waiting once it is gone.
+        if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
+            Write-QuestLog 'Control page only: workflow gone before the headset was awake - not opened.'
+            Set-QuestOpenStatus 'cancelled'
+            return 1
+        }
+        try {
+            $dev = Get-OnlineQuestSerial
+            if (-not $dev) { $dev = Connect-Quest }
+            $state = if ($dev) { Get-QuestWakefulness -DeviceSerial $dev } else { 'Unreachable' }
+            if (-not $state) { $state = 'Unknown' }
+            if ($state -ne $lastState) { Write-QuestLog ("Control page only: headset {0}{1}" -f $state, $(if ($dev) { " ($dev)" } else { '' })); $lastState = $state }
+            if ($state -eq 'Awake') {
+                # The workflow start launches the server a moment before this.
+                $t0 = [DateTime]::UtcNow
+                while (-not (Test-QuestControlPageRunning) -and ([DateTime]::UtcNow - $t0).TotalSeconds -lt 15) { Start-Sleep -Seconds 1 }
+                Set-QuestOpenStatus 'opening'
+                Save-QuestBrowserOurs -DeviceSerial $dev
+                if (-not (Open-QuestDevTools -DeviceSerial $dev)) { Write-QuestLog 'Control page only: no DevTools connection to Quest Browser.'; Set-QuestOpenStatus 'failed'; return 3 }
+                try { Open-QuestControlTab -DeviceSerial $dev -Force } finally { Close-QuestDevTools }
+                if ($script:ControlTabOpened) { Set-QuestOpenStatus 'opened'; return 0 }
+                Set-QuestOpenStatus 'failed'
+                return 3
+            }
+        } catch {
+            Write-QuestLog "Control page only: $($_.Exception.Message)"
+        }
+        if ([DateTime]::UtcNow -ge $deadline) {
+            Write-QuestLog "Control page only: headset not awake within $WaitMinutes min ($lastState) - not opened."
+            Set-QuestOpenStatus 'unreachable'
+            return 1
+        }
+        if (-not $queuedLogged) {
+            Write-QuestLog "Control page only: queued - opening when the headset is awake (up to $WaitMinutes min)."
+            Set-QuestOpenStatus 'queued'
+            $queuedLogged = $true
+        }
+        Start-Sleep -Seconds ([Math]::Max(2, $PollSeconds))
+    }
+}
+
+# /proc/net/tcp(6) address "0100A8C0:1F90" -> 192.168.0.1, 8080 (IPv4 and IPv4-mapped IPv6 only).
+function ConvertFrom-QuestProcNetAddress {
+    param([string] $Hex)
+    $parts = $Hex.Split(':')
+    if ($parts.Count -ne 2) { return $null }
+    $ipHex = $parts[0]
+    $port = [Convert]::ToInt32($parts[1], 16)
+    if ($ipHex.Length -eq 32) {
+        if (-not $ipHex.StartsWith('0000000000000000FFFF0000', [StringComparison]::OrdinalIgnoreCase)) { return [pscustomobject]@{ Ip = ''; Port = $port } }
+        $ipHex = $ipHex.Substring(24)
+    }
+    if ($ipHex.Length -ne 8) { return [pscustomobject]@{ Ip = ''; Port = $port } }
+    $b = @(0..3 | ForEach-Object { [Convert]::ToByte($ipHex.Substring($_ * 2, 2), 16) })
+    return [pscustomobject]@{ Ip = ('{0}.{1}.{2}.{3}' -f $b[3], $b[2], $b[1], $b[0]); Port = $port }
+}
+
+function Get-QuestCfgList {
+    param([string] $Name, [string[]] $Default = @())
+    if ($script:Cfg -and $script:Cfg.Contains($Name) -and $null -ne $script:Cfg[$Name]) { return @(@($script:Cfg[$Name]) | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() }) }
+    return $Default
+}
+
+# -StopMediaApps: force-stop every app (uid >= 10000) with an established TCP connection to this PC
+# (other than the control page port): that is how a Quest player reads the workflow output
+# (DLNA / HTTP / SMB from the PC). Plus the configured players (questPlaylistMediaPlayers,
+# -MediaPackages), running or not. questPlaylistKeepPackages are never stopped.
+# 0 done, 1 headset not on adb, 3 adb error.
+function Invoke-QuestStopMediaApps {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-QuestLog 'Media apps: headset not reachable over adb - skipped.'; Set-QuestOpenStatus 'unreachable'; return 1 }
+    $keep = @(Get-QuestCfgList -Name 'questPlaylistKeepPackages' -Default @($BrowserPackage)) + @($BrowserPackage)
+    $players = @(@(Get-QuestCfgList -Name 'questPlaylistMediaPlayers' -Default @($script:SkyboxPackage)) + @($MediaPackages | ForEach-Object { [string]$_ -split ',' }) | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() } | Select-Object -Unique)
+    $targets = [ordered]@{}   # package -> why
+
+    $pc = Get-QuestControlPcAddress -DeviceSerial $dev
+    $ctlPort = Get-QuestControlPort
+    if ($pc) {
+        $r = Invoke-Adb -TimeoutSec 15 -Arguments @('-s', $dev, 'shell', 'cat /proc/net/tcp /proc/net/tcp6 2>/dev/null')
+        $uids = @{}
+        $rows = 0
+        foreach ($line in (([string]$r.Out) -split "`r?`n")) {
+            $f = @($line.Trim() -split '\s+')
+            if ($f.Count -lt 8 -or $f[0] -notmatch '^\d+:$') { continue }
+            $rows++
+            if ($f[3] -ne '01') { continue }   # ESTABLISHED
+            $rem = ConvertFrom-QuestProcNetAddress -Hex $f[2]
+            if (-not $rem -or $rem.Ip -ne $pc -or $rem.Port -eq $ctlPort) { continue }
+            $uid = 0
+            if (-not [int]::TryParse($f[7], [ref]$uid) -or $uid -lt 10000) { continue }
+            if (-not $uids.ContainsKey($uid)) { $uids[$uid] = [System.Collections.Generic.List[int]]::new() }
+            if (-not $uids[$uid].Contains($rem.Port)) { $uids[$uid].Add($rem.Port) }
+        }
+        if ($rows -eq 0) {
+            Write-QuestLog "Media apps: could not read the headset's TCP socket list ($(Get-AdbMessage $r)) - only the configured players are stopped."
+        } elseif ($uids.Count) {
+            $pk = Invoke-Adb -TimeoutSec 15 -Arguments @('-s', $dev, 'shell', 'cmd', 'package', 'list', 'packages', '-U')
+            foreach ($pl in (([string]$pk.Out) -split "`r?`n")) {
+                if ($pl -notmatch '^package:(\S+)\s+uid:([\d,]+)') { continue }
+                $pkg = $Matches[1]
+                foreach ($u in ($Matches[2] -split ',')) {
+                    $ui = [int]$u
+                    if ($uids.ContainsKey($ui) -and -not $targets.Contains($pkg)) {
+                        $targets[$pkg] = "connected to this PC ($pc port $(@($uids[$ui]) -join ','))"
+                    }
+                }
+            }
+        } else {
+            Write-QuestLog "Media apps: no app on the headset is connected to this PC ($pc)."
+        }
+    } else {
+        Write-QuestLog 'Media apps: no PC address on the route to the headset - only the configured players are stopped.'
+    }
+    foreach ($p in $players) {
+        if ($targets.Contains($p)) { continue }
+        $pid0 = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $dev, 'shell', 'pidof', $p)
+        if (([string]$pid0.Out).Trim() -match '^\d') { $targets[$p] = 'configured media player (running)' }
+    }
+    $stopped = [System.Collections.Generic.List[string]]::new()
+    $failed = 0
+    foreach ($pkg in @($targets.Keys)) {
+        if (@($keep | Where-Object { $_ -ieq $pkg }).Count) { Write-QuestLog "Media apps: $pkg kept (questPlaylistKeepPackages) - $($targets[$pkg])."; continue }
+        $s = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $dev, 'shell', 'am', 'force-stop', $pkg)
+        if ($s.Code -eq 0) {
+            $stopped.Add($pkg)
+            Write-QuestLog "Media apps: force-stopped $pkg - $($targets[$pkg])."
+        } else {
+            $failed++
+            Write-QuestLog "Media apps: force-stop $pkg failed (code $($s.Code)): $(Get-AdbMessage $s)"
+        }
+    }
+    if (-not $stopped.Count -and -not $failed) { Write-QuestLog 'Media apps: nothing to stop.' }
+    Set-QuestOpenStatus $(if ($stopped.Count) { 'stopped ' + ($stopped -join ', ') } else { 'none running' })
+    if ($failed) { return 3 }
+    return 0
+}
+
+# -ExtraOrigins / questPlaylistHistoryOrigins with {pc} replaced by this PC's address.
+function Get-QuestExtraOrigins {
+    param([string] $DeviceSerial)
+    # pwsh -File passes a list as one "a,b" string.
+    $raw = @(@($ExtraOrigins) | ForEach-Object { [string]$_ -split ',' } | Where-Object { $_.Trim() })
+    if (-not $raw.Count) { return @() }
+    $pc = Get-QuestControlPcAddress -DeviceSerial $DeviceSerial
+    return @($raw | ForEach-Object {
+            $o = ([string]$_).Trim().TrimEnd('/')
+            if ($o -like '*{pc}*') { if ($pc) { $o.Replace('{pc}', $pc) } } else { $o }
+        } | Where-Object { $_ })
+}
+
 $script:Adb = Find-QuestAdbExe
 if (-not $script:Adb) {
     Write-QuestLog 'adb not found (winget install Google.PlatformTools, or set questAdbExe) - Quest LAN tab disabled.'
@@ -1430,6 +1701,8 @@ if ($WifiOff) {
     if ($w -eq 'off') { exit 0 } else { exit 3 }
 }
 if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession) }
+if ($StopMediaApps) { exit (Invoke-QuestStopMediaApps) }
+if ($OpenControlPage) { exit (Invoke-QuestOpenControlPageOnly) }
 if ($SkyboxPush -or $SkyboxUpdate) {
     $res = Invoke-QuestSkyboxWebDavPush -OnlyIfPresent:$SkyboxUpdate
     Set-QuestOpenStatus $res
@@ -1453,6 +1726,78 @@ if ([string]::IsNullOrWhiteSpace($Url)) {
     exit 2
 }
 if ($RetryHistory) { exit (Invoke-QuestHistoryRetry) }
+if ($ProbeRecentlyClosed) {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-Host 'headset not reachable over adb'; exit 1 }
+    if (-not (Open-QuestDevTools -DeviceSerial $dev)) { exit 3 }
+    try {
+        $tabs = @(Get-QuestTabs | ForEach-Object { [ordered]@{ id = $_.id; url = (ConvertTo-QuestBareUrl ([string]$_.url)) -replace '\?.*$', ''; title = [string]$_.title } })
+        $ui = Get-QuestBrowserUi
+        $probe = $null
+        if ($ui) {
+            $js = "(() => {`n$($script:QuestClosedCommonJs)`n" + @'
+  if (!store) return JSON.stringify({ ok: false, error: 'no store' });
+  const strip = u => { try { const x = new URL(u); return x.origin + x.pathname; } catch (e) { return String(u); } };
+  const rc = (store.getState().history.recentlyClosedTabs || []).map(e => ({ type: e.type, sessionId: e.sessionId, keys: Object.keys(e), tabs: (e.tabs || []).map(t => ({ url: strip(String(t.url || '')), q: (() => { try { return new URL(String(t.url || '')).search.slice(0, 40); } catch (x) { return ''; } })(), title: String(t.title || '').slice(0, 50), keys: Object.keys(t) })) }));
+  const protoNames = o => { const r = new Set(); let p = o ? Object.getPrototypeOf(o) : null; for (let i = 0; p && i < 4; i++, p = Object.getPrototypeOf(p)) Object.getOwnPropertyNames(p).forEach(n => r.add(n)); return [...r]; };
+  const menuMethods = menu ? protoNames(menu).filter(n => /closed|recent|remove|delete|clear|restore/i.test(n)) : [];
+  const menuSrc = {}; if (menu) { for (const n of ['requestRecentlyClosedTabsData', 'handleReopenClosedTab', 'handleReopenClosedWindow']) { try { menuSrc[n] = String(Object.getPrototypeOf(menu)[n]).slice(0, 700); } catch (e) {} } }
+  let delSrc = ''; walk(f => { const sn = f.stateNode; try { if (sn && sn.props && typeof Object.getPrototypeOf(sn).handleDelete === 'function') { delSrc = String(Object.getPrototypeOf(sn).handleDelete).slice(0, 700); return false; } } catch (e) {} });
+  const globals = Object.keys(window).filter(k => /webui|chrome|native|bridge|send|oculus|meta/i.test(k)).slice(0, 40);
+  const tags = [...document.querySelectorAll('script,link')].map(e => e.outerHTML.slice(0, 200));
+  const href = location.href;
+  // Other components with closed-tab related methods.
+  const comps = {}; walk(f => { const sn = f.stateNode; try { if (sn && sn.props) { const m = protoNames(sn).filter(n => /closed|recent/i.test(n)); if (m.length) comps[(sn.constructor && sn.constructor.name) || '?'] = m; } } catch (e) {} });
+  // webui actions the page knows (strings), to see if a "remove recently closed" exists.
+  let actions = [], srcs = [];
+  try {
+    srcs = [...new Set([...document.querySelectorAll('script[src],link[href]')].map(e => e.src || e.href).filter(u => /\.m?js(\?|$)/.test(u)).concat(performance.getEntriesByType('resource').map(e => e.name).filter(n => /\.m?js(\?|$)/.test(n))))];
+    const texts = [[...document.scripts].map(s => s.textContent || '').join(' ')];
+    return (async () => {
+      for (const u of srcs) { try { texts.push(await (await fetch(u)).text()); } catch (e) {} }
+      const all = texts.join(' ');
+      actions = [...new Set((all.match(/webui_action_[a-zA-Z_]+/g) || []))];
+      const near = [...new Set((all.match(/[A-Za-z_]*(?:[Rr]ecently[_]?[Cc]losed|[Tt]ab[Rr]estore|recently_closed|ClosedTab)[A-Za-z_]*/g) || []))].slice(0, 80);
+      const sends = [...new Set((all.match(/chrome\.send\(\s*["'][A-Za-z_]+["']/g) || []))].slice(0, 120);
+      actions = actions.concat(sends);
+      return JSON.stringify({ ok: true, historyKeys: Object.keys(store.getState().history || {}), recentlyClosed: rc, menuMethods, comps, actions, near, srcs, menuSrc, delSrc, globals, inlineLen: texts[0].length, tags, href, bundleHits: (() => { const out = []; const re = /webui_action_[a-zA-Z_]+/g; let m; while ((m = re.exec(all)) && out.length < 300) out.push(m[0]); return [...new Set(out)]; })(), totalLen: all.length });
+    })();
+  } catch (e) {}
+  return JSON.stringify({ ok: true, historyKeys: Object.keys(store.getState().history || {}), recentlyClosed: rc, menuMethods, comps, actions });
+})()
+'@
+            try { $probe = Invoke-QuestEval -Tab $ui -Expression $js -TimeoutSec 10 | ConvertFrom-Json } catch { $probe = @{ ok = $false; error = $_.Exception.Message } }
+        }
+    } finally { Close-QuestDevTools }
+    @{ tabs = $tabs; ui = [bool]$ui; probe = $probe } | ConvertTo-Json -Depth 8
+    exit 0
+}
+if ($ListHistory) {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-Host 'headset not reachable over adb'; exit 1 }
+    if (-not (Open-QuestDevTools -DeviceSerial $dev)) { exit 3 }
+    try {
+        $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial $dev) + @(Get-QuestExtraOrigins -DeviceSerial $dev) | Where-Object { $_ } | Select-Object -Unique)
+        $r = Clear-QuestBrowserHistory -DeviceSerial $dev -Origins $origins -BudgetSec 30 -FallbackRange '' -ListOnly
+    } finally { Close-QuestDevTools }
+    @{ matchedOrigins = $origins; result = $r } | ConvertTo-Json -Depth 6
+    exit 0
+}
+if ($ClearHistory -and $OnlyExtraOrigins) {
+    $dev = Get-OnlineQuestSerial
+    if (-not $dev) { $dev = Connect-Quest }
+    if (-not $dev) { Write-QuestLog 'History (extra origins): headset not reachable over adb - skipped.'; exit 1 }
+    $extra = @(Get-QuestExtraOrigins -DeviceSerial $dev)
+    if (-not $extra.Count) { Write-QuestLog 'History (extra origins): none set - nothing to delete.'; exit 0 }
+    if (-not (Open-QuestDevTools -DeviceSerial $dev)) { exit 3 }
+    try {
+        $res = Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins $extra -BudgetSec 25 -FallbackRange ''
+    } finally { Close-QuestDevTools }
+    Write-QuestLog ("History (extra origins): {0} ({1})." -f $res, ($extra -join ', '))
+    if ($res -eq 'cleared') { exit 0 } else { exit 3 }
+}
 if ($ResetFlags) {
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
@@ -1479,8 +1824,9 @@ if ($EnsureFlags -or $ClearHistory) {
         Write-QuestLog ("{0}: headset not reachable over adb - skipped." -f $(if ($ClearHistory) { 'History' } else { 'Flags' }))
         if ($ClearHistory -and -not $SkipHistoryClear) {
             # Close the tabs, delete the entries and reset the sensor once the headset is back.
-            $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigin -DeviceSerial '') | Where-Object { $_ } | Select-Object -Unique)
-            [void](Start-QuestHistoryRetry -Origins $origins -CloseTabs:$CloseLanTabs -Proximity:$EnableProximityAfter -CloseBrowser:(Test-QuestBrowserOurs))
+            $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial '') + @(Get-QuestExtraOrigins -DeviceSerial '') | Where-Object { $_ } | Select-Object -Unique)
+            # The helper closes Quest Browser after its delete when only empty tabs are left (as below).
+            [void](Start-QuestHistoryRetry -Origins $origins -CloseTabs:$CloseLanTabs -Proximity:$EnableProximityAfter -CloseBrowser:$CloseLanTabs)
         }
         Remove-Item -LiteralPath $script:BrowserOursPath -Force -ErrorAction SilentlyContinue
         exit 1
@@ -1491,16 +1837,19 @@ if ($EnsureFlags -or $ClearHistory) {
         $since = { ([DateTime]::UtcNow - $script:StartedAt).TotalSeconds }
         Write-QuestLog ("Cleanup: headset on adb after {0:0.0} s." -f (& $since))
         $res = 'skipped'
-        # Close Quest Browser afterwards when this session started it, or when it was closed at quit
-        # (the history step starts it): only with -CloseLanTabs, and only if no other tabs are left.
-        $closeBrowser = $CloseLanTabs -and ((Test-QuestBrowserOurs) -or -not (Test-QuestBrowserRunning -DeviceSerial $dev))
+        # Close Quest Browser afterwards (with -CloseLanTabs) whenever no tab of yours is left: only
+        # empty new-tab pages and the blank page kept for the History list. Close-QuestBrowserIfEmpty
+        # checks that and leaves it running otherwise, so who started it does not matter (it used to:
+        # a browser this session never opened stayed up on a blank tab, e.g. when the headset was off
+        # adb at Open on Quest / a 3d_playlist_local workflow start).
+        $closeBrowser = [bool]$CloseLanTabs
         $browserRes = 'kept'
         if ($CloseLanTabs -or -not $SkipHistoryClear) {
             if (Open-QuestDevTools -DeviceSerial $dev) {
                 try {
                     # Phone LAN page origins, plus the Quest control page on this PC: the tabs to close
                     # and the only history entries deleted.
-                    $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigin -DeviceSerial $dev) | Where-Object { $_ } | Select-Object -Unique)
+                    $origins = @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial $dev) + @(Get-QuestExtraOrigins -DeviceSerial $dev) | Where-Object { $_ } | Select-Object -Unique)
                     if ($CloseLanTabs) {
                         $t0 = [DateTime]::UtcNow
                         # Phone LAN page tabs, plus the Quest control page on this PC.
@@ -1515,6 +1864,10 @@ if ($EnsureFlags -or $ClearHistory) {
                         # answer: hand the delete to the after-quit helper.
                         if ($res -eq 'failed' -and (Start-QuestHistoryRetry -Origins $origins -CloseBrowser:$closeBrowser)) { $res = 'postponed' }
                         Write-QuestLog ("History step: {0} ({1:0.0} s)." -f $res, ([DateTime]::UtcNow - $t0).TotalSeconds)
+                        if (($res -eq 'cleared' -or $res -eq 'fallback') -and (Test-Path -LiteralPath $script:HistoryPendingPath)) {
+                            Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+                            Write-QuestLog 'History: the postponed delete is done too (pending file removed).'
+                        }
                     }
                     if ($closeBrowser) {
                         # A postponed delete needs the browser: the helper closes it after its delete.

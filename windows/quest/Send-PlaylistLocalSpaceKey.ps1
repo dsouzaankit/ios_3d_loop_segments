@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Press Space in the visible 3d_playlist_local PowerShell window (pause / resume the leaf DLNA export).
+  Press Space (pause / resume the leaf DLNA export) or Enter (cancel the clip / batch and exit) in the
+  visible 3d_playlist_local PowerShell window.
 
 .DESCRIPTION
   The 3d_playlist_local batch launchers (run_batch_*.ps1, Run-TranscodeOrchestrator.ps1, ...) read
@@ -13,14 +14,23 @@
   to their visible parent shell, so a launcher typed into an interactive pwsh is found while a clip
   runs. One Space per console (a console shared by several matches gets one key).
 
-  Used by the Quest control page (Serve-QuestControlPage.ps1, POST /playlist/space). Prints one JSON
-  line: { ok, sent, consoles: [ { pid, script, ok, error } ], error }. Exit 0 when at least one
+  -Key Enter writes an Enter key instead: the batch cancels the clip / batch and exits (exit 130).
+  -ProcessId adds shells to press the key in (the workflow PIDs registered at workflow start by
+  Start-PlaylistLocalQuestSession.ps1, which also covers a launcher typed into an interactive pwsh).
+
+  Used by the Quest control page (Serve-QuestControlPage.ps1, POST /playlist/space) and the Enter
+  button's Invoke-PlaylistLocalQuestShutdown.ps1. Prints one JSON line:
+  { ok, key, sent, consoles: [ { pid, script, ok, error } ], error }. Exit 0 when at least one
   console got the key, 2 when no shell was found, 1 on errors.
 #>
 [CmdletBinding()]
 param(
     # Only list what would get the key.
-    [switch] $WhatIf
+    [switch] $WhatIf,
+    [ValidateSet('Space', 'Enter')] [string] $Key = 'Space',
+    # Extra shells (pids) to press the key in, besides the ones found by command line
+    # ("123,456" works too: pwsh -File passes a list as one string).
+    [string[]] $ProcessId = @()
 )
 
 Set-StrictMode -Version Latest
@@ -45,6 +55,8 @@ $targets = [System.Collections.Generic.Dictionary[int, string]]::new()
 foreach ($p in $all) {
     $cl = [string]$p.CommandLine
     if ($cl -notmatch $scriptPattern) { continue }
+    # The Quest session helpers live in 3d_playlist_local too: not workflow windows.
+    if ($cl -match '(?i)PlaylistLocalQuest|Start-PlaylistQuestSession') { continue }
     if ([int]$p.ProcessId -eq $PID) { continue }
     $label = Get-ShellLabel -CommandLine $cl
     $cur = $p
@@ -62,13 +74,21 @@ foreach ($p in $all) {
     }
 }
 
+$extraPids = @(@($ProcessId) | ForEach-Object { [string]$_ -split '[,\s]+' } | ForEach-Object { $n = 0; if ([int]::TryParse($_, [ref]$n) -and $n -gt 0) { $n } })
+foreach ($id in $extraPids) {
+    if ($targets.ContainsKey($id)) { continue }
+    $p = $byPid[[int]$id]
+    if (-not $p) { continue }
+    $targets[[int]$id] = $(if (([string]$p.CommandLine) -match $scriptPattern) { Get-ShellLabel -CommandLine ([string]$p.CommandLine) } else { 'workflow shell' })
+}
+
 function Write-Result { param($Object, [int] $Code) ($Object | ConvertTo-Json -Compress -Depth 4) | Write-Output; exit $Code }
 
 if ($targets.Count -eq 0) {
-    Write-Result ([ordered]@{ ok = $false; sent = 0; consoles = @(); error = 'no 3d_playlist_local PowerShell window found' }) 2
+    Write-Result ([ordered]@{ ok = $false; key = $Key; sent = 0; consoles = @(); error = 'no 3d_playlist_local PowerShell window found' }) 2
 }
 if ($WhatIf) {
-    Write-Result ([ordered]@{ ok = $true; sent = 0; consoles = @($targets.Keys | ForEach-Object { [ordered]@{ pid = $_; script = $targets[$_] } }) }) 0
+    Write-Result ([ordered]@{ ok = $true; key = $Key; sent = 0; consoles = @($targets.Keys | ForEach-Object { [ordered]@{ pid = $_; script = $targets[$_] } }) }) 0
 }
 
 Add-Type -TypeDefinition @'
@@ -99,7 +119,7 @@ public static class LsConsoleKey {
     static extern bool WriteConsoleInputW(IntPtr h, INPUT_RECORD[] recs, uint n, out uint written);
 
     // "" on success, else the error. consoleId gets the console window handle (dedupe).
-    public static string SendSpace(uint pid, out long consoleId) {
+    public static string SendKey(uint pid, ushort vk, ushort scan, char ch, out long consoleId) {
         consoleId = 0;
         FreeConsole();
         if (!AttachConsole(pid)) return "AttachConsole failed (" + Marshal.GetLastWin32Error() + ")";
@@ -113,9 +133,9 @@ public static class LsConsoleKey {
                     recs[i].EventType = 1; // KEY_EVENT
                     recs[i].KeyEvent.bKeyDown = i == 0 ? 1 : 0;
                     recs[i].KeyEvent.wRepeatCount = 1;
-                    recs[i].KeyEvent.wVirtualKeyCode = 0x20;  // VK_SPACE
-                    recs[i].KeyEvent.wVirtualScanCode = 0x39;
-                    recs[i].KeyEvent.UnicodeChar = ' ';
+                    recs[i].KeyEvent.wVirtualKeyCode = vk;
+                    recs[i].KeyEvent.wVirtualScanCode = scan;
+                    recs[i].KeyEvent.UnicodeChar = ch;
                 }
                 uint written;
                 if (!WriteConsoleInputW(h, recs, 2, out written) || written != 2) return "WriteConsoleInput failed (" + Marshal.GetLastWin32Error() + ")";
@@ -140,11 +160,15 @@ foreach ($id in @($targets.Keys)) {
     $cid = [LsConsoleKey]::ConsoleOf([uint32]$id)
     if ($cid -ne 0 -and $seen.ContainsKey($cid)) { continue }
     $outId = [long]0
-    $err = [LsConsoleKey]::SendSpace([uint32]$id, [ref]$outId)
+    $err = $(if ($Key -eq 'Enter') {
+            [LsConsoleKey]::SendKey([uint32]$id, [uint16]0x0D, [uint16]0x1C, [char]13, [ref]$outId)   # VK_RETURN
+        } else {
+            [LsConsoleKey]::SendKey([uint32]$id, [uint16]0x20, [uint16]0x39, [char]' ', [ref]$outId)  # VK_SPACE
+        })
     if ($outId -ne 0) { $seen[$outId] = $true }
     $results.Add([ordered]@{ pid = $id; script = $targets[$id]; ok = ($err -eq ''); error = $err })
 }
 $sent = @($results | Where-Object { $_.ok }).Count
-$out = [ordered]@{ ok = ($sent -gt 0); sent = $sent; consoles = @($results) }
-if ($sent -eq 0) { $out.error = 'could not press Space in any 3d_playlist_local window' }
+$out = [ordered]@{ ok = ($sent -gt 0); key = $Key; sent = $sent; consoles = @($results) }
+if ($sent -eq 0) { $out.error = "could not press $Key in any 3d_playlist_local window" }
 Write-Result $out $(if ($sent -gt 0) { 0 } else { 1 })

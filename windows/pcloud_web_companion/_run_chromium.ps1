@@ -2675,7 +2675,9 @@ $chromeArgList = [System.Collections.Generic.List[string]]::new()
 [void]$chromeArgList.Add("--user-data-dir=`"$ChromeUserData`"")
 [void]$chromeArgList.Add("--disable-extensions-except=`"$ChromeExtension`"")
 [void]$chromeArgList.Add("--load-extension=`"$ChromeExtension`"")
-[void]$chromeArgList.Add("--disable-features=DisableLoadExtensionCommandLineSwitch,BlockInsecurePrivateNetworkRequests")
+# LaunchOnStartup: no "Begin browsing instantly: Chromium can now launch when Windows starts" infobar
+# (--disable-infobars does not cover it). One --disable-features only: Chromium uses the last one.
+[void]$chromeArgList.Add("--disable-features=DisableLoadExtensionCommandLineSwitch,BlockInsecurePrivateNetworkRequests,LaunchOnStartup")
 if (-not $NoDarkMode) {
     # UI chrome only. Do not enable WebContentsForceDark - it auto-inverts page CSS and
     # commonly makes video seekbars / control bars invisible during playback.
