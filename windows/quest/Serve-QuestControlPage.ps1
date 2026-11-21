@@ -326,6 +326,39 @@ function Invoke-ControlPlaylistSpace {
     return $r
 }
 
+# Paused / playing, read from the leaf DLNA export ffmpeg processes themselves (command line has
+# 3d_op_, as Test-FfmpegCommandLineIsLeafDlnaExport in 3d_playlist_local): Space there runs
+# NtSuspendProcess, which leaves every thread waiting with WaitReason Suspended. The workflow's own
+# pause flag lives in its process, so this is the state a Space from anywhere (PC keyboard or this
+# page) left. state = 'paused' | 'playing' | 'idle' (no export running).
+function Get-ControlPlaylistPlayback {
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name = 'ffmpeg.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { ([string]$_.CommandLine) -like '*3d_op_*' })
+    if ($procs.Count -eq 0) { return [ordered]@{ state = 'idle'; pids = @() } }
+    $paused = 0
+    $seen = 0
+    foreach ($p in $procs) {
+        $proc = $null
+        try {
+            $proc = Get-Process -Id ([int]$p.ProcessId) -ErrorAction Stop
+            $threads = @($proc.Threads)
+            if ($threads.Count -eq 0) { continue }
+            $seen++
+            $allSuspended = $true
+            foreach ($t in $threads) {
+                $susp = $false
+                try { $susp = ($t.ThreadState -eq [System.Diagnostics.ThreadState]::Wait) -and ($t.WaitReason -eq [System.Diagnostics.ThreadWaitReason]::Suspended) } catch {}
+                if (-not $susp) { $allSuspended = $false; break }
+            }
+            if ($allSuspended) { $paused++ }
+        } catch {
+        } finally { if ($proc) { $proc.Dispose() } }
+    }
+    $pids = @($procs | ForEach-Object { [int]$_.ProcessId })
+    if ($seen -eq 0) { return [ordered]@{ state = 'idle'; pids = @() } }
+    return [ordered]@{ state = $(if ($paused -eq $seen) { 'paused' } else { 'playing' }); pids = $pids }
+}
+
 # ---- LAN bandwidth PC -> Quest (the page on the headset downloads a blob from here) ----
 
 $script:QuestLanResultPath = Join-Path $env:TEMP 'loopsegments-quest-lan-throughput.json'
@@ -472,6 +505,7 @@ function Get-ControlStatus {
         lanBw         = (Get-ControlLanBwStatus)
         playlistStop  = (Get-ControlPlaylistStop)
         session       = (Get-ControlSessionParts)
+        playback      = (Get-ControlPlaylistPlayback)
         questLan      = (Get-ControlQuestLanStatus)
     }
 }
@@ -515,6 +549,10 @@ $script:PageHtml = @'
   .note { color: var(--muted); font-size: 14px; margin: 10px 0 0; }
   #msg, .msg { margin-top: 10px; min-height: 1.4em; font-size: 16px; }
   .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .pstate { align-self: center; font-size: 16px; font-weight: 600; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .pstate:empty { display: none; }
+  .pstate.playing { color: var(--ok); border-color: var(--ok); }
+  .pstate.paused { color: var(--warn); border-color: var(--warn); }
   #bwLines { margin-top: 10px; }
   pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, Consolas, monospace; color: var(--muted); }
 </style>
@@ -548,6 +586,7 @@ $script:PageHtml = @'
       <h2>3d_playlist_local</h2>
       <div class="buttons">
         <button id="plSpace" class="primary">Space: pause / resume export</button>
+        <span id="plState" class="pstate" role="status" aria-live="polite"></span>
         <button id="plEnter" class="danger">End session: stop all</button>
       </div>
       <div id="plParts" class="msg"></div>
@@ -626,8 +665,10 @@ $script:PageHtml = @'
     const bwRunning = renderBw(s.lanBw || {});
     const stopRunning = renderStop(s.playlistStop);
     renderParts(s.session);
+    const exporting = renderPlayback(s.playback);
     renderQuestLan(s.questLan);
-    schedule((running || bwRunning || stopRunning) ? 1500 : 10000);
+    // While an export runs, poll faster so Space pressed on the PC keyboard shows up here too.
+    schedule((running || bwRunning || stopRunning) ? 1500 : (exporting ? 3000 : 10000));
   }
 
   function mbps(v) { return (v === null || v === undefined) ? '-' : Number(v).toFixed(1) + ' Mbps'; }
@@ -740,6 +781,15 @@ $script:PageHtml = @'
     }, 1200);
   }
 
+  // Paused / playing badge + button label. Returns true while an export ffmpeg runs.
+  function renderPlayback(p) {
+    const st = (p && p.state) || 'idle', b = $('plSpace'), e = $('plState');
+    if (st === 'paused') { e.textContent = '⏸ Paused'; e.className = 'pstate paused'; b.textContent = '▶ Space: resume export'; }
+    else if (st === 'playing') { e.textContent = '▶ Playing'; e.className = 'pstate playing'; b.textContent = '⏸ Space: pause export'; }
+    else { e.textContent = 'No export running'; e.className = 'pstate'; b.textContent = 'Space: pause / resume export'; }
+    return st !== 'idle';
+  }
+
   // What End session would stop right now.
   let partsText = '';
   function renderParts(p) {
@@ -778,6 +828,8 @@ $script:PageHtml = @'
       } else { m.textContent = 'Not sent at ' + t + ': ' + (j.error || ('HTTP ' + r.status)) + '.'; m.className = 'msg bad'; }
     } catch (e) { m.textContent = 'Request failed: ' + e.message; m.className = 'msg bad'; }
     b.disabled = false;
+    // The workflow reads the key on its next poll: refresh the badge shortly after.
+    schedule(1200);
   });
 
   async function refresh() {
