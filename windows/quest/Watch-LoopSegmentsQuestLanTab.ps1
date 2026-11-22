@@ -46,7 +46,7 @@
                    insecure-origin flag again. quest\Reset-QuestBrowserFlags.ps1 wraps it.
   -SkyboxPush    : put WebDAV server 'Loop Segments' in SKYBOX's Network list at the phone's current
                    address (-LanConfig lan_config.json, else -Url) with the current LAN login, and drop
-                   the ones this PC added at older addresses (QuestSkybox.ps1; stops SKYBOX only when
+                   the ones this PC added at older addresses (quest_tools QuestSkybox.ps1; stops SKYBOX only when
                    the row changes). The Quest control page's Push button.
   -SkyboxUpdate  : the same, only if such a server is already there (Update button).
   -ClearSkyboxWebDav : remove every SKYBOX server this PC added (with -ClearHistory: after the
@@ -73,11 +73,17 @@
 
   Without a mode switch it opens the page once, like -Once (there is no keep-watching mode).
 
+  The generic headset code (adb, finding the headset, proximity sensor, keep-awake, Wi-Fi off, Quest
+  Browser DevTools / chrome://flags / history, SKYBOX database) is in the quest_tools repo
+  ($env:QUEST_TOOLS_REPO, else P:\all_scripts\quest_tools next to this repo's parent folder; see
+  quest\QuestToolsPath.ps1); this script loads it and exits 2 when it is missing. The proximity,
+  Wi-Fi and keep-awake modes here are the same as quest_tools\Invoke-QuestHeadset.ps1's.
+
   Needs developer mode on the Quest and adb on this PC (winget install Google.PlatformTools).
   Wireless adb is switched off by every Quest reboot; the adb-auto-enable app
-  (https://github.com/project-SIMPLE/adb-auto-enable) keeps it on. Setup: quest\README.md.
+  (https://github.com/project-SIMPLE/adb-auto-enable) keeps it on. Setup: quest_tools\README.md.
 
-  Finding the headset:
+  Finding the headset (quest_tools\lib\QuestAdb.ps1):
     1. A device already in `adb devices -l` whose model looks like a Quest (or -Serial).
     2. `adb connect <questAdbHost>:<questAdbPort>` (default port 5555) when questAdbHost is set.
     3. `adb connect` to the last ip:port the headset was on adb at (%TEMP%\loopsegments-quest-last-adb.txt):
@@ -200,16 +206,19 @@ Set-StrictMode -Version Latest
 $script:StartedAt = [DateTime]::UtcNow
 $ErrorActionPreference = 'Stop'
 
-$LogPath = Join-Path $env:TEMP 'loopsegments-quest-lantab.log'
+# Generic headset layer (adb, headset discovery, proximity sensor, Wi-Fi, Quest Browser DevTools,
+# SKYBOX database, Write-QuestLog -> %TEMP%\loopsegments-quest-lantab.log): the quest_tools repo
+# ($env:QUEST_TOOLS_REPO, else a quest_tools folder next to this repo's parent folders).
+. (Join-Path $PSScriptRoot 'QuestToolsPath.ps1')
+if (-not $script:QuestToolsRepo) {
+    $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), 'quest_tools not found (set QUEST_TOOLS_REPO) - Quest helpers disabled.'
+    try { Add-Content -LiteralPath (Join-Path $env:TEMP 'loopsegments-quest-lantab.log') -Value $line -Encoding utf8 } catch {}
+    Write-Host "[quest] $line"
+    exit 2
+}
+. (Join-Path $script:QuestToolsRepo 'QuestTools.ps1')
 $BrowserPackage = 'com.oculus.browser'
 $script:Cfg = $null
-
-function Write-QuestLog {
-    param([string] $Message)
-    $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
-    try { Add-Content -LiteralPath $LogPath -Value $line -Encoding utf8 } catch {}
-    Write-Host "[quest] $Message"
-}
 
 # Per-PC overrides from windows\loop-segments-windows.json (params win).
 $script:AdbRediscoverSec = 60
@@ -233,232 +242,14 @@ if (Test-Path -LiteralPath $WindowsLib) {
 }
 if ($Port -le 0) { $Port = 5555 }
 if ($NoIncognito) { $PrivateTab = $false }
-. (Join-Path $PSScriptRoot 'QuestDevTools.ps1')
-. (Join-Path $PSScriptRoot 'QuestSkybox.ps1')
-. (Join-Path $PSScriptRoot 'QuestAdbServer.ps1')
-
-function Find-QuestAdbExe {
-    if (-not [string]::IsNullOrWhiteSpace($AdbExe)) {
-        if (Test-Path -LiteralPath $AdbExe) { return $AdbExe }
-        Write-QuestLog "questAdbExe not found: $AdbExe"
-    }
-    $cmd = Get-Command -Name adb.exe -ErrorAction SilentlyContinue
-    if ($null -ne $cmd) { return [string]$cmd.Source }
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe')
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\adb.exe')
-        (Join-Path $env:ProgramFiles 'Meta Quest Developer Hub\resources\bin\adb.exe')
-        'C:\platform-tools\adb.exe'
-    )
-    $wingetPkgs = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
-    if (Test-Path -LiteralPath $wingetPkgs) {
-        $candidates += @(Get-ChildItem -LiteralPath $wingetPkgs -Directory -Filter 'Google.PlatformTools*' -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'platform-tools\adb.exe' })
-    }
-    foreach ($p in $candidates) {
-        if (-not [string]::IsNullOrWhiteSpace($p) -and (Test-Path -LiteralPath $p)) { return $p }
-    }
-    return $null
-}
-
-function Invoke-Adb {
-    param([string[]] $Arguments, [int] $TimeoutSec = 10)
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $script:Adb
-    foreach ($a in $Arguments) { [void]$psi.ArgumentList.Add($a) }
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $outTask = $p.StandardOutput.ReadToEndAsync()
-    $errTask = $p.StandardError.ReadToEndAsync()
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-        try { $p.Kill($true) } catch {}
-        return [pscustomobject]@{ Code = -1; Out = ''; Err = 'timeout' }
-    }
-    return [pscustomobject]@{ Code = $p.ExitCode; Out = $outTask.Result; Err = $errTask.Result }
-}
-
-# Last ip:port the headset was on adb at (%TEMP%\loopsegments-quest-last-adb.txt, shared by Open on
-# Quest, keep-awake and the history helper). Wireless debugging keeps its port until it is switched
-# off or the headset reboots, so a direct `adb connect` to it gets the headset back at once, while
-# mDNS can take minutes to list it again (seen: 17 s, then nothing in 240 s, after an adb server
-# restart; the direct connect took 134 ms).
-$script:LastAdbPath = Join-Path $env:TEMP 'loopsegments-quest-last-adb.txt'
-$script:LastAdbSaved = ''
-
-function Get-OnlineQuestSerial {
-    $s = Find-OnlineQuestSerial
-    if ($s -and $s -match '^\d{1,3}(\.\d{1,3}){3}:\d+$' -and $s -ne $script:LastAdbSaved) {
-        try { Set-Content -LiteralPath $script:LastAdbPath -Value $s -Encoding ascii -NoNewline; $script:LastAdbSaved = $s } catch {}
-    }
-    return $s
-}
-
-# Direct `adb connect` to the last known address (short timeout: on another network it just fails).
-function Connect-QuestLastAddress {
-    if (-not (Test-Path -LiteralPath $script:LastAdbPath)) { return $null }
-    $target = ''
-    try { $target = (Get-Content -LiteralPath $script:LastAdbPath -Raw).Trim() } catch {}
-    if ($target -notmatch '^\d{1,3}(\.\d{1,3}){3}:\d+$') { return $null }
-    $r = Invoke-Adb -Arguments @('connect', $target) -TimeoutSec 3
-    if (([string]$r.Out) -notmatch '(?i)\bconnected to\b') { return $null }
-    $s = Get-OnlineQuestSerial
-    if ($s) { Write-QuestLog "Connected to the last known address $target" }
-    return $s
-}
-
-function Find-OnlineQuestSerial {
-    $r = Invoke-Adb -Arguments @('devices', '-l')
-    # A healthy server answers `adb devices` in well under a second: a timeout means it is stuck.
-    $script:AdbDevicesTimedOut = ($r.Code -eq -1)
-    $lines = @($r.Out -split "`r?`n" | Where-Object { $_ -match '^\S+\s+device\b' })
-    if (-not [string]::IsNullOrWhiteSpace($Serial)) {
-        foreach ($l in $lines) { if ($l -match ('^' + [regex]::Escape($Serial) + '\s')) { return $Serial } }
-        return $null
-    }
-    foreach ($l in $lines) {
-        if ($l -match '(?i)\bmodel:Quest' -or $l -match '(?i)\bproduct:(hollywood|eureka|seacliff|panther|monterey)') {
-            return ($l -split '\s+')[0]
-        }
-    }
-    # Exactly one non-Quest-looking device that we connected to ourselves (host:port) - take it.
-    if (-not [string]::IsNullOrWhiteSpace($QuestHost)) {
-        foreach ($l in $lines) {
-            if ($l -match ('^' + [regex]::Escape($QuestHost) + ':\d+\s')) { return ($l -split '\s+')[0] }
-        }
-    }
-    return $null
-}
-
-function Connect-Quest {
-    # Stuck adb server: nothing below can get through it, so reset it first.
-    if ($script:AdbDevicesTimedOut -and (Repair-QuestAdbStuckServer)) {
-        $s = Get-OnlineQuestSerial
-        if ($s) { $script:MdnsUnseenSince = $null; return $s }
-    }
-    if (-not [string]::IsNullOrWhiteSpace($QuestHost)) {
-        $target = '{0}:{1}' -f $QuestHost, $Port
-        $r = Invoke-Adb -Arguments @('connect', $target) -TimeoutSec 8
-        $msg = ($r.Out + $r.Err).Trim()
-        if ($msg -ne $script:LastConnectMsg) {
-            Write-QuestLog "adb connect $target -> $msg"
-            $script:LastConnectMsg = $msg
-        }
-        $s = Get-OnlineQuestSerial
-        if ($s) { return $s }
-    }
-    # Same port as last time (no reboot / wireless debugging toggle since): no mDNS needed.
-    $s = Connect-QuestLastAddress
-    if ($s) { $script:MdnsUnseenSince = $null; return $s }
-    # Wireless debugging (TLS) advertises its random port over mDNS; works once paired.
-    $s = Connect-QuestViaMdns
-    if ($s) { $script:MdnsUnseenSince = $null; return $s }
-    if (Invoke-QuestAdbRediscover) {
-        $s = Connect-QuestViaMdns
-        if ($s) { $script:MdnsUnseenSince = $null; return $s }
-    }
-    return $null
-}
-
-function Connect-QuestViaMdns {
-    $m = Invoke-Adb -Arguments @('mdns', 'services') -TimeoutSec 8
-    foreach ($l in @($m.Out -split "`r?`n")) {
-        if ($l -match '_adb-tls-connect\._tcp\.?\s+(\d{1,3}(?:\.\d{1,3}){3}:\d+)') {
-            $target = $Matches[1]
-            [void](Invoke-Adb -Arguments @('connect', $target) -TimeoutSec 8)
-            $s = Get-OnlineQuestSerial
-            if ($s) { Write-QuestLog "Connected via mDNS $target"; return $s }
-        }
-    }
-    return $null
-}
-
-# The PC's adb server can stop hearing the headset's mDNS announcements (seen after the headset
-# slept and came back on a new wireless-debugging port: the headset advertised, `adb mdns services`
-# stayed empty until the server was restarted). So once this process has not found the headset for
-# questAdbRediscoverSec (default 60 s), restart the adb server and look again. Only when no adb
-# device at all is connected (nothing to interrupt), and at most once every 5 min across all
-# companion processes (shared %TEMP% stamp). Returns $true when it restarted the server.
-$script:MdnsUnseenSince = $null
-# Minutes between adb server restarts (the after-quit history helper waits longer: 20).
-$script:AdbRediscoverEveryMin = 5
-$script:AdbRestartStamp = Join-Path $env:TEMP 'loopsegments-adb-rediscover.txt'
-function Invoke-QuestAdbRediscover {
-    if ($script:AdbRediscoverSec -le 0) { return $false }
-    $now = [DateTime]::UtcNow
-    if (-not $script:MdnsUnseenSince) { $script:MdnsUnseenSince = $now; return $false }
-    $unseen = ($now - $script:MdnsUnseenSince).TotalSeconds
-    if ($unseen -lt $script:AdbRediscoverSec) { return $false }
-    try {
-        if (Test-Path -LiteralPath $script:AdbRestartStamp) {
-            $last = [DateTime]::Parse((Get-Content -LiteralPath $script:AdbRestartStamp -Raw).Trim(), $null, [Globalization.DateTimeStyles]::RoundtripKind)
-            if (($now - $last).TotalMinutes -lt $script:AdbRediscoverEveryMin) { return $false }
-        }
-    } catch {}
-    $d = Invoke-Adb -Arguments @('devices')
-    $attached = @($d.Out -split "`r?`n" | Where-Object { $_ -match '^\S+\s+(device|unauthorized|recovery|sideload)\b' })
-    if ($attached.Count -gt 0) { return $false }
-    try { Set-Content -LiteralPath $script:AdbRestartStamp -Value $now.ToString('o') -Encoding ascii } catch {}
-    Write-QuestLog ("adb: headset not seen over mDNS for {0:0} s - restarting the adb server to rediscover it." -f $unseen)
-    [void](Reset-QuestAdbServer -AdbExe $script:Adb -Log { param($m) Write-QuestLog "adb: $m" })
-    # mDNS answers arrive over the next few seconds.
-    for ($i = 0; $i -lt 8; $i++) {
-        Start-Sleep -Seconds 1
-        $m = Invoke-Adb -Arguments @('mdns', 'services') -TimeoutSec 8
-        if ($m.Out -match '_adb-tls-connect') { break }
-    }
-    $script:MdnsUnseenSince = $now
-    return $true
-}
-
-# Stuck adb server (`adb devices` timed out; seen: every adb command, kill-server too, hung until
-# adb.exe was killed): reset it (QuestAdbServer.ps1: kill-server, else kill the process), then
-# reconnect as usual. Unlike the 60 s rediscover above this runs at once - nothing works until it
-# is done - but at most once a minute across all companion processes (shared %TEMP% stamp), so
-# several processes noticing the same hang reset it once. Returns $true when it reset the server.
-$script:AdbDevicesTimedOut = $false
-$script:AdbStuckStamp = Join-Path $env:TEMP 'loopsegments-adb-stuck-reset.txt'
-function Repair-QuestAdbStuckServer {
-    $now = [DateTime]::UtcNow
-    try {
-        if (Test-Path -LiteralPath $script:AdbStuckStamp) {
-            $last = [DateTime]::Parse((Get-Content -LiteralPath $script:AdbStuckStamp -Raw).Trim(), $null, [Globalization.DateTimeStyles]::RoundtripKind)
-            if (($now - $last).TotalSeconds -lt 60) { return $false }
-        }
-    } catch {}
-    try { Set-Content -LiteralPath $script:AdbStuckStamp -Value $now.ToString('o') -Encoding ascii } catch {}
-    Write-QuestLog 'adb: `adb devices` did not answer in 10 s - the adb server looks stuck; resetting it.'
-    $how = Reset-QuestAdbServer -AdbExe $script:Adb -Log { param($m) Write-QuestLog "adb: $m" }
-    Write-QuestLog "adb: server reset ($how)."
-    $script:AdbDevicesTimedOut = $false
-    return $true
-}
-
-function Get-QuestWakefulness {
-    param([string] $DeviceSerial)
-    $r = Invoke-Adb -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'power') -TimeoutSec 8
-    if ($r.Code -ne 0) { return $null }
-    if ($r.Out -match 'mWakefulness=(\w+)') { return $Matches[1] }
-    return $null
-}
+Initialize-QuestTools -AdbExe $AdbExe -Serial $Serial -QuestHost $QuestHost -Port $Port -RediscoverSec $script:AdbRediscoverSec
 
 $IncognitoLauncher = 'com.oculus.browser/org.chromium.chrome.browser.incognito.IncognitoTabLauncher'
 
 # adb shell joins args into one device shell line: single-quote the URL.
 function Get-QuestQuotedUrl { "'" + ($Url -replace "'", '') + "'" }
 
-function Get-AdbMessage { param($R) (($R.Out + ' ' + $R.Err) -replace '\s+', ' ').Trim() }
 
-function Test-AdbStartOk { param($R) ($R.Code -eq 0 -and (Get-AdbMessage $R) -notmatch '(?i)\bError\b|Exception') }
-
-function Test-QuestBrowserResumed {
-    param([string] $DeviceSerial)
-    $r = Invoke-Adb -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'activity', 'activities') -TimeoutSec 10
-    $resumed = @($r.Out -split "`r?`n" | Where-Object { $_ -match '(?i)ResumedActivity' })
-    return (@($resumed | Where-Object { $_ -match [regex]::Escape($BrowserPackage) }).Count -gt 0)
-}
 
 # After Open on Quest succeeds: POST /keep_alive.json action=extend (+60 min) on the phone LAN.
 function Invoke-PhoneKeepAliveExtendAfterQuestOpen {
@@ -570,11 +361,6 @@ function Get-QuestTypedUrl {
     }
 }
 
-function Test-QuestImeShown {
-    param([string] $DeviceSerial)
-    $r = Invoke-Adb -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'input_method') -TimeoutSec 10
-    return ($r.Out -match 'mInputShown=true')
-}
 
 # Best effort: read Quest Browser tabs over its DevTools socket (what chrome://inspect uses).
 # $true = a tab shows -Url, $false = none does after ~6 s, $null = could not check.
@@ -991,11 +777,6 @@ function Open-QuestLanTabOnce {
 # running. The companion removes it at startup; the quit reads it.
 $script:BrowserOursPath = Join-Path $env:TEMP 'loopsegments-quest-browser-ours.json'
 
-function Test-QuestBrowserRunning {
-    param([string] $DeviceSerial)
-    $r = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'pidof', $BrowserPackage)
-    return ([string]$r.Out).Trim() -match '^\d'
-}
 
 function Test-QuestBrowserOurs {
     try { return [bool]((Get-Content -LiteralPath $script:BrowserOursPath -Raw | ConvertFrom-Json).ours) } catch { return $false }
@@ -1003,18 +784,6 @@ function Test-QuestBrowserOurs {
 
 # Before Open on Quest's first intent. A later click that finds the browser closed again also
 # makes it ours (whatever was open before is gone by then).
-# DevTools must be open. Tabs that are yours: not empty (new-tab page, about:blank) and not on the
-# phone LAN / control page origins.
-function Get-QuestUserTabs {
-    param([string[]] $Origins = @())
-    $os = @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/').ToLowerInvariant() })
-    return @(Get-QuestTabs | Where-Object {
-            $u = [string]$_.url
-            if ($u -eq '' -or $u -eq 'about:blank' -or $u -like 'chrome://panel-app-nav/ntp*' -or $u -like 'chrome://newtab*') { return $false }
-            $b = (ConvertTo-QuestBareUrl $u).ToLowerInvariant()
-            -not @($os | Where-Object { $b -eq $_ -or $b.StartsWith("${_}/") }).Count
-        })
-}
 
 # Ours = Quest Browser was not running, or was running with no tab of yours (only empty new-tab
 # pages or our own LAN / control tabs, e.g. left by an earlier session, a restart or the history
@@ -1040,22 +809,6 @@ function Save-QuestBrowserOurs {
     Write-QuestLog ("Browser: Quest Browser {0} before Open on Quest - {1}" -f $why, $(if ($ours) { 'closed again at quit if no other tabs are left.' } else { 'left running at quit.' }))
 }
 
-# DevTools must be open. Force-stops Quest Browser when only empty tabs are left (new tab pages).
-function Close-QuestBrowserIfEmpty {
-    param([string] $DeviceSerial)
-    $left = @(Get-QuestUserTabs)
-    if ($left.Count -gt 0) {
-        Write-QuestLog "Browser: $($left.Count) other tab(s) open - Quest Browser left running."
-        return 'left'
-    }
-    # Chromium writes its Recently closed list a few seconds after a change; a force-stop before that
-    # can bring back an older copy on the next start. So give it time to save first.
-    Start-Sleep -Seconds 5
-    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'force-stop', $BrowserPackage)
-    if ($r.Code -ne 0) { Write-QuestLog "Browser: force-stop failed (code $($r.Code))."; return 'failed' }
-    Write-QuestLog 'Browser: closed Quest Browser (no tab of yours was open, only empty / blank pages).'
-    return 'closed'
-}
 
 function Open-QuestLanTab {
     param([string] $DeviceSerial)
@@ -1079,198 +832,24 @@ function Open-QuestLanTab {
     return $true
 }
 
-function Invoke-QuestIncognitoProbe {
-    $dev = Get-OnlineQuestSerial
-    if (-not $dev) { $dev = Connect-Quest }
-    if (-not $dev) {
-        Write-QuestLog 'Probe: headset not reachable over adb.'
-        return 1
-    }
-    $dumpPath = Join-Path $env:TEMP 'loopsegments-quest-browser-dumpsys.txt'
-    $d = Invoke-Adb -Arguments @('-s', $dev, 'shell', 'dumpsys', 'package', $BrowserPackage) -TimeoutSec 30
-    Set-Content -LiteralPath $dumpPath -Value $d.Out -Encoding utf8
-    Write-Host "== Quest Browser ($dev) =="
-    $ver = [regex]::Match($d.Out, 'versionName=(\S+)')
-    Write-Host ("versionName: {0}" -f $(if ($ver.Success) { $ver.Groups[1].Value } else { '?' }))
-    Write-Host "== dumpsys lines matching incognito / private =="
-    $hits = @($d.Out -split "`r?`n" | Where-Object { $_ -match '(?i)incognito|private.?tab|privatebrows|OPEN_PRIVATE' } |
-        ForEach-Object { $_.Trim() } | Select-Object -Unique)
-    if ($hits.Count -eq 0) { Write-Host '(none)' } else { $hits | ForEach-Object { Write-Host "  $_" } }
-    Write-Host "== resolve Chromium OPEN_PRIVATE_TAB =="
-    $res = Invoke-Adb -Arguments @('-s', $dev, 'shell', 'cmd', 'package', 'resolve-activity', '--brief',
-        '-a', 'org.chromium.chrome.browser.incognito.OPEN_PRIVATE_TAB', $BrowserPackage) -TimeoutSec 15
-    Write-Host ("  " + (($res.Out + ' ' + $res.Err) -replace '\s+', ' ').Trim())
-    Write-Host "== resolve VIEW http (default handler) =="
-    $res = Invoke-Adb -Arguments @('-s', $dev, 'shell', 'cmd', 'package', 'resolve-activity', '--brief',
-        '-a', 'android.intent.action.VIEW', '-d', 'http://10.0.0.1/', $BrowserPackage) -TimeoutSec 15
-    Write-Host ("  " + (($res.Out + ' ' + $res.Err) -replace '\s+', ' ').Trim())
-    Write-Host "Full dump: $dumpPath"
-    Write-QuestLog "Probe done ($dev, $($hits.Count) incognito/private lines) -> $dumpPath"
-    return 0
-}
 
-# Proximity sensor: `prox_close` forces "worn" (virtual state CLOSE, headset never sleeps);
-# `automation_disable` drops that override so the real sensor is used again (state DISABLED).
-function Get-QuestVirtualProximity {
-    param([string] $DeviceSerial)
-    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'vrpowermanager')
-    if ($r.Out -match 'Virtual proximity state:\s*(\w+)') { return $Matches[1] }
-    return $null
-}
 
-# Hold the proximity sensor off (`prox_close`, virtual state CLOSE): the headset acts as worn and
-# does not sleep when taken off. Undone by -EnableProximity or a headset reboot.
-# A notification in the headset while the sensor is held off by hand (Set-QuestProximitySensor.ps1),
-# so it is clear why the headset does not sleep. `cmd notification post` (as the Android shell; Quest
-# shows it in the notification panel, not as a popup); there is no remove command, so turning the
-# sensor on snoozes it for a year, which takes it off the panel. A snoozed notification stays snoozed
-# when posted again under the same tag, so each post gets its own tag (loopsegments_prox_<time>) and
-# the hide snoozes every one of them. Keep-awake during a companion session does not post it.
-$script:QuestSensorNoticeTag = 'loopsegments_prox'
 
-function Show-QuestSensorOffNotice {
-    param([string] $DeviceSerial)
-    $text = 'The headset stays awake when you take it off. Run Set-QuestProximitySensor.ps1 on the PC to turn the sensor on again (a headset reboot or the companion quit also does).'
-    Hide-QuestSensorOffNotice -DeviceSerial $DeviceSerial -Quiet
-    $tag = '{0}_{1}' -f $script:QuestSensorNoticeTag, [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $r = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', "cmd notification post -S bigtext -t 'Proximity sensor OFF' $tag '$text'")
-    if ($r.Code -ne 0) { return }
-    Write-QuestLog 'Proximity: posted a "Proximity sensor OFF" notification in the headset.'
-    # Quest lists it only behind the bell (Meta button > bell), so open that list in front of the
-    # user: the system UI's notifications panel. Only on an awake headset (an activity start may
-    # wake a sleeping one). (The Navigator's NotificationsActivity sometimes brings up the Library
-    # instead, and `cmd statusbar expand-notifications` opens Settings > Notifications.)
-    if ((Get-QuestWakefulness -DeviceSerial $DeviceSerial) -eq 'Awake') {
-        $o = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'start', '-n', 'com.oculus.systemux/com.oculus.panelapp.notifications.NotificationsActivity')
-        if ($o.Code -eq 0 -and ([string]$o.Out) -notmatch '(?i)error') {
-            Write-QuestLog 'Proximity: opened the notifications list (bell) in the headset; closing it in 20 s.'
-            # Back / Home / Escape do not close that panel; removing its window's task does (like
-            # swiping it away; the notification stays behind the bell). Skipped if already closed.
-            Start-Sleep -Seconds 20
-            $acts = [string](Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'activity', 'activities')).Out
-            $m = [regex]::Match($acts, 'rootTaskId=(\d+)[^\n]*\n(?:[^\n]*\n){0,3}?[^\n]*panelapp\.notifications\.NotificationsActivity')
-            $root = if ($m.Success) { $m.Groups[1].Value } else { '' }
-            if (-not $root) {
-                $t = [regex]::Match($acts, 'panelapp\.notifications\.NotificationsActivity t(\d+)')
-                if ($t.Success) { $root = $t.Groups[1].Value }
-            }
-            if ($root) {
-                [void](Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'stack', 'remove', $root))
-                Write-QuestLog 'Proximity: closed the notifications list.'
-            }
-        }
+# http://<phoneLanHost>:<lanPort>/ from the companion's lan_config.json (re-read on every call, so a
+# phone address change during the session is picked up), or $null.
+function Get-QuestSkyboxLanUrlFromConfig {
+    param([string] $Path)
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        $c = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $h = ([string]$c.phoneLanHost).Trim()
+        if ([string]::IsNullOrWhiteSpace($h)) { return $null }
+        $port = 8765
+        if ($null -ne $c.lanPort -and [int]$c.lanPort -gt 0) { $port = [int]$c.lanPort }
+        return "http://${h}:${port}/"
+    } catch {
+        return $null
     }
-}
-
-function Hide-QuestSensorOffNotice {
-    param([string] $DeviceSerial, [switch] $Quiet)
-    $l = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'cmd', 'notification', 'list')
-    foreach ($k in @(([string]$l.Out) -split "`r?`n" | Where-Object { $_ -match "\|$([regex]::Escape($script:QuestSensorNoticeTag))(_\d+)?\|" })) {
-        [void](Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', "cmd notification snooze --for 31536000000 '$($k.Trim())'"))
-        if (-not $Quiet) { Write-QuestLog 'Proximity: removed the "Proximity sensor OFF" notification.' }
-    }
-}
-
-function Invoke-QuestDisableProximity {
-    $dev = Get-OnlineQuestSerial
-    if (-not $dev) { $dev = Connect-Quest }
-    if (-not $dev) { Write-QuestLog 'Proximity: headset not reachable over adb - skipped.'; return 1 }
-    $before = Get-QuestVirtualProximity -DeviceSerial $dev
-    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $dev, 'shell', 'am', 'broadcast', '-a', 'com.oculus.vrpowermanager.prox_close')
-    if ($r.Code -ne 0 -or ($r.Out -notmatch 'Broadcast completed')) {
-        Write-QuestLog "Proximity: broadcast failed (code $($r.Code)): $(Get-AdbMessage $r)"
-        return 3
-    }
-    Start-Sleep -Milliseconds 500
-    $after = Get-QuestVirtualProximity -DeviceSerial $dev
-    if ($after -and $after -ne 'CLOSE') {
-        Write-QuestLog "Proximity: override is '$after' after switching the sensor off (was '$before')."
-        return 3
-    }
-    Write-QuestLog ("Proximity: sensor off, headset stays awake (override was '{0}', now '{1}')." -f $(if ($before) { $before } else { '?' }), $(if ($after) { $after } else { '?' }))
-    Show-QuestSensorOffNotice -DeviceSerial $dev
-    return 0
-}
-
-# Flip it: CLOSE (held off) -> on, anything else -> off.
-function Invoke-QuestToggleProximity {
-    $dev = Get-OnlineQuestSerial
-    if (-not $dev) { $dev = Connect-Quest }
-    if (-not $dev) { Write-QuestLog 'Proximity: headset not reachable over adb - skipped.'; return 1 }
-    if ((Get-QuestVirtualProximity -DeviceSerial $dev) -eq 'CLOSE') { return (Invoke-QuestEnableProximity) }
-    return (Invoke-QuestDisableProximity)
-}
-
-function Invoke-QuestEnableProximity {
-    $dev = Get-OnlineQuestSerial
-    if (-not $dev) { $dev = Connect-Quest }
-    if (-not $dev) { Write-QuestLog 'Proximity: headset not reachable over adb - skipped.'; return 1 }
-    $before = Get-QuestVirtualProximity -DeviceSerial $dev
-    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $dev, 'shell', 'am', 'broadcast', '-a', 'com.oculus.vrpowermanager.automation_disable')
-    if ($r.Code -ne 0 -or ($r.Out -notmatch 'Broadcast completed')) {
-        Write-QuestLog "Proximity: broadcast failed (code $($r.Code)): $(Get-AdbMessage $r)"
-        return 3
-    }
-    Start-Sleep -Milliseconds 500
-    $after = Get-QuestVirtualProximity -DeviceSerial $dev
-    if ($after -and $after -ne 'DISABLED') {
-        Write-QuestLog "Proximity: override still '$after' after re-enabling (was '$before')."
-        return 3
-    }
-    Write-QuestLog ("Proximity: sensor on (override was '{0}', now '{1}')." -f $(if ($before) { $before } else { '?' }), $(if ($after) { $after } else { '?' }))
-    Hide-QuestSensorOffNotice -DeviceSerial $dev
-    return 0
-}
-
-function Invoke-QuestKeepAwakeSession {
-    if ($ParentPid -le 0) { Write-QuestLog 'Keep-awake: -ParentPid is required.'; return 2 }
-    Write-QuestLog "Keep-awake: holding the Quest proximity sensor off while PID $ParentPid runs."
-    $lastNote = ''
-    while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-        $note = ''
-        try {
-            $dev = Get-OnlineQuestSerial
-            if (-not $dev) { $dev = Connect-Quest }
-            if (-not $dev) {
-                $note = 'headset not on adb - waiting'
-            } else {
-                $state = Get-QuestVirtualProximity -DeviceSerial $dev
-                # prox_close tells the headset it was just put on, so it would wake one lying in
-                # standby (still on Wi-Fi for a while after it sleeps). Only act once it is awake,
-                # i.e. someone woke it by putting it on.
-                $wake = if ($state -eq 'CLOSE') { $null } else { Get-QuestWakefulness -DeviceSerial $dev }
-                if ($state -eq 'CLOSE') {
-                    $note = "sensor held off ($dev)"
-                } elseif ($wake -ne 'Awake') {
-                    $note = "headset asleep ($(if ($wake) { $wake } else { 'unknown' })) - not waking it; sensor goes off once it is put on"
-                } else {
-                    # Check the parent again right before acting: cleanup may have started.
-                    if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
-                    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $dev, 'shell', 'am', 'broadcast', '-a', 'com.oculus.vrpowermanager.prox_close')
-                    $note = if ($r.Out -match 'Broadcast completed') { "sensor switched off (was '$state', $dev)" } else { "prox_close failed: $(Get-AdbMessage $r)" }
-                }
-            }
-        } catch {
-            $note = "error: $($_.Exception.Message)"
-        }
-        if ($note -ne $lastNote) { Write-QuestLog "Keep-awake: $note"; $lastNote = $note }
-        for ($i = 0; $i -lt 20 -and (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
-    }
-    if ($RestoreProximity) {
-        # 3d_playlist_local workflow ended by itself (the Enter button stops this process first and
-        # turns the sensor on in its own order). Leave it held off while a companion session runs.
-        $companion = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-                Where-Object { ([string]$_.CommandLine) -like '*-KeepAwakeSession*' -and ([string]$_.CommandLine) -notlike '*-RestoreProximity*' -and [int]$_.ProcessId -ne $PID })
-        if ($companion.Count) {
-            Write-QuestLog 'Keep-awake: workflow gone - sensor left off (the companion session still holds it).'
-        } else {
-            Write-QuestLog 'Keep-awake: workflow gone - turning the proximity sensor back on.'
-            [void](Invoke-QuestEnableProximity)
-        }
-        return 0
-    }
-    Write-QuestLog 'Keep-awake: companion gone - stopping (sensor is re-enabled by the companion cleanup).'
-    return 0
 }
 
 # The phone LAN URL to use now: from -LanConfig (the companion's lan_config.json, re-read each call)
@@ -1411,15 +990,6 @@ function Test-QuestCompanionRunning {
         Select-Object -First 1)
 }
 
-# Worn = mounted and not idle. Quest Browser only answers (history list, clear dialog, new tabs)
-# while the headset is in use; a headset lying still is idle even when kept awake by prox_close.
-function Test-QuestHeadsetWorn {
-    param([string] $DeviceSerial)
-    $r = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'dumpsys', 'vrpowermanager')
-    if ($r.Code -ne 0) { return $false }
-    $o = [string]$r.Out
-    return ($o -match '(?m)^\s*State:\s*HEADSET_MOUNTED\b') -and ($o -match '(?m)^\s*Device idle state:\s*Not idle\b')
-}
 
 # Save what is left to do and make sure one helper is running for it. -Proximity: the quit could
 # not reach the headset, so the sensor override may still be on. Returns $true when handed over.
@@ -1535,44 +1105,13 @@ function Clear-QuestHistoryAndClosed {
 # drain its battery on Wi-Fi and does not hop to another network when the quit's AP bounce reboots
 # the router. adb (over that Wi-Fi) drops right after. Wireless debugging comes back on its own (new
 # port, found over mDNS) once Wi-Fi is switched on again in the headset's quick settings.
-# Returns 'off', 'failed' or 'kept' (setting off).
+# Invoke-QuestWifiOff (quest_tools) does it; this decides whether.
 function Test-QuestWifiOffWanted {
     $on = $true
     if ($script:Cfg -and $script:Cfg.Contains('questWifiOffOnExit')) { $on = [bool]$script:Cfg.questWifiOffOnExit }
     return $on
 }
 
-function Invoke-QuestWifiOff {
-    # -Force: by hand (-WifiOff), regardless of questWifiOffOnExit.
-    param([string] $DeviceSerial, [switch] $Force)
-    if (-not $Force -and -not (Test-QuestWifiOffWanted)) { return 'kept' }
-    # Open Settings > Wi-Fi first (android.settings.WIFI_SETTINGS: Quest relays it to its Settings
-    # app on the Wi-Fi page, toggle at the top), so switching Wi-Fi back on is one tap when the
-    # headset is next put on. Only on an awake headset (an activity start may wake a sleeping one),
-    # and after the browser steps (Quest Browser goes behind the panel).
-    if ((Get-QuestWakefulness -DeviceSerial $DeviceSerial) -eq 'Awake') {
-        $h = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'start', '-a', 'android.settings.WIFI_SETTINGS')
-        if ($h.Code -eq 0 -and ([string]$h.Out) -notmatch '(?i)error') { Write-QuestLog 'Wi-Fi settings: opened (Wi-Fi toggle in front).'; Start-Sleep -Milliseconds 800 }
-        else { Write-QuestLog "Wi-Fi settings: could not open ($(([string]$h.Out + ' ' + [string]$h.Err).Trim()))." }
-    }
-    $w = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'cmd', 'wifi', 'set-wifi-enabled', 'disabled')
-    if ($w.Code -eq 0) {
-        Write-QuestLog 'Wi-Fi: switched the headset''s Wi-Fi off (switch it on in quick settings before the next session).'
-        return 'off'
-    }
-    # Wireless adb runs over that Wi-Fi: the command often never returns because the link dropped
-    # as Wi-Fi went off (timeout, code -1 / 1). The headset gone from adb (offline / not listed) right
-    # after means it took it.
-    Start-Sleep -Seconds 2
-    $st = Invoke-Adb -TimeoutSec 8 -Arguments @('devices')
-    $line = @(([string]$st.Out) -split "`r?`n" | Where-Object { $_ -match ('^' + [regex]::Escape($DeviceSerial) + '\s') }) | Select-Object -First 1
-    if ($DeviceSerial -match '^\d{1,3}(\.\d{1,3}){3}:\d+$' -and (-not $line -or $line -notmatch '\sdevice\s*$')) {
-        Write-QuestLog ("Wi-Fi: switched the headset's Wi-Fi off (adb dropped during the command, code {0}; switch it on in quick settings before the next session)." -f $w.Code)
-        return 'off'
-    }
-    Write-QuestLog "Wi-Fi: could not switch it off (code $($w.Code))."
-    return 'failed'
-}
 
 # questClearHistoryFallback: the Clear browsing data range (history only) cleared when the selective
 # delete fails, at quit and in the after-quit helper. '' = no fallback.
@@ -1612,7 +1151,7 @@ function Invoke-QuestHistoryRetry {
             # Not worn in time, but maybe still on adb: Wi-Fi off before the held AP bounce anyway.
             $gone = Get-OnlineQuestSerial
             if (-not $gone) { $gone = Connect-Quest }
-            if ($gone) { [void](Invoke-QuestWifiOff -DeviceSerial $gone) }
+            if ($gone -and (Test-QuestWifiOffWanted)) { [void](Invoke-QuestWifiOff -DeviceSerial $gone) }
             Invoke-QuestDeferredBounce -Why 'history helper gave up'
             return 1
         }
@@ -1659,7 +1198,7 @@ function Invoke-QuestHistoryRetry {
                     Write-QuestLog ("History retry: done{0}." -f $(if ($res -eq 'fallback') { ' (range fallback)' } else { '' }))
                     Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
                     # Wi-Fi off before the held AP bounce, so the bounce cannot move the headset.
-                    [void](Invoke-QuestWifiOff -DeviceSerial $dev)
+                    if (Test-QuestWifiOffWanted) { [void](Invoke-QuestWifiOff -DeviceSerial $dev) }
                     Invoke-QuestDeferredBounce -Why 'history deleted'
                     return 0
                 }
@@ -1727,21 +1266,6 @@ function Invoke-QuestOpenControlPageOnly {
     }
 }
 
-# /proc/net/tcp(6) address "0100A8C0:1F90" -> 192.168.0.1, 8080 (IPv4 and IPv4-mapped IPv6 only).
-function ConvertFrom-QuestProcNetAddress {
-    param([string] $Hex)
-    $parts = $Hex.Split(':')
-    if ($parts.Count -ne 2) { return $null }
-    $ipHex = $parts[0]
-    $port = [Convert]::ToInt32($parts[1], 16)
-    if ($ipHex.Length -eq 32) {
-        if (-not $ipHex.StartsWith('0000000000000000FFFF0000', [StringComparison]::OrdinalIgnoreCase)) { return [pscustomobject]@{ Ip = ''; Port = $port } }
-        $ipHex = $ipHex.Substring(24)
-    }
-    if ($ipHex.Length -ne 8) { return [pscustomobject]@{ Ip = ''; Port = $port } }
-    $b = @(0..3 | ForEach-Object { [Convert]::ToByte($ipHex.Substring($_ * 2, 2), 16) })
-    return [pscustomobject]@{ Ip = ('{0}.{1}.{2}.{3}' -f $b[3], $b[2], $b[1], $b[0]); Port = $port }
-}
 
 function Get-QuestCfgList {
     param([string] $Name, [string[]] $Default = @())
@@ -1852,10 +1376,10 @@ if ($WifiOff) {
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
     if (-not $dev) { Write-QuestLog 'Wi-Fi: headset not reachable over adb - skipped.'; exit 1 }
-    $w = Invoke-QuestWifiOff -DeviceSerial $dev -Force
+    $w = Invoke-QuestWifiOff -DeviceSerial $dev
     if ($w -eq 'off') { exit 0 } else { exit 3 }
 }
-if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession) }
+if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession -ParentPid $ParentPid -RestoreProximity:$RestoreProximity) }
 if ($StopMediaApps) { exit (Invoke-QuestStopMediaApps) }
 if ($OpenControlPage) { exit (Invoke-QuestOpenControlPageOnly) }
 if ($SkyboxPush -or $SkyboxUpdate) {
