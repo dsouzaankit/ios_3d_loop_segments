@@ -17,7 +17,7 @@
   devices, last known address, mDNS). Needs the phone LAN page up: the helper tab opens a no-login
   phone page (/xr-assets/lsclean) before going to chrome://flags.
 
-  Like Set-QuestProximitySensor.ps1 (shared code in quest\QuestWrapperCommon.ps1): first makes sure
+  Shared code in quest\QuestWrapperCommon.ps1 and quest_tools\QuestWrapperCommon.ps1: first makes sure
   this PC is on the phone's network (lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1;
   -SkipNetworkCheck skips it), then, while the headset is not on adb (asleep, or Wi-Fi just switched
   on), keeps trying every 5 s for up to -WaitSec (default 120 s), restarting the adb server before
