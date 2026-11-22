@@ -235,6 +235,7 @@ if ($Port -le 0) { $Port = 5555 }
 if ($NoIncognito) { $PrivateTab = $false }
 . (Join-Path $PSScriptRoot 'QuestDevTools.ps1')
 . (Join-Path $PSScriptRoot 'QuestSkybox.ps1')
+. (Join-Path $PSScriptRoot 'QuestAdbServer.ps1')
 
 function Find-QuestAdbExe {
     if (-not [string]::IsNullOrWhiteSpace($AdbExe)) {
@@ -310,6 +311,8 @@ function Connect-QuestLastAddress {
 
 function Find-OnlineQuestSerial {
     $r = Invoke-Adb -Arguments @('devices', '-l')
+    # A healthy server answers `adb devices` in well under a second: a timeout means it is stuck.
+    $script:AdbDevicesTimedOut = ($r.Code -eq -1)
     $lines = @($r.Out -split "`r?`n" | Where-Object { $_ -match '^\S+\s+device\b' })
     if (-not [string]::IsNullOrWhiteSpace($Serial)) {
         foreach ($l in $lines) { if ($l -match ('^' + [regex]::Escape($Serial) + '\s')) { return $Serial } }
@@ -330,6 +333,11 @@ function Find-OnlineQuestSerial {
 }
 
 function Connect-Quest {
+    # Stuck adb server: nothing below can get through it, so reset it first.
+    if ($script:AdbDevicesTimedOut -and (Repair-QuestAdbStuckServer)) {
+        $s = Get-OnlineQuestSerial
+        if ($s) { $script:MdnsUnseenSince = $null; return $s }
+    }
     if (-not [string]::IsNullOrWhiteSpace($QuestHost)) {
         $target = '{0}:{1}' -f $QuestHost, $Port
         $r = Invoke-Adb -Arguments @('connect', $target) -TimeoutSec 8
@@ -394,8 +402,7 @@ function Invoke-QuestAdbRediscover {
     if ($attached.Count -gt 0) { return $false }
     try { Set-Content -LiteralPath $script:AdbRestartStamp -Value $now.ToString('o') -Encoding ascii } catch {}
     Write-QuestLog ("adb: headset not seen over mDNS for {0:0} s - restarting the adb server to rediscover it." -f $unseen)
-    [void](Invoke-Adb -Arguments @('kill-server') -TimeoutSec 10)
-    [void](Invoke-Adb -Arguments @('start-server') -TimeoutSec 15)
+    [void](Reset-QuestAdbServer -AdbExe $script:Adb -Log { param($m) Write-QuestLog "adb: $m" })
     # mDNS answers arrive over the next few seconds.
     for ($i = 0; $i -lt 8; $i++) {
         Start-Sleep -Seconds 1
@@ -403,6 +410,29 @@ function Invoke-QuestAdbRediscover {
         if ($m.Out -match '_adb-tls-connect') { break }
     }
     $script:MdnsUnseenSince = $now
+    return $true
+}
+
+# Stuck adb server (`adb devices` timed out; seen: every adb command, kill-server too, hung until
+# adb.exe was killed): reset it (QuestAdbServer.ps1: kill-server, else kill the process), then
+# reconnect as usual. Unlike the 60 s rediscover above this runs at once - nothing works until it
+# is done - but at most once a minute across all companion processes (shared %TEMP% stamp), so
+# several processes noticing the same hang reset it once. Returns $true when it reset the server.
+$script:AdbDevicesTimedOut = $false
+$script:AdbStuckStamp = Join-Path $env:TEMP 'loopsegments-adb-stuck-reset.txt'
+function Repair-QuestAdbStuckServer {
+    $now = [DateTime]::UtcNow
+    try {
+        if (Test-Path -LiteralPath $script:AdbStuckStamp) {
+            $last = [DateTime]::Parse((Get-Content -LiteralPath $script:AdbStuckStamp -Raw).Trim(), $null, [Globalization.DateTimeStyles]::RoundtripKind)
+            if (($now - $last).TotalSeconds -lt 60) { return $false }
+        }
+    } catch {}
+    try { Set-Content -LiteralPath $script:AdbStuckStamp -Value $now.ToString('o') -Encoding ascii } catch {}
+    Write-QuestLog 'adb: `adb devices` did not answer in 10 s - the adb server looks stuck; resetting it.'
+    $how = Reset-QuestAdbServer -AdbExe $script:Adb -Log { param($m) Write-QuestLog "adb: $m" }
+    Write-QuestLog "adb: server reset ($how)."
+    $script:AdbDevicesTimedOut = $false
     return $true
 }
 

@@ -3,6 +3,7 @@
 # headset is on adb, and the closing message. Dot-source it.
 
 $script:QuestWatchScript = Join-Path $PSScriptRoot 'Watch-LoopSegmentsQuestLanTab.ps1'
+. (Join-Path $PSScriptRoot 'QuestAdbServer.ps1')
 $script:QuestWrapperCfg = $null
 try {
     . (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\LoopSegments-Windows.ps1')
@@ -62,8 +63,10 @@ function Invoke-QuestWrapperWatch {
         $adbExe = (Get-Command adb -ErrorAction SilentlyContinue).Source
         if ($adbExe) {
             if ($tries -eq 1) { Write-Host '  (restarting the adb server before each retry)' -ForegroundColor DarkGray }
-            & $adbExe kill-server 2>&1 | Out-Null
-            & $adbExe start-server 2>&1 | Out-Null
+            # With timeouts: a stuck server never answers kill-server, and this window would hang
+            # on it (seen). Reset-QuestAdbServer then kills the adb.exe process instead.
+            $how = Reset-QuestAdbServer -AdbExe $adbExe -Log { param($m) Write-Host "  adb: $m" -ForegroundColor Yellow }
+            if ($how -eq 'killed') { Write-Host '  adb: the adb server was stuck - killed it and started a fresh one.' -ForegroundColor Yellow }
             Start-Sleep -Seconds 3
         }
     }
