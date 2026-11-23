@@ -737,7 +737,7 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
 - **`.local` (Bonjour) doesn't work:**
   - Quest OS (Android) can't look up `.local` names in the browser.
   - On the PC, Clash/Mihomo TUN takes multicast (`224.0.0.0/4`), so Bonjour lookups fail; see [../env_setup/Clash/README.md](../env_setup/Clash/README.md).
-  - The app's "Optional .local URL" is a guess from `UIDevice.current.name`. Since iOS 16 that returns "iPhone" without Apple's device-name entitlement, so sideloaded builds show `iphone.local` even when the phone announces `<name>-iPhone.local`.
+  - The app can't show the right `.local` name: since iOS 16, `UIDevice.current.name` returns "iPhone" without Apple's device-name entitlement, while the phone announces `<name>-iPhone.local`. The Export screen therefore shows only the LAN IP (its old "About → Name" and "Optional .local URL" rows were removed).
 - **`iphone.routerlogin.net` doesn't work:**
   - Clash fake-IP answers names with a dot with a `198.18.x.x` address.
   - `isAllowedRequestHost` (DNS-rebinding guard) refuses that name with **421 Misdirected Request**. It accepts only IP addresses, `localhost`, `.local`, names without a dot, and the saved tunnel host.

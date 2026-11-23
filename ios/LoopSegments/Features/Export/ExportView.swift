@@ -14,7 +14,6 @@ struct ExportView: View {
     @State private var errorMessage: String?
     @State private var logHint = ""
     @State private var liveLogTail = ""
-    @State private var lanHostURL: String?
     @State private var lanIPURL: String?
     @State private var copiedLANURL = false
     @State private var clearMediaAcknowledged = false
@@ -134,7 +133,6 @@ struct ExportView: View {
                             ExportLANServer.ensureRunning(log: { SearchDebugLog.log("LAN export: \($0)") })
                         } else {
                             ExportLANServer.stop(log: nil)
-                            lanHostURL = nil
                             lanIPURL = nil
                         }
                     }
@@ -172,13 +170,9 @@ struct ExportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Same Wi‑Fi as the device playing or controlling export. Use the LAN IP below — most PCs need the numeric address, not .local.")
+                Text("Same Wi‑Fi as the device playing or controlling export. Use the LAN IP below. On some routers the phone is also reachable as http://iphone:8765/. .local names don't work from Quest, and often not from PCs.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                LabeledContent("About → Name") {
-                    Text(ExportLANServer.deviceAboutName)
-                        .font(.caption)
-                }
                 if let lanIPURL {
                     LabeledContent("LAN IP") {
                         Text(lanIPURL)
@@ -193,14 +187,6 @@ struct ExportView: View {
                     Text("No Wi‑Fi IPv4 address — connect to Wi‑Fi on the same network as the LAN client.")
                         .font(.footnote)
                         .foregroundStyle(.orange)
-                }
-                if let lanHostURL {
-                    LabeledContent("Optional .local URL") {
-                        Text(lanHostURL)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
                 }
                 lanPasswordRows
                 Text("PC: windows/rclone/Mount-PhoneL.cmd (or Mount-LoopSegmentsRclone.ps1) maps pcld_ios_media/ over Wi‑Fi; use the LAN IP above.")
@@ -341,7 +327,6 @@ struct ExportView: View {
         }
         .task(id: ExportLANServer.isEnabled) {
             guard ExportLANServer.isEnabled else {
-                lanHostURL = nil
                 lanIPURL = nil
                 return
             }
@@ -350,13 +335,10 @@ struct ExportView: View {
                 if session.isExportSessionActive {
                     refreshLogFromDisk()
                 }
-                let urls = ExportLANServer.displayLANURLs
-                lanHostURL = urls.host
-                lanIPURL = urls.ip
+                lanIPURL = ExportLANServer.displayLANURLs.ip
                 try? await Task.sleep(for: .seconds(2))
             }
             if !ExportLANServer.isEnabled {
-                lanHostURL = nil
                 lanIPURL = nil
             }
         }
@@ -758,9 +740,7 @@ struct ExportView: View {
         if FileManager.default.fileExists(atPath: ExportPaths.workingSourceURL.path) {
             WorkingSourceSparseCatalog.refreshPlaybackState(for: ExportPaths.workingSourceURL)
         }
-        let urls = ExportLANServer.displayLANURLs
-        lanHostURL = urls.host
-        lanIPURL = urls.ip
+        lanIPURL = ExportLANServer.displayLANURLs.ip
     }
 
     @discardableResult

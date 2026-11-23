@@ -84,11 +84,6 @@ enum ExportLANServer {
     static var listenerCancelGeneration = 0
     /// Bonjour service name (`loopsegments._http._tcp.local` in browsers) — not a pingable hostname.
     static let bonjourServiceName = "loopsegments"
-    /// Settings → General → About → Name (e.g. `John's iPhone` → `http://johns-iphone.local:8765/`, not `iphone.local` unless named "iPhone").
-    static var deviceAboutName: String {
-        UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     /// mDNS host label from this iPhone (Settings → General → About → Name → `<name>.local`).
     static var deviceMDNSHostName: String {
         "\(deviceMDNSHostLabel()).local"
