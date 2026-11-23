@@ -1,3 +1,10 @@
+// Quest XR player engine (A-Frame components): the one editable copy, quest_tools/xr/xr-components.js.
+// Used by ios_3d_loop_segments /xr (a generated copy in ios/LoopSegments/Resources, written by
+// quest_tools/xr/Sync-QuestXrEngine.ps1; deploy.ps1 refuses a stale one) and by 3d_playlist_local's
+// PC XR page (serve_xr_page.py serves this folder directly). Each page keeps its own xr-app.js /
+// xr-player.html. Page knobs read here: window.__xrProjection (vr180 default | fisheye | flat),
+// window.__xrArStereo (false = mono Enter AR), window.__xrZoom / __xrDist. Matroska AV1 (V_AV1) and
+// MP4 av01 are both detected.
 (function () {
   var THREE = window.AFRAME && AFRAME.THREE ? AFRAME.THREE : window.THREE;
   if (!THREE || !window.AFRAME) return;
@@ -210,6 +217,12 @@
       // Box type only. A raw "av01" scan false-positives inside HEVC mdat and then
       // the dome stays on the AV1 blit path (blank after a real AV1 clip).
       var u8 = new Uint8Array(buf);
+      // Matroska / WebM: CodecID element (0x86), 1-byte size 5 (0x85), "V_AV1". Lives in the
+      // Tracks element near the start of the file.
+      for (var k = 0; k + 7 <= u8.length; k++) {
+        if (u8[k] === 0x86 && u8[k + 1] === 0x85 && u8[k + 2] === 86 && u8[k + 3] === 95 &&
+            u8[k + 4] === 65 && u8[k + 5] === 86 && u8[k + 6] === 49) return true;
+      }
       for (var i = 0; i + 8 <= u8.length; i++) {
         var size = (u8[i] << 24) | (u8[i + 1] << 16) | (u8[i + 2] << 8) | u8[i + 3];
         if (size < 8 || size > 16777216) continue;
@@ -1102,14 +1115,51 @@
         thetaStart: (Math.PI - span) / 2
       };
     },
+    // vr180 (equirect half sphere, the default) | fisheye (equidistant 180° circle per eye, Skybox
+    // LR_180_FISHEYE) | flat (a flat screen in front, Full_SBS). Set by xr-app.js per clip.
+    domeProjection: function () {
+      var p = String(window.__xrProjection || "vr180");
+      return (p === "fisheye" || p === "flat") ? p : "vr180";
+    },
+    // Flat screen: one eye's width / height (SBS halves the width). 16:9 until the video is known.
+    flatEyeAspect: function () {
+      var v = document.getElementById("chroma-stream");
+      var w = v && v.videoWidth, h = v && v.videoHeight;
+      if (!(w > 0 && h > 0)) return 16 / 9;
+      if (this.data.sbs) w = w / 2;
+      var a = w / h;
+      return (a > 0.3 && a < 6) ? Math.round(a * 1000) / 1000 : 16 / 9;
+    },
+    // Equidistant fisheye: the half sphere maps onto the inscribed circle (radius 0.5 at 90° off axis).
+    // Works from the sphere's own equirect UVs, so it keeps their (already correct) orientation and
+    // the FOV zoom packing.
+    applyFisheyeBaseUVs: function (geo) {
+      var uv = geo.attributes.uv;
+      var a = uv.array;
+      for (var i = 0; i < a.length; i += 2) {
+        var lon = (a[i] - 0.5) * Math.PI;
+        var lat = (a[i + 1] - 0.5) * Math.PI;
+        var x = Math.cos(lat) * Math.sin(lon);
+        var y = Math.sin(lat);
+        var z = Math.cos(lat) * Math.cos(lon);
+        var theta = Math.acos(Math.max(-1, Math.min(1, z)));
+        var r = theta / Math.PI;
+        var phi = Math.atan2(y, x);
+        a[i] = 0.5 + r * Math.cos(phi);
+        a[i + 1] = 0.5 + r * Math.sin(phi);
+      }
+      uv.needsUpdate = true;
+    },
     // A-Frame videosphere ignored phi-length → VR180 stretched to 360. Own the BufferGeometry.
     ensureDomeGeometry: function () {
       if (this.isDesktopRole()) return;
       var mesh = this.el.getObject3D("mesh");
       if (!mesh) return;
       var zoom = this.domeZoom();
+      var proj = this.domeProjection();
+      var geoKey = zoom + "|" + proj + (proj === "flat" ? "|" + this.flatEyeAspect() : "");
       var ready = mesh.geometry && mesh.geometry.userData && mesh.geometry.userData._xrHemi;
-      if (ready && this._domeGeoReady && this._domeZoom === zoom) return;
+      if (ready && this._domeGeoReady && this._domeGeoKey === geoKey) return;
       try {
         var old = mesh.geometry;
         // Zoom 1 is a 180° hemisphere. Lower values pack the full frame into a smaller arc.
@@ -1118,7 +1168,20 @@
         var thetaLen = ang.thetaLen;
         var phiStart = ang.phiStart;
         var thetaStart = ang.thetaStart;
-        var geo = new THREE.SphereGeometry(20, 80, 60, phiStart, phiLen, thetaStart, thetaLen);
+        var geo;
+        if (proj === "flat") {
+          // Screen at the dome radius, 80° wide at FOV 1 (the FOV slider shrinks it). The entity is
+          // mirrored on X (scale -1 1 1, for the inward dome), so mirror the plane too: net unmirrored.
+          var hfov = (80 * Math.PI / 180) * zoom;
+          var sw = 2 * 20 * Math.tan(hfov / 2);
+          var sh = sw / this.flatEyeAspect();
+          geo = new THREE.PlaneGeometry(sw, sh, 1, 1);
+          geo.scale(-1, 1, 1);
+          geo.translate(0, 0, -20);
+        } else {
+          geo = new THREE.SphereGeometry(20, 80, 60, phiStart, phiLen, thetaStart, thetaLen);
+          if (proj === "fisheye") this.applyFisheyeBaseUVs(geo);
+        }
         geo.userData._xrHemi = true;
         mesh.geometry = geo;
         if (old && old !== geo) {
@@ -1141,6 +1204,7 @@
         try { this.el.setAttribute("scale", "-1 1 1"); } catch (eAttr) {}
         this._domeGeoReady = true;
         this._domeZoom = zoom;
+        this._domeGeoKey = geoKey;
         mesh.traverse(function (node) {
           if (node.geometry && node.geometry.userData) {
             delete node.geometry.userData._xrBaseUv;
@@ -1494,7 +1558,10 @@
       // layer 1 only on the left eye camera and layer 2 only on the right one, so each
       // eye draws its own dome. The XR cameras are never edited here; their defaults
       // are what makes this work, and nothing carries over from an AR session.
-      // AR, mono and not-yet-presenting: layer 0, left dome only (left half, both eyes).
+      // Mono and not-yet-presenting: layer 0, left dome only (left half, both eyes).
+      // AR: the iOS page kept AR mono (its build 345: eye layers 1/2 blanked Quest AR video while it
+      // still edited the XR cameras by hand; the 2026-11-05 rewrite stopped that). Here AR uses the
+      // eye layers too unless window.__xrArStereo === false ("3D in AR" off on the page).
       var mesh = this.el.getObject3D("mesh");
       var immersive = this.isImmersiveStereo();
       var desktop = this.isDesktopRole();
@@ -1504,7 +1571,8 @@
         var sceneEl = this.el.sceneEl;
         presenting = !!(sceneEl && sceneEl.renderer && sceneEl.renderer.xr && sceneEl.renderer.xr.isPresenting);
       } catch (e0) {}
-      var stereo = !desktop && immersive && presenting && !isAR && !!this.data.sbs;
+      var arStereo = window.__xrArStereo !== false;
+      var stereo = !desktop && immersive && presenting && (!isAR || arStereo) && !!this.data.sbs;
       var layerBit = stereo ? this.eyeLayer() : 0;
       if (mesh) {
         mesh.traverse(function (node) {
@@ -1533,10 +1601,10 @@
         show = immersive;
       }
       if (this.el.object3D) this.el.object3D.visible = show;
-      var sig = layerBit + "|" + (show ? 1 : 0) + "|" + (isAR ? 1 : 0);
+      var sig = layerBit + "|" + (show ? 1 : 0) + "|" + (isAR ? 1 : 0) + "|" + (arStereo ? 1 : 0);
       if (!desktop && this._eyeLayerSig !== sig) {
         this._eyeLayerSig = sig;
-        try { xrLog("eye-layers", { eye: this.data.eye, layer: layerBit, visible: show, ar: isAR }); } catch (eLog) {}
+        try { xrLog("eye-layers", { eye: this.data.eye, layer: layerBit, visible: show, ar: isAR, arStereo: arStereo }); } catch (eLog) {}
       }
     },
     bindMaterial: function (mat) {

@@ -131,6 +131,32 @@ function Write-Step([string] $Message) {
     Write-Host "==> $Message"
 }
 
+# /xr engine (xr-components.js, aframe.min.js, aframe-LICENSE.txt) in ios\LoopSegments\Resources is a
+# generated copy of quest_tools\xr (quest_tools\xr\Sync-QuestXrEngine.ps1). The cloud build uses the
+# pushed repo, so stop before triggering it when that copy is stale or not committed. No quest_tools
+# checkout on this PC: warn and go on.
+function Assert-XrEngineInSync {
+    . (Join-Path $ProjectRoot 'windows\quest\QuestToolsPath.ps1')
+    if (-not $script:QuestToolsRepo) {
+        Write-Warning 'quest_tools not found (QUEST_TOOLS_REPO) - /xr engine copy not checked.'
+        return
+    }
+    $sync = Join-Path $script:QuestToolsRepo 'xr\Sync-QuestXrEngine.ps1'
+    if (-not (Test-Path -LiteralPath $sync)) {
+        Write-Warning "quest_tools has no xr\Sync-QuestXrEngine.ps1 ($($script:QuestToolsRepo)) - /xr engine copy not checked."
+        return
+    }
+    $res = Join-Path $ProjectRoot 'ios\LoopSegments\Resources'
+    & $sync -Target $res -Check -Quiet
+    if ($LASTEXITCODE -ne 0) {
+        throw "/xr engine copy is stale: run $sync, commit and push ios\LoopSegments\Resources, then deploy again."
+    }
+    $dirty = @(& git -C $ProjectRoot status --porcelain -- 'ios/LoopSegments/Resources/xr-components.js' 'ios/LoopSegments/Resources/aframe.min.js' 'ios/LoopSegments/Resources/aframe-LICENSE.txt')
+    if ($dirty.Count) {
+        throw "/xr engine copy has uncommitted changes (the cloud build would not get them): commit and push ios\LoopSegments\Resources first."
+    }
+}
+
 function Invoke-ProjectAltStoreDeployPrep {
     if (-not $EnsureAltStorePrep -or $SkipAltStorePrep) {
         Write-Host '[altserver] Deploy prep skipped (default). Pass -EnsureAltStorePrep for AltStore tray.' -ForegroundColor DarkYellow
@@ -292,6 +318,7 @@ if (-not $resolvedRunId) {
         $resolvedRunId = Get-LatestIpaRunId
         Write-Step "Using latest successful workflow_dispatch run: $resolvedRunId"
     } else {
+        Assert-XrEngineInSync
         Write-Step 'Triggering ios-build (workflow_dispatch)'
         Push-Location $ProjectRoot
         try {

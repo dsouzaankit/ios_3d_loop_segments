@@ -43,7 +43,7 @@ An empty ring after a Quest session can mean the `/xr` debug POST was refused (4
 | `snapshot.mode` | `av1rt` / `canvasrt` / `native` / `gpu` / … |
 | `snapshot.note` | Transport tex note (`post-AV1 canvas`, `AV1 full frame`, …) |
 | `exit-vr settled` | Safe to touch materials again after teardown |
-| `eye-layers` | Dome layer and visibility: VR left 1 / right 2, AR and flat 0 |
+| `eye-layers` | Dome layer and visibility: VR and AR left 1 / right 2 (build 444+; `arStereo:false` = mono AR on 0), flat 0 |
 | `canvas-tex-reset` | Canvas texture released after a size change: `from`, `to`, `presenting` |
 | `xr-enabled-fixed` | `xr.enabled` was false in a live session and was repaired. `ticks` = frames into the session; `n` above 1 = something keeps clearing it |
 
@@ -60,7 +60,7 @@ An empty ring after a Quest session can mean the `/xr` debug POST was refused (4
 
 ## Fix rules
 
-- `/xr` lives in `ios/LoopSegments/Resources/`: `xr-player.html` (markup, CSS), `xr-components.js` (A-Frame components) and `xr-app.js` (page logic), plus the vendored `aframe.min.js` (A-Frame 1.6.0, served from the phone; do not edit it). Prefer narrow patches there. Swift only fills `{{XR_...}}` placeholders and serves `/xr-assets/*.js`.
+- `/xr` lives in `ios/LoopSegments/Resources/`: `xr-player.html` (markup, CSS) and `xr-app.js` (page logic) are edited there. The engine, `xr-components.js` (A-Frame components) and the vendored `aframe.min.js` (A-Frame 1.6.0, do not edit it), is a generated copy since build 444: edit `quest_tools/xr/xr-components.js` (shared with 3d_playlist_local's PC XR page), then run `quest_tools/xr/Sync-QuestXrEngine.ps1` and commit the copy (`deploy.ps1` stops on a stale one). Prefer narrow patches. Swift only fills `{{XR_...}}` placeholders and serves `/xr-assets/*.js`.
 - Check a change with `node --check` on the edited script before a build.
 - A-Frame is locked at 1.6.0 (see `ios/README.md`, "A-Frame version"). An upgrade is not routine: it needs a full `/xr` headset retest, because `xr-enabled-fixed`, the eye layers and the canvas texture reset depend on how 1.6.0 behaves.
 - Quest VR uses WebGL layers 1/2 (build 406+). Do not edit the XR cameras' layers.
