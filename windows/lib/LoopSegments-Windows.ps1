@@ -91,10 +91,6 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         # Minutes the workflow start waits for an asleep / off-adb headset before giving up on opening the page;
         # 0 = until the workflow ends (its Wi-Fi is usually off at a workflow start). Checked every 5 s.
         questPlaylistOpenWaitMinutes = 0
-        # Enter button: Quest media players force-stopped whether or not they read the workflow output.
-        questPlaylistMediaPlayers = @('xyz.skybox.player.ovr')
-        # Enter button: never force-stopped, even with a connection to this PC (browser, PC streaming, system UI).
-        questPlaylistKeepPackages = @('com.oculus.browser', 'VirtualDesktop.Android', 'com.oculus.xrstreamingclient', 'com.oculus.systemux', 'com.oculus.vrshell')
         # Enter button: extra Quest Browser history origins to delete ({pc} = this PC's address), e.g. 'http://{pc}:8200'.
         questPlaylistHistoryOrigins = @()
         # Enter button: seconds the workflow window gets to exit after Enter before it is killed (0 = never kill).

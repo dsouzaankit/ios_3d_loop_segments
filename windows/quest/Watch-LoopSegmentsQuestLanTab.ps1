@@ -64,9 +64,6 @@
 
   -OpenControlPage : 3d_playlist_local workflow start: wait (-WaitMinutes) for an awake headset and open
                    only the Quest control page, signed in (ignores questControlPageOnQuest).
-  -StopMediaApps : control page Enter button: force-stop the Quest apps with a TCP connection to this PC
-                   (players reading the workflow output) plus questPlaylistMediaPlayers / -MediaPackages;
-                   never questPlaylistKeepPackages.
   -KeepAwakeSession -RestoreProximity : as -KeepAwakeSession, and turn the sensor back on once -ParentPid exits.
 
   Without a mode switch it opens the page once, like -Once (there is no keep-watching mode).
@@ -162,10 +159,6 @@ param(
     # 3d_playlist_local workflow start: open only the Quest control page (signed in), waiting up to
     # -WaitMinutes for the headset to be awake. Ignores questControlPageOnQuest.
     [switch] $OpenControlPage,
-    # Control page Enter button: force-stop Quest apps with a TCP connection to this PC (reading the
-    # workflow output, e.g. over DLNA) plus -MediaPackages / questPlaylistMediaPlayers.
-    [switch] $StopMediaApps,
-    [string[]] $MediaPackages = @(),
     # Opening a page: owner name it is registered under in quest_tools' shared origin list
     # (%TEMP%\quest-browser-origins.json), which every -ClearHistory also closes and deletes.
     [string] $Owner = 'loopsegments',
@@ -712,87 +705,6 @@ function Invoke-QuestOpenControlPageOnly {
     return 3
 }
 
-function Get-QuestCfgList {
-    param([string] $Name, [string[]] $Default = @())
-    if ($script:Cfg -and $script:Cfg.Contains($Name) -and $null -ne $script:Cfg[$Name]) { return @(@($script:Cfg[$Name]) | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() }) }
-    return $Default
-}
-
-# -StopMediaApps: force-stop every app (uid >= 10000) with an established TCP connection to this PC
-# (other than the control page port): that is how a Quest player reads the workflow output
-# (DLNA / HTTP / SMB from the PC). Plus the configured players (questPlaylistMediaPlayers,
-# -MediaPackages), running or not. questPlaylistKeepPackages are never stopped.
-# 0 done, 1 headset not on adb, 3 adb error.
-function Invoke-QuestStopMediaApps {
-    $dev = Get-OnlineQuestSerial
-    if (-not $dev) { $dev = Connect-Quest }
-    if (-not $dev) { Write-QuestLog 'Media apps: headset not reachable over adb - skipped.'; Set-QuestOpenStatus 'unreachable'; return 1 }
-    $keep = @(Get-QuestCfgList -Name 'questPlaylistKeepPackages' -Default @($BrowserPackage)) + @($BrowserPackage)
-    $players = @(@(Get-QuestCfgList -Name 'questPlaylistMediaPlayers' -Default @($script:SkyboxPackage)) + @($MediaPackages | ForEach-Object { [string]$_ -split ',' }) | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() } | Select-Object -Unique)
-    $targets = [ordered]@{}   # package -> why
-
-    $pc = Get-QuestControlPcAddress -DeviceSerial $dev
-    $ctlPort = Get-QuestControlPort
-    if ($pc) {
-        $r = Invoke-Adb -TimeoutSec 15 -Arguments @('-s', $dev, 'shell', 'cat /proc/net/tcp /proc/net/tcp6 2>/dev/null')
-        $uids = @{}
-        $rows = 0
-        foreach ($line in (([string]$r.Out) -split "`r?`n")) {
-            $f = @($line.Trim() -split '\s+')
-            if ($f.Count -lt 8 -or $f[0] -notmatch '^\d+:$') { continue }
-            $rows++
-            if ($f[3] -ne '01') { continue }   # ESTABLISHED
-            $rem = ConvertFrom-QuestProcNetAddress -Hex $f[2]
-            if (-not $rem -or $rem.Ip -ne $pc -or $rem.Port -eq $ctlPort) { continue }
-            $uid = 0
-            if (-not [int]::TryParse($f[7], [ref]$uid) -or $uid -lt 10000) { continue }
-            if (-not $uids.ContainsKey($uid)) { $uids[$uid] = [System.Collections.Generic.List[int]]::new() }
-            if (-not $uids[$uid].Contains($rem.Port)) { $uids[$uid].Add($rem.Port) }
-        }
-        if ($rows -eq 0) {
-            Write-QuestLog "Media apps: could not read the headset's TCP socket list ($(Get-AdbMessage $r)) - only the configured players are stopped."
-        } elseif ($uids.Count) {
-            $pk = Invoke-Adb -TimeoutSec 15 -Arguments @('-s', $dev, 'shell', 'cmd', 'package', 'list', 'packages', '-U')
-            foreach ($pl in (([string]$pk.Out) -split "`r?`n")) {
-                if ($pl -notmatch '^package:(\S+)\s+uid:([\d,]+)') { continue }
-                $pkg = $Matches[1]
-                foreach ($u in ($Matches[2] -split ',')) {
-                    $ui = [int]$u
-                    if ($uids.ContainsKey($ui) -and -not $targets.Contains($pkg)) {
-                        $targets[$pkg] = "connected to this PC ($pc port $(@($uids[$ui]) -join ','))"
-                    }
-                }
-            }
-        } else {
-            Write-QuestLog "Media apps: no app on the headset is connected to this PC ($pc)."
-        }
-    } else {
-        Write-QuestLog 'Media apps: no PC address on the route to the headset - only the configured players are stopped.'
-    }
-    foreach ($p in $players) {
-        if ($targets.Contains($p)) { continue }
-        $pid0 = Invoke-Adb -TimeoutSec 8 -Arguments @('-s', $dev, 'shell', 'pidof', $p)
-        if (([string]$pid0.Out).Trim() -match '^\d') { $targets[$p] = 'configured media player (running)' }
-    }
-    $stopped = [System.Collections.Generic.List[string]]::new()
-    $failed = 0
-    foreach ($pkg in @($targets.Keys)) {
-        if (@($keep | Where-Object { $_ -ieq $pkg }).Count) { Write-QuestLog "Media apps: $pkg kept (questPlaylistKeepPackages) - $($targets[$pkg])."; continue }
-        $s = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $dev, 'shell', 'am', 'force-stop', $pkg)
-        if ($s.Code -eq 0) {
-            $stopped.Add($pkg)
-            Write-QuestLog "Media apps: force-stopped $pkg - $($targets[$pkg])."
-        } else {
-            $failed++
-            Write-QuestLog "Media apps: force-stop $pkg failed (code $($s.Code)): $(Get-AdbMessage $s)"
-        }
-    }
-    if (-not $stopped.Count -and -not $failed) { Write-QuestLog 'Media apps: nothing to stop.' }
-    Set-QuestOpenStatus $(if ($stopped.Count) { 'stopped ' + ($stopped -join ', ') } else { 'none running' })
-    if ($failed) { return 3 }
-    return 0
-}
-
 # questPlaylistHistoryOrigins (config), with {pc} replaced by this PC's address.
 function Get-QuestConfigOrigins {
     param([string] $DeviceSerial)
@@ -836,7 +748,6 @@ if ($WifiOff) {
     if ($w -eq 'off') { exit 0 } else { exit 3 }
 }
 if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession -ParentPid $ParentPid -RestoreProximity:$RestoreProximity) }
-if ($StopMediaApps) { exit (Invoke-QuestStopMediaApps) }
 if ($OpenControlPage) { exit (Invoke-QuestOpenControlPageOnly) }
 if ($SkyboxPush -or $SkyboxUpdate) {
     $res = Invoke-QuestSkyboxWebDavPush -OnlyIfPresent:$SkyboxUpdate
