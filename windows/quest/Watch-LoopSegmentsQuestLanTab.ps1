@@ -234,13 +234,9 @@ if ($Port -le 0) { $Port = 5555 }
 if ($NoIncognito) { $PrivateTab = $false }
 Initialize-QuestTools -AdbExe $AdbExe -Serial $Serial -QuestHost $QuestHost -Port $Port -RediscoverSec $script:AdbRediscoverSec
 
-$IncognitoLauncher = 'com.oculus.browser/org.chromium.chrome.browser.incognito.IncognitoTabLauncher'
-
-# adb shell joins args into one device shell line: single-quote the URL.
-function Get-QuestQuotedUrl { "'" + ($Url -replace "'", '') + "'" }
-
-
-
+# Opening a page (VIEW intent, signed-in normal tab, private tab, isSecureContext, flag fix):
+# quest_tools lib\QuestOpen.ps1 (Open-QuestPage). This script supplies the phone login, the control
+# page tab, the helper page and the Loop Segments origins.
 # After Open on Quest succeeds: POST /keep_alive.json action=extend (+60 min) on the phone LAN.
 function Invoke-PhoneKeepAliveExtendAfterQuestOpen {
     param([string] $LanUrl = $Url)
@@ -351,38 +347,6 @@ function Get-QuestTypedUrl {
     }
 }
 
-
-# Best effort: read Quest Browser tabs over its DevTools socket (what chrome://inspect uses).
-# $true = a tab shows -Url, $false = none does after ~6 s, $null = could not check.
-function Test-QuestBrowserHasUrl {
-    # -Mode Any   : a tab shows -Url (login in the URL ignored)
-    # -Mode Login : a tab loaded -Url through http://user:pass@host/ (login now cached)
-    # -Mode Plain : a tab shows -Url exactly, with no login in its URL
-    param([string] $DeviceSerial, [ValidateSet('Any', 'Login', 'Plain')] [string] $Mode = 'Any')
-    $f = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'forward', 'tcp:0', 'localabstract:chrome_devtools_remote')
-    $port = 0
-    if (-not [int]::TryParse(($f.Out).Trim(), [ref]$port) -or $port -le 0) { return $null }
-    try {
-        $want = $Url.TrimEnd('/')
-        for ($i = 0; $i -lt 12; $i++) {
-            try {
-                # Invoke-RestMethod emits the JSON array as one object: enumerate it explicitly.
-                $tabs = @((Invoke-RestMethod -Uri "http://127.0.0.1:$port/json/list" -TimeoutSec 3 -NoProxy) | ForEach-Object { $_ })
-                foreach ($t in $tabs) {
-                    $rawUrl = ([string]$t.url).TrimEnd('/')
-                    $hasLogin = $rawUrl -match '^https?://[^/@]*@'
-                    $bare = $rawUrl -replace '^(https?://)[^/@]*@', '$1'
-                    if ($bare -ne $want) { continue }
-                    if ($Mode -eq 'Any' -or ($Mode -eq 'Login' -and $hasLogin) -or ($Mode -eq 'Plain' -and -not $hasLogin)) { return $true }
-                }
-            } catch {}
-            Start-Sleep -Milliseconds 500
-        }
-        return $false
-    } finally {
-        [void](Invoke-Adb -TimeoutSec 5 -Arguments @('-s', $DeviceSerial, 'forward', '--remove', "tcp:$port"))
-    }
-}
 
 # Every phone LAN origin the flag should list: -Url plus phoneLanHost / phoneLanHosts from config.
 function Get-QuestLanOrigins {
@@ -547,152 +511,6 @@ function Open-QuestControlTab {
     }
 }
 
-function Open-QuestNormalTab {
-    param([string] $DeviceSerial)
-    $plain = ($Url -replace "'", '')
-    $login = Get-QuestTypedUrl
-    if (-not (Open-QuestDevTools -DeviceSerial $DeviceSerial)) {
-        # No DevTools: plain VIEW intent, no login.
-        $r = Invoke-Adb -TimeoutSec 15 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'start',
-            '-a', 'android.intent.action.VIEW', '-d', (Get-QuestQuotedUrl), '-p', $BrowserPackage)
-        if (Test-AdbStartOk $r) { Write-QuestLog "Opened $Url in Quest browser, normal tab, not signed in ($DeviceSerial)"; return $true }
-        Write-QuestLog "am start failed (code $($r.Code)): $(Get-AdbMessage $r)"
-        return $false
-    }
-    try {
-        # Quest control page first (its own tab), so the LAN page below ends up in front.
-        Open-QuestControlTab -DeviceSerial $DeviceSerial
-        if (-not (Open-QuestSignedInTab -DeviceSerial $DeviceSerial -PlainUrl $plain -LoginUrl $login -Origins (Get-QuestLanOrigins))) { return $false }
-        $how = if ($login -ne $plain) { 'signed in' } else { 'not signed in' }
-        $which = if ($script:QuestReusedTab) { 'reused open tab' } else { 'new tab' }
-        Write-QuestLog "Opened $Url in Quest browser, normal tab, $how, $which ($DeviceSerial)"
-        # A cold start can bring back extra browser windows (Android keeps their records across a
-        # force-stop), each on an empty new-tab page. Close empty new-tab pages: a window left with
-        # none closes with it. Your own tabs are not touched; the quit sweeps the 'New tab' items
-        # this leaves in Recently closed.
-        $empty = @(Get-QuestTabs | Where-Object { ([string]$_.url) -like 'chrome://panel-app-nav/ntp*' -or ([string]$_.url) -eq 'about:blank' })
-        foreach ($t in $empty) { Close-QuestTab -Id $t.id }
-        if ($empty.Count) { Write-QuestLog "Closed $($empty.Count) empty new-tab page(s) (extra browser windows from the cold start)." }
-        return $true
-    } catch {
-        Write-QuestLog "Normal tab: $($_.Exception.Message)"
-        return $false
-    } finally { Close-QuestDevTools }
-}
-
-# Ctrl+L (retried until the address bar has focus), type TypedUrl, Enter. Never logs TypedUrl.
-function Send-QuestOmniboxUrl {
-    param([string] $DeviceSerial, [string] $TypedUrl)
-    $omnibox = $false
-    for ($i = 0; $i -lt 8 -and -not $omnibox; $i++) {
-        # A fresh private tab ignores keys for a moment after launch.
-        Start-Sleep -Milliseconds 700
-        $k = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'input', 'keycombination', 'KEYCODE_CTRL_LEFT', 'KEYCODE_L')
-        if ($k.Code -ne 0) {
-            Write-QuestLog "Ctrl+L failed: $(Get-AdbMessage $k)"
-            return $false
-        }
-        Start-Sleep -Milliseconds 500
-        $omnibox = Test-QuestImeShown -DeviceSerial $DeviceSerial
-    }
-    if (-not $omnibox) {
-        Write-QuestLog 'Address bar never took focus - not typing the URL.'
-        return $false
-    }
-    $steps = [System.Collections.Generic.List[object]]::new()
-    $steps.Add([string[]]@('input', 'text', ("'" + $TypedUrl + "'")))
-    $steps.Add([string[]]@('input', 'keyevent', 'KEYCODE_ENTER'))
-    foreach ($step in $steps) {
-        $k = Invoke-Adb -TimeoutSec 10 -Arguments (@('-s', $DeviceSerial, 'shell') + $step)
-        if ($k.Code -ne 0 -or (Get-AdbMessage $k) -match '(?i)Error|Exception|Unknown') {
-            Write-QuestLog "'input $($step[1])' failed (code $($k.Code))."
-            return $false
-        }
-        Start-Sleep -Milliseconds 400
-    }
-    return $true
-}
-
-function Open-QuestIncognitoTab {
-    param([string] $DeviceSerial)
-    $r = Invoke-Adb -TimeoutSec 20 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'start', '-W', '-n', $IncognitoLauncher)
-    if (-not (Test-AdbStartOk $r)) {
-        Write-QuestLog "Private-tab launcher failed (code $($r.Code)): $(Get-AdbMessage $r)"
-        return $false
-    }
-    # Let the new private tab settle before keystrokes; only type into Quest Browser.
-    $resumed = $false
-    for ($i = 0; $i -lt 8 -and -not $resumed; $i++) {
-        Start-Sleep -Milliseconds 500
-        $resumed = Test-QuestBrowserResumed -DeviceSerial $DeviceSerial
-    }
-    if (-not $resumed) {
-        Write-QuestLog 'Quest Browser not in front after private-tab launch - not typing the URL.'
-        return $false
-    }
-    $plain = ($Url -replace "'", '')
-    $typed = Get-QuestTypedUrl
-    if (-not (Send-QuestOmniboxUrl -DeviceSerial $DeviceSerial -TypedUrl $typed)) { return $false }
-    if ($typed -ne $plain) {
-        # A page loaded from http://user:pass@host/ cannot fetch() relative URLs (Chromium refuses
-        # URLs with credentials), so status_lists.json etc. fail. Load once with the login so the
-        # private session caches it, then reload the same tab from the plain URL.
-        if ((Test-QuestBrowserHasUrl -DeviceSerial $DeviceSerial -Mode Login) -eq $false) {
-            Write-QuestLog 'Signed-in load not seen in the tab list - reloading without the login anyway.'
-        }
-        Start-Sleep -Milliseconds 800
-        if (-not (Send-QuestOmniboxUrl -DeviceSerial $DeviceSerial -TypedUrl $plain)) {
-            Write-QuestLog 'Signed in, but could not reload without the login - page fetches (status_lists.json) will fail.'
-            return $true
-        }
-        $verified = Test-QuestBrowserHasUrl -DeviceSerial $DeviceSerial -Mode Plain
-    } else {
-        $verified = Test-QuestBrowserHasUrl -DeviceSerial $DeviceSerial -Mode Any
-    }
-    if ($verified -eq $false) {
-        Write-QuestLog "Typed the LAN URL into the private tab, but no browser tab shows $Url - check the headset."
-    }
-    Write-QuestLog "Opened $Url in Quest browser, private tab ($DeviceSerial)"
-    return $true
-}
-
-# window.isSecureContext of the open phone LAN tab(s): true only while the insecure-origin flag
-# lists that origin, so this checks the flag without opening chrome://flags (no helper tab, no
-# "Experiments" in history or Recently closed). Returns 'secure', 'insecure' or 'unknown'.
-function Test-QuestLanTabSecure {
-    param([string] $DeviceSerial)
-    if (-not (Open-QuestDevTools -DeviceSerial $DeviceSerial)) { return 'unknown' }
-    try {
-        $want = (ConvertTo-QuestBareUrl $Url).ToLowerInvariant()
-        try { $want = ([Uri]$want).GetLeftPart([UriPartial]::Authority).ToLowerInvariant() } catch {}
-        for ($i = 0; $i -lt 10; $i++) {
-            foreach ($t in @(Get-QuestLanTabs -Origins @($want))) {
-                try {
-                    $r = Invoke-QuestEval -Tab $t -TimeoutSec 5 -Expression 'JSON.stringify({ origin: location.origin, secure: window.isSecureContext })' | ConvertFrom-Json
-                    if ($r.origin -and $r.origin.ToLowerInvariant() -eq $want) {
-                        Write-QuestLog ("Flags: {0} isSecureContext={1} in the open tab." -f $r.origin, $r.secure)
-                        return $(if ($r.secure) { 'secure' } else { 'insecure' })
-                    }
-                } catch {}
-            }
-            Start-Sleep -Milliseconds 500
-        }
-        Write-QuestLog 'Flags: could not read isSecureContext in the LAN tab - flag not checked.'
-        return 'unknown'
-    } finally { Close-QuestDevTools }
-}
-
-function Open-QuestLanTabOnce {
-    param([string] $DeviceSerial)
-    # Before the open: a half-failed one can still leave a tab or a history entry behind.
-    Register-QuestBrowserOrigin -Url $Url -Owner $Owner
-    if ($PrivateTab) {
-        if (Open-QuestIncognitoTab -DeviceSerial $DeviceSerial) { return $true }
-        Write-QuestLog 'Falling back to a normal tab.'
-    }
-    return (Open-QuestNormalTab -DeviceSerial $DeviceSerial)
-}
-
 # ---- Close Quest Browser at quit when this session started it ----
 # %TEMP%\loopsegments-quest-browser-ours.json: {ours: true} once an Open on Quest found Quest Browser
 # not running (so it was started for Loop Segments), {ours: false} when the first one found it
@@ -732,30 +550,18 @@ function Save-QuestBrowserOurs {
 }
 
 
+# Open -Url (the phone LAN page, or any page a caller passes with -NoLanLogin) through quest_tools'
+# Open-QuestPage: signed in with the phone LAN login, the control page in its own tab first (so this
+# page ends up in front), an open tab on a phone LAN origin reused, and the insecure-origin flag fixed
+# for every phone LAN origin when the page is not a secure context.
 function Open-QuestLanTab {
     param([string] $DeviceSerial)
     Save-QuestBrowserOurs -DeviceSerial $DeviceSerial
-    if (-not (Open-QuestLanTabOnce -DeviceSerial $DeviceSerial)) { return $false }
-    if ($NoFlags) { return $true }
-    if ((Test-QuestLanTabSecure -DeviceSerial $DeviceSerial) -ne 'insecure') { return $true }
-    # Not a secure context: WebXR is off. Fix the flag (restarts Quest Browser, closing its tabs)
-    # and open the page again.
-    $res = Invoke-QuestFlagSync -DeviceSerial $DeviceSerial -SkipConfirm
-    if ($res -ne 'changed') {
-        Write-QuestLog "Flags: page is not a secure context, flag fix result '$res' - XR may not start."
-        return $true
-    }
-    Write-QuestLog 'Flags: fixed - opening the page again after the browser restart.'
-    if (-not (Open-QuestLanTabOnce -DeviceSerial $DeviceSerial)) { return $false }
-    # The confirmation: the reopened page is a secure context now (logged by the check).
-    if ((Test-QuestLanTabSecure -DeviceSerial $DeviceSerial) -eq 'insecure') {
-        Write-QuestLog 'Flags: the page is still not a secure context after the restart - the flag did not stick, XR may not start.'
-    }
-    return $true
+    $lan = @(Get-QuestLanOrigins)
+    return (Open-QuestPage -DeviceSerial $DeviceSerial -Url $Url -LoginUrl (Get-QuestTypedUrl) -Owner $Owner `
+            -ReuseOrigins $lan -FlagOrigins $lan -HelperUrl { Get-QuestHelperUrl } -NoFlags:$NoFlags -PrivateTab:$PrivateTab `
+            -BeforeOpen { param($d) Open-QuestControlTab -DeviceSerial $d })
 }
-
-
-
 
 # http://<phoneLanHost>:<lanPort>/ from the companion's lan_config.json (re-read on every call, so a
 # phone address change during the session is picked up), or $null.
@@ -900,53 +706,22 @@ function Get-QuestHistoryFallbackRange {
 function Invoke-QuestOpenControlPageOnly {
     # -WaitMinutes 0 with -ParentPid: no time limit, keep waiting until the workflow ends (the headset's
     # Wi-Fi is usually off at a workflow start: the last cleanup switched it off).
-    $untilParent = ($WaitMinutes -le 0 -and $ParentPid -gt 0)
-    $deadline = if ($untilParent) { [DateTime]::MaxValue } else { [DateTime]::UtcNow.AddMinutes([Math]::Max(0, $WaitMinutes)) }
-    $lastState = ''
-    $queuedLogged = $false
-    Set-QuestOpenStatus 'checking'
-    while ($true) {
-        # -ParentPid = the workflow: stop waiting once it is gone.
-        if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
-            Write-QuestLog 'Control page only: workflow gone before the headset was awake - not opened.'
-            Set-QuestOpenStatus 'cancelled'
-            return 1
-        }
-        try {
-            $dev = Get-OnlineQuestSerial
-            if (-not $dev) { $dev = Connect-Quest }
-            $state = if ($dev) { Get-QuestWakefulness -DeviceSerial $dev } else { 'Unreachable' }
-            if (-not $state) { $state = 'Unknown' }
-            if ($state -ne $lastState) { Write-QuestLog ("Control page only: headset {0}{1}" -f $state, $(if ($dev) { " ($dev)" } else { '' })); $lastState = $state }
-            if ($state -eq 'Awake') {
-                # The workflow start launches the server a moment before this.
-                $t0 = [DateTime]::UtcNow
-                while (-not (Test-QuestControlPageRunning) -and ([DateTime]::UtcNow - $t0).TotalSeconds -lt 15) { Start-Sleep -Seconds 1 }
-                Set-QuestOpenStatus 'opening'
-                Save-QuestBrowserOurs -DeviceSerial $dev
-                if (-not (Open-QuestDevTools -DeviceSerial $dev)) { Write-QuestLog 'Control page only: no DevTools connection to Quest Browser.'; Set-QuestOpenStatus 'failed'; return 3 }
-                try { Open-QuestControlTab -DeviceSerial $dev -Force } finally { Close-QuestDevTools }
-                if ($script:ControlTabOpened) { Set-QuestOpenStatus 'opened'; return 0 }
-                Set-QuestOpenStatus 'failed'
-                return 3
-            }
-        } catch {
-            Write-QuestLog "Control page only: $($_.Exception.Message)"
-        }
-        if ([DateTime]::UtcNow -ge $deadline) {
-            Write-QuestLog "Control page only: headset not awake within $WaitMinutes min ($lastState) - not opened."
-            Set-QuestOpenStatus 'unreachable'
-            return 1
-        }
-        if (-not $queuedLogged) {
-            Write-QuestLog ("Control page only: queued - opening when the headset is awake ({0})." -f $(if ($untilParent) { 'until the workflow ends' } else { "up to $WaitMinutes min" }))
-            Set-QuestOpenStatus 'queued'
-            $queuedLogged = $true
-        }
-        Start-Sleep -Seconds ([Math]::Max(2, $PollSeconds))
-    }
+    $w = Wait-QuestHeadsetAwake -WaitMinutes $WaitMinutes -ParentPid $ParentPid -PollSeconds $PollSeconds -Label 'Control page only: ' `
+        -OnStatus { param($s) Set-QuestOpenStatus $s }
+    if ($w.Reason -eq 'parent') { Set-QuestOpenStatus 'cancelled'; return 1 }
+    if (-not $w.Serial) { Set-QuestOpenStatus 'unreachable'; return 1 }
+    $dev = $w.Serial
+    # The workflow start launches the server a moment before this.
+    $t0 = [DateTime]::UtcNow
+    while (-not (Test-QuestControlPageRunning) -and ([DateTime]::UtcNow - $t0).TotalSeconds -lt 15) { Start-Sleep -Seconds 1 }
+    Set-QuestOpenStatus 'opening'
+    Save-QuestBrowserOurs -DeviceSerial $dev
+    if (-not (Open-QuestDevTools -DeviceSerial $dev)) { Write-QuestLog 'Control page only: no DevTools connection to Quest Browser.'; Set-QuestOpenStatus 'failed'; return 3 }
+    try { Open-QuestControlTab -DeviceSerial $dev -Force } finally { Close-QuestDevTools }
+    if ($script:ControlTabOpened) { Set-QuestOpenStatus 'opened'; return 0 }
+    Set-QuestOpenStatus 'failed'
+    return 3
 }
-
 
 function Get-QuestCfgList {
     param([string] $Name, [string[]] $Default = @())
@@ -1300,44 +1075,12 @@ if ($EnsureFlags -or $ClearHistory) {
 # Default: open the page once (the Open on Quest button). An asleep / unreachable headset is
 # polled for up to -WaitMinutes and the page opens when it wakes.
 Write-QuestLog ("Open start: url={0} adb={1} host={2} port={3} serial={4}" -f $Url, $script:Adb, $QuestHost, $Port, $Serial)
-$lastState = ''
-$queuedLogged = $false
-$deadline = if ($WaitMinutes -gt 0) { [DateTime]::UtcNow.AddMinutes($WaitMinutes) } else { $null }
-Set-QuestOpenStatus 'checking'
-while ($true) {
-    try {
-        $dev = Get-OnlineQuestSerial
-        if (-not $dev) { $dev = Connect-Quest }
-        $state = if ($dev) { Get-QuestWakefulness -DeviceSerial $dev } else { 'Unreachable' }
-        if (-not $state) { $state = 'Unknown' }
-        if ($state -ne $lastState) {
-            Write-QuestLog ("Headset {0}{1}" -f $state, $(if ($dev) { " ($dev)" } else { '' }))
-            $lastState = $state
-        }
-        if ($state -eq 'Awake') {
-            if ($queuedLogged) { Write-QuestLog 'Headset woke - opening the queued page.' }
-            Set-QuestOpenStatus 'opening'
-            if (Open-QuestLanTab -DeviceSerial $dev) {
-                Set-QuestOpenStatus 'opened'
-                Invoke-PhoneKeepAliveExtendAfterQuestOpen
-                exit 0
-            } else {
-                exit 3
-            }
-        }
-    } catch {
-        Write-QuestLog "Poll error: $($_.Exception.Message)"
-    }
-    if ($deadline -and [DateTime]::UtcNow -lt $deadline) {
-        if (-not $queuedLogged) {
-            Write-QuestLog "Queued: headset $lastState - opening when it wakes (up to $WaitMinutes min)."
-            Set-QuestOpenStatus 'queued'
-            $queuedLogged = $true
-        }
-    } else {
-        if ($deadline) { Write-QuestLog "Headset did not wake within $WaitMinutes min ($lastState) - nothing opened." }
-        else { Write-QuestLog "Headset not awake/reachable ($lastState) - nothing opened." }
-        exit 1
-    }
-    Start-Sleep -Seconds ([Math]::Max(2, $PollSeconds))
+$w = Wait-QuestHeadsetAwake -WaitMinutes $WaitMinutes -PollSeconds $PollSeconds -OnStatus { param($s) Set-QuestOpenStatus $s }
+if (-not $w.Serial) { exit 1 }
+Set-QuestOpenStatus 'opening'
+if (Open-QuestLanTab -DeviceSerial $w.Serial) {
+    Set-QuestOpenStatus 'opened'
+    Invoke-PhoneKeepAliveExtendAfterQuestOpen
+    exit 0
 }
+exit 3
