@@ -731,7 +731,18 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
   -Headers @{ Authorization = "Basic $cred"; "Content-Type" = "application/json" } -Body $body
 ```
 
-**`.local` hostnames:** Prefer the **LAN IP** from Export (`http://10.x.x.x:8765/`). `http://iphone.local:8765/` only works if the device name is literally “iPhone”; many PCs also need [Apple Bonjour](https://support.apple.com/kb/DL999) for any `.local` name. PC mount/probe scripts: [../windows/README.md](../windows/README.md).
+**Hostnames:** Use the **LAN IP** from Export (`http://192.168.x.x:8765/`) or the router-DNS name **`http://iphone:8765/`**.
+
+- **`iphone:8765`:** works from Quest and PC. The router's DNS (`192.168.2.1`, domain `routerlogin.net`) registers the phone under the name it sends when it gets its address, which is plain `iPhone`. A bare name skips Clash fake-IP and passes the server's Host check. If a second iPhone joins the network, the two can clash over the name; fall back to the IP.
+- **`.local` (Bonjour) doesn't work:**
+  - Quest OS (Android) can't look up `.local` names in the browser.
+  - On the PC, Clash/Mihomo TUN takes multicast (`224.0.0.0/4`), so Bonjour lookups fail; see [../env_setup/Clash/README.md](../env_setup/Clash/README.md).
+  - The app's "Optional .local URL" is a guess from `UIDevice.current.name`. Since iOS 16 that returns "iPhone" without Apple's device-name entitlement, so sideloaded builds show `iphone.local` even when the phone announces `<name>-iPhone.local`.
+- **`iphone.routerlogin.net` doesn't work:**
+  - Clash fake-IP answers names with a dot with a `198.18.x.x` address.
+  - `isAllowedRequestHost` (DNS-rebinding guard) refuses that name with **421 Misdirected Request**. It accepts only IP addresses, `localhost`, `.local`, names without a dot, and the saved tunnel host.
+
+PC mount/probe scripts: [../windows/README.md](../windows/README.md).
 
 ### `_working.mp4`: browser scrubber vs export logs
 
