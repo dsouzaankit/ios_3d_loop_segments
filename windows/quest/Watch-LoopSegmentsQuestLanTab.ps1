@@ -394,20 +394,17 @@ function Get-QuestControlPort {
     return $p
 }
 
-# This PC's IPv4 address on the route to the headset (or, for a USB serial, to the phone): the
-# address the Quest reaches the control page on. UDP "connect" sends nothing.
+# This PC's IPv4 address on the route to the headset (quest_tools Get-QuestPcAddress): the address the
+# Quest reaches the control page on. A USB serial has no address, so the route to questAdbHost, else
+# to the phone (-Url), stands in.
 function Get-QuestControlPcAddress {
     param([string] $DeviceSerial)
-    $target = $null
-    if ($DeviceSerial -match '^(\d{1,3}(?:\.\d{1,3}){3}):\d+$') { $target = $Matches[1] }
-    elseif ($QuestHost -match '^\d{1,3}(\.\d{1,3}){3}$') { $target = $QuestHost }
-    else { try { $target = ([Uri]$Url).Host } catch {} }
-    if (-not $target) { return $null }
-    $u = [System.Net.Sockets.UdpClient]::new()
-    try {
-        $u.Connect($target, 9)
-        return ([System.Net.IPEndPoint]$u.Client.LocalEndPoint).Address.ToString()
-    } catch { return $null } finally { $u.Dispose() }
+    $target = ''
+    if ($DeviceSerial -notmatch '^\d{1,3}(\.\d{1,3}){3}:\d+$') {
+        if ($QuestHost -match '^\d{1,3}(\.\d{1,3}){3}$') { $target = $QuestHost }
+        else { try { $target = ([Uri]$Url).Host } catch {} }
+    }
+    return (Get-QuestPcAddress -DeviceSerial $DeviceSerial -Target $target)
 }
 
 function Get-QuestControlOrigin {
