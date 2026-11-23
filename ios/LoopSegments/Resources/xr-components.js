@@ -454,6 +454,9 @@
           "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5 * keyColor.b;",
           "  float dist = sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));",
           "  float blend = smoothstep(similarity, similarity + smoothness, dist);",
+          // Key colour pure black = luma key (a chroma key cannot separate black from greys/whites).
+          // Luma is taken back to ~sRGB so the thresholds match the canvas path (15..28 / 255).
+          "  if (max(keyColor.r, max(keyColor.g, keyColor.b)) < 0.004) blend = smoothstep(0.06, 0.11, pow(max(dot(videoColor.rgb, vec3(0.299, 0.587, 0.114)), 0.0), 1.0 / 2.2));",
           "  gl_FragColor = vec4(videoColor.rgb * blend, blend);",
           "}"
         ].join("\n"),
@@ -541,6 +544,9 @@
     var smo = (smoothness == null) ? 0.08 : smoothness;
     if (smo < 0.0001) smo = 0.0001;
     var edge = sim + smo;
+    // Key colour pure black = luma key: near-black pixels go transparent (fisheye background black).
+    var lumaKey = Math.max(key.r, key.g, key.b) < 0.004;
+    var LUMA_LO = 0.06, LUMA_HI = 0.11;
     for (var i = 0; i < d.length; i += 4) {
       var r = d[i] / 255;
       var g = d[i + 1] / 255;
@@ -548,7 +554,13 @@
       var cr = 0.5 * r - 0.4187 * g - 0.0813 * b;
       var cb = -0.1687 * r - 0.3313 * g + 0.5 * b;
       var dist = Math.sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));
-      var blend = dist <= sim ? 0 : (dist >= edge ? 1 : (dist - sim) / smo);
+      var blend;
+      if (lumaKey) {
+        var y = 0.299 * r + 0.587 * g + 0.114 * b;
+        blend = y <= LUMA_LO ? 0 : (y >= LUMA_HI ? 1 : (y - LUMA_LO) / (LUMA_HI - LUMA_LO));
+      } else {
+        blend = dist <= sim ? 0 : (dist >= edge ? 1 : (dist - sim) / smo);
+      }
       d[i + 3] = (blend * 255) | 0;
     }
     ctx.putImageData(img, 0, 0);
@@ -700,6 +712,9 @@
       "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5 * keyColor.b;",
       "  float dist = sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));",
       "  float blend = smoothstep(similarity, similarity + smoothness, dist);",
+      // Key colour pure black = luma key (a chroma key cannot separate black from greys/whites).
+      // Luma is taken back to ~sRGB so the thresholds match the canvas path (15..28 / 255).
+      "  if (max(keyColor.r, max(keyColor.g, keyColor.b)) < 0.004) blend = smoothstep(0.06, 0.11, pow(max(dot(videoColor.rgb, vec3(0.299, 0.587, 0.114)), 0.0), 1.0 / 2.2));",
       "  gl_FragColor = vec4(videoColor.rgb, blend);",
       "}"
     ].join("\n")
@@ -1460,6 +1475,9 @@
             "  float keyCb = -0.1687 * keyColor.r - 0.3313 * keyColor.g + 0.5 * keyColor.b;",
             "  float dist = sqrt((cr - keyCr) * (cr - keyCr) + (cb - keyCb) * (cb - keyCb));",
             "  float blend = smoothstep(similarity, similarity + smoothness, dist);",
+            // Key colour pure black = luma key (a chroma key cannot separate black from greys/whites).
+            // Luma is taken back to ~sRGB so the thresholds match the canvas path (15..28 / 255).
+            "  if (max(keyColor.r, max(keyColor.g, keyColor.b)) < 0.004) blend = smoothstep(0.06, 0.11, pow(max(dot(videoColor.rgb, vec3(0.299, 0.587, 0.114)), 0.0), 1.0 / 2.2));",
             "  gl_FragColor = vec4(videoColor.rgb * blend, blend);",
             "}"
           ].join("\n"),
