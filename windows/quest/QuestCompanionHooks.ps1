@@ -214,14 +214,16 @@ function Start-QuestKeepAwakeInBackground {
     }
 }
 
-# Stop the after-quit history helper (Watch-LoopSegmentsQuestLanTab.ps1 -RetryHistory) a previous
-# quit left waiting for the headset, and drop what it was waiting to do.
+# Stop the after-quit history helper (quest_tools' Invoke-QuestHistoryRetry.ps1, or the older
+# Watch-LoopSegmentsQuestLanTab.ps1 -RetryHistory) a previous quit left waiting for the headset, and
+# drop what it was waiting to do. (The companion does not load quest_tools, so this matches the
+# command lines itself, like quest_tools' Stop-QuestHistoryRetry.)
 function Stop-QuestHistoryRetry {
     $pending = Join-Path $env:TEMP 'loopsegments-quest-history-pending.json'
     $n = 0
     try {
         Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and $_.CommandLine -like '*Watch-LoopSegmentsQuestLanTab.ps1*' -and $_.CommandLine -like '*-RetryHistory*' } |
+            Where-Object { $c = [string]$_.CommandLine; $c -and ($c -like '*Invoke-QuestHistoryRetry.ps1*' -or ($c -like '*Watch-LoopSegmentsQuestLanTab.ps1*' -and $c -like '*-RetryHistory*')) } |
             ForEach-Object { Stop-Process -Id ([int]$_.ProcessId) -Force -ErrorAction SilentlyContinue; $n++ }
     } catch {}
     if (Test-Path -LiteralPath $pending) {

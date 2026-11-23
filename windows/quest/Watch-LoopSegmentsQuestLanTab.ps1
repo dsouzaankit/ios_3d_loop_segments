@@ -51,13 +51,12 @@
   -SkyboxUpdate  : the same, only if such a server is already there (Update button).
   -ClearSkyboxWebDav : remove every SKYBOX server this PC added (with -ClearHistory: after the
                    history step). Needs no -Url.
-  -RetryHistory  : after-quit helper. A -ClearHistory whose history delete fails (Quest Browser does
-                   not answer while nobody wears the headset) or that finds no headset saves the
-                   origins and starts this, detached: every 5 s it checks for the headset on adb
-                   and worn (mounted, not idle), then closes the LAN tabs and deletes those entries
-                   (same questClearHistoryFallback range as the quit). Stops when done, after questHistoryRetryMinutes (120), or when
-                   the companion starts again. Exit 4 from -ClearHistory = only the history step was
-                   handed to it.
+  After-quit helper: a -ClearHistory whose history delete fails (Quest Browser does not answer
+                   while nobody wears the headset) or that finds no headset hands it to quest_tools'
+                   after-quit helper (Invoke-QuestHistoryRetry.ps1, detached): it deletes those entries
+                   once the headset is worn (same questClearHistoryFallback range as the quit), and
+                   stops when done, after questHistoryRetryMinutes (120), or when the companion starts
+                   again. Exit 4 from -ClearHistory = only the history step was handed to it.
   -KeepAwakeSession : until -ParentPid exits, every ~20 s: when the headset is on adb, awake, and the
                    proximity override is not CLOSE, send `prox_close` (headset acts as worn and does
                    not sleep, so it stays on adb). A headset in standby is left alone (prox_close
@@ -94,7 +93,7 @@
 
   Log: %TEMP%\loopsegments-quest-lantab.log
   Exit codes: 0 ok, 1 headset not reachable / asleep, 2 no adb or bad arguments, 3 step failed,
-  4 (-ClearHistory) everything else done, history delete postponed to the -RetryHistory helper.
+  4 (-ClearHistory) everything else done, history delete postponed to the after-quit helper.
 
 .EXAMPLE
   .\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://10.0.100.10:8765/ -Once
@@ -169,12 +168,6 @@ param(
     [switch] $ClearSkyboxWebDav,
     # The companion's lan_config.json: phone address for the SKYBOX steps (re-read every poll).
     [string] $LanConfig = '',
-    # After-quit helper (started by a -ClearHistory whose history delete failed or found no headset):
-    # wait until the headset is worn, then close the LAN tabs and delete the Loop Segments history
-    # entries saved in %TEMP%\loopsegments-quest-history-pending.json; gives up after
-    # questHistoryRetryMinutes (120) or when the companion starts again. A Wi-Fi->www AP bounce the
-    # quit handed over (%TEMP%\loopsegments-wifi-bounce-pending.json) runs after the delete / give-up.
-    [switch] $RetryHistory,
     # 3d_playlist_local workflow start: open only the Quest control page (signed in), waiting up to
     # -WaitMinutes for the headset to be awake. Ignores questControlPageOnQuest.
     [switch] $OpenControlPage,
@@ -413,98 +406,27 @@ function Get-QuestLanOrigins {
     return @($list | Select-Object -Unique)
 }
 
-# A page on the phone that needs no login (XR assets stay open), used for helper tabs. It has to
-# land in Quest Browser history (the delete of the phone origin is what removes the helper's
-# Recently closed items): /xr-assets/aframe.min.js (1.4 MB script) stopped being recorded, a small
-# page there (404, no login) is.
-#
-# Phone not answering (Loop Segments app closed, phone off the LAN): the page never loads, so no
-# visit is recorded and the swept Recently closed items stay behind as two ".../xr-assets/lsclean"
-# entries (seen 2026-11-19 at an End session without the companion). Then the same small 404 page is
-# served from this PC (Start-QuestHelperFallback, questControlPort + 1, pwsh's firewall rule) and its
-# origin joins Get-QuestLanOrigins, so the history delete removes it too. Decided once per process.
-$script:HelperUrlCached = $null
+# The helper page for the Recently closed sweep (quest_tools lib\QuestHelperPage.ps1): the phone's
+# /xr-assets/lsclean (a small 404 page, no login: it has to land in Quest Browser history; the old
+# /xr-assets/aframe.min.js, a 1.4 MB script, stopped being recorded). Phone not answering (Loop
+# Segments app closed, phone off the LAN; seen 2026-11-19 at an End session without the companion,
+# which left two ".../xr-assets/lsclean" items): the same page is served from this PC on
+# questControlPort + 1 and its origin joins Get-QuestLanOrigins. Decided once per process.
 $script:HelperFallbackOrigin = $null
 
-function Test-QuestTcpOpen {
-    param([string] $HostName, [int] $Port, [int] $TimeoutMs = 2000)
-    $c = [System.Net.Sockets.TcpClient]::new()
-    try { return ($c.ConnectAsync($HostName, $Port).Wait($TimeoutMs) -and $c.Connected) } catch { return $false } finally { $c.Dispose() }
-}
-
-$script:HelperFallbackMarker = '<!-- loopsegments-lsclean -->'
-
-function Test-QuestHelperFallbackServing {
-    param([string] $Origin)
-    try {
-        $r = Invoke-WebRequest -Uri "$Origin/lsclean" -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck
-        return ([string]$r.Content).Contains($script:HelperFallbackMarker)
-    } catch { return $false }
-}
-
-# Static 404 page on all addresses, port -Port, from a hidden pwsh that exits with this process (or
-# after 30 min). A separate process: a listener in this one kept it from exiting after its work
-# (callers then waited out their timeouts). A second watcher reuses one already serving it.
-# $true when it answers.
-function Start-QuestHelperFallback {
-    param([int] $Port)
-    $origin = "http://127.0.0.1:$Port"
-    if (Test-QuestHelperFallbackServing -Origin $origin) { return $true }
-    $server = @'
-param([int] $Port, [int] $ParentPid, [string] $Marker)
-$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
-try { $l.Start() } catch { exit 1 }
-$body = [System.Text.Encoding]::ASCII.GetBytes("<!doctype html><title>Loop Segments</title>$Marker")
-$until = [DateTime]::UtcNow.AddMinutes(30)
-try {
-    while ([DateTime]::UtcNow -lt $until -and (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
-        if (-not $l.Pending()) { Start-Sleep -Milliseconds 100; continue }
-        $c = $l.AcceptTcpClient()
-        try {
-            $s = $c.GetStream()
-            $s.ReadTimeout = 3000
-            $buf = [byte[]]::new(8192)
-            [void]$s.Read($buf, 0, $buf.Length)
-            $hdr = [System.Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nContent-Type: text/html; charset=utf-8`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nConnection: close`r`n`r`n")
-            $s.Write($hdr, 0, $hdr.Length)
-            $s.Write($body, 0, $body.Length)
-            $s.Flush()
-        } catch {} finally { $c.Close() }
-    }
-} finally { $l.Stop() }
-'@
-    $file = Join-Path $env:TEMP 'loopsegments-quest-helper-page.ps1'
-    try { Set-Content -LiteralPath $file -Value $server -Encoding utf8 } catch { return $false }
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = (Get-Process -Id $PID).Path
-    foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $file, '-Port', "$Port", '-ParentPid', "$PID", '-Marker', $script:HelperFallbackMarker)) { [void]$psi.ArgumentList.Add($a) }
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    try { [void][System.Diagnostics.Process]::Start($psi) } catch { return $false }
-    for ($i = 0; $i -lt 25; $i++) {
-        Start-Sleep -Milliseconds 200
-        if (Test-QuestHelperFallbackServing -Origin $origin) { return $true }
-    }
-    return $false
+# The phone's helper page URL (no fallback decided yet).
+function Get-QuestPhoneHelperUrl {
+    try { $u = [Uri]$Url; return ('{0}://{1}/xr-assets/lsclean' -f $u.Scheme, $u.Authority) } catch { return $Url }
 }
 
 function Get-QuestHelperUrl {
-    if ($script:HelperUrlCached) { return $script:HelperUrlCached }
-    $phone = $null
-    try { $u = [Uri]$Url; $phone = ('{0}://{1}/xr-assets/lsclean' -f $u.Scheme, $u.Authority) } catch { return $Url }
-    if (Test-QuestTcpOpen -HostName $u.Host -Port $u.Port) { $script:HelperUrlCached = $phone; return $phone }
-    $ip = $null
-    try { $ip = Get-QuestControlPcAddress -DeviceSerial (Get-OnlineQuestSerial) } catch {}
-    $port = (Get-QuestControlPort) + 1
-    if ($ip -and (Start-QuestHelperFallback -Port $port)) {
-        $script:HelperFallbackOrigin = "http://${ip}:$port"
-        $script:HelperUrlCached = "$($script:HelperFallbackOrigin)/lsclean"
-        Write-QuestLog "Helper page: phone $($u.Authority) not answering - serving it from this PC at $($script:HelperUrlCached)."
-    } else {
-        $script:HelperUrlCached = $phone
-        Write-QuestLog "Helper page: phone $($u.Authority) not answering and no PC fallback ($(if ($ip) { "port $port not served" } else { 'no route to the headset' })) - Recently closed items may stay."
+    if (-not $script:QtHelperPage) {
+        $ip = $null
+        try { $ip = Get-QuestControlPcAddress -DeviceSerial (Get-OnlineQuestSerial) } catch {}
+        [void](Resolve-QuestHelperUrl -PreferredUrl (Get-QuestPhoneHelperUrl) -FallbackPort ((Get-QuestControlPort) + 1) -PcAddress $ip)
     }
-    return $script:HelperUrlCached
+    $script:HelperFallbackOrigin = $script:QtHelperPage.FallbackOrigin
+    return $script:QtHelperPage.Url
 }
 
 function Invoke-QuestFlagSync {
@@ -923,117 +845,24 @@ function Set-QuestOpenStatus {
     try { Set-Content -LiteralPath $StatusFile -Value $Value -Encoding ascii } catch {}
 }
 
-# ---- After-quit history helper (-RetryHistory) ----
+# ---- After-quit history helper: quest_tools lib\QuestHistoryRetry.ps1 (Invoke-QuestHistoryRetry.ps1) ----
 
-$script:HistoryPendingPath = Join-Path $env:TEMP 'loopsegments-quest-history-pending.json'
-
-function Read-QuestHistoryPending {
-    if (-not (Test-Path -LiteralPath $script:HistoryPendingPath)) { return $null }
-    try { return (Get-Content -LiteralPath $script:HistoryPendingPath -Raw | ConvertFrom-Json) } catch { return $null }
-}
-
-function Write-QuestHistoryPending {
-    param($Pending)
-    $tmp = "$($script:HistoryPendingPath).tmp"
-    Set-Content -LiteralPath $tmp -Value ($Pending | ConvertTo-Json -Depth 4) -Encoding utf8
-    Move-Item -LiteralPath $tmp -Destination $script:HistoryPendingPath -Force
-}
-
-# The quit's phone LAN AP bounce (Wi-Fi->www probe failed), handed over by _run_chromium.ps1 while a
-# history delete is pending: the bounce reboots the 10.0.100.x AP, the headset falls over to the
-# other Wi-Fi and the PC (back on 10.0.100.x) can no longer reach it. So it runs here, after the
-# delete (or the give-up). Dropped when the companion starts again (its quit probes anew).
-$script:BouncePendingPath = Join-Path $env:TEMP 'loopsegments-wifi-bounce-pending.json'
-
-function Invoke-QuestDeferredBounce {
-    param([string] $Why)
-    if (-not (Test-Path -LiteralPath $script:BouncePendingPath)) { return }
-    $b = $null
-    try { $b = Get-Content -LiteralPath $script:BouncePendingPath -Raw | ConvertFrom-Json } catch {}
-    Remove-Item -LiteralPath $script:BouncePendingPath -Force -ErrorAction SilentlyContinue
-    $ps1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1'
-    if (-not (Test-Path -LiteralPath $ps1)) { Write-QuestLog "Wi-Fi bounce: $ps1 missing - skipped."; return }
-    $log = Join-Path $env:TEMP 'loopsegments-wifi-bounce.log'
-    Write-QuestLog "Wi-Fi bounce: $Why - bouncing the phone LAN AP now (held by the quit; output in $log)."
-    $a = @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $ps1, '-BouncePhoneLanAp', '-NoWaitEnter')
-    if ($b -and $b.phoneLanHost) { $a += @('-PhoneLanHost', [string]$b.phoneLanHost) }
-    try {
-        $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $a -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput $log -RedirectStandardError "$log.err"
-        if (-not $p.WaitForExit(600000)) { try { $p.Kill($true) } catch {}; Write-QuestLog 'Wi-Fi bounce: still running after 10 min - stopped.'; return }
-        Write-QuestLog "Wi-Fi bounce: finished (exit $($p.ExitCode))."
-    } catch {
-        Write-QuestLog "Wi-Fi bounce: could not run: $($_.Exception.Message)"
-    }
-}
-
-function Remove-QuestDeferredBounce {
-    if (Test-Path -LiteralPath $script:BouncePendingPath) {
-        Remove-Item -LiteralPath $script:BouncePendingPath -Force -ErrorAction SilentlyContinue
-        Write-QuestLog 'Wi-Fi bounce: dropped (the companion started again; its quit probes Wi-Fi->www anew).'
-    }
-}
-
-function Test-QuestHistoryHelperAlive {
-    param([int] $HelperPid)
-    if ($HelperPid -le 0) { return $false }
-    $p = Get-CimInstance Win32_Process -Filter "ProcessId = $HelperPid" -ErrorAction SilentlyContinue
-    return [bool]($p -and ([string]$p.CommandLine) -match '-RetryHistory')
-}
-
-# A PC companion (Run-PCloudWebCompanion / _run_chromium) started after -Since is running. The
-# helper starts while the quitting companion still waits for its cleanup, so older ones do not count.
-function Test-QuestCompanionRunning {
-    param([DateTime] $Since)
-    return [bool](Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { ([string]$_.CommandLine) -match 'Run-PCloudWebCompanion\.ps1|_run_chromium\.ps1' -and $_.CreationDate -and $_.CreationDate.ToUniversalTime() -gt $Since } |
-        Select-Object -First 1)
-}
-
-
-# Save what is left to do and make sure one helper is running for it. -Proximity: the quit could
-# not reach the headset, so the sensor override may still be on. Returns $true when handed over.
-function Start-QuestHistoryRetry {
+# Hand a failed (or unreachable) history delete to quest_tools' after-quit helper, with Loop Segments'
+# settings: questHistoryRetryMinutes (120; 0 = no helper), questClearHistoryFallback (once per helper
+# run), questWifiOffOnExit (Wi-Fi off after its delete), the phone helper page with its PC fallback.
+# It stops (dropping the delete) when the companion starts again: that session's quit deletes the
+# same origins. Its after-script runs the quit's held phone LAN AP bounce
+# (Invoke-LoopSegmentsHeldWifiBounce.ps1; QuestCompanionHooks.ps1 Request-QuestDeferredWifiBounce).
+# -Proximity: the quit could not reach the headset, so the sensor override may still be on.
+# Returns $true when handed over.
+function Start-LoopSegmentsHistoryRetry {
     param([string[]] $Origins, [switch] $CloseTabs, [switch] $Proximity, [switch] $CloseBrowser)
     $mins = 120
     if ($script:Cfg -and $script:Cfg.Contains('questHistoryRetryMinutes')) { $mins = [int]$script:Cfg.questHistoryRetryMinutes }
-    if ($mins -le 0) { return $false }
-    $Origins = @($Origins | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('/') })
-    if ($Origins.Count -eq 0) { return $false }
-    $prev = Read-QuestHistoryPending
-    $all = @(@($Origins) + @($(if ($prev) { @($prev.origins) } else { @() })) | Where-Object { $_ } | Select-Object -Unique)
-    $helperPid = if ($prev -and (Test-QuestHistoryHelperAlive -HelperPid ([int]$prev.pid))) { [int]$prev.pid } else { 0 }
-    $until = [DateTime]::UtcNow.AddMinutes($mins)
-    $pending = [ordered]@{
-        origins   = $all
-        url       = $Url
-        closeTabs = [bool]($CloseTabs -or ($prev -and $prev.closeTabs))
-        proximity = [bool]($Proximity -or ($prev -and $prev.proximity))
-        closeBrowser = [bool]($CloseBrowser -or ($prev -and $prev.PSObject.Properties['closeBrowser'] -and $prev.closeBrowser))
-        until     = $until.ToString('o')
-        queuedAt  = [DateTime]::UtcNow.ToString('o')
-        pid       = $helperPid
-    }
-    Write-QuestHistoryPending $pending
-    if ($helperPid -eq 0) {
-        # Detached (WMI-created, so not part of the companion's process tree), no window.
-        $pwsh = (Get-Process -Id $PID).Path
-        $cmd = ('"{0}" -NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "{1}" -Url "{2}" -RetryHistory' -f $pwsh, $PSCommandPath, ($Url -replace '"', ''))
-        try {
-            $si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
-            $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $si }
-            if ([int]$r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }
-            $helperPid = [int]$r.ProcessId
-            $pending.pid = $helperPid
-            Write-QuestHistoryPending $pending
-        } catch {
-            Write-QuestLog "History: could not start the retry helper - $($_.Exception.Message)"
-            Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
-            return $false
-        }
-    }
-    Write-QuestLog ("History: postponed - deleted when the headset is next worn (helper PID {0}, until {1:HH:mm})." -f $helperPid, $until.ToLocalTime())
-    return $true
+    return (Start-QuestHistoryRetry -Origins $Origins -Minutes $mins -CloseTabs:$CloseTabs -Proximity:$Proximity -CloseBrowser:$CloseBrowser `
+            -HelperUrl (Get-QuestPhoneHelperUrl) -HelperFallbackPort ((Get-QuestControlPort) + 1) -FallbackRange (Get-QuestHistoryFallbackRange) `
+            -WifiOff:(Test-QuestWifiOffWanted) -StopIfCommandLine 'Run-PCloudWebCompanion\.ps1|_run_chromium\.ps1' `
+            -AfterScript (Join-Path $PSScriptRoot 'Invoke-LoopSegmentsHeldWifiBounce.ps1'))
 }
 
 # Tab closing, history delete, Recently closed sweep: quest_tools lib\QuestCleanup.ps1
@@ -1062,83 +891,6 @@ function Get-QuestHistoryFallbackRange {
         else { Write-QuestLog "History: questClearHistoryFallback '$fbRaw' unknown - using 'day'." }
     }
     return $fbRange
-}
-
-function Invoke-QuestHistoryRetry {
-    $script:AdbRediscoverEveryMin = 20
-    $p = Read-QuestHistoryPending
-    if (-not $p) { Write-QuestLog 'History retry: nothing pending - stop.'; Invoke-QuestDeferredBounce -Why 'no history delete pending'; return 0 }
-    $until = [DateTime]::Parse([string]$p.until, $null, [Globalization.DateTimeStyles]::RoundtripKind)
-    Write-QuestLog ("History retry: waiting for the headset to be worn (until {0:HH:mm}; {1})." -f $until.ToLocalTime(), (@($p.origins) -join ', '))
-    $proxDone = -not [bool]$p.proximity
-    $shownWorn = $false
-    $fallbackTried = $false
-    while ($true) {
-        $p = Read-QuestHistoryPending
-        if (-not $p) { Write-QuestLog 'History retry: no longer pending - stop.'; Invoke-QuestDeferredBounce -Why 'history delete no longer pending'; return 0 }
-        $owner = [int]$p.pid
-        if ($owner -ne $PID) {
-            if (Test-QuestHistoryHelperAlive -HelperPid $owner) { return 0 }
-            $p.pid = $PID
-            Write-QuestHistoryPending $p
-        }
-        $until = [DateTime]::Parse([string]$p.until, $null, [Globalization.DateTimeStyles]::RoundtripKind)
-        if ([DateTime]::UtcNow -gt $until) {
-            Write-QuestLog 'History retry: the headset was not worn in time - gave up (the next companion quit deletes those entries).'
-            Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
-            # Not worn in time, but maybe still on adb: Wi-Fi off before the held AP bounce anyway.
-            $gone = Get-OnlineQuestSerial
-            if (-not $gone) { $gone = Connect-Quest }
-            if ($gone -and (Test-QuestWifiOffWanted)) { [void](Invoke-QuestWifiOff -DeviceSerial $gone) }
-            Invoke-QuestDeferredBounce -Why 'history helper gave up'
-            return 1
-        }
-        if (Test-QuestCompanionRunning -Since $script:StartedAt) {
-            Write-QuestLog 'History retry: the companion started again - stop (its quit deletes those entries).'
-            Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
-            Remove-QuestDeferredBounce
-            return 0
-        }
-        $dev = Get-OnlineQuestSerial
-        if (-not $dev) { $dev = Connect-Quest }
-        if ($dev) {
-            if (-not $proxDone) {
-                # The quit could not reach the headset: put the sensor back to normal now.
-                $proxDone = ((Invoke-QuestEnableProximity) -eq 0)
-                if ($proxDone) { $p.proximity = $false; Write-QuestHistoryPending $p }
-            }
-            if (Test-QuestHeadsetWorn -DeviceSerial $dev) {
-                if (-not $shownWorn) { Write-QuestLog 'History retry: headset worn - deleting.'; $shownWorn = $true }
-                # Let the browser catch up after the headset is put on.
-                Start-Sleep -Seconds 3
-                # Same range fallback as the quit (questClearHistoryFallback): it also clears what
-                # you browsed since, within that range.
-                # The range fallback at most once per helper run: retried every few seconds, its
-                # Clear browsing data dialog would keep popping up while the browser is stuck.
-                $fb = if ($fallbackTried) { '' } else { Get-QuestHistoryFallbackRange }
-                if ($fb) { $fallbackTried = $true }
-                # The saved origins plus the shared list (quest_tools); the quit left Quest Browser running
-                # for this delete: closed afterwards if it was ours, only once the delete worked.
-                $c = Invoke-QuestBrowserCleanup -DeviceSerial $dev -Origins @($p.origins) -HelperUrl (Get-QuestHelperUrl) `
-                    -CloseTabs:([bool]$p.closeTabs) -BudgetSec 40 -FallbackRange $fb -KeepBrowserOnFailure `
-                    -CloseBrowser:([bool]($p.PSObject.Properties['closeBrowser'] -and $p.closeBrowser))
-                $res = $c.History
-                if ($res -eq 'cleared' -or $res -eq 'fallback') {
-                    Write-QuestLog ("History retry: done{0}." -f $(if ($res -eq 'fallback') { ' (range fallback)' } else { '' }))
-                    Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
-                    # Wi-Fi off before the held AP bounce, so the bounce cannot move the headset.
-                    if (Test-QuestWifiOffWanted) { [void](Invoke-QuestWifiOff -DeviceSerial $dev) }
-                    Invoke-QuestDeferredBounce -Why 'history deleted'
-                    return 0
-                }
-                Write-QuestLog 'History retry: not done yet - trying again while the headset is worn.'
-            } else {
-                $shownWorn = $false
-            }
-        }
-        # Same pace as the Open on Quest queue: the delete starts within ~5 s of the headset being put on.
-        Start-Sleep -Seconds 5
-    }
 }
 
 # ---- 3d_playlist_local workflow session (3d_playlist_local\individual_transcode\quest: Start-PlaylistLocalQuestSession.ps1 / Invoke-PlaylistLocalQuestShutdown.ps1) ----
@@ -1345,7 +1097,6 @@ if ([string]::IsNullOrWhiteSpace($Url)) {
     Write-QuestLog '-Url is required (unless -ProbeIncognito).'
     exit 2
 }
-if ($RetryHistory) { exit (Invoke-QuestHistoryRetry) }
 if ($TestHelperVisit) {
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
@@ -1475,7 +1226,7 @@ if ($EnsureFlags -or $ClearHistory) {
             # Close the tabs, delete the entries and reset the sensor once the headset is back.
             $origins = @(Get-QuestCleanupOrigins -DeviceSerial '')
             # The helper closes Quest Browser after its delete when only empty tabs are left (as below).
-            [void](Start-QuestHistoryRetry -Origins $origins -CloseTabs:$CloseLanTabs -Proximity:$EnableProximityAfter -CloseBrowser:$CloseLanTabs)
+            [void](Start-LoopSegmentsHistoryRetry -Origins $origins -CloseTabs:$CloseLanTabs -Proximity:$EnableProximityAfter -CloseBrowser:$CloseLanTabs)
         }
         Remove-Item -LiteralPath $script:BrowserOursPath -Force -ErrorAction SilentlyContinue
         exit 1
@@ -1504,11 +1255,11 @@ if ($EnsureFlags -or $ClearHistory) {
                 -HelperUrl $(if (-not $SkipHistoryClear) { Get-QuestHelperUrl } else { '' }) `
                 -CloseTabs:$CloseLanTabs -SkipHistory:$SkipHistoryClear -BudgetUntil $script:StartedAt.AddSeconds(28) `
                 -FallbackRange (Get-QuestHistoryFallbackRange) -CloseBrowser:$closeBrowser `
-                -OnHistoryFailed { param($o) Start-QuestHistoryRetry -Origins $o -CloseBrowser:$script:CleanupCloseBrowser }
+                -OnHistoryFailed { param($o) Start-LoopSegmentsHistoryRetry -Origins $o -CloseBrowser:$script:CleanupCloseBrowser }
             $res = if ($c.DevTools) { $c.History } else { 'failed' }
             $browserRes = $c.Browser
-            if (($res -eq 'cleared' -or $res -eq 'fallback') -and (Test-Path -LiteralPath $script:HistoryPendingPath)) {
-                Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+            if (($res -eq 'cleared' -or $res -eq 'fallback') -and (Test-Path -LiteralPath $script:QuestHistoryPendingPath)) {
+                Remove-Item -LiteralPath $script:QuestHistoryPendingPath -Force -ErrorAction SilentlyContinue
                 Write-QuestLog 'History: the postponed delete is done too (pending file removed).'
             }
             if ($c.DevTools) { Remove-Item -LiteralPath $script:BrowserOursPath -Force -ErrorAction SilentlyContinue }
