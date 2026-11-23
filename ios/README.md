@@ -731,7 +731,7 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
   -Headers @{ Authorization = "Basic $cred"; "Content-Type" = "application/json" } -Body $body
 ```
 
-**Hostnames:** Use the **LAN IP** from Export. In the cellular-first setup that's always **`http://10.0.100.10:8765/`** (MR5100). A DNS name for the phone only works on a router that gives it its address.
+**Hostnames:** Use the **LAN IP** from Export (`http://<phone-ip>:8765/`, e.g. `10.0.100.10` on the MR5100). The IP depends on the app setup, so don't hard-code it. On the PC it's `phoneLanHost` in `loop-segments-windows.json`; `windows\setup\Set-LoopSegmentsLANHost.ps1` reads it from the phone over USB ([../windows/README.md](../windows/README.md)). A DNS name for the phone only works on a router that gives it its address.
 
 A router can only learn the phone's name from the phone's DHCP request (option 12, the hostname). A pktmon capture on the MR6500 (2026-11-22) shows what iOS sends:
 
@@ -745,7 +745,7 @@ Both Netgear routers answer DNS under the domain `routerlogin.net` and register 
 | Router | Phone's Wi-Fi config | Name lookup |
 |---|---|---|
 | **MR6500** `192.168.2.1`, SSID `ATT-WIFI-3pKe` | DHCP | **Works**: `http://iphone:8765/` (private address on) |
-| **MR5100** `10.0.100.2`, SSID `ATT-WIFI-5pmY_5GHz` | **Manual IP `10.0.100.10`, no gateway** (cellular-first: LAN over Wi-Fi, internet over cellular) | **Impossible**: with a manual IP there's no DHCP request, so no name. Use the IP. |
+| **MR5100** `10.0.100.2`, SSID `ATT-WIFI-5pmY_5GHz` | **Manual IP (e.g. `10.0.100.10`, set by the app setup), no gateway** (cellular-first: LAN over Wi-Fi, internet over cellular) | **Impossible**: with a manual IP there's no DHCP request, so no name. Use the IP. |
 
 - **`iphone:8765` (MR6500 only):** a bare name skips Clash fake-IP and passes the server's Host check. Caveats:
   - A second iPhone with Private Wi-Fi Address on sends the same `iPhone`, so the two clash.
