@@ -182,19 +182,12 @@ param(
     # workflow output, e.g. over DLNA) plus -MediaPackages / questPlaylistMediaPlayers.
     [switch] $StopMediaApps,
     [string[]] $MediaPackages = @(),
-    # With -ClearHistory: more origins to delete (http://host:port; {pc} = this PC's address).
-    [string[]] $ExtraOrigins = @(),
     # Opening a page: owner name it is registered under in quest_tools' shared origin list
     # (%TEMP%\quest-browser-origins.json), which every -ClearHistory also closes and deletes.
     [string] $Owner = 'loopsegments',
     # With -KeepAwakeSession: once -ParentPid exits, turn the sensor back on (3d_playlist_local
     # workflow session; the companion's cleanup does that itself).
     [switch] $RestoreProximity,
-    # With -ClearHistory -ExtraOrigins: delete only those origins' history entries (no sensor, Wi-Fi
-    # or range fallback; with -CloseLanTabs their tabs are closed first, or an open tab such as the
-    # 3d_playlist_local XR page stays and keeps its page in history). The end-session button runs it
-    # before the companion's own quit cleanup, which does not know questPlaylistHistoryOrigins.
-    [switch] $OnlyExtraOrigins,
     # Read-only: print every Quest Browser history entry (origin + path, no login, no query string)
     # and whether the history delete would match it. Nothing is deleted or logged.
     [switch] $ListHistory,
@@ -1043,70 +1036,8 @@ function Start-QuestHistoryRetry {
     return $true
 }
 
-# The history delete, then the Recently closed sweep (Invoke-QuestRecentlyClosedSweep) and, when the
-# sweep moved items onto the phone page, one more delete for those. DevTools must be open.
-# Visit -HelperUrl in an open empty tab (new-tab / blank page) and put the tab back as it was,
-# without back/forward entries. DevTools must be open.
-function Invoke-QuestHelperVisitInOpenTab {
-    param([string] $HelperUrl)
-    $tab = Get-QuestTabs | Where-Object { $u = [string]$_.url; $u -like 'chrome://panel-app-nav/ntp*' -or $u -eq 'about:blank' } | Select-Object -First 1
-    if (-not $HelperUrl) { return }
-    if (-not $tab) {
-        $urls = @(Get-QuestTabs | ForEach-Object { (ConvertTo-QuestBareUrl ([string]$_.url)) -replace '\?.*$', '' }) -join ', '
-        Write-QuestLog "Recently closed: no new-tab / blank tab open for the helper visit (tabs: $urls)."
-        return
-    }
-    $was = [string]$tab.url
-    try {
-        [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $HelperUrl } -TimeoutSec 8)
-        $t = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 6 -Match { param($u) $u -like 'http*' }
-        if ($t) { $tab = $t } else { Write-QuestLog "Recently closed: the helper page did not load in the open tab (was $was)." }
-        Start-Sleep -Milliseconds 1500
-        $back = if ($was -like 'chrome://panel-app-nav/ntp*') { 'chrome://panel-app-nav/ntp' } else { 'about:blank' }
-        [void](Invoke-QuestCdp -Tab $tab -Method 'Page.navigate' -Params @{ url = $back } -TimeoutSec 8)
-        $t = Wait-QuestTabUrl -Id $tab.id -TimeoutSec 6 -Match { param($u) $u -notlike 'http*' }
-        if ($t) { $tab = $t }
-        [void](Invoke-QuestCdp -Tab $tab -Method 'Page.resetNavigationHistory' -TimeoutSec 5)
-    } catch {
-        Write-QuestLog "Recently closed: helper visit in the open tab failed - $($_.Exception.Message)"
-    }
-}
-
-function Clear-QuestHistoryAndClosed {
-    param([string] $DeviceSerial, [string[]] $Origins, [double] $BudgetSec, [string] $FallbackRange)
-    $t0 = [DateTime]::UtcNow
-    # Callers build -Origins before the helper page is picked: add the PC-served one if it is used.
-    [void](Get-QuestHelperUrl)
-    if ($script:HelperFallbackOrigin) { $Origins = @(@($Origins) + $script:HelperFallbackOrigin | Select-Object -Unique) }
-    $res = Clear-QuestBrowserHistory -DeviceSerial $DeviceSerial -HelperUrl (Get-QuestHelperUrl) -Origins $Origins -BudgetSec $BudgetSec -FallbackRange $FallbackRange
-    if ($res -ne 'cleared' -and $res -ne 'fallback') { return $res }
-    $left = $BudgetSec - ([DateTime]::UtcNow - $t0).TotalSeconds
-    if ($left -lt 4) { return $res }
-    $n = Invoke-QuestRecentlyClosedSweep -Origins $Origins -HelperUrl (Get-QuestHelperUrl) -BudgetSec ($left - 3)
-    if ($n -gt 0) {
-        # The swept items now point at the helper page, but the visits made in those reopened tabs
-        # were not recorded (seen every time an item already on the helper page was swept). The
-        # history delete drops Recently closed items by URL, so one recorded visit is enough: make it
-        # in a tab that stays open (the kept new-tab page), then put that tab back.
-        # Checked: the visit must be in the History list before the delete (one retry), and logged
-        # either way (a silent miss left the swept items in place, seen at an End session).
-        $helper = Get-QuestHelperUrl
-        $recorded = $false
-        for ($try = 1; $try -le 2 -and -not $recorded; $try++) {
-            Invoke-QuestHelperVisitInOpenTab -HelperUrl $helper
-            $w0 = [DateTime]::UtcNow
-            while (-not $recorded -and ([DateTime]::UtcNow - $w0).TotalSeconds -lt 8) {
-                Start-Sleep -Seconds 2
-                $l = Clear-QuestBrowserHistory -DeviceSerial $DeviceSerial -Origins $Origins -BudgetSec 8 -FallbackRange '' -ListOnly
-                if ($l -and $l.PSObject.Properties['items']) { $recorded = @(@($l.items) | Where-Object { $_.ours -and ([string]$_.u) -eq $helper }).Count -gt 0 }
-            }
-            Write-QuestLog ("Recently closed: helper visit {0} in the History list (try {1})." -f $(if ($recorded) { 'is' } else { 'NOT' }), $try)
-        }
-        $left = $BudgetSec - ([DateTime]::UtcNow - $t0).TotalSeconds
-        [void](Clear-QuestBrowserHistory -DeviceSerial $DeviceSerial -HelperUrl (Get-QuestHelperUrl) -Origins $Origins -BudgetSec ([Math]::Max(3, $left)) -FallbackRange '')
-    }
-    return $res
-}
+# Tab closing, history delete, Recently closed sweep: quest_tools lib\QuestCleanup.ps1
+# (Invoke-QuestBrowserCleanup, Clear-QuestHistoryAndClosed -HelperUrl (Get-QuestHelperUrl)).
 
 # questWifiOffOnExit (default true): switch the headset's Wi-Fi off, so a sleeping headset does not
 # drain its battery on Wi-Fi and does not hop to another network when the quit's AP bounce reboots
@@ -1180,28 +1111,18 @@ function Invoke-QuestHistoryRetry {
                 if (-not $shownWorn) { Write-QuestLog 'History retry: headset worn - deleting.'; $shownWorn = $true }
                 # Let the browser catch up after the headset is put on.
                 Start-Sleep -Seconds 3
-                $res = 'failed'
-                if (Open-QuestDevTools -DeviceSerial $dev) {
-                    try {
-                        $origins = @($p.origins)
-                        if ($p.closeTabs) {
-                            $closed = Close-QuestOurTabs -Origins $origins
-                            if ($closed) { Write-QuestLog "History retry: closed $closed Quest Browser tab(s) on the phone LAN page / control page." }
-                        }
-                        # Same range fallback as the quit (questClearHistoryFallback): it also clears what
-                        # you browsed since, within that range.
-                        # The range fallback at most once per helper run: retried every few seconds, its
-                        # Clear browsing data dialog would keep popping up while the browser is stuck.
-                        $fb = if ($fallbackTried) { '' } else { Get-QuestHistoryFallbackRange }
-                        if ($fb) { $fallbackTried = $true }
-                        $res = Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins $origins -BudgetSec 40 -FallbackRange $fb
-                        if ($res -eq 'cleared' -or $res -eq 'fallback') { [void](Remove-QuestClosedOrigins -Origins $origins) }
-                        # The quit left Quest Browser running for this delete: close it now if it was ours.
-                        if (($res -eq 'cleared' -or $res -eq 'fallback') -and $p.PSObject.Properties['closeBrowser'] -and $p.closeBrowser) {
-                            [void](Close-QuestBrowserIfEmpty -DeviceSerial $dev)
-                        }
-                    } finally { Close-QuestDevTools }
-                }
+                # Same range fallback as the quit (questClearHistoryFallback): it also clears what
+                # you browsed since, within that range.
+                # The range fallback at most once per helper run: retried every few seconds, its
+                # Clear browsing data dialog would keep popping up while the browser is stuck.
+                $fb = if ($fallbackTried) { '' } else { Get-QuestHistoryFallbackRange }
+                if ($fb) { $fallbackTried = $true }
+                # The saved origins plus the shared list (quest_tools); the quit left Quest Browser running
+                # for this delete: closed afterwards if it was ours, only once the delete worked.
+                $c = Invoke-QuestBrowserCleanup -DeviceSerial $dev -Origins @($p.origins) -HelperUrl (Get-QuestHelperUrl) `
+                    -CloseTabs:([bool]$p.closeTabs) -BudgetSec 40 -FallbackRange $fb -KeepBrowserOnFailure `
+                    -CloseBrowser:([bool]($p.PSObject.Properties['closeBrowser'] -and $p.closeBrowser))
+                $res = $c.History
                 if ($res -eq 'cleared' -or $res -eq 'fallback') {
                     Write-QuestLog ("History retry: done{0}." -f $(if ($res -eq 'fallback') { ' (range fallback)' } else { '' }))
                     Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
@@ -1356,11 +1277,14 @@ function Invoke-QuestStopMediaApps {
     return 0
 }
 
-# -ExtraOrigins / questPlaylistHistoryOrigins with {pc} replaced by this PC's address.
-function Get-QuestExtraOrigins {
+# questPlaylistHistoryOrigins (config), with {pc} replaced by this PC's address.
+function Get-QuestConfigOrigins {
     param([string] $DeviceSerial)
-    # pwsh -File passes a list as one "a,b" string.
-    $raw = @(@($ExtraOrigins) | ForEach-Object { [string]$_ -split ',' } | Where-Object { $_.Trim() })
+    $raw = @()
+    if ($script:Cfg -and $script:Cfg.Contains('questPlaylistHistoryOrigins') -and $null -ne $script:Cfg.questPlaylistHistoryOrigins) {
+        $raw += @(@($script:Cfg.questPlaylistHistoryOrigins) | ForEach-Object { [string]$_ })
+    }
+    $raw = @($raw | Where-Object { $_ -and $_.Trim() })
     if (-not $raw.Count) { return @() }
     $pc = Get-QuestControlPcAddress -DeviceSerial $DeviceSerial
     return @($raw | ForEach-Object {
@@ -1369,12 +1293,12 @@ function Get-QuestExtraOrigins {
         } | Where-Object { $_ })
 }
 
-# Every origin a -ClearHistory closes and deletes: the phone LAN page, the control page, -ExtraOrigins,
-# and every origin any project registered in quest_tools' shared list (QuestOrigins.ps1), e.g. the
-# 3d_playlist_local XR page.
+# Every origin a -ClearHistory closes and deletes: the phone LAN page, the control page,
+# questPlaylistHistoryOrigins, and every origin any project registered in quest_tools' shared list
+# (QuestOrigins.ps1), e.g. the 3d_playlist_local XR page.
 function Get-QuestCleanupOrigins {
     param([string] $DeviceSerial)
-    return @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial $DeviceSerial) + @(Get-QuestExtraOrigins -DeviceSerial $DeviceSerial) +
+    return @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial $DeviceSerial) + @(Get-QuestConfigOrigins -DeviceSerial $DeviceSerial) +
         @(Get-QuestRegisteredOrigins) | Where-Object { $_ } | ForEach-Object { ([string]$_).TrimEnd('/') } | Select-Object -Unique)
 }
 
@@ -1523,26 +1447,6 @@ if ($ListHistory) {
     @{ matchedOrigins = $origins; result = $r } | ConvertTo-Json -Depth 6
     exit 0
 }
-if ($ClearHistory -and $OnlyExtraOrigins) {
-    $dev = Get-OnlineQuestSerial
-    if (-not $dev) { $dev = Connect-Quest }
-    if (-not $dev) { Write-QuestLog 'History (extra origins): headset not reachable over adb - skipped.'; exit 1 }
-    $extra = @(Get-QuestExtraOrigins -DeviceSerial $dev)
-    if (-not $extra.Count) { Write-QuestLog 'History (extra origins): none set - nothing to delete.'; exit 0 }
-    if (-not (Open-QuestDevTools -DeviceSerial $dev)) { exit 3 }
-    try {
-        if ($CloseLanTabs) {
-            # Close them before the delete: an open tab keeps its page in the History list.
-            $closed = Close-QuestOurTabs -Origins $extra
-            Write-QuestLog ("Tabs (extra origins): closed {0} Quest Browser tab(s)." -f $closed)
-            if ($closed) { Start-Sleep -Seconds 1 }
-        }
-        $res = Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins $extra -BudgetSec 25 -FallbackRange ''
-        if ($res -eq 'cleared') { [void](Remove-QuestClosedOrigins -Origins $extra) }
-    } finally { Close-QuestDevTools }
-    Write-QuestLog ("History (extra origins): {0} ({1})." -f $res, ($extra -join ', '))
-    if ($res -eq 'cleared') { exit 0 } else { exit 3 }
-}
 if ($ResetFlags) {
     $dev = Get-OnlineQuestSerial
     if (-not $dev) { $dev = Connect-Quest }
@@ -1555,7 +1459,7 @@ if ($ResetFlags) {
         # blank items in Recently closed. Then close Quest Browser again if the reset started it.
         if ($res -eq 'reset') {
             Start-Sleep -Seconds 1
-            [void](Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins @(Get-QuestLanOrigins) -BudgetSec 25 -FallbackRange '')
+            [void](Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins @(Get-QuestLanOrigins) -BudgetSec 25 -FallbackRange '' -HelperUrl (Get-QuestHelperUrl))
             if (-not $wasRunning) { [void](Close-QuestBrowserIfEmpty -DeviceSerial $dev) }
         }
     } finally { Close-QuestDevTools }
@@ -1590,41 +1494,24 @@ if ($EnsureFlags -or $ClearHistory) {
         $closeBrowser = [bool]$CloseLanTabs
         $browserRes = 'kept'
         if ($CloseLanTabs -or -not $SkipHistoryClear) {
-            if (Open-QuestDevTools -DeviceSerial $dev) {
-                try {
-                    # Phone LAN page origins, the Quest control page on this PC, -ExtraOrigins and the
-                    # shared origin list (any project's pages): the tabs to close and the only history
-                    # entries deleted.
-                    $origins = @(Get-QuestCleanupOrigins -DeviceSerial $dev)
-                    if ($CloseLanTabs) {
-                        $t0 = [DateTime]::UtcNow
-                        # Phone LAN page tabs, plus the Quest control page on this PC.
-                        $closed = Close-QuestOurTabs -Origins $origins
-                        Write-QuestLog ("Tabs: closed {0} Quest Browser tab(s) on the phone LAN page / control page ({1:0.0} s)." -f $closed, ([DateTime]::UtcNow - $t0).TotalSeconds)
-                    }
-                    if (-not $SkipHistoryClear) {
-                        $t0 = [DateTime]::UtcNow
-                        $budget = 28 - (& $since)
-                        $res = Clear-QuestHistoryAndClosed -DeviceSerial $dev -Origins $origins -BudgetSec $budget -FallbackRange (Get-QuestHistoryFallbackRange)
-                        # Usually nobody is wearing the headset at quit, and then Quest Browser does not
-                        # answer: hand the delete to the after-quit helper.
-                        if ($res -eq 'failed' -and (Start-QuestHistoryRetry -Origins $origins -CloseBrowser:$closeBrowser)) { $res = 'postponed' }
-                        Write-QuestLog ("History step: {0} ({1:0.0} s)." -f $res, ([DateTime]::UtcNow - $t0).TotalSeconds)
-                        if ($res -eq 'cleared' -or $res -eq 'fallback') { [void](Remove-QuestClosedOrigins -Origins $origins) }
-                        if (($res -eq 'cleared' -or $res -eq 'fallback') -and (Test-Path -LiteralPath $script:HistoryPendingPath)) {
-                            Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
-                            Write-QuestLog 'History: the postponed delete is done too (pending file removed).'
-                        }
-                    }
-                    if ($closeBrowser) {
-                        # A postponed delete needs the browser: the helper closes it after its delete.
-                        $browserRes = if ($res -eq 'postponed') { 'helper' } else { Close-QuestBrowserIfEmpty -DeviceSerial $dev }
-                    }
-                } finally { Close-QuestDevTools }
-                Remove-Item -LiteralPath $script:BrowserOursPath -Force -ErrorAction SilentlyContinue
-            } else {
-                $res = 'failed'
+            # quest_tools Invoke-QuestBrowserCleanup, one DevTools session: tabs on our pages (phone LAN
+            # page, control page on this PC, questPlaylistHistoryOrigins, plus the shared
+            # origin list: every project's pages), the history delete within ~28 s of start, then the
+            # browser closed when only empty pages are left. Usually nobody is wearing the headset at
+            # quit, and then Quest Browser does not answer: the delete goes to the after-quit helper.
+            $script:CleanupCloseBrowser = $closeBrowser
+            $c = Invoke-QuestBrowserCleanup -DeviceSerial $dev -Origins @(Get-QuestCleanupOrigins -DeviceSerial $dev) `
+                -HelperUrl $(if (-not $SkipHistoryClear) { Get-QuestHelperUrl } else { '' }) `
+                -CloseTabs:$CloseLanTabs -SkipHistory:$SkipHistoryClear -BudgetUntil $script:StartedAt.AddSeconds(28) `
+                -FallbackRange (Get-QuestHistoryFallbackRange) -CloseBrowser:$closeBrowser `
+                -OnHistoryFailed { param($o) Start-QuestHistoryRetry -Origins $o -CloseBrowser:$script:CleanupCloseBrowser }
+            $res = if ($c.DevTools) { $c.History } else { 'failed' }
+            $browserRes = $c.Browser
+            if (($res -eq 'cleared' -or $res -eq 'fallback') -and (Test-Path -LiteralPath $script:HistoryPendingPath)) {
+                Remove-Item -LiteralPath $script:HistoryPendingPath -Force -ErrorAction SilentlyContinue
+                Write-QuestLog 'History: the postponed delete is done too (pending file removed).'
             }
+            if ($c.DevTools) { Remove-Item -LiteralPath $script:BrowserOursPath -Force -ErrorAction SilentlyContinue }
         }
         $sky = 'skipped'
         if ($ClearSkyboxWebDav) {
