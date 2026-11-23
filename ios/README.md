@@ -731,9 +731,28 @@ Invoke-WebRequest -Method PUT -Uri "$base/pcld_ios_media/scripts/export_trigger.
   -Headers @{ Authorization = "Basic $cred"; "Content-Type" = "application/json" } -Body $body
 ```
 
-**Hostnames:** Use the **LAN IP** from Export (`http://192.168.x.x:8765/`) or the router-DNS name **`http://iphone:8765/`**.
+**Hostnames:** Use the **LAN IP** from Export. In the cellular-first setup that's always **`http://10.0.100.10:8765/`** (MR5100). A DNS name for the phone only works on a router that gives it its address.
 
-- **`iphone:8765`:** works from Quest and PC. The router's DNS (`192.168.2.1`, domain `routerlogin.net`) registers the phone under the name it sends when it gets its address, which is plain `iPhone`. A bare name skips Clash fake-IP and passes the server's Host check. If a second iPhone joins the network, the two can clash over the name; fall back to the IP.
+A router can only learn the phone's name from the phone's DHCP request (option 12, the hostname). A pktmon capture on the MR6500 (2026-11-22) shows what iOS sends:
+
+| Private Wi-Fi Address | DHCP hostname iOS sends |
+|---|---|
+| On (random hardware address) | `iPhone` |
+| Off (real hardware address) | short form of Settings → About → Name (e.g. `dsouzaatsiPhone`) |
+
+Both Netgear routers answer DNS under the domain `routerlogin.net` and register DHCP names (the PC shows up as `Ankit-S5406S` on both):
+
+| Router | Phone's Wi-Fi config | Name lookup |
+|---|---|---|
+| **MR6500** `192.168.2.1`, SSID `ATT-WIFI-3pKe` | DHCP | **Works**: `http://iphone:8765/` (private address on) |
+| **MR5100** `10.0.100.2`, SSID `ATT-WIFI-5pmY_5GHz` | **Manual IP `10.0.100.10`, no gateway** (cellular-first: LAN over Wi-Fi, internet over cellular) | **Impossible**: with a manual IP there's no DHCP request, so no name. Use the IP. |
+
+- **`iphone:8765` (MR6500 only):** a bare name skips Clash fake-IP and passes the server's Host check. Caveats:
+  - A second iPhone with Private Wi-Fi Address on sends the same `iPhone`, so the two clash.
+  - Old leases leave stale entries. For example, `dsouzaatsiPhone` kept pointing at a dead `192.168.2.29` after the phone switched back to a private address.
+- **On the MR5100,** devices only resolve the router's names if the router hands out itself as DNS. Its LAN DNS was a custom `8.8.8.8` and is now auto. The MR5100 also passes lookups it can't answer to the MR6500, so it can return the MR6500's (possibly stale) entries.
+- **PC Wi-Fi profiles with a manual DNS** (`8.8.8.8`, shown as `ProfileNameServer` in the registry) ignore the router's DNS. Set DNS server assignment to Automatic (DHCP) for names to work.
+- **With Clash TUN on,** even DNS sent straight to the router, and LAN traffic, can go into Mihomo (`198.18.x.x` answers). Check `Find-NetRoute <router-ip>` before trusting a probe from the PC.
 - **`.local` (Bonjour) doesn't work:**
   - Quest OS (Android) can't look up `.local` names in the browser.
   - On the PC, Clash/Mihomo TUN takes multicast (`224.0.0.0/4`), so Bonjour lookups fail; see [../env_setup/Clash/README.md](../env_setup/Clash/README.md).
