@@ -7,7 +7,8 @@
   first makes sure this PC is on the phone's network, like the companion's startup
   (lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -PhoneLanHost <phoneLanHost>; only when the
   PC is on another network, e.g. after a quit's Wi-Fi bounce, it restarts that router's Wi-Fi so the PC
-  moves back; -SkipNetworkCheck skips it), then runs the quest_tools script.
+  moves back; -SkipNetworkCheck skips it), then runs the quest_tools script with -NoNetworkCycle (its
+  saved-Wi-Fi cycle would move the PC off the phone's network).
 
   While the PC companion runs with questKeepAwakeDuringSession=true, its keep-awake job switches the
   sensor off again within ~20 s after you turn it on; the companion turns it on itself at close.
@@ -16,10 +17,10 @@
   take the change. Log: %TEMP%\loopsegments-quest-lantab.log
 
 .EXAMPLE
-  .\Set-QuestProximitySensor.ps1                 # Toggle, then wait for Enter
+  .\Set-LoopSegmentsQuestProximitySensor.ps1                 # Toggle, then wait for Enter
 
 .EXAMPLE
-  .\Set-QuestProximitySensor.ps1 -State Off -NoWait
+  .\Set-LoopSegmentsQuestProximitySensor.ps1 -State Off -NoWait
 #>
 [CmdletBinding()]
 param(
@@ -35,5 +36,5 @@ param(
 . (Join-Path $PSScriptRoot 'QuestWrapperCommon.ps1')
 
 if (-not $SkipNetworkCheck) { Invoke-QuestWrapperNetworkCheck }
-& (Join-Path $script:QuestToolsRepo 'Set-QuestProximitySensor.ps1') -State $State -NoWait:$NoWait -WaitSec $WaitSec
+& (Join-Path $script:QuestToolsRepo 'Set-QuestProximitySensor.ps1') -State $State -NoWait:$NoWait -WaitSec $WaitSec -NoNetworkCycle
 exit $LASTEXITCODE

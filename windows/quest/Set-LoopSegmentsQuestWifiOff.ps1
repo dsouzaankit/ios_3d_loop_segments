@@ -15,10 +15,10 @@
   not take it. Log: %TEMP%\loopsegments-quest-lantab.log
 
 .EXAMPLE
-  .\Set-QuestWifiOff.ps1
+  .\Set-LoopSegmentsQuestWifiOff.ps1
 
 .EXAMPLE
-  .\Set-QuestWifiOff.ps1 -NoWait -WaitSec 0
+  .\Set-LoopSegmentsQuestWifiOff.ps1 -NoWait -WaitSec 0
 #>
 [CmdletBinding()]
 param(

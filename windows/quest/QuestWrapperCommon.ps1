@@ -1,5 +1,5 @@
 # Shared by the double-click Quest helpers in this folder (Reset-QuestBrowserFlags.ps1, and the
-# Set-QuestProximitySensor.ps1 / Set-QuestWifiOff.ps1 forwarders): config, the PC's network check, and
+# Set-LoopSegmentsQuestProximitySensor.ps1 / Set-LoopSegmentsQuestWifiOff.ps1 forwarders): config, the PC's network check, and
 # running Watch-LoopSegmentsQuestLanTab.ps1 with retries until the headset is on adb (the retry loop
 # and closing message are quest_tools\QuestWrapperCommon.ps1). Dot-source it.
 

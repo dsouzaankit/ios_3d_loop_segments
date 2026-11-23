@@ -35,11 +35,11 @@
   -EnableProximity : turn the proximity sensor back on (undoes a `prox_close` override, so the
                    headset sleeps again when taken off). Companion runs it on close. Needs no -Url.
   -DisableProximity : hold the proximity sensor off (`prox_close`; headset stays awake when taken
-                   off). -ToggleProximity flips it. Both need no -Url; quest\Set-QuestProximitySensor.ps1
+                   off). -ToggleProximity flips it. Both need no -Url; quest\Set-LoopSegmentsQuestProximitySensor.ps1
                    wraps all three.
   -WifiOff       : switch the headset's Wi-Fi off now (Settings > Wi-Fi opened first on an awake
                    headset), whatever questWifiOffOnExit says; adb drops right after.
-                   quest\Set-QuestWifiOff.ps1 wraps it. Needs no -Url.
+                   quest\Set-LoopSegmentsQuestWifiOff.ps1 wraps it. Needs no -Url.
   -ResetFlags    : reset every Quest Browser chrome://flags entry to its default ("Reset all") and
                    restart Quest Browser (closes its tabs). The next Open on Quest sets the
                    insecure-origin flag again. quest\Reset-QuestBrowserFlags.ps1 wraps it.
