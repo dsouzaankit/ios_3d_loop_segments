@@ -43,7 +43,7 @@ An empty ring after a Quest session can mean the `/xr` debug POST was refused (4
 | `snapshot.mode` | `av1rt` / `canvasrt` / `native` / `gpu` / … |
 | `snapshot.note` | Transport tex note (`post-AV1 canvas`, `AV1 full frame`, …) |
 | `exit-vr settled` | Safe to touch materials again after teardown |
-| `eye-layers` | Dome layer and visibility: VR and AR left 1 / right 2 (build 444+; `arStereo:false` = mono AR on 0), flat 0 |
+| `eye-layers` | Dome layer and visibility: VR and AR left 1 / right 2 (AR since build 444), SBS off and flat 0 |
 | `canvas-tex-reset` | Canvas texture released after a size change: `from`, `to`, `presenting` |
 | `xr-enabled-fixed` | `xr.enabled` was false in a live session and was repaired. `ticks` = frames into the session; `n` above 1 = something keeps clearing it |
 

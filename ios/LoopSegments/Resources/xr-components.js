@@ -3,7 +3,7 @@
 // quest_tools/xr/Sync-QuestXrEngine.ps1; deploy.ps1 refuses a stale one) and by 3d_playlist_local's
 // PC XR page (serve_xr_page.py serves this folder directly). Each page keeps its own xr-app.js /
 // xr-player.html. Page knobs read here: window.__xrProjection (vr180 default | fisheye | flat),
-// window.__xrArStereo (false = mono Enter AR), window.__xrZoom / __xrDist. Matroska AV1 (V_AV1) and
+// window.__xrZoom / __xrDist. Matroska AV1 (V_AV1) and
 // MP4 av01 are both detected.
 (function () {
   var THREE = window.AFRAME && AFRAME.THREE ? AFRAME.THREE : window.THREE;
@@ -1558,10 +1558,10 @@
       // layer 1 only on the left eye camera and layer 2 only on the right one, so each
       // eye draws its own dome. The XR cameras are never edited here; their defaults
       // are what makes this work, and nothing carries over from an AR session.
-      // Mono and not-yet-presenting: layer 0, left dome only (left half, both eyes).
-      // AR: the iOS page kept AR mono (its build 345: eye layers 1/2 blanked Quest AR video while it
-      // still edited the XR cameras by hand; the 2026-11-05 rewrite stopped that). Here AR uses the
-      // eye layers too unless window.__xrArStereo === false ("3D in AR" off on the page).
+      // Enter AR uses the same layers (each eye its own half over passthrough). Loop Segments build 345
+      // had kept AR mono because layers 1/2 blanked Quest AR video while the code still edited the XR
+      // cameras by hand; build 406 stopped that, and 3D AR passed on Quest 3 (2026-11-22, both pages).
+      // SBS off and not-yet-presenting: layer 0, left dome only.
       var mesh = this.el.getObject3D("mesh");
       var immersive = this.isImmersiveStereo();
       var desktop = this.isDesktopRole();
@@ -1571,8 +1571,7 @@
         var sceneEl = this.el.sceneEl;
         presenting = !!(sceneEl && sceneEl.renderer && sceneEl.renderer.xr && sceneEl.renderer.xr.isPresenting);
       } catch (e0) {}
-      var arStereo = window.__xrArStereo !== false;
-      var stereo = !desktop && immersive && presenting && (!isAR || arStereo) && !!this.data.sbs;
+      var stereo = !desktop && immersive && presenting && !!this.data.sbs;
       var layerBit = stereo ? this.eyeLayer() : 0;
       if (mesh) {
         mesh.traverse(function (node) {
@@ -1601,10 +1600,10 @@
         show = immersive;
       }
       if (this.el.object3D) this.el.object3D.visible = show;
-      var sig = layerBit + "|" + (show ? 1 : 0) + "|" + (isAR ? 1 : 0) + "|" + (arStereo ? 1 : 0);
+      var sig = layerBit + "|" + (show ? 1 : 0) + "|" + (isAR ? 1 : 0);
       if (!desktop && this._eyeLayerSig !== sig) {
         this._eyeLayerSig = sig;
-        try { xrLog("eye-layers", { eye: this.data.eye, layer: layerBit, visible: show, ar: isAR, arStereo: arStereo }); } catch (eLog) {}
+        try { xrLog("eye-layers", { eye: this.data.eye, layer: layerBit, visible: show, ar: isAR }); } catch (eLog) {}
       }
     },
     bindMaterial: function (mat) {

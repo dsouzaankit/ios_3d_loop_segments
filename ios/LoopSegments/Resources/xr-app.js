@@ -39,8 +39,6 @@
   var chromaKeyEl = document.getElementById("xr-chroma-key");
   var chromaKeyPlayEl = document.getElementById("xr-chroma-key-play");
   var sbsToggle = document.getElementById("xr-sbs-toggle");
-  var arStereoEl = document.getElementById("xr-ar-stereo");
-  var AR_STEREO_KEY = "loopsegments.lan.xrArStereo.v1";
   var seekDragging = false;
   if (!video || !overlay) return;
   // Same-origin LAN files must not use crossOrigin=anonymous (no CORS headers → black WebGL + audio OK).
@@ -785,23 +783,6 @@
     if (savedKey && /^#[0-9a-fA-F]{6}$/.test(savedKey)) applyChromaKey(savedKey);
   } catch (eKey) {}
   if (sbsToggle) sbsToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
-  // 3D in AR (build 444): eye layers in Enter AR too (quest_tools xr-components.js syncEyeLayers reads
-  // window.__xrArStereo). Off = the left half to both eyes, as before.
-  function applyArStereo(on) {
-    window.__xrArStereo = !!on;
-    if (arStereoEl) arStereoEl.checked = !!on;
-    try { localStorage.setItem(AR_STEREO_KEY, on ? "1" : "0"); } catch (eS) {}
-    sphereEls().forEach(function (el) {
-      var comp = el.components && el.components["chroma-stereo-sbs"];
-      if (comp) try { comp.syncEyeLayers(); } catch (eL) {}
-    });
-  }
-  (function () {
-    var on = true;
-    try { var saved = localStorage.getItem(AR_STEREO_KEY); if (saved === "0" || saved === "1") on = saved === "1"; } catch (eR) {}
-    applyArStereo(on);
-  })();
-  if (arStereoEl) arStereoEl.onchange = function () { applyArStereo(arStereoEl.checked); };
   if (reopenBtn) {
     reopenBtn.onclick = function () {
       showOverlay(true);

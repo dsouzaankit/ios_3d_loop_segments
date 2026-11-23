@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 445 (1.3.1):** `/xr` drops the **3D in AR** box from build 444: Enter AR is always 3D when **SBS 3D** is on (tested on Quest 3 with build 444's `/xr`: AR, VR right after AR, Chroma off, Fullscreen).
+
 **Build 444 (1.3.1):** `/xr` **Enter AR** is 3D: each eye gets its own SBS half (eye layers 1/2, as in Enter VR); the page's **3D in AR** box off = the old mono AR. The `/xr` engine (`xr-components.js`, `aframe.min.js` + license) now comes from the shared **quest_tools** repo (`quest_tools\xr`, also used by 3d_playlist_local's PC XR page): the files in `Resources` are a generated copy (`quest_tools\xr\Sync-QuestXrEngine.ps1`; `deploy.ps1` stops on a stale or uncommitted copy). The engine also handles fisheye 180 / flat projections (unused here) and Matroska AV1.
 
 **Build 443 (1.3.1):** LAN requests need an IP, localhost, .local or single-label Host, or the saved tunnel host (blocks DNS rebinding; else 421). Vanilla download path escaped on the LAN page.
@@ -592,7 +594,7 @@ Earlier builds labeled these **Arc** / **Dist**, then **Zoom**. Gemini-style uni
 
 **AR/VR exit vs flat playback:** immersive and the flat player share one `#chroma-stream` `<video>`. Leaving AR/VR suspends the AV1 blit and defers RT dispose. After an AV1 blit in the session (`sawAv1Tex`), exit **pauses** and keeps flat on the **canvas** path — a poisoned VideoTexture was killing Quest Browser on exit. Otherwise exit does not pause, so flat keeps playing. **Files** (home overlay) hard-stops (`pause` + clear `src`). Tip: pause in AR before exit on heavy AV1 when you can.
 
-**Quest VR SBS:** **Enter VR** puts the left dome on layer 1 and the right dome on layer 2 (build 406+). **Enter AR** does the same since build 444 (**3D in AR** off = mono, left half both eyes). Build 345 had kept AR mono because layers 1/2 blanked Quest AR video while the code still edited the XR cameras by hand; build 406 stopped that, and 3D AR was tested on Quest 3 (2026-11-22, through 3d_playlist_local's copy of the same engine).
+**Quest VR SBS:** **Enter VR** puts the left dome on layer 1 and the right dome on layer 2 (build 406+). **Enter AR** does the same since build 444 (**SBS 3D** off = one picture to both eyes, in VR and AR). Build 345 had kept AR mono because layers 1/2 blanked Quest AR video while the code still edited the XR cameras by hand; build 406 stopped that, and 3D AR was tested on Quest 3 (2026-11-22: 3d_playlist_local's PC XR page and this app's build 444 `/xr`).
 
 **`/xr` debug:** the page POSTs a ring buffer to **`/xr_debug.json`** (LAN login, build 424+) (also under monitor quick links). `GET /xr_debug.json` returns `{ lines, snapshot }`. Skill: `.cursor/skills/xr-debug/`.
 
