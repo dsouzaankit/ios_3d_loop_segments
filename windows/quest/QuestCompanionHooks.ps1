@@ -163,6 +163,9 @@ function Invoke-QuestControlRegister {
     $p = [System.Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEndAsync()
     if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill($true) } catch {}; return $null }
+    # Never block startup on the pipe: a grandchild that inherited it (an older quest_tools started
+    # the page host that way) keeps it open after the child exits, and .Result would wait forever.
+    if (-not $out.Wait(3000)) { Write-Warning '[quest] control page registration: output not closed - continuing'; return $null }
     $line = ($out.Result -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
     if ($line) { try { return ($line | ConvertFrom-Json) } catch {} }
     return $null
