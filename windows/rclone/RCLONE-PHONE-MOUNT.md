@@ -8,19 +8,6 @@ For **Quest Skybox**, companion prefers **`rclone serve dlna`** (`Serve-LoopSegm
 
 **If Explorer freezes after the phone LAN goes down:** the mount script **polls** `status.json` and **kills rclone + exits** after ~60s unreachable (override with `-LanDownSeconds` / `-LanPollSeconds`, or `-NoLanWatch`). rclone writes **`%TEMP%\loopsegments-rclone-mount.log`** (local disk — it cannot create the log on pCloud `P:`). On quit/abort/next start that file is copied to **`windows\rclone\loopsegments-rclone-mount.log`**. Manual escape: double-click **`Unstick-PhoneL.cmd`** (or `.\Mount-LoopSegmentsRclone.ps1 -Unstick`) to kill the mount and restart Explorer. If Explorer is already wedged, use **Task Manager → File → Run new task** and paste the full path to `Unstick-PhoneL.cmd`.
 
-### Explorer frozen on L: but the mount is still alive
-
-Browsing **L:** in Explorer (thumbnails / This PC) while something else is hammering the VFS — e.g. **[3d_playlist_local](https://github.com/dsouzaankit/3d_playlist_local)** hybrid/flat reading `L:\archive\…` through AviSynth DirectShowSource + ffmpeg `-readrate` — can freeze the Explorer window even though the letter still works from a shell.
-
-**Do not browse L: in Explorer while a batch encodes from it.**
-
-| Symptom | Meaning | Fix |
-|--------|---------|-----|
-| Explorer wedged on L:; shell `Get-ChildItem L:\` still returns quickly | Explorer-only wedge | `.\Restart-ExplorerShell.ps1` — restarts Explorer only, leaves rclone + encode jobs running, then probes `L:\` |
-| Shell list of `L:\` also hangs / times out | Mount itself is dead or wedged | `Unstick-PhoneL.cmd` / `.\Mount-LoopSegmentsRclone.ps1 -Unstick` (kills rclone + restarts Explorer), then remount |
-
-While L: is wedged mid-read, consumers writing paced wrap-2 leaves (e.g. `3d_playlist_local` under `%AppData%\3d_playlist_local` / dummy **M:**, played on PC or Quest **WebXR**) can look **torn/hazy** — those are mid-stall / mid-write slots, not a soft encode. A finished ~60s leaf after L: recovers should look sharp again. ffmpeg often logs `Resumed reading ... after a lag of Ns` for the stall.
-
 ## Setup (portable across PCs)
 
 1. **WinFsp** — required for `rclone mount` on Windows ([winfsp.dev](https://winfsp.dev/)).
@@ -93,7 +80,6 @@ They are still reachable from the network: SKYBOX's backend (`airscreen-backend.
 | **`Serve-LoopSegmentsRcloneDlna.ps1`** | **Quest path** — `rclone serve dlna` over phone WebDAV (`-Remove`, `-TestOnly`, `-Quick`, `-Hidden`, LAN watch). Companion uses `-Hidden` (no console). |
 | **`Serve-PhoneDlna.cmd`** | Day-to-day launcher → DLNA serve script |
 | **`Unstick-PhoneL.cmd`** | Kill dead phone mount + restart Explorer |
-| **`Restart-ExplorerShell.ps1`** | Restart Explorer only (leave L: rclone mount running); probes `L:\` |
 | **`%TEMP%\loopsegments-rclone-mount.log`** | live rclone mount log (Temp; copied to `windows\rclone\` on quit) |
 | **`%TEMP%\loopsegments-rclone-dlna.log`** | live rclone DLNA serve log |
 | **`../setup/Set-LoopSegmentsWindows.ps1`** | Per-PC json (IP, drive letter, rclone paths) |

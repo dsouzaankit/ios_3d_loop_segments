@@ -222,8 +222,6 @@ Optional args: **`rclone\Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestO
 
 **Explorer frozen after LAN dies:** wait for auto-unmount, or run **`rclone\Unstick-PhoneL.cmd`** (kills mount + restarts Explorer). If Explorer is already wedged: Task Manager → File → Run new task → full path to `Unstick-PhoneL.cmd`.
 
-**Explorer frozen on L: but mount still alive** (shell can list `L:\`): **`rclone\Restart-ExplorerShell.ps1`** — Explorer only; leaves rclone + encode jobs running. Details / mid-stall wrap haze: **[rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md)**.
-
 ## Multiple iPhones — unified LAN listing
 
 Each phone runs its own LAN server on **`http://<phone-ip>:8765/`**. To browse **all** phones from one place on the PC:
@@ -366,7 +364,6 @@ Reports MB transferred and Mbps (default caps at **64 MB**), then recommends a *
 | `rclone\Mount-PhoneL.cmd` | **Day-to-day** launcher → `Mount-LoopSegmentsRclone.ps1` |
 | `rclone\Serve-PhoneDlna.cmd` | **Day-to-day** launcher → `Serve-LoopSegmentsRcloneDlna.ps1` (Quest Network) |
 | `rclone\Unstick-PhoneL.cmd` | Kill dead phone mount + restart Explorer |
-| `rclone\Restart-ExplorerShell.ps1` | Restart Explorer only (leave L: mount running); probes `L:\` — see [rclone/RCLONE-PHONE-MOUNT.md](rclone/RCLONE-PHONE-MOUNT.md) |
 | `rclone\Mount-LoopSegmentsRclone.ps1` | **`-TestOnly`** / mount / **`-Remove`** / **`-Unstick`** / **`-Quick`** / LAN watch / **`-RemovePort80Proxy`** |
 | `rclone\Serve-LoopSegmentsRcloneDlna.ps1` | **`-TestOnly`** / `rclone serve dlna` / **`-Remove`** / **`-Quick`** / **`-Hidden`** (companion default) / LAN watch |
 | `%TEMP%\loopsegments-rclone-mount.log` | live rclone mount log (copied to `rclone\loopsegments-rclone-mount.log` on quit) |
