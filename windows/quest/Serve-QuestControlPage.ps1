@@ -14,7 +14,7 @@
     Clear  : remove every SKYBOX server this PC added
   Each runs quest\Watch-LoopSegmentsQuestLanTab.ps1 in the background; the page polls /status.json.
 
-  Playback Control: Space presses Space in the 3d_playlist_local workflow's PowerShell window (pause / resume the leaf
+  Session Control: Space presses Space in the 3d_playlist_local workflow's PowerShell window (pause / resume the leaf
   export); End session runs 3d_playlist_local's Invoke-PlaylistLocalQuestShutdown.ps1 in the background (force-stop the
   Quest apps reading the workflow output and the configured players, Enter in the workflow window,
   Quest Browser tabs / history, sensor back on, Quest Wi-Fi off, then make sure the window exits).
@@ -583,7 +583,7 @@ $script:PageHtml = @'
       <p class="note">Push adds "Loop Segments" to SKYBOX's Network list at the phone's current address with the current login (and removes older addresses). Update does the same only if it is already there. Clear removes it. SKYBOX restarts if it is open when the server changes; it is also removed when the companion quits.</p>
     </section>
     <section>
-      <h2>Playback Control</h2>
+      <h2>Session Control</h2>
       <div class="buttons">
         <button id="plSpace" class="primary">Space: pause / resume export</button>
         <span id="plState" class="pstate" role="status" aria-live="polite"></span>
