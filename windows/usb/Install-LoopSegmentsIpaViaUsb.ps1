@@ -465,7 +465,7 @@ if ($before -and [int]$before -lt 428) {
 $phoneHost = ([string](Get-LoopSegmentsWindowsSettings).phoneLanHost).Trim()
 if (-not $phoneHost) { Write-Inst 'phoneLanHost is empty in loop-segments-windows.json.' Red; exit 2 }
 # SideStore signs over Wi-Fi www, which the phone LAN Wi-Fi does not give (no gateway on purpose),
-# so the phone AND this PC go to another Wi-Fi for the install. They stay there: the web companion's
+# so the phone AND this PC go to another Wi-Fi for the install. They stay there: the PC companion's
 # start-up network check moves both back to the phone LAN.
 $phoneIp = Move-PhoneOffPhoneLan $phoneHost
 if (-not $phoneIp) { Write-Inst 'The phone is not on a Wi-Fi off the phone LAN, so SideStore could not sign the app there.' Red; exit 2 }

@@ -31,7 +31,7 @@
 
 .PARAMETER Quick
   Skip the slow pre-mount "rclone ls" WebDAV listing (HTTP status.json + remote config only).
-  Used by the web companion so L: appears sooner; full -TestOnly still runs the ls check.
+  Used by the PC companion so L: appears sooner; full -TestOnly still runs the ls check.
 
 .PARAMETER LanPollSeconds
   While mounted, probe phone LAN this often (default 15). Ignored with -NoLanWatch.

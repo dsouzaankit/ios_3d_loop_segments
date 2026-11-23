@@ -457,8 +457,8 @@ function Sync-LanConfigFromLoopSegments {
         $password = [string]$settings.webdavPassword
     }
 
-    # Quest control page (quest\Serve-QuestControlPage.ps1): the PC LAN page's "Quest control" button
-    # opens it on 127.0.0.1 and the extension answers its login. Same login the server checks:
+    # Quest control page (quest\Serve-QuestControlPage.ps1): Open on Quest opens it on 127.0.0.1
+    # next to the LAN tab and the extension answers its login. Same login the server checks:
     # webdavUser + this phone's phoneLanHosts[].webdavPassword, else webdavPassword.
     $controlPage = $true
     $controlPort = 18766

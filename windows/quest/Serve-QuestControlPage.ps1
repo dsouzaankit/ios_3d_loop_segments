@@ -14,8 +14,8 @@
     Clear  : remove every SKYBOX server this PC added
   Each runs quest\Watch-LoopSegmentsQuestLanTab.ps1 in the background; the page polls /status.json.
 
-  3d_playlist_local: Space presses Space in the workflow's PowerShell window (pause / resume the leaf
-  export); Enter runs 3d_playlist_local's Invoke-PlaylistLocalQuestShutdown.ps1 in the background (force-stop the
+  Playback Control: Space presses Space in the 3d_playlist_local workflow's PowerShell window (pause / resume the leaf
+  export); End session runs 3d_playlist_local's Invoke-PlaylistLocalQuestShutdown.ps1 in the background (force-stop the
   Quest apps reading the workflow output and the configured players, Enter in the workflow window,
   Quest Browser tabs / history, sensor back on, Quest Wi-Fi off, then make sure the window exits).
   Also started without the companion by a 3d_playlist_local workflow
@@ -583,7 +583,7 @@ $script:PageHtml = @'
       <p class="note">Push adds "Loop Segments" to SKYBOX's Network list at the phone's current address with the current login (and removes older addresses). Update does the same only if it is already there. Clear removes it. SKYBOX restarts if it is open when the server changes; it is also removed when the companion quits.</p>
     </section>
     <section>
-      <h2>3d_playlist_local</h2>
+      <h2>Playback Control</h2>
       <div class="buttons">
         <button id="plSpace" class="primary">Space: pause / resume export</button>
         <span id="plState" class="pstate" role="status" aria-live="polite"></span>
@@ -593,7 +593,7 @@ $script:PageHtml = @'
       <div id="plMsg" class="msg" role="status" aria-live="polite"></div>
       <pre id="plStop" hidden></pre>
       <p class="note">Space presses Space once in the 3d_playlist_local PowerShell window on the PC (run_batch_*.ps1 / Run-TranscodeOrchestrator.ps1), the same as pressing it there: while a clip runs it pauses or resumes the leaf DLNA export. The window does not need focus.</p>
-      <p class="note">End session stops whatever is running, in this order, and skips what is not: force-stops the Quest apps reading the segments and the configured players (SKYBOX); presses Enter in every 3d_playlist_local window and waits for it to exit (killed after a few minutes); closes the Loop Segments companion's Chromium, so its normal quit runs (Quest tabs, history, SKYBOX, sensor, Wi-Fi off, the phone mount, iPhone Home). Without the companion it cleans up the headset itself: closes these tabs, deletes their history, turns the sensor back on, switches the Wi-Fi off. The Quest history is deleted once either way.</p>
+      <p class="note">End session stops whatever is running, in this order, and skips what is not: force-stops the Quest apps reading the segments and the configured players (SKYBOX); presses Enter in every 3d_playlist_local window and waits for it to exit (killed after a few minutes); closes the Loop Segments PC companion's Chromium, so its normal quit runs (Quest tabs, history, SKYBOX, sensor, Wi-Fi off, the phone mount, iPhone Home). Without the companion it cleans up the headset itself: closes these tabs, deletes their history, turns the sensor back on, switches the Wi-Fi off. The Quest history is deleted once either way.</p>
     </section>
   </div>
 

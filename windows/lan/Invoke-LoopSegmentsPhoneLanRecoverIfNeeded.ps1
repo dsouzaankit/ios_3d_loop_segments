@@ -8,7 +8,7 @@
   Prefers USB/pcapd via env_setup\lan\Invoke-PhonePcSubnetIfNeeded.ps1
   (pymobiledevice3 phone Wi-Fi IP vs this PC's LAN). If the phone is already on a PC subnet,
   does a short :8765 probe (default 5 s — Wi-Fi is already right). If :8765 is still down,
-  USB-launches Loop Segments briefly (like the web companion), waits for the LAN page, then
+  USB-launches Loop Segments briefly (like the PC companion), waits for the LAN page, then
   USB Home backgrounds the app again so Keep Alive can hold :8765. Does not reboot routers
   just because the app was down.
 

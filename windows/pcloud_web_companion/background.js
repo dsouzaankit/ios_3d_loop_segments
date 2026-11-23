@@ -246,7 +246,7 @@ chrome.webRequest.onAuthRequired.addListener(
         const asked = new URL(details.url);
         let password = "";
         if (asked.host === new URL(lanBaseUrl(cfg)).host) password = cfg.webdavPassword;
-        // The Quest control page on this PC, opened by the LAN page's "Quest control" button.
+        // The Quest control page on this PC, opened alongside Open on Quest.
         else if (asked.host === new URL(questControlUrl(cfg)).host) password = cfg.questControlPassword;
         if (!password) {
           callback({});
@@ -3264,10 +3264,13 @@ async function questOpenFetch(method, body) {
   return payload;
 }
 
-/** Ask the companion sink to run adb once, then wait for it to finish. */
+/** Ask the companion sink to run adb once, then wait for it to finish.
+ *  Also opens the Quest control page in this Chromium next to the LAN tab (LAN stays in front). */
 async function openLanPageOnQuest(sender) {
   const url = questOpenUrlFromSender(sender);
   if (!url) return { ok: false, message: "Not a private-LAN http:// page." };
+  // Open the control page alongside first so it is there while adb may still be waiting.
+  const control = await openQuestControlPage(sender, { activate: false });
   try {
     let st = await questOpenFetch("POST", { url });
     const deadline = Date.now() + QUEST_OPEN_TIMEOUT_MS;
@@ -3278,6 +3281,9 @@ async function openLanPageOnQuest(sender) {
     }
     if (st?.state === "queued") {
       // Headset asleep / off adb: the companion keeps trying and opens it when the headset wakes.
+      if (!control?.ok && control?.message) {
+        return { ...st, message: `${st.message || "Queued."} (Quest control: ${control.message})` };
+      }
       return st;
     }
     if (st?.state === "running") {
@@ -3291,14 +3297,22 @@ async function openLanPageOnQuest(sender) {
       message: st?.message || st?.detail || "",
       silent: true,
     });
+    if (st?.ok && !control?.ok && control?.message) {
+      return {
+        ...st,
+        message: `${st.message || "Opened on Quest."} (Quest control: ${control.message})`,
+      };
+    }
     return st;
   } catch (err) {
     return { ok: false, message: openExplorerFetchErrorMessage(err) };
   }
 }
 
-/** Open (or bring forward) the Quest control page in this Chromium, next to the LAN tab. */
-async function openQuestControlPage(sender) {
+/** Open (or bring forward) the Quest control page in this Chromium, next to the LAN tab.
+ *  @param {{ activate?: boolean }} [opts] activate=false keeps the LAN tab in front (Open on Quest). */
+async function openQuestControlPage(sender, opts = {}) {
+  const activate = opts.activate !== false;
   let cfg;
   try {
     cfg = await loadLanConfig();
@@ -3324,11 +3338,14 @@ async function openQuestControlPage(sender) {
   }
   const open = await chrome.tabs.query({ url: `${url}*` });
   if (open.length) {
-    await chrome.tabs.update(open[0].id, { active: true });
-    if (open[0].windowId !== undefined) await chrome.windows.update(open[0].windowId, { focused: true });
-    return { ok: true, message: "Quest control page is open (switched to its tab)." };
+    if (activate) {
+      await chrome.tabs.update(open[0].id, { active: true });
+      if (open[0].windowId !== undefined) await chrome.windows.update(open[0].windowId, { focused: true });
+      return { ok: true, message: "Quest control page is open (switched to its tab)." };
+    }
+    return { ok: true, message: "Quest control page is already open." };
   }
-  const props = { url, active: true };
+  const props = { url, active: activate };
   if (sender?.tab) {
     props.index = sender.tab.index + 1;
     props.windowId = sender.tab.windowId;
@@ -3339,10 +3356,6 @@ async function openQuestControlPage(sender) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "quest-open-control-page") {
-    void (async () => sendResponse(await openQuestControlPage(sender)))();
-    return true;
-  }
   if (message?.type === "quest-open-lan-tab") {
     void (async () => sendResponse(await openLanPageOnQuest(sender)))();
     return true;
