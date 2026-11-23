@@ -76,25 +76,16 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questCloseLanTabsOnExit = $true
         # Companion session: hold the Quest proximity sensor off (headset stays awake and on adb), turn it back on at cleanup.
         questKeepAwakeDuringSession = $true
-        # Quest control page (quest\Serve-QuestControlPage.ps1) on this PC's LAN address, signed in with the phone LAN login.
+        # This repo's tiles (quest\LoopSegmentsControlTiles.ps1) on the shared Quest control page that quest_tools
+        # hosts on this PC's LAN address (QuestControlHost.ps1); the phone LAN login also signs in to it.
         questControlPage        = $true
         questControlPort        = 18766
         # Open on Quest also opens the control page in its own Quest Browser tab.
         questControlPageOnQuest = $true
         # Control page SKYBOX Push / Update / Clear buttons, and removal of the server at companion close.
         questSkyboxWebDav       = $true
-        # 3d_playlist_local workflows (run_batch_vr_hybrid / run_batch_fisheye_v360 / Run-TranscodeOrchestrator):
-        # at start, hold the proximity sensor off and push the control page to the headset
-        # (3d_playlist_local\individual_transcode\quest\Start-PlaylistLocalQuestSession.ps1); the page's
-        # End session button runs Invoke-PlaylistLocalQuestShutdown.ps1 there.
-        questPlaylistSession    = $true
-        # Minutes the workflow start waits for an asleep / off-adb headset before giving up on opening the page;
-        # 0 = until the workflow ends (its Wi-Fi is usually off at a workflow start). Checked every 5 s.
-        questPlaylistOpenWaitMinutes = 0
-        # Enter button: extra Quest Browser history origins to delete ({pc} = this PC's address), e.g. 'http://{pc}:8200'.
-        questPlaylistHistoryOrigins = @()
-        # Enter button: seconds the workflow window gets to exit after Enter before it is killed (0 = never kill).
-        questPlaylistEnterExitSec = 180
+        # (3d_playlist_local's Quest session settings live in that repo: individual_transcode\quest\playlist-quest.json;
+        # it still reads older questPlaylist* keys from this file when they are set.)
         webdavUser              = 'admin'
         webdavPassword          = ''
         iCloudDownloads         = ''

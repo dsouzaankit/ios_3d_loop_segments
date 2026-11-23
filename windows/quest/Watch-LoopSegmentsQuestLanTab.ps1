@@ -62,8 +62,6 @@
                    would wake it); it gets the override once someone puts it on. Re-applies after a headset reboot. Never re-enables
                    the sensor itself (the companion's cleanup does, after clearing history).
 
-  -OpenControlPage : 3d_playlist_local workflow start: wait (-WaitMinutes) for an awake headset and open
-                   only the Quest control page, signed in (ignores questControlPageOnQuest).
   -KeepAwakeSession -RestoreProximity : as -KeepAwakeSession, and turn the sensor back on once -ParentPid exits.
 
   Without a mode switch it opens the page once, like -Once (there is no keep-watching mode).
@@ -156,9 +154,6 @@ param(
     [switch] $ClearSkyboxWebDav,
     # The companion's lan_config.json: phone address for the SKYBOX steps (re-read every poll).
     [string] $LanConfig = '',
-    # 3d_playlist_local workflow start: open only the Quest control page (signed in), waiting up to
-    # -WaitMinutes for the headset to be awake. Ignores questControlPageOnQuest.
-    [switch] $OpenControlPage,
     # Opening a page: owner name it is registered under in quest_tools' shared origin list
     # (%TEMP%\quest-browser-origins.json), which every -ClearHistory also closes and deletes.
     [string] $Owner = 'loopsegments',
@@ -386,13 +381,9 @@ function Invoke-QuestFlagSync {
     } finally { Close-QuestDevTools }
 }
 
-# ---- Quest control page (quest\Serve-QuestControlPage.ps1, on this PC) ----
-
-function Get-QuestControlPort {
-    $p = 18766
-    try { if ($script:Cfg -and [int]$script:Cfg.questControlPort -gt 0) { $p = [int]$script:Cfg.questControlPort } } catch {}
-    return $p
-}
+# ---- Quest control page (quest_tools QuestControlHost.ps1 on this PC; this repo's tiles:
+# LoopSegmentsControlTiles.ps1). Get-QuestControlPort / Get-QuestControlToken / Get-QuestControlHost
+# are quest_tools' (lib\QuestControl.ps1). ----
 
 # This PC's IPv4 address on the route to the headset (quest_tools Get-QuestPcAddress): the address the
 # Quest reaches the control page on. A USB serial has no address, so the route to questAdbHost, else
@@ -438,18 +429,15 @@ function Get-QuestControlOrigins {
     return @(@(Get-QuestControlOrigin -DeviceSerial $DeviceSerial) + @(Get-QuestSavedControlOrigins) | Where-Object { $_ } | Select-Object -Unique)
 }
 
-# Is the companion's control page server running? (it writes %TEMP%\loopsegments-quest-control.json)
-function Test-QuestControlPageRunning {
-    $state = Join-Path $env:TEMP 'loopsegments-quest-control.json'
-    if (-not (Test-Path -LiteralPath $state)) { return $false }
-    try { $c = Get-Content -LiteralPath $state -Raw | ConvertFrom-Json; return [bool](Get-Process -Id ([int]$c.pid) -ErrorAction SilentlyContinue) } catch { return $false }
-}
+# Is the control page host running on this PC?
+function Test-QuestControlPageRunning { return [bool](Get-QuestControlHost) }
 
-# Open on Quest: also open the control page in its own normal tab, signed in with the LAN login
-# (reused if already open). Needs an open DevTools session. Never fails the LAN page.
+# Open on Quest: also open the control page in its own normal tab, signed in with the page's token
+# link (/s?t=, swapped for a cookie; reused if already open). Needs an open DevTools session. Never
+# fails the LAN page.
 $script:ControlTabOpened = $false
 function Open-QuestControlTab {
-    # -Force: open even with questControlPageOnQuest=false (-OpenControlPage). Sets $script:ControlTabOpened.
+    # -Force: open even with questControlPageOnQuest=false. Sets $script:ControlTabOpened.
     param([string] $DeviceSerial, [switch] $Force)
     $script:ControlTabOpened = $false
     if (-not $Force -and $script:Cfg -and $script:Cfg.Contains('questControlPageOnQuest') -and $script:Cfg.questControlPageOnQuest -eq $false) { return }
@@ -457,15 +445,7 @@ function Open-QuestControlTab {
     $origin = Get-QuestControlOrigin -DeviceSerial $DeviceSerial
     if (-not $origin) { Write-QuestLog 'Control page: no PC address on the route to the headset - not opened.'; return }
     $plain = "$origin/"
-    $loginUrl = $plain
-    if ($script:SendLanLogin) {
-        try {
-            $l = Get-QuestLanLogin
-            if (-not [string]::IsNullOrEmpty($l.Password)) {
-                $loginUrl = ('http://{0}:{1}@{2}/' -f [Uri]::EscapeDataString($l.User), [Uri]::EscapeDataString($l.Password), ([Uri]$plain).Authority)
-            }
-        } catch {}
-    }
+    $loginUrl = '{0}/s?t={1}' -f $origin, (Get-QuestControlToken)
     try {
         # Keep-awake may have the notifications list open (proximity OFF toast); bring the browser
         # forward so the VIEW intent is not dropped behind that UI.
@@ -475,7 +455,7 @@ function Open-QuestControlTab {
             Write-QuestLog "Control page: opened $plain in Quest browser ($which)."
             $script:ControlTabOpened = $true
             Add-QuestSavedControlOrigin -Origin $origin
-            Register-QuestBrowserOrigin -Origin $origin -Owner 'loopsegments-control'
+            Register-QuestBrowserOrigin -Origin $origin -Owner 'quest-control'
         } else {
             # VIEW can fail to open a tab, or the tab can open on chrome-error (firewall / server down).
             $haveTab = @(Get-QuestLanTabs -Origins @($origin)).Count -gt 0
@@ -678,52 +658,12 @@ function Get-QuestHistoryFallbackRange {
     return $fbRange
 }
 
-# ---- 3d_playlist_local workflow session (3d_playlist_local\individual_transcode\quest: Start-PlaylistLocalQuestSession.ps1 / Invoke-PlaylistLocalQuestShutdown.ps1) ----
-
-# -OpenControlPage: wait (up to -WaitMinutes) for an awake headset, then open the control page in
-# its own signed-in tab. 0 opened, 1 headset not awake in time, 3 failed.
-function Invoke-QuestOpenControlPageOnly {
-    # -WaitMinutes 0 with -ParentPid: no time limit, keep waiting until the workflow ends (the headset's
-    # Wi-Fi is usually off at a workflow start: the last cleanup switched it off).
-    $w = Wait-QuestHeadsetAwake -WaitMinutes $WaitMinutes -ParentPid $ParentPid -PollSeconds $PollSeconds -Label 'Control page only: ' `
-        -OnStatus { param($s) Set-QuestOpenStatus $s }
-    if ($w.Reason -eq 'parent') { Set-QuestOpenStatus 'cancelled'; return 1 }
-    if (-not $w.Serial) { Set-QuestOpenStatus 'unreachable'; return 1 }
-    $dev = $w.Serial
-    # The workflow start launches the server a moment before this.
-    $t0 = [DateTime]::UtcNow
-    while (-not (Test-QuestControlPageRunning) -and ([DateTime]::UtcNow - $t0).TotalSeconds -lt 15) { Start-Sleep -Seconds 1 }
-    Set-QuestOpenStatus 'opening'
-    Save-QuestBrowserOurs -DeviceSerial $dev
-    if (-not (Open-QuestDevTools -DeviceSerial $dev)) { Write-QuestLog 'Control page only: no DevTools connection to Quest Browser.'; Set-QuestOpenStatus 'failed'; return 3 }
-    try { Open-QuestControlTab -DeviceSerial $dev -Force } finally { Close-QuestDevTools }
-    if ($script:ControlTabOpened) { Set-QuestOpenStatus 'opened'; return 0 }
-    Set-QuestOpenStatus 'failed'
-    return 3
-}
-
-# questPlaylistHistoryOrigins (config), with {pc} replaced by this PC's address.
-function Get-QuestConfigOrigins {
-    param([string] $DeviceSerial)
-    $raw = @()
-    if ($script:Cfg -and $script:Cfg.Contains('questPlaylistHistoryOrigins') -and $null -ne $script:Cfg.questPlaylistHistoryOrigins) {
-        $raw += @(@($script:Cfg.questPlaylistHistoryOrigins) | ForEach-Object { [string]$_ })
-    }
-    $raw = @($raw | Where-Object { $_ -and $_.Trim() })
-    if (-not $raw.Count) { return @() }
-    $pc = Get-QuestControlPcAddress -DeviceSerial $DeviceSerial
-    return @($raw | ForEach-Object {
-            $o = ([string]$_).Trim().TrimEnd('/')
-            if ($o -like '*{pc}*') { if ($pc) { $o.Replace('{pc}', $pc) } } else { $o }
-        } | Where-Object { $_ })
-}
-
-# Every origin a -ClearHistory closes and deletes: the phone LAN page, the control page,
-# questPlaylistHistoryOrigins, and every origin any project registered in quest_tools' shared list
-# (QuestOrigins.ps1), e.g. the 3d_playlist_local XR page.
+# Every origin a -ClearHistory closes and deletes: the phone LAN page, the control page, and every
+# origin any project registered in quest_tools' shared list (QuestOrigins.ps1), e.g. the
+# 3d_playlist_local XR page and its extra history origins.
 function Get-QuestCleanupOrigins {
     param([string] $DeviceSerial)
-    return @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial $DeviceSerial) + @(Get-QuestConfigOrigins -DeviceSerial $DeviceSerial) +
+    return @(@(Get-QuestLanOrigins) + @(Get-QuestControlOrigins -DeviceSerial $DeviceSerial) +
         @(Get-QuestRegisteredOrigins) | Where-Object { $_ } | ForEach-Object { ([string]$_).TrimEnd('/') } | Select-Object -Unique)
 }
 
@@ -745,7 +685,6 @@ if ($WifiOff) {
     if ($w -eq 'off') { exit 0 } else { exit 3 }
 }
 if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession -ParentPid $ParentPid -RestoreProximity:$RestoreProximity) }
-if ($OpenControlPage) { exit (Invoke-QuestOpenControlPageOnly) }
 if ($SkyboxPush -or $SkyboxUpdate) {
     $res = Invoke-QuestSkyboxWebDavPush -OnlyIfPresent:$SkyboxUpdate
     Set-QuestOpenStatus $res
@@ -917,8 +856,7 @@ if ($EnsureFlags -or $ClearHistory) {
         $browserRes = 'kept'
         if ($CloseLanTabs -or -not $SkipHistoryClear) {
             # quest_tools Invoke-QuestBrowserCleanup, one DevTools session: tabs on our pages (phone LAN
-            # page, control page on this PC, questPlaylistHistoryOrigins, plus the shared
-            # origin list: every project's pages), the history delete within ~28 s of start, then the
+            # page, control page on this PC, plus the shared origin list: every project's pages), the history delete within ~28 s of start, then the
             # browser closed when only empty pages are left. Usually nobody is wearing the headset at
             # quit, and then Quest Browser does not answer: the delete goes to the after-quit helper.
             $script:CleanupCloseBrowser = $closeBrowser

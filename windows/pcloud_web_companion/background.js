@@ -214,7 +214,7 @@ async function loadLanConfig() {
     lanPort: Number(cfg.lanPort) > 0 ? Number(cfg.lanPort) : 8765,
     webdavUser: String(cfg.webdavUser || "admin"),
     webdavPassword: String(cfg.webdavPassword || ""),
-    // Quest control page on this PC (quest\Serve-QuestControlPage.ps1); older lan_config.json
+    // Quest control page on this PC (quest_tools QuestControlHost.ps1); older lan_config.json
     // files have none of these.
     questControlPage: cfg.questControlPage !== false,
     questControlPort: Number(cfg.questControlPort) > 0 ? Number(cfg.questControlPort) : 18766,

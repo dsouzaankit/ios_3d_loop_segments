@@ -457,8 +457,9 @@ function Sync-LanConfigFromLoopSegments {
         $password = [string]$settings.webdavPassword
     }
 
-    # Quest control page (quest\Serve-QuestControlPage.ps1): Open on Quest opens it on 127.0.0.1
-    # next to the LAN tab and the extension answers its login. Same login the server checks:
+    # Quest control page (quest_tools QuestControlHost.ps1, this repo's tiles in
+    # quest\LoopSegmentsControlTiles.ps1): Open on Quest opens it on 127.0.0.1 next to the LAN tab and
+    # the extension answers its login. Same login the tiles give the host:
     # webdavUser + this phone's phoneLanHosts[].webdavPassword, else webdavPassword.
     $controlPage = $true
     $controlPort = 18766
@@ -1820,7 +1821,7 @@ function Invoke-MeasureLanThroughputIfMounted {
         [void]$psArgs.Add("-SkipLowThroughputGatewayReboot")
     }
     [void]$psArgs.Add("-NoWaitEnter")
-    # Shown on the Quest control page (quest\Serve-QuestControlPage.ps1), which can also re-run it.
+    # Shown on the Quest control page (quest\LoopSegmentsControlTiles.ps1), which can also re-run it.
     [void]$psArgs.Add("-ResultFile")
     [void]$psArgs.Add((Join-Path $env:TEMP 'loopsegments-lan-throughput.json'))
 

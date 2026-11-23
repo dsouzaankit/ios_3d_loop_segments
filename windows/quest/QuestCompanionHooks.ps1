@@ -2,9 +2,10 @@
 # _profile_exit_watchdog.ps1). Each hook runs quest\Watch-LoopSegmentsQuestLanTab.ps1 in a
 # hidden pwsh; log lines go to %TEMP%\loopsegments-quest-lantab.log.
 #   startup : -KeepAwakeSession (background, until the companion exits) - questKeepAwakeDuringSession
-#   startup : Serve-QuestControlPage.ps1 (background, until the companion exits): the Quest control
-#             page with SKYBOX Push / Update / Clear - questControlPage / questSkyboxWebDav
-#   close   : stop keep-awake, the control page and any SKYBOX action, then ONE background process: close LAN tabs,
+#   startup : this repo's tiles (LoopSegmentsControlTiles.ps1: SKYBOX Push / Update / Clear, PC <-> phone
+#             LAN) on the shared Quest control page that quest_tools hosts, until the companion exits
+#             - questControlPage / questSkyboxWebDav
+#   close   : stop keep-awake, take the tiles off the page, stop any SKYBOX action, then ONE background process: close LAN tabs,
 #             clear history (~30 s), remove the SKYBOX WebDAV server, proximity sensor on -
 #             questCloseLanTabsOnExit / questClearHistoryOnExit / questSkyboxWebDav /
 #             questKeepAwakeDuringSession. Start-QuestCleanupOnExit starts it, Wait-QuestCleanupOnExit
@@ -131,45 +132,69 @@ function Wait-QuestCleanupOnExit {
     }
 }
 
-# ---- Quest control page (quest\Serve-QuestControlPage.ps1): SKYBOX Push / Update / Clear ----
+# ---- Quest control page: this repo's tiles (quest\LoopSegmentsControlTiles.ps1: SKYBOX Push /
+# Update / Clear, PC <-> phone LAN) on the shared page that quest_tools hosts (QuestControlHost.ps1,
+# port controlPort / questControlPort, default 18766; 3d_playlist_local workflows add theirs) ----
 
-$script:QuestControlProc = $null
 $script:QuestCleanupTimeoutSec = 40
-$script:QuestControlScript = Join-Path $PSScriptRoot 'Serve-QuestControlPage.ps1'
+$script:QuestControlTiles = Join-Path $PSScriptRoot 'LoopSegmentsControlTiles.ps1'
+$script:QuestControlOwner = 'loopsegments'
 
-# Startup: serve the Quest control page on this PC's LAN address (port questControlPort, signed in
-# with the phone LAN login) until the companion exits. Open on Quest opens it on the headset.
+# quest_tools Register-QuestControlTiles.ps1 (the companion does not load quest_tools itself).
+function Get-QuestControlRegisterScript {
+    . (Join-Path $PSScriptRoot 'QuestToolsPath.ps1')
+    if (-not $script:QuestToolsRepo) { return $null }
+    $p = Join-Path $script:QuestToolsRepo 'Register-QuestControlTiles.ps1'
+    if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+    return $null
+}
+
+function Invoke-QuestControlRegister {
+    param([string[]] $Arguments, [int] $TimeoutSec = 20)
+    $script = Get-QuestControlRegisterScript
+    if (-not $script) { Write-Warning '[quest] quest_tools Register-QuestControlTiles.ps1 not found (set QUEST_TOOLS_REPO) - no control page.'; return $null }
+    $pwsh = if (Get-Command Get-LoopSegmentsPwshExe -ErrorAction SilentlyContinue) { Get-LoopSegmentsPwshExe } else { (Get-Process -Id $PID).Path }
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $pwsh
+    foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script) + $Arguments) { [void]$psi.ArgumentList.Add($a) }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEndAsync()
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill($true) } catch {}; return $null }
+    $line = ($out.Result -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
+    if ($line) { try { return ($line | ConvertFrom-Json) } catch {} }
+    return $null
+}
+
+# Startup: add this repo's tiles to the Quest control page until the companion exits (the host
+# starts if none runs). Open on Quest opens the page on the headset.
 function Start-QuestControlPageInBackground {
     param([string] $ExtensionDir, [int] $CompanionPid = $PID)
     if (-not (Get-QuestCompanionSetting -Name 'questControlPage')) {
         Write-Host '[quest] Quest control page off (questControlPage=false)'
         return
     }
-    if (-not (Test-Path -LiteralPath $script:QuestControlScript)) { return }
-    Stop-QuestControlPage
-    $port = 18766
-    try { $p = [int](Get-LoopSegmentsWindowsSettings).questControlPort; if ($p -gt 0) { $port = $p } } catch {}
+    if (-not (Test-Path -LiteralPath $script:QuestControlTiles)) { return }
     try {
-        $pwsh = if (Get-Command Get-LoopSegmentsPwshExe -ErrorAction SilentlyContinue) { Get-LoopSegmentsPwshExe } else { (Get-Process -Id $PID).Path }
-        $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = $pwsh
-        foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script:QuestControlScript,
-                '-Port', "$port", '-LanConfig', (Join-Path $ExtensionDir 'lan_config.json'), '-CompanionPid', "$CompanionPid")) { [void]$psi.ArgumentList.Add($a) }
-        $psi.UseShellExecute = $false
-        $psi.CreateNoWindow = $true
-        $script:QuestControlProc = [System.Diagnostics.Process]::Start($psi)
-        Write-Host "[quest] Quest control page on port $port (SKYBOX Push / Update / Clear; opened on the Quest with Open on Quest; PID $($script:QuestControlProc.Id))"
+        $r = Invoke-QuestControlRegister -Arguments @('-Owner', $script:QuestControlOwner, '-OwnerPid', "$CompanionPid", '-Module', $script:QuestControlTiles)
+        if ($r -and $r.ok) {
+            Write-Host "[quest] Quest control page on port $($r.port) (SKYBOX Push / Update / Clear; opened on the Quest with Open on Quest; host PID $($r.pid))"
+        } else {
+            Write-Warning '[quest] Quest control page did not start (see %TEMP%\quest-control-host.log)'
+        }
     } catch {
         Write-Warning "[quest] Could not start the Quest control page: $($_.Exception.Message)"
     }
 }
 
-# Close: stop the control page and any SKYBOX action it started (this session's, or ones left
-# running), whole process trees, so nothing re-adds the server after the cleanup removed it and no
-# adb pull/push keeps writing.
+# Close: take this repo's tiles off the page (the host stops by itself once no project uses it) and
+# stop any SKYBOX action they started (this session's, or ones left running), whole process trees,
+# so nothing re-adds the server after the cleanup removed it and no adb pull/push keeps writing.
 function Stop-QuestControlPage {
+    try { [void](Invoke-QuestControlRegister -Arguments @('-Owner', $script:QuestControlOwner, '-Unregister') -TimeoutSec 10) } catch {}
     $ids = [System.Collections.Generic.List[int]]::new()
-    if ($script:QuestControlProc -and -not $script:QuestControlProc.HasExited) { $ids.Add($script:QuestControlProc.Id) }
     try {
         Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
             Where-Object {
