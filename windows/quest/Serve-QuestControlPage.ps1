@@ -23,7 +23,7 @@
 
   LAN bandwidth (PC -> Quest): on the headset the page downloads GET /speedtest/blob (64 MB) and posts
   bytes + milliseconds to POST /speedtest/result (only recorded from a non-loopback client, i.e. the
-  headset). The result, with the recommended segment bitrate (80% of the measured Mbps, 5-100), goes
+  headset). The result, with the recommended segment bitrate (80% of the measured Mbps, 5-80), goes
   to %TEMP%\loopsegments-quest-lan-throughput.json; 3d_playlist_local's segment encodes read it.
 
   LAN bandwidth (PC <-> phone): Measure LAN runs lan\Measure-LoopSegmentsLanThroughput.ps1 (HTTP,
@@ -390,7 +390,9 @@ function Save-ControlQuestLanResult {
     $mbps = [Math]::Round(($Bytes * 8.0) / ($Ms / 1000.0) / 1e6, 1)
     $rec = [int][Math]::Floor($mbps * 0.8)
     if ($rec -lt 5) { $rec = 5 }
-    if ($rec -gt 100) { $rec = 100 }
+    # 80, not 100: Intel av1_qsv CBR near 100M pads frames but codes them far worse (blocky / hazy
+    # segments). 3d_playlist_local caps at 80 too; keep this tile showing the bitrate actually used.
+    if ($rec -gt 80) { $rec = 80 }
     $o = [ordered]@{
         ok = $true; path = 'pc->quest'; measuredMbps = $mbps; recommendedMaxMediaBitrateMbps = $rec; recommendHeadroom = 0.8
         bytes = $Bytes; seconds = [Math]::Round($Ms / 1000.0, 2); client = $Client; measuredAtUtc = [DateTime]::UtcNow.ToString('o')
@@ -609,7 +611,7 @@ $script:PageHtml = @'
         <button id="qlMeasure" class="primary">Measure PC &rarr; Quest</button>
       </div>
       <div id="qlMsg" class="msg" role="status" aria-live="polite"></div>
-      <p class="note">The headset downloads 64 MB from this PC (the same Wi-Fi path DLNA uses). Runs by itself each time this page opens on the Quest at a 3d_playlist_local workflow start; 3d_playlist_local encodes the next minute segments at 80% of the result (5-100 Mbps). Only the headset can run it.</p>
+      <p class="note">The headset downloads 64 MB from this PC (the same Wi-Fi path DLNA uses). Runs by itself each time this page opens on the Quest at a 3d_playlist_local workflow start; 3d_playlist_local encodes the next minute segments at 80% of the result (5-80 Mbps). Only the headset can run it.</p>
     </section>
     <section>
       <h2>LAN bandwidth: PC &harr; phone</h2>
@@ -720,7 +722,7 @@ $script:PageHtml = @'
     if (q && q.ok) {
       $('qlMbps').textContent = Number(q.measuredMbps).toFixed(1) + ' Mbps (' + (q.bytes / 1048576).toFixed(0) + ' MB in ' + q.seconds + ' s, ' + q.client + ')';
       $('qlMbps').className = 'ok';
-      $('qlRec').textContent = q.recommendedMaxMediaBitrateMbps + ' Mbps (80%, 5-100)';
+      $('qlRec').textContent = q.recommendedMaxMediaBitrateMbps + ' Mbps (80%, 5-80)';
       $('qlAt').textContent = new Date(q.measuredAtUtc).toLocaleString();
     }
     $('qlMeasure').disabled = qlRunning || !onQuest;

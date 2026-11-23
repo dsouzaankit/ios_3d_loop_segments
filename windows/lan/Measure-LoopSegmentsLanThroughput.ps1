@@ -55,7 +55,7 @@ param(
     [ValidateRange(0.1, 1.0)]
     [double] $RecommendHeadroom = 0.8,
     [int] $RecommendMinMbps = 5,
-    [int] $RecommendMaxMbps = 100,
+    [int] $RecommendMaxMbps = 80,   # av1_qsv CBR near 100M codes blocky / hazy segments
     # After measure: if throughput is below this, reboot other routers (not the current gateway), settle, re-check.
     # 0 = use minLanThroughputMbps from loop-segments-windows.json (default 40).
     [double] $LowThroughputMbps = 0,

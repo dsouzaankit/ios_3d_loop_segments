@@ -106,7 +106,7 @@ The server handles one request at a time and only once a connection has sent one
 
 ## LAN bandwidth (PC → Quest), segment bitrate for 3d_playlist_local
 
-The **LAN bandwidth: PC → Quest** tile measures the link 3d_playlist_local's DLNA segments travel. On the headset the page downloads **64 MB** from this PC (`GET /speedtest/blob`, random bytes, timed from the first byte) and posts the bytes and milliseconds back (`POST /speedtest/result`). The server computes the Mbps itself and records it only from a non-loopback client (the PC's own tab gets *run the test from the headset*), in `%TEMP%\loopsegments-quest-lan-throughput.json` with the recommended segment bitrate: **80 % of the measured Mbps, 5-100**, the same rule as the phone sidecars. Logged `QUEST_LAN ...` in `%TEMP%\loopsegments-quest-control.log`.
+The **LAN bandwidth: PC → Quest** tile measures the link 3d_playlist_local's DLNA segments travel. On the headset the page downloads **64 MB** from this PC (`GET /speedtest/blob`, random bytes, timed from the first byte) and posts the bytes and milliseconds back (`POST /speedtest/result`). The server computes the Mbps itself and records it only from a non-loopback client (the PC's own tab gets *run the test from the headset*), in `%TEMP%\loopsegments-quest-lan-throughput.json` with the recommended segment bitrate: **80 % of the measured Mbps, 5-80** (capped at 80: Intel av1_qsv CBR near 100M codes blocky / hazy segments). Logged `QUEST_LAN ...` in `%TEMP%\loopsegments-quest-control.log`.
 
 It runs by itself each time the page opens on the Quest (at every 3d_playlist_local workflow start; skipped when a result under 2 min old exists), and with **Measure PC → Quest** (headset only). Tested: 98.9 Mbps (64 MB in 5.4 s) → 79 Mbps segments, 6 s after the page opened.
 
@@ -120,7 +120,7 @@ The **LAN bandwidth: PC ↔ phone** section shows the last measurement and a **M
 |---|---|
 | **Result** | Mbps of the lower path (`http` or `mount`), green; red with **LOW** when under `minLanThroughputMbps` (default 40), or *failed: ...* with the error |
 | **HTTP / mount** | Each path's Mbps (*not measured* when the mount was not up) |
-| **Max segment bitrate** | The recommended max media bitrate for minute segments (80% of the result, 5-100 Mbps), the same number the probe prints and writes to the phone sidecars when the mount is up |
+| **Max segment bitrate** | The recommended max media bitrate for minute segments (80% of the result, 5-80 Mbps), the same number the probe prints and writes to the phone sidecars when the mount is up |
 | **Measured** | When, in the viewer's local time; notes when Virtual Desktop's streamer was running (it uses ~50 Mbps of the LAN, so the number reads low) |
 
 Unlike the startup probe, a press **never reboots routers** when the result is low (`-SkipLowThroughputGatewayReboot`): only the companion's startup probe does that. The result is kept on the PC in `%TEMP%\loopsegments-lan-throughput.json` (`-ResultFile`; the startup probe writes it too, so the page shows that one until you press the button); the output of the last press is in `%TEMP%\loopsegments-quest-control-lanbw.log`. The phone LAN page's own **LAN speed test** measures the browser ↔ phone path instead (on the Quest: headset ↔ phone).
