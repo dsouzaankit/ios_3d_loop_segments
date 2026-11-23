@@ -4,7 +4,7 @@ The PC companion drives **Quest Browser** over **adb over Wi-Fi** and the browse
 
 | When | What | Setting |
 |------|------|---------|
-| **Open on Quest** click (PC LAN page) | Open the **Quest control page** in its own tab, then the LAN page in a **normal tab, signed in** (in front), then check the flag in that tab (below); on success **POST `/keep_alive.json`** (`action=extend`) to **add 60 min** Keep Alive on the phone (build **440+**) | `questSendLanLogin`, `questIncognito`, `questControlPageOnQuest` |
+| **Open on Quest** click (PC LAN page) | Open the **Quest control page** in its own tab, then the LAN page in a **normal tab, signed in** (in front), then check the flag in that tab (below); on success **POST `/keep_alive.json`** (`action=extend`) to **add 60 min** Keep Alive on the phone (build **440+**) | `questSendLanLogin`, `questControlPageOnQuest` |
 | Companion **startup**, until close | Keep the headset **awake**: proximity sensor held off once the headset is on adb | `questKeepAwakeDuringSession` |
 | Companion **startup**, until close | Serve the **Quest control page** on this PC's LAN address, signed in: **SKYBOX Push / Update / Clear** buttons, **Measure LAN** (PC ↔ phone bandwidth) and **Space** in the 3d_playlist_local window (pause / resume export, with a Playing / Paused badge) | `questControlPage`, `questControlPort`, `questSkyboxWebDav` |
 | Companion **close** (normal finish and the console-X watchdog) | Stop the control page, close Quest Browser **tabs on the phone LAN page, the control page and every other page in quest_tools' shared origin list** (e.g. 3d_playlist_local's XR page), delete their **history entries** and sweep their *Recently closed* items, close Quest Browser itself if Open on Quest started it and no other tabs are left (other history is kept; if nobody is wearing the headset, a background helper does it once you put it on, within 2 h: [After-quit history helper](#after-quit-history-helper)), **remove the Loop Segments entries from SKYBOX** (phone WebDAV servers and the rclone DLNA entry), then turn the **proximity sensor back on**, open **Settings > Wi-Fi** and switch the headset's **Wi-Fi off** ([Wi-Fi off at close](#wi-fi-off-at-close)) | `questCloseLanTabsOnExit`, `questClearHistoryOnExit`, `questSkyboxWebDav`, `questKeepAwakeDuringSession`, `questWifiOffOnExit` |
@@ -15,14 +15,14 @@ Startup and close steps are skipped (and logged) when the headset is not on adb.
 
 ## Open on Quest: normal tab, signed in
 
-The open itself is quest_tools' `Open-QuestPage` (one tab reused, VIEW intent, sign-in and plain reload, empty new-tab pages closed, `isSecureContext` and the flag fix, private tab): [quest_tools](../../../../quest_tools/README.md#opening-a-page-push-to-quest) README, *Opening a page*. What Loop Segments adds:
+The open itself is quest_tools' `Open-QuestPage` (one tab reused, VIEW intent, sign-in and plain reload, empty new-tab pages closed, `isSecureContext` and the flag fix): [quest_tools](../../../../quest_tools/README.md#opening-a-page-push-to-quest) README, *Opening a page*. What Loop Segments adds:
 
 1. **The control page first**, in its own tab, signed in the same way (below), so the LAN page ends up in front.
 2. **One LAN tab:** a tab already open on any phone LAN origin (LAN page or `/xr`) is reused, extra LAN tabs are closed. Reusing an `/xr` tab replaces the XR player with the LAN page.
 3. **Signed in** with `http://admin:<password>@<phone>:8765/`, then reloaded plain: the page is signed in, its URL has no password, `fetch()` works (`status_lists.json`), and **WebXR immersive VR/AR is available**. If the tab ends on Chromium's error page (phone app closed or phone off Wi-Fi), the button reports a failure instead of "Opened".
 4. Keep Alive: +60 min on the phone after the page opened (`Keep Alive: +60 min after Open on Quest`).
 
-`"questIncognito": true` (or `-PrivateTab`) opens a private tab instead; not the default, since **Quest Browser disables immersive WebXR in private tabs**, so the XR player cannot enter VR from one.
+Always a **normal** tab: **Quest Browser disables immersive WebXR in private tabs**, so the XR player could not enter VR from one. That is also why a private tab cannot keep the LAN page out of history: the page has to run in a normal tab, so the quit deletes its history instead (why, in full: [quest_tools](../../../../quest_tools/README.md#opening-a-page-push-to-quest) README, *Always a normal tab, so history has to be cleaned*). The `questIncognito` private-tab option is gone; a leftover `"questIncognito"` in `loop-segments-windows.json` is ignored.
 
 The password comes from `webdavPassword` in `windows\loop-segments-windows.json`, or from the matching `phoneLanHosts[].webdavPassword`. It is percent-encoded, read by the script itself (never on a command line), and never logged. Chromium does not keep the `user:pass@` form in browsing history. `"questSendLanLogin": false` (or `-NoLanLogin`) opens the plain URL and you sign in as `admin` / the app password on the headset.
 
@@ -225,7 +225,6 @@ pwsh -File quest\Set-QuestProximitySensor.ps1 -State Off                        
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -SkyboxPush         # Push button: put the phone in SKYBOX
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -Url http://<phoneLanHost>:8765/ -SkyboxUpdate       # Update button
 pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -ClearSkyboxWebDav                                # remove every server this PC added
-pwsh -File quest\Watch-LoopSegmentsQuestLanTab.ps1 -ProbeIncognito                                  # read-only
 ```
 
 Log: `%TEMP%\loopsegments-quest-lantab.log`.
@@ -239,7 +238,6 @@ Log: `%TEMP%\loopsegments-quest-lantab.log`.
 | `questAdbSerial` | `""` | Pick this adb serial when several Android devices are connected |
 | `questAdbExe` | `""` | Full path to `adb.exe` (empty = auto) |
 | `questAdbRediscoverSec` | `60` | Headset not found for this long and no adb device connected: restart the PC's adb server once to rediscover it over mDNS (at most every 5 min). `0` = off |
-| `questIncognito` | `false` | `true` = private tab (no immersive WebXR there) instead of the normal tab |
 | `questSendLanLogin` | `true` | Sign the tab in with the LAN login (`false` = sign in on the headset) |
 | `questEnsureInsecureOriginFlag` | `true` | Each Open on Quest: check `isSecureContext` in the LAN tab and, only if false, fix the insecure-origin flag (restarts Quest Browser and reopens the page) |
 | `questClearHistoryOnExit` | `true` | Companion close: delete the Quest Browser history entries on the phone LAN page, the control page and every page in quest_tools' shared origin list (other history is kept) |

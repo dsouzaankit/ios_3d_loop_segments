@@ -788,8 +788,7 @@ function Get-QuestOpenStatus {
     $detail = Get-QuestOpenLastLogLine
     $message = switch ($code) {
         0 {
-            if ($detail -match 'private tab') { 'Opened on Quest (private tab).' }
-            elseif ($detail -match 'normal tab') { 'Opened on Quest (normal tab).' }
+            if ($detail -match 'normal tab') { 'Opened on Quest (normal tab).' }
             else { 'Opened on Quest.' }
         }
         1 { "Quest did not wake (or was not on adb) within $($script:QuestOpenWaitMinutes) min - nothing opened." }

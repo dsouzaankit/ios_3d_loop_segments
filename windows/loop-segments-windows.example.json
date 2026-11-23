@@ -24,7 +24,6 @@
   "questHistoryRetryMinutes": 120,
   "questWifiOffOnExit": true,
   "ipaInstallWifiProfile": "",
-  "questIncognito": false,
   "questSendLanLogin": true,
   "questEnsureInsecureOriginFlag": true,
   "questClearHistoryOnExit": true,

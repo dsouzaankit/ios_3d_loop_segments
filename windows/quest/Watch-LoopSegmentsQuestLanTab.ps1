@@ -17,9 +17,8 @@
   else webdavPassword); it is never logged or put on a command line. -NoLanLogin /
   questSendLanLogin=false opens the plain URL (you sign in on the headset).
 
-  Normal tab, not private: Quest Browser disables immersive WebXR in private tabs, so the XR player
-  cannot enter VR there. -PrivateTab (or questIncognito=true) still opens a private tab instead
-  (Chromium IncognitoTabLauncher + typed URL; falls back to a normal tab).
+  Always a normal tab, never a private one: Quest Browser disables immersive WebXR in private tabs, so
+  the XR player could not enter VR there.
 
   -WaitMinutes N : when opening the page, a headset that is asleep or off adb is not an error: keep polling
                    for up to N minutes and open the page when it wakes (the button uses 7).
@@ -107,10 +106,7 @@
 .EXAMPLE
   .\Watch-LoopSegmentsQuestLanTab.ps1 -EnableProximity
 
-.EXAMPLE
-  .\Watch-LoopSegmentsQuestLanTab.ps1 -ProbeIncognito
-  Read-only: list what Quest Browser exposes for incognito / private launches. Full
-  `dumpsys package com.oculus.browser` is saved to %TEMP%\loopsegments-quest-browser-dumpsys.txt.
+
 #>
 [CmdletBinding()]
 param(
@@ -127,12 +123,7 @@ param(
     [int] $WaitMinutes = 0,
     # Opening the page: file that gets 'queued' / 'opening' (read by the companion sink).
     [string] $StatusFile = '',
-    # Read-only: report Quest Browser incognito / private launch entry points and exit.
-    [switch] $ProbeIncognito,
-    # Open a private tab instead of the default normal tab (no WebXR immersive mode there).
-    [switch] $PrivateTab,
-    # Always a normal tab, even if questIncognito=true.
-    [switch] $NoIncognito,
+
     # Do not sign the tab in with admin:<password>@ (you sign in on the headset).
     [switch] $NoLanLogin,
     # Only make sure the insecure-origin chrome://flags entry covers the phone LAN origins.
@@ -223,7 +214,6 @@ if (Test-Path -LiteralPath $WindowsLib) {
         if ([string]::IsNullOrWhiteSpace($Serial)) { $Serial = [string]$cfg.questAdbSerial }
         if ($Port -le 0 -and $null -ne $cfg.questAdbPort) { $Port = [int]$cfg.questAdbPort }
         if ($null -ne $cfg.questAdbRediscoverSec) { $script:AdbRediscoverSec = [int]$cfg.questAdbRediscoverSec }
-        if ($cfg.Contains('questIncognito') -and $cfg.questIncognito -eq $true) { $PrivateTab = $true }
         if ($cfg.Contains('questEnsureInsecureOriginFlag') -and $cfg.questEnsureInsecureOriginFlag -eq $false) { $NoFlags = $true }
         if ($cfg.Contains('questSendLanLogin') -and $cfg.questSendLanLogin -eq $false) { $NoLanLogin = $true }
     } catch {
@@ -231,10 +221,9 @@ if (Test-Path -LiteralPath $WindowsLib) {
     }
 }
 if ($Port -le 0) { $Port = 5555 }
-if ($NoIncognito) { $PrivateTab = $false }
 Initialize-QuestTools -AdbExe $AdbExe -Serial $Serial -QuestHost $QuestHost -Port $Port -RediscoverSec $script:AdbRediscoverSec
 
-# Opening a page (VIEW intent, signed-in normal tab, private tab, isSecureContext, flag fix):
+# Opening a page (VIEW intent, signed-in normal tab, isSecureContext, flag fix):
 # quest_tools lib\QuestOpen.ps1 (Open-QuestPage). This script supplies the phone login, the control
 # page tab, the helper page and the Loop Segments origins.
 # After Open on Quest succeeds: POST /keep_alive.json action=extend (+60 min) on the phone LAN.
@@ -559,7 +548,7 @@ function Open-QuestLanTab {
     Save-QuestBrowserOurs -DeviceSerial $DeviceSerial
     $lan = @(Get-QuestLanOrigins)
     return (Open-QuestPage -DeviceSerial $DeviceSerial -Url $Url -LoginUrl (Get-QuestTypedUrl) -Owner $Owner `
-            -ReuseOrigins $lan -FlagOrigins $lan -HelperUrl { Get-QuestHelperUrl } -NoFlags:$NoFlags -PrivateTab:$PrivateTab `
+            -ReuseOrigins $lan -FlagOrigins $lan -HelperUrl { Get-QuestHelperUrl } -NoFlags:$NoFlags `
             -BeforeOpen { param($d) Open-QuestControlTab -DeviceSerial $d })
 }
 
@@ -836,7 +825,6 @@ if (-not $script:Adb) {
 }
 $script:LastConnectMsg = ''
 $script:SendLanLogin = (-not $NoLanLogin) -and [bool](Get-Command Get-LoopSegmentsWebDAVCredentials -ErrorAction SilentlyContinue)
-if ($ProbeIncognito) { exit (Invoke-QuestIncognitoProbe) }
 if ($EnableProximity) { exit (Invoke-QuestEnableProximity) }
 if ($DisableProximity) { exit (Invoke-QuestDisableProximity) }
 if ($ToggleProximity) { exit (Invoke-QuestToggleProximity) }
@@ -869,7 +857,7 @@ if ($ClearSkyboxWebDav -and -not $ClearHistory) {
     exit 0
 }
 if ([string]::IsNullOrWhiteSpace($Url)) {
-    Write-QuestLog '-Url is required (unless -ProbeIncognito).'
+    Write-QuestLog '-Url is required for this mode.'
     exit 2
 }
 if ($TestHelperVisit) {

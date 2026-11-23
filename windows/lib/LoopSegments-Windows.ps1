@@ -64,10 +64,7 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         # deploy.ps1 USB install: Windows Wi-Fi profile to move the PC to while SideStore installs (off the
         # phoneLanHost subnet, with www). Empty = first saved profile in range that is off that subnet.
         ipaInstallWifiProfile   = ''
-        # Open on Quest: false (default) = normal tab (WebXR works); true = private tab (no immersive WebXR).
-        questIncognito          = $false
-        # Private tab URL carries admin:<webdavPassword>@ so the LAN page opens signed in.
-        questSendLanLogin       = $true
+                questSendLanLogin       = $true
         # Companion startup: keep Quest Browser's insecure-origin chrome://flags entry on the phone LAN origin(s).
         questEnsureInsecureOriginFlag = $true
         # Companion close: delete the Quest Browser history entries on the phone LAN page and the control page.
