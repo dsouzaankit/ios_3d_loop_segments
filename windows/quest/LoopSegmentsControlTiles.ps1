@@ -364,7 +364,6 @@ $script:LsTilesScript = @'
   });
 
   $('lsEnd').addEventListener('click', async () => {
-    if (!confirm('End the session? This closes the Loop Segments PC companion and cleans up the Quest.')) return;
     const b = $('lsEnd'), m = $('lsEndMsg');
     b.disabled = true; b.dataset.busy = '1'; m.textContent = 'Starting End session...'; m.className = 'msg warn';
     const r = await QC.post('ls/end-session');
