@@ -189,7 +189,7 @@ Phone must be on Wi‑Fi with Loop Segments open (foreground, exporting, or Keep
 | `_profile_exit_watchdog.ps1` | If console X kills the launcher, still close Chromium, unmap Skybox AirScreen shares, quit Skybox if we started it, + sync/clear profile |
 | `requirements.txt` | `playwright` (launcher Chromium fetch only) |
 | `_rest_log_sink.ps1` | Local REST sink on `127.0.0.1:18765` (loopback / private clients only): **POST /log** (extension log lines → `rest.log`); **POST /phone-lan** (phone LAN API relay, empty WinHTTP proxy = DIRECT); **POST /quest-open-lan-tab** (Open on Quest → `quest\Watch-LoopSegmentsQuestLanTab.ps1`); **POST /open-explorer**; **POST /write-hybrid-media-list** (maps `items`/`paths` → Drive paths, overwrite UTF-8 list, open hub in Explorer); **/focus-console** (toast click brings the companion console to the front; the only use of its `-CompanionPid`); **GET /health** |
-| `chromium-profile.zip` | Canonical browser profile on P: (gitignored; extracted under `%LOCALAPPDATA%`) |
+| `chromium-profile.zip` | Canonical browser profile on P: (gitignored; extracted under `%LOCALAPPDATA%`). Each upload is read back from P: (hash + zip check) and keeps the replaced good copy as `chromium-profile.prev.zip` and a copy on this PC (`%LOCALAPPDATA%pcloud_web_companionprofile-backup`). The start checks a zip before clearing the local profile for it and falls back main → prev → local backup: pCloud Drive has served this file with another file's bytes in it, which used to start Chromium empty and then upload that empty profile over the good one. A run that started with no usable zip never replaces a copy that reads fine, nor the backups |
 
 ## Requirements
 

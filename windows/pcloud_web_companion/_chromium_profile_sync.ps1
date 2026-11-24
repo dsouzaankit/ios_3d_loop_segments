@@ -201,6 +201,82 @@ function Expand-ChromiumProfileZip {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $DestDir)
 }
 
+# pCloud Drive has served this zip with another file's bytes in it (a PowerShell transcript that
+# was being appended on P:, then zeros), so a zip is checked before it replaces the local profile
+# and after it is written to P:.
+function Test-ChromiumProfileZip {
+    param([string]$ZipPath)
+    $r = [pscustomobject]@{ Ok = $false; Reason = ''; Entries = 0; HasLogin = $false }
+    if ([string]::IsNullOrWhiteSpace($ZipPath) -or -not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) { $r.Reason = 'missing'; return $r }
+    $len = (Get-Item -LiteralPath $ZipPath).Length
+    if ($len -lt 1024) { $r.Reason = "too small ($len bytes)"; return $r }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = $null
+    try {
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+        # tar.exe-era zips name entries ./Default/...
+        $names = @($zip.Entries | ForEach-Object { $_.FullName -replace '^\./', '' })
+        $r.Entries = $names.Count
+        $r.HasLogin = $names -contains 'Default/Login Data'
+        if ($names -notcontains 'Default/Preferences') { $r.Reason = "no Default/Preferences ($($names.Count) entries)"; return $r }
+        if ($names.Count -lt 10) { $r.Reason = "only $($names.Count) entries"; return $r }
+        $r.Ok = $true
+    } catch {
+        $r.Reason = "not a readable zip ($($_.Exception.Message))"
+    } finally {
+        if ($zip) { $zip.Dispose() }
+    }
+    return $r
+}
+
+# Whether this run's Download restored a profile, read by its Upload (same process or the exit
+# watchdog): a run that started from an empty profile because every copy was bad must not
+# overwrite a copy that reads fine again, nor the backups.
+function Get-ChromiumProfileRestoreStatePath { Join-Path $env:LOCALAPPDATA 'pcloud_web_companion\profile-restore.json' }
+
+function Set-ChromiumProfileRestoreState {
+    param([bool]$Ok, [string]$Source)
+    try {
+        $p = Get-ChromiumProfileRestoreStatePath
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null
+        [ordered]@{ ok = $Ok; source = $Source; atUtc = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Compress |
+            Set-Content -LiteralPath $p -Encoding utf8
+    } catch {}
+}
+
+function Get-ChromiumProfileRestoreState {
+    $p = Get-ChromiumProfileRestoreStatePath
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    try { return (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json) } catch { return $null }
+}
+
+# Last good upload, also kept on this PC (outside the local profile the companion clears at exit).
+function Get-ChromiumProfileLocalBackupZip { Join-Path $env:LOCALAPPDATA 'pcloud_web_companion\profile-backup\chromium-profile.zip' }
+
+function Get-ChromiumProfilePrevZip {
+    param([string]$RepoProfileZip)
+    return ($RepoProfileZip -replace '(?i)\.zip$', '.prev.zip')
+}
+
+# Copy to P: and read it back: same hash as the local zip and a valid zip, else one more try.
+function Copy-ChromiumProfileZipVerified {
+    param([string]$Src, [string]$Dst)
+    $want = (Get-FileHash -LiteralPath $Src -Algorithm SHA256).Hash
+    for ($try = 1; $try -le 2; $try++) {
+        try {
+            Copy-ChromiumProfileZipFile -Src $Src -Dst $Dst
+            $got = (Get-FileHash -LiteralPath $Dst -Algorithm SHA256).Hash
+            $t = Test-ChromiumProfileZip -ZipPath $Dst
+            if ($got -eq $want -and $t.Ok) { return $true }
+            Write-Warning "[profile] $Dst did not read back intact (try $try): $(if ($got -ne $want) { 'hash differs' } else { $t.Reason })"
+        } catch {
+            Write-Warning "[profile] Copy to $Dst failed (try $try): $($_.Exception.Message)"
+        }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
 function Start-LegacyUnpackedProfileCleanup {
     param([string]$Dir)
     if ([string]::IsNullOrWhiteSpace($Dir) -or -not (Test-Path -LiteralPath $Dir)) {
@@ -243,35 +319,80 @@ function Sync-LoopSegmentsChromiumProfile {
             return
         }
         Write-Host "[profile] Upload zip (cache excluded): $LocalProfileDir -> $RepoProfileZip"
+        $prevZip = Get-ChromiumProfilePrevZip -RepoProfileZip $RepoProfileZip
+        $backupZip = Get-ChromiumProfileLocalBackupZip
+        $state = Get-ChromiumProfileRestoreState
+        $restoreFailed = $state -and ($state.ok -eq $false)
         try {
             $len = New-ChromiumProfileZip -ProfileDir $LocalProfileDir -ZipPath $localStageZip
-            Copy-ChromiumProfileZipFile -Src $localStageZip -Dst $RepoProfileZip
-            Write-Host ("[profile] Upload OK ({0:N1} MB)" -f ($len / 1MB))
-            Start-LegacyUnpackedProfileCleanup -Dir $RepoProfileDir
+            $current = Test-ChromiumProfileZip -ZipPath $RepoProfileZip
+            if ($restoreFailed) {
+                # This run started from an empty profile: never replace a copy that reads fine now
+                # (the bad read may have been pCloud's), and never touch the backups.
+                if ($current.Ok) {
+                    Write-Warning "[profile] Upload skipped: this run started without a restored profile and $RepoProfileZip reads fine now (kept as is)"
+                    return
+                }
+                Write-Warning "[profile] This run started without a restored profile: writing $RepoProfileZip only (previous zip and local backup kept)"
+                if (Copy-ChromiumProfileZipVerified -Src $localStageZip -Dst $RepoProfileZip) { Write-Host ("[profile] Upload OK ({0:N1} MB)" -f ($len / 1MB)) }
+                return
+            }
+            # Keep the copy being replaced as the previous zip, if it is a good one.
+            if ($current.Ok) {
+                try { Copy-ChromiumProfileZipFile -Src $RepoProfileZip -Dst $prevZip } catch { Write-Warning "[profile] Could not keep previous zip: $($_.Exception.Message)" }
+            }
+            try { Copy-ChromiumProfileZipFile -Src $localStageZip -Dst $backupZip } catch { Write-Warning "[profile] Could not write local backup: $($_.Exception.Message)" }
+            if (Copy-ChromiumProfileZipVerified -Src $localStageZip -Dst $RepoProfileZip) {
+                Write-Host ("[profile] Upload OK ({0:N1} MB, verified; previous zip {1}, local backup {2})" -f ($len / 1MB), $(if ($current.Ok) { 'kept' } else { 'unchanged' }), $backupZip)
+                Start-LegacyUnpackedProfileCleanup -Dir $RepoProfileDir
+            } else {
+                Write-Warning "[profile] Upload did not verify on P:; the next start falls back to the previous zip or $backupZip"
+            }
         } catch {
             Write-Warning "[profile] Upload zip failed: $($_.Exception.Message)"
         }
         return
     }
 
-    # Download
-    if (Test-Path -LiteralPath $RepoProfileZip) {
-        $mb = (Get-Item -LiteralPath $RepoProfileZip).Length / 1MB
-        Write-Host ("[profile] Download zip ({0:N1} MB): $RepoProfileZip" -f $mb)
+    # Download: the P: zip, else the previous one on P:, else this PC's backup; each is checked
+    # before the local profile is cleared for it.
+    $candidates = @(
+        [pscustomobject]@{ Name = 'P: zip'; Path = $RepoProfileZip }
+        [pscustomobject]@{ Name = 'P: previous zip'; Path = (Get-ChromiumProfilePrevZip -RepoProfileZip $RepoProfileZip) }
+        [pscustomobject]@{ Name = 'local backup'; Path = (Get-ChromiumProfileLocalBackupZip) }
+    )
+    $seen = 0
+    foreach ($c in $candidates) {
+        if (-not (Test-Path -LiteralPath $c.Path -PathType Leaf)) { continue }
+        $seen++
+        $mb = (Get-Item -LiteralPath $c.Path).Length / 1MB
+        Write-Host ("[profile] Download {0} ({1:N1} MB): {2}" -f $c.Name, $mb, $c.Path)
         try {
-            Copy-ChromiumProfileZipFile -Src $RepoProfileZip -Dst $localStageZip
+            Copy-ChromiumProfileZipFile -Src $c.Path -Dst $localStageZip
+            $t = Test-ChromiumProfileZip -ZipPath $localStageZip
+            if (-not $t.Ok) { Write-Warning "[profile] $($c.Name) is not a usable profile zip: $($t.Reason)"; continue }
             Expand-ChromiumProfileZip -ZipPath $localStageZip -DestDir $LocalProfileDir
-            Write-Host "[profile] Download OK (extracted locally)"
+            if (-not (Test-Path -LiteralPath (Join-Path $LocalProfileDir 'Default\Preferences'))) { Write-Warning "[profile] $($c.Name) extracted without Default\Preferences"; continue }
+            Write-Host ("[profile] Download OK from {0} ({1} entries{2})" -f $c.Name, $t.Entries, $(if ($t.HasLogin) { '' } else { ', no saved passwords in it' }))
+            Set-ChromiumProfileRestoreState -Ok $true -Source $c.Name
+            return
         } catch {
-            Write-Warning "[profile] Download zip failed: $($_.Exception.Message)"
+            Write-Warning "[profile] Download $($c.Name) failed: $($_.Exception.Message)"
         }
+    }
+    if ($seen -gt 0) {
+        Write-Warning "[profile] No usable profile zip (P: zip, previous zip, local backup): starting with an EMPTY profile (saved logins missing this run). Restore chromium-profile.zip from pCloud's file history."
+        Clear-ChromiumProfileDir -Dir $LocalProfileDir
+        Set-ChromiumProfileRestoreState -Ok $false -Source 'none usable'
         return
     }
 
     if (-not (Test-Path -LiteralPath $RepoProfileDir)) {
         Write-Host "[profile] Download skip (no zip and no legacy folder)"
+        Set-ChromiumProfileRestoreState -Ok $true -Source 'first run'
         return
     }
+    Set-ChromiumProfileRestoreState -Ok $true -Source 'legacy folder'
 
     Write-Host "[profile] Download legacy folder (cache dirs skipped): $RepoProfileDir -> $LocalProfileDir"
     Clear-ChromiumProfileDir -Dir $LocalProfileDir
