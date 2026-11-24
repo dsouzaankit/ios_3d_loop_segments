@@ -139,6 +139,69 @@ function Get-LsTilesLanBwStatus {
     return $out
 }
 
+# ---- End session (companion-only sessions) ----
+# 3d_playlist_local's Session Control tile has the same button while one of its workflows runs; this
+# one is for a session with only the companion (the page hides it while that tile is there). Both run
+# 3d_playlist_local's Invoke-PlaylistLocalQuestShutdown.ps1, which closes the companion's Chromium so
+# its normal quit cleans up the Quest (and does the Quest cleanup itself if the companion did not).
+
+$script:LsTilesShutdownStatePath = Join-Path $env:TEMP 'loopsegments-playlist-shutdown.json'
+$script:LsTilesPlaylistSessionPath = Join-Path $env:TEMP 'loopsegments-playlist-session.json'
+
+# A running workflow's registered copy, else 3d_playlist_local next to 'iOS apps'
+# ($env:PLAYLIST_LOCAL_REPO overrides that).
+function Get-LsTilesShutdownScript {
+    try {
+        $list = @((Get-Content -LiteralPath $script:LsTilesPlaylistSessionPath -Raw -ErrorAction Stop | ConvertFrom-Json).sessions)
+        [array]::Reverse($list)
+        foreach ($e in $list) {
+            if (-not $e -or -not $e.PSObject.Properties['shutdownScript']) { continue }
+            if (-not (Get-Process -Id ([int]$e.pid) -ErrorAction SilentlyContinue)) { continue }
+            if (Test-Path -LiteralPath ([string]$e.shutdownScript) -PathType Leaf) { return [string]$e.shutdownScript }
+        }
+    } catch {}
+    $repo = $env:PLAYLIST_LOCAL_REPO
+    if ([string]::IsNullOrWhiteSpace($repo)) {
+        $repo = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $script:LsTilesWindowsDir))) '3d_playlist_local'
+    }
+    $p = Join-Path $repo 'individual_transcode\quest\Invoke-PlaylistLocalQuestShutdown.ps1'
+    if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+    return $null
+}
+
+function Get-LsTilesEndStatus {
+    if (-not (Test-Path -LiteralPath $script:LsTilesShutdownStatePath)) { return $null }
+    try { $j = Get-Content -LiteralPath $script:LsTilesShutdownStatePath -Raw | ConvertFrom-Json } catch { return $null }
+    if ($j.state -eq 'running' -and -not (Get-Process -Id ([int]$j.pid) -ErrorAction SilentlyContinue)) { $j.state = 'stopped' }
+    return $j
+}
+
+# Detached through WMI (its parent is not the host): the companion quits during the run, the host
+# stops with it, and the run goes on. Without 3d_playlist_local: close the companion's Chromium
+# gracefully (taskkill without /F), so its normal quit runs the Quest cleanup.
+function Start-LsTilesEndSession {
+    $cur = Get-LsTilesEndStatus
+    if ($cur -and $cur.state -eq 'running') { return 'running' }
+    $exe = (Get-Process -Id $PID).Path
+    $shutdown = Get-LsTilesShutdownScript
+    if ($shutdown) {
+        $cmd = '"{0}" -NoProfile -NoLogo -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{1}"' -f $exe, $shutdown
+    } else {
+        $chrome = @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $c = [string]$_.CommandLine; $c -notlike '*--type=*' -and $c -match '(?i)pcloud_web_companion[\\/]+chromium-profile' })
+        if ($chrome.Count -eq 0) { Write-QuestControlLog 'LS_END no shutdown script and no companion Chromium'; return 'nothing' }
+        $cmd = 'taskkill.exe ' + (($chrome | ForEach-Object { '/PID ' + $_.ProcessId }) -join ' ')
+    }
+    $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $startup }
+    if ($r.ReturnValue -ne 0) { Write-QuestControlLog "LS_END Win32_Process.Create failed ($($r.ReturnValue))"; return 'failed' }
+    if ($shutdown) {
+        try { @{ pid = [int]$r.ProcessId; state = 'running'; startedAt = (Get-Date -Format 'HH:mm:ss'); steps = @() } | ConvertTo-Json -Compress | Set-Content -LiteralPath $script:LsTilesShutdownStatePath -Encoding utf8 } catch {}
+    }
+    Write-QuestControlLog "LS_END started (pid $($r.ProcessId)): $cmd"
+    return $(if ($shutdown) { 'started' } else { 'companion' })
+}
+
 function Get-LsTilesStatus {
     $s = Get-LoopSegmentsWindowsSettings
     $lan = Get-LsTilesLanUrl
@@ -161,6 +224,8 @@ function Get-LsTilesStatus {
         action        = (Get-LsTilesActionStatus)
         log           = $log
         lanBw         = (Get-LsTilesLanBwStatus)
+        endSession    = (Get-LsTilesEndStatus)
+        endScript     = [bool](Get-LsTilesShutdownScript)
     }
 }
 
@@ -198,6 +263,18 @@ $script:LsTilesLanHtml = @'
       <div id="bwMsg" class="msg" role="status" aria-live="polite"></div>
       <pre id="bwLines" class="scroll" hidden></pre>
       <p class="note">Runs the same probe as the companion at startup (lan\Measure-LoopSegmentsLanThroughput.ps1): downloads up to 64 MB of a phone video over HTTP, and copies it from the rclone mount when the mount is up, then uses the lower number. It never reboots routers from here. Takes about 10-60 s; pause a Virtual Desktop session first or the number comes out low.</p>
+    </section>
+'@
+
+$script:LsTilesEndHtml = @'
+    <section id="lsEndTile">
+      <h2>Session</h2>
+      <div class="buttons">
+        <button id="lsEnd" class="danger">End session: stop all</button>
+      </div>
+      <div id="lsEndMsg" class="msg" role="status" aria-live="polite"></div>
+      <pre id="lsEndSteps" hidden></pre>
+      <p class="note">Closes the Loop Segments PC companion's Chromium, so its normal quit runs: Quest tabs, history, SKYBOX, sensor, Wi-Fi off, the phone mount, iPhone Home. Run through 3d_playlist_local's End session when that repo is on this PC, which also does the Quest cleanup itself if the companion's quit did not. While a 3d_playlist_local workflow runs, its Session Control tile has this button instead.</p>
     </section>
 '@
 
@@ -245,8 +322,25 @@ $script:LsTilesScript = @'
     return running;
   }
 
-  QC.register('loopsegments', (s) => {
+  // End session progress (3d_playlist_local's shutdown file); returns true while it runs.
+  function renderEnd(j) {
+    const pre = $('lsEndSteps');
+    if (!j) { pre.hidden = true; return false; }
+    const running = j.state === 'running';
+    const mark = { ok: 'ok  ', warn: 'warn', bad: 'FAIL', running: '... ', skip: '--  ' };
+    const lines = ['End session ' + (running ? 'running' : j.state) + ' (started ' + j.startedAt + (j.doneAt ? ', done ' + j.doneAt : '') + ')'];
+    (j.steps || []).forEach(st => lines.push((mark[st.level] || '    ') + ' ' + st.name + ': ' + st.result));
+    pre.textContent = lines.join('\n');
+    pre.hidden = false;
+    return running;
+  }
+
+  QC.register('loopsegments', (s, all) => {
     if (!s) return;
+    // 3d_playlist_local's Session Control tile has its own End session: show only one.
+    $('lsEndTile').hidden = !!(all && (all.ownerNames || []).includes('playlist'));
+    const endRunning = renderEnd(s.endSession);
+    if (!$('lsEnd').dataset.busy) $('lsEnd').disabled = endRunning;
     $('lsLan').textContent = s.phoneLanUrl || 'unknown (no lan_config.json)';
     $('lsDav').textContent = s.skyboxUrl || '-';
     $('lsUser').textContent = s.user + (s.hasPassword ? '' : ' (no password set on the PC)');
@@ -266,7 +360,21 @@ $script:LsTilesScript = @'
       if (key !== lastShown || $('lsMsg').textContent === '') { setMsg(text, ok ? 'ok' : 'bad'); lastShown = key; }
     }
     const bwRunning = renderBw(s.lanBw || {});
-    return (running || bwRunning) ? 1500 : 10000;
+    return (running || bwRunning || endRunning) ? 1500 : 10000;
+  });
+
+  $('lsEnd').addEventListener('click', async () => {
+    if (!confirm('End the session? This closes the Loop Segments PC companion and cleans up the Quest.')) return;
+    const b = $('lsEnd'), m = $('lsEndMsg');
+    b.disabled = true; b.dataset.busy = '1'; m.textContent = 'Starting End session...'; m.className = 'msg warn';
+    const r = await QC.post('ls/end-session');
+    if (r.ok) {
+      m.textContent = 'End session started at ' + new Date().toLocaleTimeString() + '.' +
+        (r.json.via === 'companion' ? ' Closing the companion (3d_playlist_local not found: its quit does the cleanup).' : '') +
+        (QC.onQuest ? ' This tab is closed by the Quest cleanup in a few seconds.' : ' This page stops with the companion: close the tab.');
+      m.className = 'msg ok';
+    } else { m.textContent = 'Not started: ' + (r.json.error || ('HTTP ' + r.status)) + '.'; m.className = 'msg bad'; b.disabled = false; delete b.dataset.busy; }
+    QC.schedule(800);
   });
 
   $('bwMeasure').addEventListener('click', async () => {
@@ -292,6 +400,7 @@ $script:LsTilesScript = @'
     Label  = 'Loop Segments PC companion'
     Tiles  = @(
         @{ Column = 0; Order = 10; Html = $script:LsTilesSkyboxHtml }
+        @{ Column = 0; Order = 30; Html = $script:LsTilesEndHtml }
         @{ Column = 1; Order = 20; Html = $script:LsTilesLanHtml }
         @{ Column = 'wide'; Order = 10; Html = $script:LsTilesLogHtml }
     )
@@ -302,6 +411,16 @@ $script:LsTilesScript = @'
         '/skybox/push'   = { param($Ctx) Invoke-LsTilesSkyboxRoute -Name 'push' }
         '/skybox/update' = { param($Ctx) Invoke-LsTilesSkyboxRoute -Name 'update' }
         '/skybox/clear'  = { param($Ctx) Invoke-LsTilesSkyboxRoute -Name 'clear' }
+        '/ls/end-session' = {
+            param($Ctx)
+            switch (Start-LsTilesEndSession) {
+                'started'   { @{ Code = 202; Body = @{ ok = $true; action = 'end-session'; via = 'playlist'; state = 'running' } } }
+                'companion' { @{ Code = 202; Body = @{ ok = $true; action = 'end-session'; via = 'companion'; state = 'running' } } }
+                'running'   { @{ Code = 409; Body = @{ ok = $false; error = 'End session is already running' } } }
+                'nothing'   { @{ Code = 409; Body = @{ ok = $false; error = 'no 3d_playlist_local shutdown script and no companion Chromium found' } } }
+                default     { @{ Code = 500; Body = @{ ok = $false; error = 'could not start End session' } } }
+            }
+        }
         '/lan/measure'   = {
             param($Ctx)
             if (Start-LsTilesLanBw) { @{ Code = 202; Body = @{ ok = $true; action = 'lan-measure'; state = 'running' } } }
