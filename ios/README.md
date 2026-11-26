@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 451 (1.3.1):** Quest /xr hand gestures: both fists switch them off / on; VR entered after AR gets hand tracking.
+
 **Build 450 (1.3.1):** The `/xr` page shows the Keep Alive countdown (same line as the LAN monitor: time left, end time, off / stopped / export states) as a small badge in the top-left corner, over both the launch screen and the 2D player. It polls `keep_alive.json` every 15 s and refreshes right after each once-a-minute "playing" heartbeat, so a renewal shows at once. Not drawn inside Enter AR / Enter VR (the browser shows no page elements there).
 
 **Build 449 (1.3.1):** Keep Alive keeps renewing while a clip plays on the phone's own `/xr` page in Quest Browser. Build 447 renewed only on video GETs, but a looping clip is buffered after its first pass, so the requests stopped and Keep Alive counted down mid-playback. Now `/xr` posts `{"action":"playing"}` to `/keep_alive.json` once a minute while its video plays (not paused or ended), and the phone applies the same rule: reset to **60 min** at most every **10 min**. It still never starts a stopped Keep Alive, undoes a lock-screen pause, shortens a longer session or touches an export-owned one.
