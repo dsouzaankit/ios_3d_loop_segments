@@ -1932,4 +1932,150 @@
       window.__xrSyncPassthroughHud = syncHudVisible;
     }
   });
+
+  /*
+   * Hand tracking in Enter VR / Enter AR (Quest hands, no controllers).
+   * - Requests the optional WebXR "hand-tracking" feature. With it Quest exposes the hands as
+   *   tracked-pointer input sources, and a thumb-index pinch fires the session "select" event the
+   *   pages already map to play/pause (the same path as the controller trigger).
+   * - Fist held on either hand (window.__xrHandExitHoldMs, default 1000 ms) ends the immersive
+   *   session: Quest Browser's 2D window comes back. A ring in front of the eyes fills while held.
+   *   Other Quest apps: Quest's own system gesture (look at the palm, pinch) opens the universal
+   *   menu, and it works inside WebXR too.
+   * Auto-attached to <a-scene>; window.__xrHandGestures = false before load turns it off.
+   */
+  AFRAME.registerComponent("xr-hand-gestures", {
+    init: function () {
+      var sceneEl = this.el;
+      try {
+        var wx = sceneEl.getAttribute("webxr");
+        if (wx && wx.optionalFeatures && wx.optionalFeatures.indexOf("hand-tracking") === -1) {
+          wx.optionalFeatures.push("hand-tracking");
+          sceneEl.setAttribute("webxr", wx);
+        }
+      } catch (eFeat) {}
+      this._fist = { left: 0, right: 0 };
+      this._exitFired = false;
+      this._ring = null;
+      this._onEnter = this.reset.bind(this);
+      this._onExit = this.reset.bind(this);
+      sceneEl.addEventListener("enter-vr", this._onEnter);
+      sceneEl.addEventListener("exit-vr", this._onExit);
+    },
+    remove: function () {
+      this.el.removeEventListener("enter-vr", this._onEnter);
+      this.el.removeEventListener("exit-vr", this._onExit);
+      this.reset();
+    },
+    reset: function () {
+      this._fist.left = 0;
+      this._fist.right = 0;
+      this._exitFired = false;
+      this.showProgress(0);
+    },
+    // Fist: every fingertip is near the wrist compared with the hand's own size
+    // (wrist → middle-finger knuckle), so it works for small and large hands.
+    isFist: function (frame, refSpace, hand) {
+      function pos(name) {
+        var joint = hand.get ? hand.get(name) : null;
+        if (!joint) return null;
+        var pose = frame.getJointPose(joint, refSpace);
+        return pose ? pose.transform.position : null;
+      }
+      function dist(a, b) {
+        var dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      var wrist = pos("wrist");
+      var knuckle = pos("middle-finger-phalanx-proximal");
+      if (!wrist || !knuckle) return false;
+      var size = dist(wrist, knuckle);
+      if (size < 0.03) return false;
+      var tips = ["index-finger-tip", "middle-finger-tip", "ring-finger-tip", "pinky-finger-tip"];
+      for (var i = 0; i < tips.length; i++) {
+        var tip = pos(tips[i]);
+        // Extended finger ≈ 2.2× size from the wrist; curled ≈ 1.0-1.2×.
+        if (!tip || dist(tip, wrist) > size * 1.35) return false;
+      }
+      return true;
+    },
+    showProgress: function (p) {
+      var cam = this.el.camera;
+      if (!this._ring) {
+        if (!(p > 0) || !cam) return;
+        var segs = 48;
+        var bg = new THREE.Mesh(
+          new THREE.RingGeometry(0.016, 0.022, segs, 1),
+          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25, depthTest: false })
+        );
+        var fg = new THREE.Mesh(
+          new THREE.RingGeometry(0.016, 0.022, segs, 1, Math.PI / 2, -Math.PI * 2),
+          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide })
+        );
+        var group = new THREE.Group();
+        group.add(bg);
+        group.add(fg);
+        group.position.set(0, -0.04, -0.45);
+        group.renderOrder = 999;
+        bg.renderOrder = 999;
+        fg.renderOrder = 1000;
+        this._ring = { group: group, fg: fg, segs: segs };
+        cam.add(group);
+      }
+      var on = p > 0;
+      this._ring.group.visible = on;
+      if (on) {
+        var n = Math.max(1, Math.round(this._ring.segs * Math.min(1, p)));
+        this._ring.fg.geometry.setDrawRange(0, n * 6);
+      }
+    },
+    tick: function () {
+      var sceneEl = this.el;
+      if (window.__xrHandGestures === false) return;
+      var frame = sceneEl.frame;
+      var xr = sceneEl.renderer && sceneEl.renderer.xr;
+      if (!frame || !xr || !xr.isPresenting) return;
+      var session = frame.session;
+      var refSpace = xr.getReferenceSpace && xr.getReferenceSpace();
+      if (!session || !refSpace || !frame.getJointPose) return;
+      var holdMs = Number(window.__xrHandExitHoldMs) > 0 ? Number(window.__xrHandExitHoldMs) : 1000;
+      var now = performance.now();
+      var seen = { left: false, right: false };
+      var best = 0;
+      var sources = session.inputSources || [];
+      for (var i = 0; i < sources.length; i++) {
+        var src = sources[i];
+        if (!src || !src.hand || (src.handedness !== "left" && src.handedness !== "right")) continue;
+        var fist = false;
+        try { fist = this.isFist(frame, refSpace, src.hand); } catch (eJ) {}
+        seen[src.handedness] = fist;
+        if (!fist) continue;
+        if (!this._fist[src.handedness]) this._fist[src.handedness] = now;
+        best = Math.max(best, (now - this._fist[src.handedness]) / holdMs);
+      }
+      if (!seen.left) this._fist.left = 0;
+      if (!seen.right) this._fist.right = 0;
+      if (this._exitFired) return;
+      this.showProgress(best);
+      if (best >= 1) {
+        this._exitFired = true;
+        this.showProgress(0);
+        try { xrLog("hand-exit", { ar: !!(sceneEl.is && sceneEl.is("ar-mode")) }); } catch (eL) {}
+        try {
+          if (sceneEl.exitVR) sceneEl.exitVR();
+          else session.end();
+        } catch (eEnd) {
+          try { session.end(); } catch (eEnd2) {}
+        }
+      }
+    }
+  });
+
+  function attachHandGestures() {
+    if (window.__xrHandGestures === false) return;
+    var scene = document.querySelector("a-scene");
+    if (scene && !scene.hasAttribute("xr-hand-gestures")) scene.setAttribute("xr-hand-gestures", "");
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", attachHandGestures);
+  else attachHandGestures();
 })();
