@@ -1971,6 +1971,8 @@
       this._fist.left = 0;
       this._fist.right = 0;
       this._exitFired = false;
+      // No fist counts until the hand that pinched Enter AR has settled.
+      this._armAt = performance.now() + 1500;
       this.showProgress(0);
     },
     // Fist: every fingertip is near the wrist compared with the hand's own size
@@ -1990,12 +1992,20 @@
       var knuckle = pos("middle-finger-phalanx-proximal");
       if (!wrist || !knuckle) return false;
       var size = dist(wrist, knuckle);
-      if (size < 0.03) return false;
+      // Untracked hands report every joint at one point (size 0).
+      if (size < 0.05 || size > 0.16) return false;
+      // A pinch is never a fist. Pinching Enter AR with the other fingers curled
+      // measured 1.31 (and thumb-index 8 mm); real fists keep the thumb 22-55 mm away.
+      var thumb = pos("thumb-tip");
+      var indexTip = pos("index-finger-tip");
+      if (!thumb || !indexTip || dist(thumb, indexTip) < 0.015) return false;
+      // Fingertip-to-wrist / hand size, measured on a Quest 3 (2026-11-26): fist 0.85-1.07,
+      // relaxed or open 1.5-2.0, pinch with the other fingers out ≈ 1.7 for those fingers.
+      var limit = Number(window.__xrHandFistRatio) > 0 ? Number(window.__xrHandFistRatio) : 1.15;
       var tips = ["index-finger-tip", "middle-finger-tip", "ring-finger-tip", "pinky-finger-tip"];
       for (var i = 0; i < tips.length; i++) {
         var tip = pos(tips[i]);
-        // Extended finger ≈ 2.2× size from the wrist; curled ≈ 1.0-1.2×.
-        if (!tip || dist(tip, wrist) > size * 1.35) return false;
+        if (!tip || dist(tip, wrist) > size * limit) return false;
       }
       return true;
     },
@@ -2040,6 +2050,11 @@
       if (!session || !refSpace || !frame.getJointPose) return;
       var holdMs = Number(window.__xrHandExitHoldMs) > 0 ? Number(window.__xrHandExitHoldMs) : 1000;
       var now = performance.now();
+      if (this._armAt && now < this._armAt) {
+        this._fist.left = 0;
+        this._fist.right = 0;
+        return;
+      }
       var seen = { left: false, right: false };
       var best = 0;
       var sources = session.inputSources || [];
