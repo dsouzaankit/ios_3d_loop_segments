@@ -1040,6 +1040,24 @@ enum ExportLANServer {
         return (start, end)
     }
 
+    private static let mediaKeepAliveLock = NSLock()
+    private static var lastMediaKeepAliveNote = Date.distantPast
+
+    /// A video GET over LAN (Quest `/xr`, Skybox, rclone `L:` playback) keeps the phone's Keep Alive
+    /// session going: nothing on the PC sees the phone's own `/xr` page play, so the phone renews
+    /// itself. Hops to the main actor at most once a minute; the Keep Alive side throttles to 10 min.
+    static func noteMediaServedForKeepAlive() {
+        mediaKeepAliveLock.lock()
+        let now = Date()
+        let due = now.timeIntervalSince(lastMediaKeepAliveNote) >= 60
+        if due { lastMediaKeepAliveNote = now }
+        mediaKeepAliveLock.unlock()
+        guard due else { return }
+        Task { @MainActor in
+            ExportBackgroundKeepAlive.shared.noteLANMediaServed()
+        }
+    }
+
     static func sendFile(
         connection: NWConnection,
         fileURL: URL,
@@ -1235,6 +1253,10 @@ enum ExportLANServer {
                 done()
             })
             return
+        }
+
+        if ExportPaths.isLANBrowsableMediaFile(fileName: fileURL.lastPathComponent) {
+            noteMediaServedForKeepAlive()
         }
 
         connection.send(content: headerData, completion: .contentProcessed { error in

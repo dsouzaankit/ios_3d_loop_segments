@@ -41,6 +41,9 @@ enum ExportKeepAliveSettings {
     /// Auto-stop after the app is foregrounded or export leaves the running state (finish, pause, cancel).
     static let sessionDurationSeconds: TimeInterval = 60 * 60
 
+    /// While video is served over LAN, the session is reset to `sessionDurationSeconds` at most this often.
+    static let mediaRenewIntervalSeconds: TimeInterval = 10 * 60
+
     /// Longest session the auto-stop timer runs (24 h). `POST /keep_alive.json` extends are capped
     /// here; without a cap a huge `seconds` overflowed the timer's nanosecond count and crashed the app.
     static let maxSessionAutoStopSeconds: TimeInterval = 24 * 60 * 60

@@ -22,6 +22,8 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private var timeoutTask: Task<Void, Never>?
     /// When the export-owned Keep Alive auto-stops (`ExportKeepAliveSettings.timeoutHours` > 0); `nil` = until export ends.
     private var exportTimeoutEndsAt: Date?
+    /// Last session reset from LAN video serving (`noteLANMediaServed`).
+    private var lastMediaRenewAt: Date?
     private var sessionAutoStopTask: Task<Void, Never>?
     private var sessionAutoStopEndsAt: Date?
     private var sessionAutoStopSubtitle: String?
@@ -189,6 +191,37 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         payload["extended"] = false
         payload["reason"] = reason
         return payload
+    }
+
+    /// Video served over LAN (`ExportLANServer.noteMediaServedForKeepAlive`, ≤ once a minute): while a
+    /// non-export session runs, reset it to `sessionDurationSeconds` at most every
+    /// `mediaRenewIntervalSeconds`, so playback from the phone (Quest `/xr`, Skybox) never runs it out.
+    /// Never starts a stopped Keep Alive, undoes a lock-screen pause, shortens a longer session
+    /// (e.g. after Open on Quest's +60 min), or touches an export-owned one.
+    func noteLANMediaServed() {
+        guard ExportKeepAliveSettings.isEnabled, isActive, !exportSessionEligible,
+              !userPausedFromLockScreen, let ends = sessionAutoStopEndsAt else { return }
+        let now = Date()
+        if let last = lastMediaRenewAt,
+           now.timeIntervalSince(last) < ExportKeepAliveSettings.mediaRenewIntervalSeconds {
+            return
+        }
+        let duration = ExportKeepAliveSettings.sessionDurationSeconds
+        guard ends.timeIntervalSince(now) < duration else { return }
+        // Log the first renewal of a playback stretch only (not every 10 min).
+        let continuing = lastMediaRenewAt.map {
+            now.timeIntervalSince($0) < ExportKeepAliveSettings.mediaRenewIntervalSeconds * 2
+        } ?? false
+        lastMediaRenewAt = now
+        scheduleSessionAutoStop(
+            durationSeconds: duration,
+            logMessage: continuing ? nil : String(
+                format: "Keep Alive: LAN media playing — continuing %.0f min (renewed every %.0f min while video is served)",
+                duration / 60,
+                ExportKeepAliveSettings.mediaRenewIntervalSeconds / 60
+            ),
+            albumHint: "LAN playback"
+        )
     }
 
     /// `POST /keep_alive.json` action `extend` — add `addSeconds` (default 60 min) to remaining
@@ -375,7 +408,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
 
     private func scheduleSessionAutoStop(
         durationSeconds: TimeInterval? = nil,
-        logMessage: String,
+        logMessage: String?,
         albumHint: String
     ) {
         guard ExportKeepAliveSettings.isEnabled else {
@@ -393,7 +426,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
                 albumHint: albumHint
             )
         }
-        logKeepAlive(logMessage)
+        if let logMessage { logKeepAlive(logMessage) }
         sessionAutoStopTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
