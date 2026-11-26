@@ -60,7 +60,7 @@ Deleting the Loop Segments history at quit needs the headset on adb with Quest B
 
 Cleanup, on a normal quit and on console X (the watchdog), stops that job and starts **one background process** that closes the LAN tabs, **deletes the Loop Segments history entries** (the headset is still awake), then **turns the sensor back on**. The companion closes Chromium and syncs the profile meanwhile, and waits for that process (at most 40 s from its start) before the Wi-Fi probe / router restart, which would drop the Quest's adb. Each step logs its duration (`Tabs: ... (0.4 s)`, `History step: ...`, `Proximity step: ...`, `Cleanup: finished ... s after start`). The sensor is turned back on even if the history clear failed (`am broadcast -a com.oculus.vrpowermanager.automation_disable`, checked against `dumpsys vrpowermanager`: `Virtual proximity state: DISABLED`).
 
-Things this does not cover: pressing the power button or a flat battery still sleeps the headset. If the PC crashes or both companion processes are killed, nothing turns the sensor back on: run `-EnableProximity` (or `Set-LoopSegmentsQuestProximitySensor.ps1`, below), or reboot the headset. While the override is on, the display stays lit when the headset is off your head (battery, and keep the lenses out of direct sunlight). `"questKeepAwakeDuringSession": false` turns both halves off.
+Things this does not cover: pressing the power button or a flat battery still sleeps the headset. If the PC crashes or both companion processes are killed, nothing turns the sensor back on: run `-EnableProximity` (or `Set-LoopSegmentsQuestProximitySensor.ps1`, below), or reboot the headset. The same happens when the **PC is on a different network from the headset at quit**: the cleanup finds no headset on adb, so the sensor stays off (headset awake) and the history stays ([PC left the phone's network mid-session](#pc-left-the-phones-network-mid-session)). While the override is on, the display stays lit when the headset is off your head (battery, and keep the lenses out of direct sunlight). `"questKeepAwakeDuringSession": false` turns both halves off.
 
 **Toggle by hand:** run [`Set-LoopSegmentsQuestProximitySensor.ps1`](Set-LoopSegmentsQuestProximitySensor.ps1) (`windows\quest\`). It first makes sure this PC is on the phone's network, as the companion's startup does (`lan\Invoke-LoopSegmentsGatewayWifiRebootIfNeeded.ps1 -PhoneLanHost <phoneLanHost>`; `-SkipNetworkCheck` skips it), since adb reaches the headset only from the same network, then runs quest_tools' `Set-QuestProximitySensor.ps1` with `-NoNetworkCycle` (its saved-Wi-Fi cycle, `Find-QuestWifiNetwork.ps1`, could move the PC off the phone's network) (retries for up to 2 min, `-State On` / `Off`, `-NoWait`; the *Proximity sensor OFF* notification): [quest_tools](../../../../quest_tools/README.md) README, *Proximity sensor*. While the companion runs, its keep-awake job switches the sensor off again within ~20 s of turning it on.
 
@@ -168,6 +168,26 @@ mDNS does not cross routers, so the PC finds the headset only while both are on 
 The usual cause is the companion's own **quit**, and it is intended: when its Wi-Fi→www check fails, the finish restarts the Wi-Fi of the phone network's router (held until the [after-quit history helper](#after-quit-history-helper) is done, when one is waiting: the helper needs the headset on the PC's network) (`[gateway] Rebooting phone-LAN AP 10.0.100.2 (mr5100)` in the console log; see [../README.md](../README.md)). That restart is what gives the phone internet over Wi-Fi again, which SideStore needs for its daily app refresh, so it stays. While that router is down, Windows and the headset both join their other saved network (seen: from `ATT-WIFI-5pmY_5GHz`, `10.0.100.x`, the phone's network, to `ATT-WIFI-3pKe`, `192.168.2.x`), seconds after every quit, and stay there. The next companion start moves the PC back to the phone's network; the headset may stay behind, and adb loses it until it moves back too (or you move it). Windows' Wi-Fi log shows this: Event Viewer → *Applications and Services Logs → Microsoft → Windows → WLAN-AutoConfig → Operational*, event 8001.
 
 So do **not** simply forget the other network on the headset: after a quit the PC sits on it, and the [after-quit history helper](#after-quit-history-helper) then only finds a headset that followed it there (tested: both on `192.168.2.x`, found over mDNS 22 s after the quit). While the companion runs, both need the phone's network; if the headset is the one that stayed behind, switch it in its Wi-Fi settings, and the companion finds it within about 20 s.
+
+#### PC left the phone's network mid-session
+
+The phone network's router can also drop out **during** a session, with no quit involved, and Windows then moves the PC to its other saved network and keeps it there. Seen 2026-11-26: at 04:27 the WLAN log shows the PC leaving `ATT-WIFI-5pmY_5GHz`, reconnecting briefly, then joining `ATT-WIFI-3pKe` (`192.168.2.70`). The headset followed at first (on adb at `192.168.2.54` from 04:28), dropped off adb at 04:38 and went back to `10.0.100.x`. The PC stayed on 3pKe. At the 04:58 quit the two were on different networks, so the log shows only `Control page: loopsegments tiles removed` and `History: headset not reachable over adb - skipped`, followed by the [after-quit history helper](#after-quit-history-helper) waiting. Every Quest step at quit was skipped:
+
+- the **sensor stayed off**, so the headset stays awake on the desk;
+- the LAN tabs and their **history stayed**;
+- the headset's **Wi-Fi stayed on**.
+
+The history helper cannot fix this. It looks for the headset from the network the PC is on and never moves the PC (only the companion's startup and the double-click tools do), so it gives up after `questHistoryRetryMinutes`.
+
+**How to tell:** in the log, `Keep-awake: headset not on adb - waiting` well before the quit and never followed by `sensor held off`, then `History: headset not reachable over adb - skipped` at the quit. `netsh wlan show interfaces` shows the PC on the other SSID.
+
+**Recovery:**
+
+1. Put the PC back on the phone's network (`ATT-WIFI-5pmY_5GHz`). While the history helper is still waiting, it then finds the headset once you put it on, and deletes the history, closes the tabs and turns the sensor back on.
+2. Or run `Set-LoopSegmentsQuestProximitySensor.ps1 -State On` (*Toggle by hand* in [Keep the headset awake during the session](#keep-the-headset-awake-during-the-session)). It moves the PC back first, but it only turns the sensor on; the history is deleted at the next quit, or by the helper if it is still waiting.
+3. Or reboot the headset: that turns the sensor back on, but the history stays until the next quit.
+
+The quit and the helper do not check the PC's network yet, so this is not handled automatically.
 
 ### Test
 
