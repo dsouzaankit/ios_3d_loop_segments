@@ -323,6 +323,7 @@ extension ExportLANServer {
                 "GET: current Keep Alive state (active, remaining session seconds).",
                 "POST action=reset (default): set non-export session timer to sessionDurationSeconds (60 min).",
                 "POST action=extend: add seconds (default sessionDurationSeconds) to remaining session time.",
+                "POST action=playing: /xr heartbeat while video plays; renews a running session to 60 min at most every 10 min.",
                 "Body examples: { \"reason\": \"companion_quit\" }, { \"action\": \"extend\", \"reason\": \"quest_open\" }.",
                 "While an export owns Keep Alive, POST keeps the loop running and does not attach an auto-stop.",
             ]
@@ -375,6 +376,8 @@ extension ExportLANServer {
                             action = "extend"
                         } else if trimmed == "reset" {
                             action = "reset"
+                        } else if trimmed == "playing" {
+                            action = "playing"
                         }
                     }
                     if let n = object["seconds"] as? Double {
@@ -390,7 +393,14 @@ extension ExportLANServer {
             }
             Task { @MainActor in
                 let payload: [String: Any]
-                if action == "extend" {
+                if action == "playing" {
+                    // `/xr` heartbeat while its <video> plays: a buffered looping clip makes no more
+                    // media GETs, so `sendFile` alone stops renewing. Same 10-min throttle and rules.
+                    ExportBackgroundKeepAlive.shared.noteLANMediaServed()
+                    var status = ExportBackgroundKeepAlive.shared.statusPayload()
+                    status["ok"] = true
+                    payload = status
+                } else if action == "extend" {
                     payload = ExportBackgroundKeepAlive.shared.extendSessionFromLAN(
                         reason: reason,
                         addSeconds: addSeconds

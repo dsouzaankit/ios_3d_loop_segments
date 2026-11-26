@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 449 (1.3.1):** Keep Alive keeps renewing while a clip plays on the phone's own `/xr` page in Quest Browser. Build 447 renewed only on video GETs, but a looping clip is buffered after its first pass, so the requests stopped and Keep Alive counted down mid-playback. Now `/xr` posts `{"action":"playing"}` to `/keep_alive.json` once a minute while its video plays (not paused or ended), and the phone applies the same rule: reset to **60 min** at most every **10 min**. It still never starts a stopped Keep Alive, undoes a lock-screen pause, shortens a longer session or touches an export-owned one.
+
 **Build 448 (1.3.1):** Quest /xr hand tracking: a pinch plays / pauses, a held fist leaves AR (a pinch no longer counts as a fist).
 
 **Build 447 (1.3.1):** Video served over LAN keeps Keep Alive going: while the phone serves a video (Quest Browser on the phone's own `/xr` page, Skybox, rclone `L:` playback), it resets its non-export Keep Alive session to **60 min** at most every **10 min** (log once per playback stretch: `Keep Alive: LAN media playing — continuing 60 min …`). Before, only the companion's reset counted, and the companion cannot see `/xr` playing straight from the phone, so the session ran out mid-clip (seen 2026-11-26: under 50 min while a clip played). Never starts a stopped Keep Alive, undoes a lock-screen pause, shortens a longer session, or touches an export-owned one.
