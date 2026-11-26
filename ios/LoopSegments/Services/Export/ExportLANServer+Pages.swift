@@ -74,6 +74,81 @@ extension ExportLANServer {
         """
     }
 
+    /// Live Keep Alive countdown: polls `keep_alive.json` every 15 s, ticks locally every 1 s.
+    /// Own poller (not `status.json`), so it stays live on the monitor's manual-refresh page during export.
+    /// The end time shown is computed on this browser's clock from `*RemainingSeconds`, so phone/PC clock skew does not matter.
+    static func htmlKeepAliveLiveBlock() -> String {
+        """
+        <p id="lan-keep-alive-line" class="keep-alive-line" role="status" aria-live="off">
+          <strong>Keep Alive:</strong> <span id="lan-keep-alive-text">checking…</span>
+        </p>
+        <script>
+        (function () {
+          var el = document.getElementById("lan-keep-alive-text");
+          var wrap = document.getElementById("lan-keep-alive-line");
+          if (!el || !wrap) return;
+          var last = null, fetchedAt = 0, failed = false;
+          function clock(sec) {
+            sec = Math.max(0, Math.floor(sec));
+            var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+            return (h > 0 ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (s < 10 ? "0" : "") + s;
+          }
+          function at(sec) {
+            return new Date(Date.now() + sec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          }
+          function left(v) {
+            return typeof v === "number" ? v - (Date.now() - fetchedAt) / 1000 : null;
+          }
+          function render() {
+            var cls = "keep-alive-line", text;
+            var j = last;
+            if (!j) {
+              text = failed ? "phone not answering" : "checking…";
+              cls += failed ? " is-off" : "";
+            } else if (j.enabled === false) {
+              text = "off (turn on in the app: Export → Keep Alive)";
+              cls += " is-off";
+            } else if (!j.active) {
+              text = "stopped — the LAN server stops when the app is in the background"
+                + (j.lastStartError ? " (" + j.lastStartError + ")" : "");
+              cls += " is-off";
+            } else if (j.exportSession) {
+              var er = left(j.exportTimeoutRemainingSeconds);
+              text = er !== null
+                ? "export running — auto-stops in " + clock(er) + " (at " + at(er) + ")"
+                : "export running — on until the export ends";
+            } else {
+              var r = left(j.sessionRemainingSeconds);
+              if (r !== null) {
+                text = clock(r) + " left (ends " + at(r) + ")";
+                if (r < 600) cls += " is-warn";
+              } else {
+                text = "on (no auto-stop)";
+              }
+            }
+            if (j && j.active && j.loopPlaying === false) text += " · paused from lock screen";
+            if (j && failed) {
+              text += " · last update " + clock((Date.now() - fetchedAt) / 1000) + " ago";
+              cls += " is-stale";
+            }
+            el.textContent = text;
+            wrap.className = cls;
+          }
+          function poll() {
+            fetch("keep_alive.json", { cache: "no-store" })
+              .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+              .then(function (j) { last = j; fetchedAt = Date.now(); failed = false; render(); })
+              .catch(function () { failed = true; render(); });
+          }
+          window.refreshLANKeepAlive = poll;
+          poll();
+          setInterval(poll, 15000);
+          setInterval(render, 1000);
+        })();
+        </script>
+        """
+    }
+
     static func htmlPlaybackStatusLine(_ line: String) -> String {
         """
         <p><strong id="lan-playback-line">\(htmlEscape(line))</strong></p>
@@ -1493,6 +1568,10 @@ extension ExportLANServer {
             .export-source-main { flex: 1 1 12rem; min-width: 0; }
             .export-source-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-shrink: 0; }
             .export-source-line #lan-export-source-name { word-break: break-all; }
+            .keep-alive-line { margin: 0.5rem 0 1rem; font-variant-numeric: tabular-nums; }
+            .keep-alive-line.is-warn #lan-keep-alive-text { color: #c77700; font-weight: 600; }
+            .keep-alive-line.is-off #lan-keep-alive-text { color: #c0392b; }
+            .keep-alive-line.is-stale #lan-keep-alive-text { opacity: 0.7; }
             .export-pending-banner { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; background: var(--banner-bg); border: 1px solid var(--banner-border); border-radius: 8px; color: var(--banner-fg); }
             .export-pending-banner strong { display: block; margin-bottom: 0.25rem; font-size: 1.05em; }
             .export-pending-banner span { font-size: 0.95em; line-height: 1.45; }
@@ -2267,6 +2346,7 @@ extension ExportLANServer {
                   <span id="lan-export-pending-detail">Keep Loop Segments open in the foreground on the phone.</span>
                 </div>
                 \(htmlExportSourceLineShell())
+                \(htmlKeepAliveLiveBlock())
                 \(htmlPendingQueueSection())
                 \(htmlPausedExportsSection())
                 <div id="lan-playback-status">\(playbackStatusInitial)</div>
@@ -2337,6 +2417,7 @@ extension ExportLANServer {
               <span id="lan-export-pending-detail">Please wait — keep Loop Segments open in the foreground on the phone.</span>
             </div>
             \(htmlExportSourceLineBlock())
+            \(htmlKeepAliveLiveBlock())
             \(htmlPendingQueueSection())
             \(htmlPausedExportsSection())
             <p>Serving on port \(defaultPort): logs and media under <code>pcld_ios_media/</code> (private on phone, not in Files app). Legacy URLs <code>/export_latest.txt</code>, <code>/logs/export_*.txt</code>, and <code>/loop_segments_ok.txt</code> still work.</p>

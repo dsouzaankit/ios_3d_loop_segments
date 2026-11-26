@@ -20,6 +20,8 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
     private var playbackBackend = ""
     private var loopSourceLabel = ""
     private var timeoutTask: Task<Void, Never>?
+    /// When the export-owned Keep Alive auto-stops (`ExportKeepAliveSettings.timeoutHours` > 0); `nil` = until export ends.
+    private var exportTimeoutEndsAt: Date?
     private var sessionAutoStopTask: Task<Void, Never>?
     private var sessionAutoStopEndsAt: Date?
     private var sessionAutoStopSubtitle: String?
@@ -70,6 +72,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         exportSessionEligible = false
         timeoutTask?.cancel()
         timeoutTask = nil
+        exportTimeoutEndsAt = nil
         scheduleSessionAutoStopAfterExportIfNeeded()
     }
 
@@ -106,6 +109,10 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         if let ends = sessionAutoStopEndsAt {
             payload["sessionEndsAt"] = ISO8601DateFormatter().string(from: ends)
             payload["sessionRemainingSeconds"] = max(0, ends.timeIntervalSinceNow)
+        }
+        if exportSessionEligible, let ends = exportTimeoutEndsAt {
+            payload["exportTimeoutEndsAt"] = ISO8601DateFormatter().string(from: ends)
+            payload["exportTimeoutRemainingSeconds"] = max(0, ends.timeIntervalSinceNow)
         }
         if let err = lastStartError, !err.isEmpty {
             payload["lastStartError"] = err
@@ -325,6 +332,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         playbackWatchdogTask = nil
         timeoutTask?.cancel()
         timeoutTask = nil
+        exportTimeoutEndsAt = nil
         loopPlaying = false
         userPausedFromLockScreen = false
         playerLooper?.disableLooping()
@@ -760,6 +768,7 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
 
     private func scheduleTimeoutIfNeeded() {
         guard let timeout = ExportKeepAliveSettings.timeoutSeconds else { return }
+        exportTimeoutEndsAt = Date().addingTimeInterval(timeout)
         timeoutTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             guard !Task.isCancelled, isActive else { return }
