@@ -288,12 +288,21 @@ $script:PlaylistSessionPath = Join-Path $env:TEMP 'loopsegments-playlist-session
 function Get-PlaylistWorkflowsOnPhoneMount {
     if (-not (Test-Path -LiteralPath $script:PlaylistSessionPath)) { return @() }
     try { $list = @((Get-Content -LiteralPath $script:PlaylistSessionPath -Raw -ErrorAction Stop | ConvertFrom-Json).sessions) } catch { return @() }
-    $letter = 'L'
-    if (Get-Command Get-LoopSegmentsMountDriveLetter -ErrorAction SilentlyContinue) { $letter = Get-LoopSegmentsMountDriveLetter }
-    $prefix = $letter + ':\'
+    # The configured letter (mountDriveLetter, default L) plus any letter our rclone mount actually runs
+    # on (remote loopsegments: in its command line, so the Koofr or other rclone mounts never count).
+    $letters = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $configured = 'L'
+    if (Get-Command Get-LoopSegmentsMountDriveLetter -ErrorAction SilentlyContinue) {
+        try { $configured = [string](Get-LoopSegmentsMountDriveLetter) } catch {}
+    }
+    [void]$letters.Add($configured)
+    if (Get-Command Get-LoopSegmentsRcloneMountedDriveLetters -ErrorAction SilentlyContinue) {
+        # It returns its HashSet as one object (return ,$set): enumerate that, not @() around it.
+        try { $mounted = Get-LoopSegmentsRcloneMountedDriveLetters; foreach ($m in $mounted) { if ($m) { [void]$letters.Add([string]$m) } } } catch {}
+    }
     return @($list | Where-Object {
             $_ -and $_.PSObject.Properties['shutdownScript'] -and [int]$_.pid -gt 0 -and
-            ([string]$_.shutdownScript).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
+            ([string]$_.shutdownScript) -match '^([A-Za-z]):\\' -and $letters.Contains($Matches[1]) -and
             (Get-QuestProcessStartStamp -ProcessId ([int]$_.pid)) -eq [string]$_.started
         } | ForEach-Object { [string]$_.name })
 }
