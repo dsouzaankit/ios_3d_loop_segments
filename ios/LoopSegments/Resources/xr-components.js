@@ -1942,6 +1942,10 @@
    *   session: Quest Browser's 2D window comes back. A ring in front of the eyes fills while held.
    *   Other Quest apps: Quest's own system gesture (look at the palm, pinch) opens the universal
    *   menu, and it works inside WebXR too.
+   * - Both fists held (same hold time) switch these gestures off / on (window.__xrHandGesturesOff):
+   *   the ring fills cyan, then flashes red (off) or green (on). While off, hand pinches are dropped
+   *   before the pages' select handlers and a fist does not exit; controllers are unaffected. Quest's
+   *   own hand tracking (pointing, the system gesture) stays on: a page cannot turn that off.
    * Auto-attached to <a-scene>; window.__xrHandGestures = false before load turns it off.
    */
   AFRAME.registerComponent("xr-hand-gestures", {
@@ -1970,6 +1974,9 @@
     reset: function () {
       this._fist.left = 0;
       this._fist.right = 0;
+      this._both = 0;
+      this._waitOpen = false;
+      this._flashUntil = 0;
       this._exitFired = false;
       // No fist counts until the hand that pinched Enter AR has settled.
       this._armAt = performance.now() + 1500;
@@ -2009,7 +2016,7 @@
       }
       return true;
     },
-    showProgress: function (p) {
+    showProgress: function (p, color) {
       var cam = this.el.camera;
       if (!this._ring) {
         if (!(p > 0) || !cam) return;
@@ -2037,6 +2044,7 @@
       if (on) {
         var n = Math.max(1, Math.round(this._ring.segs * Math.min(1, p)));
         this._ring.fg.geometry.setDrawRange(0, n * 6);
+        this._ring.fg.material.color.setHex(color || 0xffffff);
       }
     },
     tick: function () {
@@ -2071,6 +2079,39 @@
       if (!seen.left) this._fist.left = 0;
       if (!seen.right) this._fist.right = 0;
       if (this._exitFired) return;
+      // Green / red flash after a toggle, then the ring hides.
+      if (this._flashUntil) {
+        if (now < this._flashUntil) return;
+        this._flashUntil = 0;
+        this.showProgress(0);
+      }
+      // After a toggle, nothing counts until both hands open (else the hand that opens
+      // second would start the exit).
+      if (this._waitOpen) {
+        if (seen.left || seen.right) return;
+        this._waitOpen = false;
+      }
+      // Both fists = hand gestures off / on. The second fist takes over the first one's exit timer.
+      if (seen.left && seen.right) {
+        if (!this._both) this._both = now;
+        var pBoth = (now - this._both) / holdMs;
+        if (pBoth < 1) {
+          this.showProgress(pBoth, 0x40c8ff);
+          return;
+        }
+        this._both = 0;
+        this._waitOpen = true;
+        window.__xrHandGesturesOff = !window.__xrHandGesturesOff;
+        this._flashUntil = now + 700;
+        this.showProgress(1, window.__xrHandGesturesOff ? 0xff4040 : 0x40ff60);
+        try { xrLog("hand-gestures", { off: !!window.__xrHandGesturesOff }); } catch (eT) {}
+        return;
+      }
+      this._both = 0;
+      if (window.__xrHandGesturesOff) {
+        this.showProgress(0);
+        return;
+      }
       this.showProgress(best);
       if (best >= 1) {
         this._exitFired = true;
@@ -2085,6 +2126,67 @@
       }
     }
   });
+
+  // Every immersive session asks for hand-tracking, offers included. A-Frame offers a VR session
+  // (navigator.xr.offerSession, Quest Browser's own Enter VR) while <a-scene> starts, before
+  // xr-hand-gestures can add the feature, and offers again only after a VR session, not after AR:
+  // VR entered after AR used that page-load offer and got no hands (seen 2026-11-26). This script
+  // runs from <head>, before the scene, so the wrapper is in place for the first offer.
+  (function requestHandTrackingAlways() {
+    var xr = navigator.xr;
+    if (!xr || xr.__xrHandFeature) return;
+    xr.__xrHandFeature = true;
+    ["requestSession", "offerSession"].forEach(function (name) {
+      var orig = xr[name];
+      if (typeof orig !== "function") return;
+      xr[name] = function (mode, opts) {
+        if (window.__xrHandGestures !== false && typeof mode === "string" && mode.indexOf("immersive-") === 0) {
+          var o = {};
+          for (var k in (opts || {})) o[k] = opts[k];
+          var req = o.requiredFeatures || [];
+          var opt = (o.optionalFeatures || []).slice();
+          if (req.indexOf("hand-tracking") === -1 && opt.indexOf("hand-tracking") === -1) opt.push("hand-tracking");
+          o.optionalFeatures = opt;
+          opts = o;
+        }
+        return orig.call(xr, mode, opts);
+      };
+    });
+  })();
+
+  // While hand gestures are off (both fists), hand pinches never reach the pages' select
+  // handlers (play / pause). Controller triggers still do. Pages add their listeners with
+  // addEventListener, so wrap it once on XRSession; removeEventListener gets the same wrapper.
+  (function filterHandSelectWhileOff() {
+    var XRS = window.XRSession;
+    if (!XRS || !XRS.prototype || XRS.prototype.__xrHandFilter || typeof WeakMap !== "function") return;
+    var add = XRS.prototype.addEventListener;
+    var rem = XRS.prototype.removeEventListener;
+    if (!add || !rem) return;
+    var wrapped = new WeakMap();
+    var types = { select: 1, selectstart: 1, selectend: 1 };
+    XRS.prototype.__xrHandFilter = true;
+    XRS.prototype.addEventListener = function (type, fn, opts) {
+      if (types[type] && typeof fn === "function") {
+        var w = wrapped.get(fn);
+        if (!w) {
+          w = function (ev) {
+            if (window.__xrHandGesturesOff && ev && ev.inputSource && ev.inputSource.hand) return;
+            return fn.apply(this, arguments);
+          };
+          wrapped.set(fn, w);
+        }
+        return add.call(this, type, w, opts);
+      }
+      return add.apply(this, arguments);
+    };
+    XRS.prototype.removeEventListener = function (type, fn, opts) {
+      if (types[type] && typeof fn === "function" && wrapped.has(fn)) {
+        return rem.call(this, type, wrapped.get(fn), opts);
+      }
+      return rem.apply(this, arguments);
+    };
+  })();
 
   function attachHandGestures() {
     if (window.__xrHandGestures === false) return;
