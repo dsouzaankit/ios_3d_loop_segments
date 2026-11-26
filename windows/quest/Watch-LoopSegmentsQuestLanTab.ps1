@@ -61,6 +61,11 @@
                    not sleep, so it stays on adb). A headset in standby is left alone (prox_close
                    would wake it); it gets the override once someone puts it on. Re-applies after a headset reboot. Never re-enables
                    the sensor itself (the companion's cleanup does, after clearing history).
+                   Also, while one of our pages plays on the Quest (quest_tools Get-QuestMediaActivity:
+                   a media request in the last 3 min, e.g. 3d_playlist_local's XR page), POST
+                   /keep_alive.json reset to the phone every 10 min, so the
+                   phone's 60 min Keep Alive (its LAN server, the L: mount) does not run out mid-session
+                   (-LanConfig = the companion's lan_config.json, for the phone's current address).
 
   -KeepAwakeSession -RestoreProximity : as -KeepAwakeSession, and turn the sensor back on once -ParentPid exits.
 
@@ -214,7 +219,38 @@ Initialize-QuestTools -AdbExe $AdbExe -Serial $Serial -QuestHost $QuestHost -Por
 # Opening a page (VIEW intent, signed-in normal tab, isSecureContext, flag fix):
 # quest_tools lib\QuestOpen.ps1 (Open-QuestPage). This script supplies the phone login, the control
 # page tab, the helper page and the Loop Segments origins.
-# After Open on Quest succeeds: POST /keep_alive.json action=extend (+60 min) on the phone LAN.
+# Phone Keep Alive (POST /keep_alive.json on the phone LAN, build 440+). Its window is 60 min from the
+# app's last foreground or the last LAN reset; WebDAV and Quest traffic do not extend it, and once it
+# ends in the background the phone's LAN server (and the rclone L: mount) stops.
+#   Send-PhoneKeepAlive                         the one POST (both callers below)
+#   Invoke-PhoneKeepAliveExtendAfterQuestOpen   after Open on Quest succeeds: extend +60 min
+#   Invoke-PhoneKeepAliveOnQuestPlayback        -KeepAwakeSession tick: reset to 60 min while the Quest plays
+
+# Returns [pscustomobject]{ Status = HTTP code; Json = parsed reply or $null }. HTTP errors come back as
+# a Status; network errors (phone server down, timeout) throw.
+function Send-PhoneKeepAlive {
+    param([Parameter(Mandatory)] [string] $LanUrl, [Parameter(Mandatory)] [string] $Action, [string] $Reason = '')
+    $u = [Uri]$LanUrl
+    $login = Get-QuestLanLogin -ForUrl $LanUrl
+    $pair = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(('{0}:{1}' -f $login.User, $login.Password)))
+    $body = [ordered]@{ action = $Action; reason = $Reason } | ConvertTo-Json -Compress
+    $r = Invoke-WebRequest -Uri ('{0}://{1}/keep_alive.json' -f $u.Scheme, $u.Authority) -Method Post -Body $body `
+        -ContentType 'application/json; charset=utf-8' -Headers @{ Authorization = "Basic $pair" } `
+        -NoProxy -TimeoutSec 15 -UseBasicParsing -SkipHttpErrorCheck
+    # Without a text Content-Type, Invoke-WebRequest hands back bytes.
+    $text = if ($r.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($r.Content) } else { [string]$r.Content }
+    $json = $null
+    try { $json = $text | ConvertFrom-Json -ErrorAction Stop } catch {}
+    return [pscustomobject]@{ Status = [int]$r.StatusCode; Json = $json }
+}
+
+function Get-PhoneKeepAliveError {
+    param($Reply)
+    if ($Reply.Status -eq 404 -or $Reply.Status -eq 405) { return 'phone build missing /keep_alive.json (need 440+)' }
+    if ($null -ne $Reply.Json -and $Reply.Json.PSObject.Properties['error'] -and $Reply.Json.error) { return [string]$Reply.Json.error }
+    return "HTTP $($Reply.Status)"
+}
+
 function Invoke-PhoneKeepAliveExtendAfterQuestOpen {
     param([string] $LanUrl = $Url)
     if ([string]::IsNullOrWhiteSpace($LanUrl)) {
@@ -226,64 +262,75 @@ function Invoke-PhoneKeepAliveExtendAfterQuestOpen {
         return
     }
     try {
-        $u = [Uri]$LanUrl
-        $origin = '{0}://{1}' -f $u.Scheme, $u.Authority
-        $endpoint = "$origin/keep_alive.json"
-        $login = Get-QuestLanLogin -ForUrl $LanUrl
-        $pair = [Convert]::ToBase64String(
-            [Text.Encoding]::ASCII.GetBytes(('{0}:{1}' -f $login.User, $login.Password))
-        )
-        $req = [System.Net.HttpWebRequest]::Create($endpoint)
-        $req.Method = 'POST'
-        $req.ContentType = 'application/json; charset=utf-8'
-        $req.Timeout = 15000
-        $req.ReadWriteTimeout = 15000
-        $req.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
-        $req.Headers['Authorization'] = "Basic $pair"
-        $bodyBytes = [Text.Encoding]::UTF8.GetBytes('{"action":"extend","reason":"quest_open"}')
-        $req.ContentLength = $bodyBytes.Length
-        $stream = $req.GetRequestStream()
-        $stream.Write($bodyBytes, 0, $bodyBytes.Length)
-        $stream.Close()
-        $resp = $null
-        try {
-            $resp = $req.GetResponse()
-            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
-            $text = $reader.ReadToEnd()
-            $reader.Close()
-            $json = $null
-            try { $json = $text | ConvertFrom-Json } catch {}
-            if ($null -ne $json -and $json.ok -eq $true -and $json.extended -eq $true) {
-                $left = if ($null -ne $json.sessionRemainingSeconds) {
-                    ' (~{0:N0}s remaining)' -f [double]$json.sessionRemainingSeconds
-                } else { '' }
-                Write-QuestLog ("Keep Alive: +60 min after Open on Quest{0}." -f $left)
-            } elseif ($null -ne $json -and $json.ok -eq $true -and $json.exportSession -eq $true) {
-                Write-QuestLog 'Keep Alive: export running — +60 min extend skipped.'
-            } elseif ([int]$resp.StatusCode -eq 404 -or [int]$resp.StatusCode -eq 405) {
-                Write-QuestLog 'Keep Alive: phone build missing /keep_alive.json (need 440+) - skip.'
-            } else {
-                $detail = if ($null -ne $json -and $json.error) { [string]$json.error } else { "HTTP $([int]$resp.StatusCode)" }
-                Write-QuestLog "Keep Alive: extend failed ($detail)."
-            }
-        } finally {
-            if ($null -ne $resp) {
-                try { $resp.Close() } catch {}
-                try { $resp.Dispose() } catch {}
-            }
-        }
-    } catch [System.Net.WebException] {
-        $code = $null
-        if ($null -ne $_.Exception.Response) {
-            try { $code = [int]$_.Exception.Response.StatusCode } catch {}
-        }
-        if ($code -eq 404 -or $code -eq 405) {
+        $r = Send-PhoneKeepAlive -LanUrl $LanUrl -Action 'extend' -Reason 'quest_open'
+        $j = $r.Json
+        if ($r.Status -eq 200 -and $null -ne $j -and $j.ok -eq $true -and $j.extended -eq $true) {
+            $left = if ($null -ne $j.sessionRemainingSeconds) { ' (~{0:N0}s remaining)' -f [double]$j.sessionRemainingSeconds } else { '' }
+            Write-QuestLog ("Keep Alive: +60 min after Open on Quest{0}." -f $left)
+        } elseif ($r.Status -eq 200 -and $null -ne $j -and $j.ok -eq $true -and $j.exportSession -eq $true) {
+            Write-QuestLog 'Keep Alive: export running - +60 min extend skipped.'
+        } elseif ($r.Status -eq 404 -or $r.Status -eq 405) {
             Write-QuestLog 'Keep Alive: phone build missing /keep_alive.json (need 440+) - skip.'
         } else {
-            Write-QuestLog ("Keep Alive: extend request failed: {0}" -f $_.Exception.Message)
+            Write-QuestLog "Keep Alive: extend failed ($(Get-PhoneKeepAliveError $r))."
         }
     } catch {
         Write-QuestLog ("Keep Alive: extend request failed: {0}" -f $_.Exception.Message)
+    }
+}
+
+# -KeepAwakeSession tick (the companion's, every ~20 s). Playing = one of our pages served a media
+# request in the last QuestPlaybackFreshSec (quest_tools Get-QuestMediaActivity: per-owner files such
+# as 3d_playlist_local's XR server's; other Quest Browser playback does not count). While playing:
+# reset (a fresh 60 min) every QuestPlaybackResetSec. Once it stops: nothing, the phone's timer runs out.
+$script:QuestPlaybackFreshSec = 180
+$script:QuestPlaybackResetSec = 600
+$script:QuestPlaybackRetrySec = 60
+$script:QuestPlaybackPlaying = $false
+$script:QuestPlaybackLastReset = [DateTime]::MinValue
+$script:QuestPlaybackLastTry = [DateTime]::MinValue
+$script:QuestPlaybackLastError = ''
+
+function Invoke-PhoneKeepAliveOnQuestPlayback {
+    $act = @(Get-QuestMediaActivity -FreshSec $script:QuestPlaybackFreshSec)
+    $now = [DateTime]::UtcNow
+    if ($act.Count -eq 0) {
+        if ($script:QuestPlaybackPlaying) {
+            Write-QuestLog 'Keep Alive: Quest playback stopped - the phone Keep Alive runs out on its own timer (<= 60 min).'
+            $script:QuestPlaybackPlaying = $false
+            $script:QuestPlaybackLastReset = [DateTime]::MinValue
+        }
+        return
+    }
+    if (($now - $script:QuestPlaybackLastReset).TotalSeconds -lt $script:QuestPlaybackResetSec) { return }
+    if (($now - $script:QuestPlaybackLastTry).TotalSeconds -lt $script:QuestPlaybackRetrySec) { return }
+    $script:QuestPlaybackLastTry = $now
+    $lan = Get-QuestSkyboxCurrentLanUrl
+    $err = ''
+    if (-not $lan) {
+        $err = 'no phone LAN address (-LanConfig / -Url)'
+    } else {
+        try {
+            $r = Send-PhoneKeepAlive -LanUrl $lan -Action 'reset' -Reason 'quest_playback'
+            if ($r.Status -eq 200 -and $null -ne $r.Json -and $r.Json.ok -eq $true) {
+                $script:QuestPlaybackLastReset = $now
+                $script:QuestPlaybackLastError = ''
+                if (-not $script:QuestPlaybackPlaying) {
+                    $what = if ($r.Json.reset -eq $true) { 'reset to 60 min' } else { 'left to the running export' }
+                    $who = ($act | ForEach-Object { $_.Owner }) -join ', '
+                    Write-QuestLog ("Keep Alive: Quest playing ({0}, last media {1:N0} s ago) - phone session {2}; renewed every {3} min while it plays." -f $who, $act[0].AgeSec, $what, ($script:QuestPlaybackResetSec / 60))
+                    $script:QuestPlaybackPlaying = $true
+                }
+                return
+            }
+            $err = Get-PhoneKeepAliveError $r
+        } catch {
+            $err = $_.Exception.Message
+        }
+    }
+    if ($err -ne $script:QuestPlaybackLastError) {
+        Write-QuestLog "Keep Alive: Quest playing but the phone reset failed ($err) - retrying every $($script:QuestPlaybackRetrySec) s."
+        $script:QuestPlaybackLastError = $err
     }
 }
 
@@ -684,7 +731,11 @@ if ($WifiOff) {
     $w = Invoke-QuestWifiOff -DeviceSerial $dev
     if ($w -eq 'off') { exit 0 } else { exit 3 }
 }
-if ($KeepAwakeSession) { exit (Invoke-QuestKeepAwakeSession -ParentPid $ParentPid -RestoreProximity:$RestoreProximity) }
+if ($KeepAwakeSession) {
+    # The companion's keep-awake (no -RestoreProximity) also keeps the phone serving while the Quest plays.
+    $tick = if ($RestoreProximity) { $null } else { { Invoke-PhoneKeepAliveOnQuestPlayback } }
+    exit (Invoke-QuestKeepAwakeSession -ParentPid $ParentPid -RestoreProximity:$RestoreProximity -OnTick $tick)
+}
 if ($SkyboxPush -or $SkyboxUpdate) {
     $res = Invoke-QuestSkyboxWebDavPush -OnlyIfPresent:$SkyboxUpdate
     Set-QuestOpenStatus $res

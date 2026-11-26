@@ -224,7 +224,7 @@ $script:QuestKeepAwakeProc = $null
 # Startup: hold the proximity sensor off (prox_close) while this companion runs; applied when the
 # headset first shows up on adb and again after a headset reboot.
 function Start-QuestKeepAwakeInBackground {
-    param([int] $CompanionPid = $PID)
+    param([int] $CompanionPid = $PID, [string] $ExtensionDir = '')
     # A new session takes over from the last quit's history helper (this session's quit deletes
     # those entries), before keep-awake can switch the sensor off under it.
     Stop-QuestHistoryRetry
@@ -235,7 +235,11 @@ function Start-QuestKeepAwakeInBackground {
     if (-not (Test-Path -LiteralPath $script:QuestWatchScript)) { return }
     Stop-QuestKeepAwake
     try {
-        $script:QuestKeepAwakeProc = Start-QuestWatchProcess -Arguments @('-KeepAwakeSession', '-ParentPid', "$CompanionPid")
+        # -LanConfig: the phone's current LAN address (re-read every tick) for the Keep Alive reset
+        # while the Quest plays (Invoke-PhoneKeepAliveOnQuestPlayback).
+        $watchArgs = @('-KeepAwakeSession', '-ParentPid', "$CompanionPid")
+        if ($ExtensionDir) { $watchArgs += @('-LanConfig', (Join-Path $ExtensionDir 'lan_config.json')) }
+        $script:QuestKeepAwakeProc = Start-QuestWatchProcess -Arguments $watchArgs
         Write-Host "[quest] Keeping the Quest awake while the companion runs (proximity sensor off once it is on adb; PID $($script:QuestKeepAwakeProc.Id))"
     } catch {
         Write-Warning "[quest] Could not start Quest keep-awake: $($_.Exception.Message)"

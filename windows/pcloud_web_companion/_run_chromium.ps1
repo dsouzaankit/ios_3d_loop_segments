@@ -2778,7 +2778,7 @@ if (-not $DetachChromium) {
     Register-CompanionCancelHandler
     Start-CompanionExitWatchdog
     if (Get-Command Start-QuestKeepAwakeInBackground -ErrorAction SilentlyContinue) {
-        Start-QuestKeepAwakeInBackground -CompanionPid $PID
+        Start-QuestKeepAwakeInBackground -CompanionPid $PID -ExtensionDir $ExtensionDir
     }
     if (Get-Command Start-QuestControlPageInBackground -ErrorAction SilentlyContinue) {
         Start-QuestControlPageInBackground -ExtensionDir $ExtensionDir -CompanionPid $PID
