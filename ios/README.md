@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 448 (1.3.1):** Quest /xr hand tracking: a pinch plays / pauses, a held fist leaves AR (a pinch no longer counts as a fist).
+
 **Build 447 (1.3.1):** Video served over LAN keeps Keep Alive going: while the phone serves a video (Quest Browser on the phone's own `/xr` page, Skybox, rclone `L:` playback), it resets its non-export Keep Alive session to **60 min** at most every **10 min** (log once per playback stretch: `Keep Alive: LAN media playing — continuing 60 min …`). Before, only the companion's reset counted, and the companion cannot see `/xr` playing straight from the phone, so the session ran out mid-clip (seen 2026-11-26: under 50 min while a clip played). Never starts a stopped Keep Alive, undoes a lock-screen pause, shortens a longer session, or touches an export-owned one.
 
 **Build 446 (1.3.1):** LAN monitor `/` and `/browse` show a live **Keep Alive** countdown under the export source bar (time left + end time, ticks every second, re-reads `keep_alive.json` every 15 s, also during export). `GET /keep_alive.json` adds `exportTimeoutEndsAt` / `exportTimeoutRemainingSeconds` while an export runs with a Keep Alive timeout set.
