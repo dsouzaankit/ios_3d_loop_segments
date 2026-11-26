@@ -967,6 +967,9 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "playing", reason: "xr_playing" }),
         cache: "no-store"
+      }).then(function () {
+        // Top-left countdown (htmlKeepAliveLiveBlock) shows a renewal right away, not up to 15 s later.
+        if (typeof window.refreshLANKeepAlive === "function") window.refreshLANKeepAlive();
       }).catch(function () {});
     } catch (eKa) {}
   }, 60000);

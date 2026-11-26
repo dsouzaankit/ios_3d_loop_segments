@@ -215,9 +215,21 @@
       background: #334155 !important;
       color: #f8fafc !important;
     }
+    /* Keep Alive countdown (htmlKeepAliveLiveBlock): top-left, over the launch screen and the 2D player. */
+    #lan-keep-alive-line {
+      position: fixed; left: max(0.6rem, env(safe-area-inset-left, 0px) + 0.4rem);
+      top: max(0.6rem, env(safe-area-inset-top, 0px) + 0.35rem); z-index: 10045; margin: 0;
+      padding: 0.3rem 0.6rem; border-radius: 8px; border: 1px solid #333;
+      background: rgba(15, 23, 42, 0.85); color: #e2e8f0; font-size: 0.8rem;
+      font-variant-numeric: tabular-nums; pointer-events: none; max-width: calc(100vw - 1.2rem);
+    }
+    #lan-keep-alive-line.is-warn #lan-keep-alive-text { color: #fbbf24; font-weight: 600; }
+    #lan-keep-alive-line.is-off #lan-keep-alive-text { color: #f87171; }
+    #lan-keep-alive-line.is-stale #lan-keep-alive-text { opacity: 0.7; }
   </style>
 </head>
 <body>
+  {{XR_KEEP_ALIVE_HTML}}
   <button type="button" id="xr-reopen" aria-label="Show file list">Files</button>
   <div id="xr-archive-float" hidden></div>
   <div id="xr-archive-dd" aria-hidden="true">

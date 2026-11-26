@@ -2297,6 +2297,7 @@ extension ExportLANServer {
             .replacingOccurrences(of: "{{XR_CONFIG_JSON}}", with: configJSON)
             .replacingOccurrences(of: "{{XR_MEDIA_ROOT_HTML}}", with: htmlEscape(mediaRoot))
             .replacingOccurrences(of: "{{XR_BUILD}}", with: XRPlayerAssets.version)
+            .replacingOccurrences(of: "{{XR_KEEP_ALIVE_HTML}}", with: htmlKeepAliveLiveBlock())
     }
 
     /// The /xr page lives in bundled files: xr-player.html (markup + CSS), xr-components.js
