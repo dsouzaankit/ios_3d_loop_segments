@@ -183,6 +183,30 @@ This is different from [re-linking after a SideStore reinstall](#reinstall-or-up
 | **`NSURLErrorDomain` code `-1001`** (request timed out on install / +) | **Restart the iPhone**, reconnect LocalDevVPN (Wi‑Fi), wait until the IPA is fully local (no iCloud badge), then **My Apps → +** again — fixed it here. |
 | **`VerifyCertificateOperation`** → **`targetAppBundle is missing in context`** | Not a certificate problem: SideStore lost its stored copy of the app. LocalDevVPN on → **My Apps → +** → pick that app’s fully local IPA (Loop Segments: `.\copy-to-icloud.ps1`) → Refresh All. Same Apple ID ⇒ app data kept. Do this for every app the error names ([SideStore #1575](https://github.com/SideStore/SideStore/issues/1575)). |
 
+#### Apple ID sign-in fails with HTTP 503 (since 2026-11-20)
+
+**Symptom:** SideStore sign-in → **503 Service Temporarily Unavailable** on **every** anisette server (seen here Nov 26, 2026). Switching servers does not help: the 503 comes from Apple, not anisette.
+
+**Cause:** Since 2026-11-20 Apple's sign-in server (`gsa.apple.com/grandslam/GsService2`) answers 503 to any request whose `X-MMe-Client-Info` header says `macOS;`, before it checks the password. SideStore 0.7.0 / nightly still sends `macOS;`. With `Mac OS X;` instead, the old `10.12.6` identity is then refused (`-22410` / `-23782`, "macOS 10.13 or later required"), so the version must change too ([SideStore #1745](https://github.com/SideStore/SideStore/issues/1745)).
+
+**Workaround** (confirmed by several users in #1745; **worked here Nov 26, 2026**: signed in, Refresh gave a new 7-day profile, same certificate, so `signing.p12` still valid):
+
+1. **Settings → User Customizations →** **On-Device Anisette** off (on gives `-45063`) → force-quit and reopen SideStore.
+2. **Settings → Anisette Servers →** **jkcoxson** (`https://mac-ani.jkcoxson.com`, a Mac-based server) → **Auto Rotation** off.
+3. **User Customizations → Anisette Client Configuration → Remote Server Sync → Fetch → Save as Overrides.**
+4. **Client Info** → `<MacBookPro13,3> <Mac OS X;26.6;25F84> <com.apple.AuthKit/1 (com.apple.akd/1.0)>`; keep the fetched User Agent → **Save Overrides**.
+5. **Reset adi.pb** with **keep headers** ticked → force-quit → LocalDevVPN on → sign in.
+
+| Watch out for | Why |
+|---|---|
+| **Reset to Defaults** in Anisette Client Configuration | Puts `macOS;` back → 503 again. Never tap it. |
+| Retrying again and again | Each failure is another Apple request; it can add a rate limit on top. |
+| SideStore offers to **revoke** the certificate (after closing a failed login page) | Choose **Continue without revoking**. `windows\signing\signing.p12` (PC-signed USB installs) is that same certificate. |
+| `-45061` / `-22410` after the change | **Reset adi.pb** again (keep headers) → reopen → sign in. |
+| Refresh: **Could not locate signing certificate** | Long-press the app in **My Apps** → reset its certificate → **Refresh All**. |
+
+**PC-signed USB install is not a way around this:** zsign re-signs with the newest profile already on the phone and cannot get a new one; only a SideStore sign-in renews the 7-day profile. An app whose profile lapses just stops opening (data kept), and the next successful refresh brings it back.
+
 #### Reinstall or update SideStore with iloader
 
 Use **iloader** over USB — it works even when on-device refresh is broken and places a fresh pairing file. Check the installed version afterward: SideStore **Settings** tab → bottom of the page (or iOS **Settings → General → iPhone Storage → SideStore**).
