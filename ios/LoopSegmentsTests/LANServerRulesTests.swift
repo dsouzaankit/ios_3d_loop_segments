@@ -211,4 +211,14 @@ final class LANServerRulesTests: XCTestCase {
         XCTAssertFalse(ExportLANServer.isBrowserLikeRequest(requestHeaders: headers("User-Agent: Mozilla/5.0", "Depth: 0")),
                        "a WebDAV client is never treated as a browser")
     }
+
+    /// Only rclone (the PC's L: mount) renews Keep Alive on media GETs; direct HTTP players do not.
+    func testRcloneClientDetection() {
+        XCTAssertTrue(ExportLANServer.isRcloneClient(requestHeaders: headers("User-Agent: rclone/v1.68.2", "Range: bytes=0-")))
+        XCTAssertTrue(ExportLANServer.isRcloneClient(requestHeaders: headers("user-agent:rclone/v1.70.0")))
+        XCTAssertFalse(ExportLANServer.isRcloneClient(requestHeaders: headers("User-Agent: Mozilla/5.0 (X11; Linux x86_64) OculusBrowser/38.0")))
+        XCTAssertFalse(ExportLANServer.isRcloneClient(requestHeaders: headers("User-Agent: SkyBox/1.0 okhttp/4.9")))
+        XCTAssertFalse(ExportLANServer.isRcloneClient(requestHeaders: headers("Range: bytes=0-")), "no User-Agent")
+        XCTAssertFalse(ExportLANServer.isRcloneClient(requestHeaders: headers("X-Via: rclone/v1.68")), "rclone outside User-Agent")
+    }
 }

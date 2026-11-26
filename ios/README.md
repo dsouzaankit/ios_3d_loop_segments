@@ -14,6 +14,8 @@
 
 Build **1.0.6+** uses **AVFoundation** stream copy to `op_00.mp4` / `op_01.mp4` (no embedded ffmpeg). Required on **iOS 26.x** (ffmpeg-kit crashes at launch).
 
+**Build 452 (1.3.1):** Keep Alive renews only while the PC's rclone **L:** mount reads video (3d_playlist_local reading `L:\archive`): a media GET with `User-Agent: rclone/…` resets the non-export session to **60 min** at most every **10 min** (log: `Keep Alive: L: (rclone) reading video — continuing 60 min …`). Direct HTTP playback from the phone (Quest `/xr`, Skybox, Safari) no longer extends it, and the `/xr` once-a-minute `playing` heartbeat (449–451) is removed; `POST /keep_alive.json` `{"action":"playing"}` is now a no-op so a page still open from those builds does not reset the timer. The `/xr` countdown badge (450) stays. The PC companion's own 10-min reset while 3d_playlist_local's XR page plays now also needs one of its workflows running from **L:** (windows/quest README, *Keep Alive while the Quest plays*). Same rules as before: never starts a stopped Keep Alive, undoes a lock-screen pause, shortens a longer session or touches an export-owned one.
+
 **Build 451 (1.3.1):** Quest /xr hand gestures: both fists switch them off / on; VR entered after AR gets hand tracking.
 
 **Build 450 (1.3.1):** The `/xr` page shows the Keep Alive countdown (same line as the LAN monitor: time left, end time, off / stopped / export states) as a small badge in the top-left corner, over both the launch screen and the 2D player. It polls `keep_alive.json` every 15 s and refreshes right after each once-a-minute "playing" heartbeat, so a renewal shows at once. Not drawn inside Enter AR / Enter VR (the browser shows no page elements there).

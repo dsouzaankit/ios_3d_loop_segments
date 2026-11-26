@@ -956,23 +956,6 @@
   video.addEventListener("progress", syncTransportUI);
   video.addEventListener("play", syncPlayPauseLabel);
   video.addEventListener("pause", syncPlayPauseLabel);
-  // Keep Alive heartbeat: a looping clip is buffered after its first pass, so the phone sees no
-  // more media GETs and stops renewing Keep Alive. Tell it once a minute while the video plays
-  // (the phone renews at most every 10 min and never starts a stopped Keep Alive).
-  setInterval(function () {
-    if (video.paused || video.ended || !(video.currentSrc || video.src)) return;
-    try {
-      fetch("keep_alive.json", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "playing", reason: "xr_playing" }),
-        cache: "no-store"
-      }).then(function () {
-        // Top-left countdown (htmlKeepAliveLiveBlock) shows a renewal right away, not up to 15 s later.
-        if (typeof window.refreshLANKeepAlive === "function") window.refreshLANKeepAlive();
-      }).catch(function () {});
-    } catch (eKa) {}
-  }, 60000);
   video.addEventListener("ended", function () {
     if (!activePlaylist().length) return;
     loadIndex(index + 1, true);

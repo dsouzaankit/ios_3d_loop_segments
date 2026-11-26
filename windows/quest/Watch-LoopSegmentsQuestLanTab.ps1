@@ -62,8 +62,9 @@
                    would wake it); it gets the override once someone puts it on. Re-applies after a headset reboot. Never re-enables
                    the sensor itself (the companion's cleanup does, after clearing history).
                    Also, while one of our pages plays on the Quest (quest_tools Get-QuestMediaActivity:
-                   a media request in the last 3 min, e.g. 3d_playlist_local's XR page), POST
-                   /keep_alive.json reset to the phone every 10 min, so the
+                   a media request in the last 3 min, e.g. 3d_playlist_local's XR page) AND a
+                   3d_playlist_local workflow runs from the L: mount (its registered copy is on L:),
+                   POST /keep_alive.json reset to the phone every 10 min, so the
                    phone's 60 min Keep Alive (its LAN server, the L: mount) does not run out mid-session
                    (-LanConfig = the companion's lan_config.json, for the phone's current address).
 
@@ -279,10 +280,31 @@ function Invoke-PhoneKeepAliveExtendAfterQuestOpen {
     }
 }
 
+# Running 3d_playlist_local workflows whose copy lives on the phone's rclone mount (L:\archive\...),
+# from %TEMP%\loopsegments-playlist-session.json (3d_playlist_local Register-PlaylistQuestSession:
+# shutdownScript = that workflow's own copy). Same PID-and-start-time check as 3d_playlist_local, so a
+# reused PID does not count. Returns the workflow names (empty = none runs from L:).
+$script:PlaylistSessionPath = Join-Path $env:TEMP 'loopsegments-playlist-session.json'
+function Get-PlaylistWorkflowsOnPhoneMount {
+    if (-not (Test-Path -LiteralPath $script:PlaylistSessionPath)) { return @() }
+    try { $list = @((Get-Content -LiteralPath $script:PlaylistSessionPath -Raw -ErrorAction Stop | ConvertFrom-Json).sessions) } catch { return @() }
+    $letter = 'L'
+    if (Get-Command Get-LoopSegmentsMountDriveLetter -ErrorAction SilentlyContinue) { $letter = Get-LoopSegmentsMountDriveLetter }
+    $prefix = $letter + ':\'
+    return @($list | Where-Object {
+            $_ -and $_.PSObject.Properties['shutdownScript'] -and [int]$_.pid -gt 0 -and
+            ([string]$_.shutdownScript).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
+            (Get-QuestProcessStartStamp -ProcessId ([int]$_.pid)) -eq [string]$_.started
+        } | ForEach-Object { [string]$_.name })
+}
+
 # -KeepAwakeSession tick (the companion's, every ~20 s). Playing = one of our pages served a media
 # request in the last QuestPlaybackFreshSec (quest_tools Get-QuestMediaActivity: per-owner files such
-# as 3d_playlist_local's XR server's; other Quest Browser playback does not count). While playing:
-# reset (a fresh 60 min) every QuestPlaybackResetSec. Once it stops: nothing, the phone's timer runs out.
+# as 3d_playlist_local's XR server's; other Quest Browser playback does not count). While playing AND
+# a 3d_playlist_local workflow runs from the phone's L: mount (Get-PlaylistWorkflowsOnPhoneMount; it
+# may need its own scripts from L: even when no video is read from there): reset (a fresh 60 min) every
+# QuestPlaybackResetSec. Otherwise nothing: the phone's timer runs out (rclone video reads on L: renew
+# it on the phone itself, app build 452+).
 $script:QuestPlaybackFreshSec = 180
 $script:QuestPlaybackResetSec = 600
 $script:QuestPlaybackRetrySec = 60
@@ -290,18 +312,29 @@ $script:QuestPlaybackPlaying = $false
 $script:QuestPlaybackLastReset = [DateTime]::MinValue
 $script:QuestPlaybackLastTry = [DateTime]::MinValue
 $script:QuestPlaybackLastError = ''
+$script:QuestPlaybackOffMountLogged = $false
 
 function Invoke-PhoneKeepAliveOnQuestPlayback {
     $act = @(Get-QuestMediaActivity -FreshSec $script:QuestPlaybackFreshSec)
     $now = [DateTime]::UtcNow
-    if ($act.Count -eq 0) {
+    $onMount = @()
+    if ($act.Count -gt 0) { $onMount = @(Get-PlaylistWorkflowsOnPhoneMount) }
+    if ($act.Count -eq 0 -or $onMount.Count -eq 0) {
         if ($script:QuestPlaybackPlaying) {
-            Write-QuestLog 'Keep Alive: Quest playback stopped - the phone Keep Alive runs out on its own timer (<= 60 min).'
+            $why = if ($act.Count -eq 0) { 'Quest playback stopped' } else { 'no 3d_playlist_local workflow runs from L: any more' }
+            Write-QuestLog "Keep Alive: $why - the phone Keep Alive runs out on its own timer (<= 60 min)."
             $script:QuestPlaybackPlaying = $false
             $script:QuestPlaybackLastReset = [DateTime]::MinValue
         }
+        if ($act.Count -eq 0) {
+            $script:QuestPlaybackOffMountLogged = $false
+        } elseif (-not $script:QuestPlaybackOffMountLogged) {
+            Write-QuestLog 'Keep Alive: Quest playing, but no 3d_playlist_local workflow runs from L: - phone Keep Alive not renewed.'
+            $script:QuestPlaybackOffMountLogged = $true
+        }
         return
     }
+    $script:QuestPlaybackOffMountLogged = $false
     if (($now - $script:QuestPlaybackLastReset).TotalSeconds -lt $script:QuestPlaybackResetSec) { return }
     if (($now - $script:QuestPlaybackLastTry).TotalSeconds -lt $script:QuestPlaybackRetrySec) { return }
     $script:QuestPlaybackLastTry = $now
@@ -318,7 +351,7 @@ function Invoke-PhoneKeepAliveOnQuestPlayback {
                 if (-not $script:QuestPlaybackPlaying) {
                     $what = if ($r.Json.reset -eq $true) { 'reset to 60 min' } else { 'left to the running export' }
                     $who = ($act | ForEach-Object { $_.Owner }) -join ', '
-                    Write-QuestLog ("Keep Alive: Quest playing ({0}, last media {1:N0} s ago) - phone session {2}; renewed every {3} min while it plays." -f $who, $act[0].AgeSec, $what, ($script:QuestPlaybackResetSec / 60))
+                    Write-QuestLog ("Keep Alive: Quest playing ({0}, last media {1:N0} s ago; workflow on L: {2}) - phone session {3}; renewed every {4} min while it plays." -f $who, $act[0].AgeSec, ($onMount -join ', '), $what, ($script:QuestPlaybackResetSec / 60))
                     $script:QuestPlaybackPlaying = $true
                 }
                 return

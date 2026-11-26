@@ -1043,9 +1043,20 @@ enum ExportLANServer {
     private static let mediaKeepAliveLock = NSLock()
     private static var lastMediaKeepAliveNote = Date.distantPast
 
-    /// A video GET over LAN (Quest `/xr`, Skybox, rclone `L:` playback) keeps the phone's Keep Alive
-    /// session going: nothing on the PC sees the phone's own `/xr` page play, so the phone renews
-    /// itself. Hops to the main actor at most once a minute; the Keep Alive side throttles to 10 min.
+    /// rclone's `User-Agent: rclone/…`: the PC's `L:` mount (3d_playlist_local reading `L:\archive`).
+    /// Browsers (Quest `/xr`, Safari), Skybox and other players send their own.
+    static func isRcloneClient(requestHeaders: String) -> Bool {
+        // "\r\n" is one Character in Swift (see isWebDAVClient).
+        requestHeaders.split(whereSeparator: { $0 == "\r\n" || $0 == "\n" }).contains { line in
+            let lower = line.lowercased()
+            guard lower.hasPrefix("user-agent:") else { return false }
+            return lower.dropFirst("user-agent:".count).trimmingCharacters(in: .whitespaces).hasPrefix("rclone/")
+        }
+    }
+
+    /// A video GET from rclone (the PC's `L:` mount, e.g. 3d_playlist_local reading `L:\archive`) keeps
+    /// the phone's Keep Alive session going. Direct HTTP reads (Quest `/xr`, Skybox, browsers) do not.
+    /// Hops to the main actor at most once a minute; the Keep Alive side throttles to 10 min.
     static func noteMediaServedForKeepAlive() {
         mediaKeepAliveLock.lock()
         let now = Date()
@@ -1255,7 +1266,8 @@ enum ExportLANServer {
             return
         }
 
-        if ExportPaths.isLANBrowsableMediaFile(fileName: fileURL.lastPathComponent) {
+        if ExportPaths.isLANBrowsableMediaFile(fileName: fileURL.lastPathComponent),
+           isRcloneClient(requestHeaders: requestHeaders) {
             noteMediaServedForKeepAlive()
         }
 

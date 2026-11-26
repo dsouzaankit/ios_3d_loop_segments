@@ -323,7 +323,7 @@ extension ExportLANServer {
                 "GET: current Keep Alive state (active, remaining session seconds).",
                 "POST action=reset (default): set non-export session timer to sessionDurationSeconds (60 min).",
                 "POST action=extend: add seconds (default sessionDurationSeconds) to remaining session time.",
-                "POST action=playing: /xr heartbeat while video plays; renews a running session to 60 min at most every 10 min.",
+                "POST action=playing: ignored (old /xr heartbeat); only rclone L: video reads renew Keep Alive.",
                 "Body examples: { \"reason\": \"companion_quit\" }, { \"action\": \"extend\", \"reason\": \"quest_open\" }.",
                 "While an export owns Keep Alive, POST keeps the loop running and does not attach an auto-stop.",
             ]
@@ -394,9 +394,9 @@ extension ExportLANServer {
             Task { @MainActor in
                 let payload: [String: Any]
                 if action == "playing" {
-                    // `/xr` heartbeat while its <video> plays: a buffered looping clip makes no more
-                    // media GETs, so `sendFile` alone stops renewing. Same 10-min throttle and rules.
-                    ExportBackgroundKeepAlive.shared.noteLANMediaServed()
+                    // Builds 449-451 `/xr` heartbeat. Since 452 direct HTTP playback does not extend Keep
+                    // Alive (only rclone `L:` reads do); kept as a no-op so a page still open from those
+                    // builds does not fall through to `reset`.
                     var status = ExportBackgroundKeepAlive.shared.statusPayload()
                     status["ok"] = true
                     payload = status

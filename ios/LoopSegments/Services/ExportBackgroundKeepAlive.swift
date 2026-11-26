@@ -193,9 +193,10 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         return payload
     }
 
-    /// Video served over LAN (`ExportLANServer.noteMediaServedForKeepAlive`, ≤ once a minute): while a
-    /// non-export session runs, reset it to `sessionDurationSeconds` at most every
-    /// `mediaRenewIntervalSeconds`, so playback from the phone (Quest `/xr`, Skybox) never runs it out.
+    /// rclone read a video over LAN (`ExportLANServer.noteMediaServedForKeepAlive`, ≤ once a minute: the
+    /// PC's `L:` mount, e.g. 3d_playlist_local reading `L:\archive`): while a non-export session runs,
+    /// reset it to `sessionDurationSeconds` at most every `mediaRenewIntervalSeconds`, so `L:` stays up
+    /// while it is read. Direct HTTP reads (Quest `/xr`, Skybox) do not call this.
     /// Never starts a stopped Keep Alive, undoes a lock-screen pause, shortens a longer session
     /// (e.g. after Open on Quest's +60 min), or touches an export-owned one.
     func noteLANMediaServed() {
@@ -216,11 +217,11 @@ final class ExportBackgroundKeepAlive: NSObject, AVAudioPlayerDelegate {
         scheduleSessionAutoStop(
             durationSeconds: duration,
             logMessage: continuing ? nil : String(
-                format: "Keep Alive: LAN media playing — continuing %.0f min (renewed every %.0f min while video is served)",
+                format: "Keep Alive: L: (rclone) reading video — continuing %.0f min (renewed every %.0f min while it reads)",
                 duration / 60,
                 ExportKeepAliveSettings.mediaRenewIntervalSeconds / 60
             ),
-            albumHint: "LAN playback"
+            albumHint: "L: reading"
         )
     }
 
