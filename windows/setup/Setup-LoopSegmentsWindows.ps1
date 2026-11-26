@@ -208,7 +208,7 @@ Portable notes:
   - Companion venv/browsers/extension live under %LOCALAPPDATA%\pcloud_web_companion (not P:).
   - chromium-profile on P: is intentional (shared pCloud login cookies across your PCs).
   - On a new PC: run this Setup again; do not copy another user's .venv.
-  - PC-signed USB install: windows\signing\signing.p12 syncs with the repo folder; the password is
+  - PC-signed USB install: ..\env_setup\zsign\signing.p12 syncs with that folder; the password is
     per PC (Credential Manager): .\setup\Set-LoopSegmentsSigning.ps1 asks for it.
   - Install AltServer (https://altstore.io) and keep it running for AltStore refresh;
     without weekly refresh, free/Personal Team Loop Segments stops opening after ~7 days.

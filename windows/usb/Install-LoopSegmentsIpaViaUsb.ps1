@@ -48,15 +48,14 @@
      so you can still finish it by hand.
 
   1b. Before any of 2-4: when SideStore's exported certificate is at -SigningP12 (password in Credential
-     Manager as -SigningCredTarget) and zsign is found (..\env_setup\zsign\zsign.exe next to the repo, or
-     PATH), signs the IPA on this PC with it and the phone's newest profile for the installed bundle id,
-     and installs it over USB (LoopSegments-UsbSign.py): no tap, no Wi-Fi moves. Confirmed by the new
+     Manager as -SigningCredTarget) and zsign is found (zsignExe, else ..\env_setup\zsign\zsign.exe next to
+     the repo, else PATH), signs the IPA on this PC with it and the phone's newest profile for the installed bundle id,
+     and installs it over USB (..\env_setup\zsign\sidestore_sign.py): no tap, no Wi-Fi moves. Confirmed by the new
      build as in step 4. Not set up, or it fails: steps 2-5 as usual. -NoSignedInstall skips it.
      No LocalDevVPN needed: the phone prep skips it when this is ready, and before steps 2-5 the
      VPN is connected if it is not (Prepare-PhoneForSideStoreViaUsb.ps1 -ForceVpn).
      Setup on any PC: ..\setup\Set-LoopSegmentsSigning.ps1 [-P12 <SideStore export>] (zsign download,
-     certificate copy, password prompt per PC, check). zsign: zsignExe in loop-segments-windows.json,
-     else ..\env_setup\zsign next to the repo, else windows\signing\zsign, else PATH.
+     certificate copy, password prompt per PC, check). Shared kit: ..\env_setup\zsign (README.md there).
 
   The installed app must be build 428+ for step 3 to open SideStore; older builds just launch.
 
@@ -88,10 +87,11 @@ param(
     [switch] $RestartPhoneOnError,
     # Skip the PC-signed install (step 1b) and always use the SideStore link.
     [switch] $NoSignedInstall,
-    # SideStore's exported signing certificate; empty = windows\signing\signing.p12
+    # SideStore's exported signing certificate; empty = ..\env_setup\zsign\signing.p12
     # (lib\Get-LoopSegmentsSigning.ps1).
     [string] $SigningP12 = '',
-    # Windows Credential Manager generic credential holding the .p12 password; empty = LoopSegments-signing.
+    # Windows Credential Manager generic credential holding the .p12 password; empty = SideStore-signing
+    # (or the older LoopSegments-signing when that is the one this PC has).
     [string] $SigningCredTarget = ''
 )
 
@@ -427,12 +427,11 @@ if ($NoSignedInstall) {
     Write-Inst 'PC-signed install: zsign not found - using SideStore.' Yellow
 } else {
     Write-Inst 'Signing on this PC with SideStore''s certificate and installing over USB...' Cyan
-    $signPy = Join-Path $PSScriptRoot 'LoopSegments-UsbSign.py'
     # Local disk, not P: (pCloud holds new files while it uploads them; the USB install then hung) and
     # not AppData (the Store Python's private copy).
     $work = Join-Path $env:USERPROFILE '.loopsegments-sign-work'
     $oldPath = if ($beforeApp) { $beforeApp.Path } else { '' }
-    $out = Invoke-Py @($signPy, 'sign-install', $IpaPath, $zsign, $SigningP12, $SigningCredTarget, $work)
+    $out = ((Invoke-LoopSegmentsSignPy -Runtime $script:rt -ArgumentList @('sign-install', $IpaPath, $zsign, $SigningP12, $SigningCredTarget, $work)).Lines -join "`n")
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     $ready = [regex]::Match($out, '(?m)^READY\t(\S+)\t\S*\t([^\t]+)\t(\S+)')
     if ($ready.Success) {

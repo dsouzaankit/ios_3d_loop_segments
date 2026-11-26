@@ -110,8 +110,8 @@ function Invoke-ProjectAltStoreDeployPrep {
         return
     }
     $join = @(
-        (Join-Path $ProjectRoot 'env_setup\altserver_refresh\lib\Join-AltStoreDeployPrep.ps1')
-        (Join-Path $ProjectRoot 'env_setup\altserver_refresh\Join-AltStoreDeployPrep.ps1')
+        (Join-Path (Split-Path -Parent $ProjectRoot) 'env_setup\altserver_refresh\lib\Join-AltStoreDeployPrep.ps1')
+        (Join-Path (Split-Path -Parent $ProjectRoot) 'env_setup\altserver_refresh\Join-AltStoreDeployPrep.ps1')
         'P:\all_scripts\iOS apps\env_setup\altserver_refresh\lib\Join-AltStoreDeployPrep.ps1'
         'P:\all_scripts\iOS apps\env_setup\altserver_refresh\Join-AltStoreDeployPrep.ps1'
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1

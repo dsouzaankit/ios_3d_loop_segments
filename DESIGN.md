@@ -202,10 +202,10 @@ Day-to-day: **companion** (queue exports) + optional **rclone** mount + **USB** 
 | `rclone/` | Optional WinFsp drive letter over phone WebDAV |
 | `sideload/` | AltServer at logon; Sideloadly fallback |
 | `lan/` | Multi-phone listing / PC index `:8766` |
-| `lib/` | Shared helpers (AltServer wrappers → `env_setup` submodule, Python picker, settings) |
+| `lib/` | Shared helpers (AltServer wrappers → sibling `..\env_setup`, Python picker, settings) |
 | `archive/` | Legacy `Sync-FromPhoneLAN.ps1`, `net use`, old mounts |
 
-Repo-root submodule **`env_setup/`** ([ios_env_setup](https://github.com/dsouzaankit/ios_env_setup)): AltServer start and phone-subnet refresh. Repo-root **`Skybox_vr_pc/`** ([skybox-vr-pc](https://github.com/dsouzaankit/skybox-vr-pc)): SKYBOX desktop process + AirScreen Add-folders. Clone with `--recurse-submodules`.
+Sibling checkout **`..\env_setup`** next to the repo ([ios_env_setup](https://github.com/dsouzaankit/ios_env_setup), not a submodule): AltServer start, phone-subnet refresh, SideStore guide, zsign. Repo-root **`Skybox_vr_pc/`** ([skybox-vr-pc](https://github.com/dsouzaankit/skybox-vr-pc)): SKYBOX desktop process + AirScreen Add-folders. Clone with `--recurse-submodules`.
 
 **Typical sequence**
 
@@ -254,7 +254,6 @@ ios_3d_loop_segments/
     setup/ usb/ rclone/ sideload/ lan/ lib/
     pcloud_web_companion/
     archive/                # legacy sync scripts
-  env_setup/                # submodule ios_env_setup (AltServer start / phone subnet)
   Skybox_vr_pc/             # submodule skybox-vr-pc (SKYBOX desktop + AirScreen share)
 ```
 

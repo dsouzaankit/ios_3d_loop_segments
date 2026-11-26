@@ -608,10 +608,10 @@ function Test-LoopSegmentsLanHttpLooksLikeApp {
 function Get-LoopSegmentsIphoneLanIpv4ScriptPath {
     $repoRoot = Split-Path -Parent $script:LoopSegmentsWindowsRoot
     $candidates = @(
-        (Join-Path $repoRoot 'env_setup\lan\Get-IphoneLanIpv4.py')
+        (Join-Path (Split-Path -Parent $repoRoot) 'env_setup\lan\Get-IphoneLanIpv4.py')
         'P:\all_scripts\iOS apps\env_setup\lan\Get-IphoneLanIpv4.py'
         # Legacy path (pre env_setup/lan move)
-        (Join-Path $repoRoot 'env_setup\altserver_refresh\lan\Get-IphoneLanIpv4.py')
+        (Join-Path (Split-Path -Parent $repoRoot) 'env_setup\altserver_refresh\lan\Get-IphoneLanIpv4.py')
         'P:\all_scripts\iOS apps\env_setup\altserver_refresh\lan\Get-IphoneLanIpv4.py'
     )
     foreach ($c in $candidates) {

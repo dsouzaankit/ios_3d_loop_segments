@@ -57,6 +57,8 @@ windows/rclone/loopsegments-rclone-mount.log
 xr_debug*.json
 search_debug_pull*.txt
 
-# PC-signed USB install: SideStore's exported certificate + zsign (windows\usb\Install-LoopSegmentsIpaViaUsb.ps1)
+# PC-signed USB install: the certificate + zsign live in ..\env_setup\zsign now; keep an old copy and any
+# stray SideStore export out of git
 windows/signing/
+*.p12
 .zsign_cache/

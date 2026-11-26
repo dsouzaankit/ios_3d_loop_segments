@@ -5,18 +5,18 @@
 
 .DESCRIPTION
   Works on any Windows PC; Setup-LoopSegmentsWindows.ps1 runs it. Each step is skipped when done:
-  1. zsign: found via zsignExe (loop-segments-windows.json), ..\env_setup\zsign next to the repo,
-     windows\signing\zsign, or PATH. Missing: downloads zsign-windows-x64.zip (pinned version) from
-     github.com/zhlynn/zsign releases, checks its SHA-256 against the hash pinned in
-     lib\Get-LoopSegmentsSigning.ps1, and unzips it to ..\env_setup\zsign when that env_setup folder
-     exists, else to windows\signing\zsign. -SkipZsign skips this.
-  2. Certificate: windows\signing\signing.p12 (gitignored; it syncs with the repo folder, so other
-     PCs on the same synced folder have it too). -P12 <file> copies an export there (SideStore >
-     Settings > Certificate Management > long-press the certificate > Export Certificate >
-     Export Full (.p12)).
-  3. Password: a generic credential LoopSegments-signing in this PC's Credential Manager (per PC,
-     never synced). Missing (or -ResetPassword): cmdkey prompts for it.
-  4. Check: LoopSegments-UsbSign.py check (needs the iPhone on USB for the profile part).
+  Uses the shared kit in ..\env_setup\zsign next to the repo (SideStoreSigning.ps1, sidestore_sign.py;
+  see its README.md). No env_setup there: nothing to set up (clone ios_env_setup next to the repo).
+  1. zsign: found via zsignExe (loop-segments-windows.json), env_setup\zsign\zsign.exe, or PATH.
+     Missing: downloads zsign-windows-x64.zip (pinned version + SHA-256 in SideStoreSigning.ps1) from
+     github.com/zhlynn/zsign releases into env_setup\zsign. -SkipZsign skips this.
+  2. Certificate: env_setup\zsign\signing.p12 (gitignored; it syncs with that folder, so other PCs on
+     the same synced folder have it too). -P12 <file> copies an export there (SideStore > Settings >
+     Certificate Management > long-press the certificate > Export Certificate > Export Full (.p12)).
+  3. Password: a generic credential SideStore-signing (older setups: LoopSegments-signing, still used)
+     in this PC's Credential Manager (per PC, never synced). Missing (or -ResetPassword): cmdkey prompts.
+  4. Check: env_setup\zsign\sidestore_sign.py check for Loop Segments (needs the iPhone on USB for the
+     profile part).
 
 .EXITCODES
   0  READY (or everything set up but no iPhone on USB to check against)
@@ -30,7 +30,7 @@
 #>
 [CmdletBinding()]
 param(
-    # A SideStore export to copy to windows\signing\signing.p12 (replaces the one there).
+    # A SideStore export to copy to env_setup\zsign\signing.p12 (replaces the one there).
     [string] $P12 = '',
     # Ask for the .p12 password again even when this PC already has it.
     [switch] $ResetPassword,
@@ -52,6 +52,11 @@ function Write-Sign([string] $Text, [string] $Color = 'Gray') {
 
 $missing = @()
 
+if (-not (Test-LoopSegmentsZsignKit)) {
+    Write-Sign "No env_setup\zsign next to the repo ($LoopSegmentsSigningDir). Clone https://github.com/dsouzaankit/ios_env_setup.git as env_setup next to this repo, then run this again." Yellow
+    exit 1
+}
+
 # --- 1. zsign ---
 $zsign = Find-LoopSegmentsZsign
 if ($zsign) {
@@ -60,37 +65,19 @@ if ($zsign) {
     Write-Sign 'zsign not found (-SkipZsign).' Yellow
     $missing += 'zsign'
 } else {
-    $dir = Get-LoopSegmentsZsignInstallDir
-    $url = "https://github.com/zhlynn/zsign/releases/download/$LoopSegmentsZsignVersion/zsign-windows-x64.zip"
-    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("zsign-" + [Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $tmp | Out-Null
     try {
-        Write-Sign "Downloading zsign $LoopSegmentsZsignVersion ..."
-        $zip = Join-Path $tmp 'zsign-windows-x64.zip'
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
-        $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($hash -ne $LoopSegmentsZsignZipSha256) {
-            throw "zsign download hash mismatch ($hash); not installed."
-        }
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
-        $zsign = Find-LoopSegmentsZsign
-        if (-not $zsign) { throw "zsign.exe not found in $dir after unzipping." }
+        Write-Sign "Downloading zsign $SideStoreZsignVersion ..."
+        $zsign = Install-SideStoreZsign
         Write-Sign "zsign installed (checksum OK): $zsign" Green
     } catch {
         Write-Sign "zsign: $($_.Exception.Message)" Red
         $missing += 'zsign'
-    } finally {
-        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
 # --- 2. Certificate ---
 if ($P12) {
-    if (-not (Test-Path -LiteralPath $P12 -PathType Leaf)) { throw "No file at $P12" }
-    New-Item -ItemType Directory -Force -Path $LoopSegmentsSigningDir | Out-Null
-    Copy-Item -LiteralPath $P12 -Destination $LoopSegmentsSigningP12 -Force
+    [void](Copy-SideStoreSigningP12 -Source $P12)
     Write-Sign "Certificate copied to $LoopSegmentsSigningP12 (delete the export from iCloud Drive: it is your signing key)." Green
 }
 if (Test-Path -LiteralPath $LoopSegmentsSigningP12) {
@@ -102,6 +89,7 @@ if (Test-Path -LiteralPath $LoopSegmentsSigningP12) {
 
 # --- 3. Password (this PC's Credential Manager) ---
 $hasPassword = Test-LoopSegmentsSigningPassword
+if ($ResetPassword) { $LoopSegmentsSigningCredTarget = $SideStoreSigningCredTarget }
 if ($hasPassword -and -not $ResetPassword) {
     Write-Sign "Password: saved on this PC ($LoopSegmentsSigningCredTarget)."
 } elseif ($NoPrompt) {
@@ -110,8 +98,7 @@ if ($hasPassword -and -not $ResetPassword) {
 } else {
     Write-Sign 'Enter the password you chose when exporting the certificate from SideStore:' Cyan
     # cmdkey prompts itself, so the password is never on a command line or in history.
-    & cmdkey "/generic:$LoopSegmentsSigningCredTarget" '/user:p12' '/pass'
-    if (-not (Test-LoopSegmentsSigningPassword)) { $missing += 'password' }
+    if (-not (Set-SideStoreSigningPassword -CredTarget $LoopSegmentsSigningCredTarget)) { $missing += 'password' }
 }
 
 # --- 4. Check ---

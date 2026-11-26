@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Core locate/start lives in env_setup\altserver_refresh\lib\Get-AltServer.ps1
-  (git submodule env_setup, with a sibling-folder fallback).
+  (env_setup checkout next to the repo, e.g. P:\all_scripts\iOS apps\env_setup).
   This file keeps Loop Segments-specific warnings and USB-list heuristics.
   Dot-source from Launch-LoopSegmentsViaUsb.ps1, _run_chromium.ps1, Setup, etc.
 
@@ -19,7 +19,7 @@ $script:LoopSegmentsAltServerCoreLoaded = $false
 
 function Get-LoopSegmentsEnvSetupRoot {
     $candidates = @(
-        (Join-Path $script:LoopSegmentsRepoRoot 'env_setup')
+        (Join-Path (Split-Path -Parent $script:LoopSegmentsRepoRoot) 'env_setup')
         'P:\all_scripts\iOS apps\env_setup'
     )
     foreach ($c in $candidates) {
@@ -28,9 +28,9 @@ function Get-LoopSegmentsEnvSetupRoot {
         }
     }
     throw @'
-Missing env_setup (AltServer helpers). Clone the submodule:
-  git submodule update --init env_setup
-Or keep a checkout at P:\all_scripts\iOS apps\env_setup
+Missing env_setup (AltServer helpers). Clone it next to this repo:
+  git clone https://github.com/dsouzaankit/ios_env_setup.git env_setup
+(e.g. P:\all_scripts\iOS apps\env_setup)
 '@
 }
 

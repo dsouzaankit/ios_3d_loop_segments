@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Dot-source from pcloud_web_companion\_run_chromium.ps1.
-  Core lives in env_setup\altserver_refresh\VpnMulticast (submodule or P:\all_scripts\iOS apps\env_setup).
+  Core lives in env_setup\altserver_refresh\VpnMulticast (env_setup next to the repo, e.g. P:\all_scripts\iOS apps\env_setup).
 #>
 
 function Get-LoopSegmentsClashDir {
@@ -17,7 +17,7 @@ function Get-LoopSegmentsClashDir {
         } catch {}
     }
     foreach ($c in @(
-            (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'env_setup')
+            (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) 'env_setup')
             'P:\all_scripts\iOS apps\env_setup'
         )) {
         if ($c -and (Test-Path -LiteralPath $c) -and -not ($roots -contains $c)) {

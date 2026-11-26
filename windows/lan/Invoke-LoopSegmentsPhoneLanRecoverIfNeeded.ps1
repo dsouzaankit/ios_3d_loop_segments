@@ -331,7 +331,7 @@ try {
     $repoRoot = Split-Path -Parent $WindowsDir
     $altSubnetPs1 = ''
     foreach ($candidate in @(
-            (Join-Path $repoRoot 'env_setup\lan\Invoke-PhonePcSubnetIfNeeded.ps1')
+            (Join-Path (Split-Path -Parent $repoRoot) 'env_setup\lan\Invoke-PhonePcSubnetIfNeeded.ps1')
             'P:\all_scripts\iOS apps\env_setup\lan\Invoke-PhonePcSubnetIfNeeded.ps1'
         )) {
         if (Test-Path -LiteralPath $candidate) {
