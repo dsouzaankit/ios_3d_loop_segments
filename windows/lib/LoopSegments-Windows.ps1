@@ -76,6 +76,11 @@ function Get-DefaultLoopSegmentsWindowsSettings {
         questCloseLanTabsOnExit = $true
         # Companion session: hold the Quest proximity sensor off (headset stays awake and on adb), turn it back on at cleanup.
         questKeepAwakeDuringSession = $true
+        # Companion session (its keep-awake job, so questKeepAwakeDuringSession must be on): once the phone's
+        # Keep Alive has run out (its 60 min session, not an export's) and the phone has not answered for this
+        # many minutes since, and no 3d_playlist_local workflow runs, close the companion's Chromium so its
+        # normal quit runs (as if you closed it). 0 = never.
+        companionCloseAfterKeepAliveMinutes = 5
         # This repo's tiles (quest\LoopSegmentsControlTiles.ps1) on the shared Quest control page that quest_tools
         # hosts on this PC's LAN address (QuestControlHost.ps1); the phone LAN login also signs in to it.
         questControlPage        = $true

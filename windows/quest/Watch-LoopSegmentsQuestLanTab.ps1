@@ -307,6 +307,93 @@ function Get-PlaylistWorkflowsOnPhoneMount {
         } | ForEach-Object { [string]$_.name })
 }
 
+# Every running 3d_playlist_local workflow (wherever its copy lives), same PID-and-start-time check.
+function Get-PlaylistLiveWorkflows {
+    if (-not (Test-Path -LiteralPath $script:PlaylistSessionPath)) { return @() }
+    try { $list = @((Get-Content -LiteralPath $script:PlaylistSessionPath -Raw -ErrorAction Stop | ConvertFrom-Json).sessions) } catch { return @() }
+    return @($list | Where-Object {
+            $_ -and [int]$_.pid -gt 0 -and (Get-QuestProcessStartStamp -ProcessId ([int]$_.pid)) -eq [string]$_.started
+        } | ForEach-Object { [string]$_.name })
+}
+
+# -KeepAwakeSession tick: close the companion once the phone's Keep Alive has run out.
+# Every KaPollSec, GET /keep_alive.json. A reply sets the expected end: now + sessionRemainingSeconds for
+# a running 60 min session; none (never closes) for an export-owned one (it runs until the export ends),
+# no auto-stop, Keep Alive off, or the app in front (it answers while not active). Expired = that end
+# plus companionCloseAfterKeepAliveMinutes has passed and the phone has not answered for as long (any
+# reply recomputes the end, so a renewal or bringing the app to the front cancels it). Then, once no
+# 3d_playlist_local workflow runs (its playback would lose the Quest: the quit turns Wi-Fi off), close
+# the companion's Chromium without /F, so its normal quit runs, as if you closed it. Once per run.
+$script:KaPollSec = 60
+$script:KaLastPoll = [DateTime]::MinValue
+$script:KaLastOkUtc = [DateTime]::MinValue
+$script:KaEndsUtc = $null
+$script:KaCloseDone = $false
+$script:KaWaitLogged = ''
+
+function Get-PhoneKeepAliveStatus {
+    param([Parameter(Mandatory)] [string] $LanUrl)
+    $u = [Uri]$LanUrl
+    $login = Get-QuestLanLogin -ForUrl $LanUrl
+    $pair = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(('{0}:{1}' -f $login.User, $login.Password)))
+    $r = Invoke-WebRequest -Uri ('{0}://{1}/keep_alive.json' -f $u.Scheme, $u.Authority) -Method Get `
+        -Headers @{ Authorization = "Basic $pair" } -NoProxy -TimeoutSec 10 -UseBasicParsing -SkipHttpErrorCheck
+    if ([int]$r.StatusCode -ne 200) { return $null }
+    $text = if ($r.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($r.Content) } else { [string]$r.Content }
+    try { return ($text | ConvertFrom-Json -ErrorAction Stop) } catch { return $null }
+}
+
+function Get-CompanionChromiumProcesses {
+    return @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $c = [string]$_.CommandLine; $c -notlike '*--type=*' -and $c -match '(?i)pcloud_web_companion[\\/]+chromium-profile' })
+}
+
+function Invoke-CompanionCloseOnKeepAliveExpiry {
+    if ($script:KaCloseDone) { return }
+    $minutes = 5
+    try { $minutes = [double](Get-LoopSegmentsWindowsSettings).companionCloseAfterKeepAliveMinutes } catch {}
+    if ($minutes -le 0) { return }
+    $now = [DateTime]::UtcNow
+    if (($now - $script:KaLastPoll).TotalSeconds -ge $script:KaPollSec) {
+        $script:KaLastPoll = $now
+        $lan = Get-QuestSkyboxCurrentLanUrl
+        $j = $null
+        if ($lan) { try { $j = Get-PhoneKeepAliveStatus -LanUrl $lan } catch { $j = $null } }
+        if ($null -ne $j) {
+            $script:KaLastOkUtc = $now
+            $left = $j.PSObject.Properties['sessionRemainingSeconds']
+            if ($j.enabled -ne $false -and $j.active -eq $true -and $j.exportSession -ne $true -and $left -and $null -ne $left.Value) {
+                $script:KaEndsUtc = $now.AddSeconds([double]$left.Value)
+            } else {
+                $script:KaEndsUtc = $null
+            }
+            $script:KaWaitLogged = ''
+        }
+    }
+    if ($null -eq $script:KaEndsUtc) { return }
+    $grace = [TimeSpan]::FromMinutes($minutes)
+    if ($now -lt $script:KaEndsUtc.Add($grace) -or ($now - $script:KaLastOkUtc) -lt $grace) { return }
+    $endLocal = $script:KaEndsUtc.ToLocalTime().ToString('HH:mm')
+    $running = @(Get-PlaylistLiveWorkflows)
+    if ($running.Count -gt 0) {
+        $key = $running -join ', '
+        if ($script:KaWaitLogged -ne $key) {
+            Write-QuestLog "Keep Alive: the phone's Keep Alive ran out at $endLocal (no answer since) - closing the companion once 3d_playlist_local ends ($key running)."
+            $script:KaWaitLogged = $key
+        }
+        return
+    }
+    $script:KaCloseDone = $true
+    $chrome = @(Get-CompanionChromiumProcesses)
+    if ($chrome.Count -eq 0) {
+        Write-QuestLog "Keep Alive: the phone's Keep Alive ran out at $endLocal, but no companion Chromium is running - nothing to close."
+        return
+    }
+    Write-QuestLog ("Keep Alive: the phone's Keep Alive ran out at {0} and the phone has not answered for {1:N0} min; no 3d_playlist_local workflow runs - closing the companion's Chromium (its normal quit runs)." -f $endLocal, ($now - $script:KaLastOkUtc).TotalMinutes)
+    $pidArgs = @($chrome | ForEach-Object { '/PID'; [string]$_.ProcessId })
+    try { & taskkill.exe @pidArgs | Out-Null } catch { Write-QuestLog "Keep Alive: closing the companion's Chromium failed: $($_.Exception.Message)" }
+}
+
 # -KeepAwakeSession tick (the companion's, every ~20 s). Playing = one of our pages served a media
 # request in the last QuestPlaybackFreshSec (quest_tools Get-QuestMediaActivity: per-owner files such
 # as 3d_playlist_local's XR server's; other Quest Browser playback does not count). While playing AND
@@ -775,7 +862,13 @@ if ($WifiOff) {
 }
 if ($KeepAwakeSession) {
     # The companion's keep-awake (no -RestoreProximity) also keeps the phone serving while the Quest plays.
-    $tick = if ($RestoreProximity) { $null } else { { Invoke-PhoneKeepAliveOnQuestPlayback } }
+    # It also closes the companion once the phone's Keep Alive has run out (Invoke-CompanionCloseOnKeepAliveExpiry).
+    $tick = if ($RestoreProximity) { $null } else {
+        {
+            try { Invoke-PhoneKeepAliveOnQuestPlayback } catch { Write-QuestLog "Keep Alive: playback check failed: $($_.Exception.Message)" }
+            Invoke-CompanionCloseOnKeepAliveExpiry
+        }
+    }
     exit (Invoke-QuestKeepAwakeSession -ParentPid $ParentPid -RestoreProximity:$RestoreProximity -OnTick $tick)
 }
 if ($SkyboxPush -or $SkyboxUpdate) {
