@@ -1984,6 +1984,63 @@ public static class LoopSegmentsShellNotify {
 '@
 }
 
+function Initialize-LoopSegmentsDriveBroadcast {
+    if ([System.Management.Automation.PSTypeName]'LoopSegmentsDriveBroadcast'.Type) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LoopSegmentsDriveBroadcast {
+    [StructLayout(LayoutKind.Sequential)]
+    struct DEV_BROADCAST_VOLUME {
+        public uint dbcv_size;
+        public uint dbcv_devicetype;
+        public uint dbcv_reserved;
+        public uint dbcv_unitmask;
+        public ushort dbcv_flags;
+    }
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern int BroadcastSystemMessageW(uint flags, ref uint recipients, uint msg, IntPtr wParam, ref DEV_BROADCAST_VOLUME lParam);
+    const uint WM_DEVICECHANGE = 0x0219;
+    const uint DBT_DEVICEARRIVAL = 0x8000;
+    const uint DBT_DEVICEREMOVECOMPLETE = 0x8004;
+    const uint DBT_DEVTYP_VOLUME = 2;
+    const uint BSM_APPLICATIONS = 0x8;
+    // IGNORECURRENTTASK | NOHANG | FORCEIFHUNG: a wedged window cannot stall us.
+    const uint FLAGS = 0x2 | 0x8 | 0x20;
+    public static void Send(char letter, bool removed) {
+        int idx = char.ToUpperInvariant(letter) - 'A';
+        if (idx < 0 || idx > 25) return;
+        var v = new DEV_BROADCAST_VOLUME();
+        v.dbcv_size = (uint)Marshal.SizeOf(typeof(DEV_BROADCAST_VOLUME));
+        v.dbcv_devicetype = DBT_DEVTYP_VOLUME;
+        v.dbcv_unitmask = 1u << idx;
+        uint recipients = BSM_APPLICATIONS;
+        BroadcastSystemMessageW(FLAGS, ref recipients, WM_DEVICECHANGE,
+            (IntPtr)(removed ? DBT_DEVICEREMOVECOMPLETE : DBT_DEVICEARRIVAL), ref v);
+    }
+}
+'@
+}
+
+function Wait-LoopSegmentsDriveReady {
+    # Test-Path L:\ can pass before rclone/WinFsp answers volume queries; Explorer
+    # asks for the label right away and drops the drive if it is not ready yet.
+    param(
+        [Parameter(Mandatory = $true)][string] $DriveRoot,
+        [int] $TimeoutSec = 8
+    )
+    $letter = $DriveRoot.Trim().Substring(0, 1)
+    $deadline = [datetime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSec))
+    do {
+        try {
+            $di = [System.IO.DriveInfo]::new($letter)
+            if ($di.IsReady -and -not [string]::IsNullOrEmpty($di.VolumeLabel)) { return $true }
+        } catch {}
+        Start-Sleep -Milliseconds 300
+    } while ([datetime]::UtcNow -lt $deadline)
+    return $false
+}
+
 function Update-ExplorerForMappedDrive {
     param(
         [Parameter(Mandatory = $true)][string] $DriveRoot,
@@ -1991,6 +2048,18 @@ function Update-ExplorerForMappedDrive {
     )
     $root = $DriveRoot.Trim()
     if ($root -notmatch '\\$') { $root = "$root\" }
+    if (-not $Removed) {
+        if (-not (Wait-LoopSegmentsDriveReady -DriveRoot $root)) {
+            Write-Verbose ('[explorer] {0} not answering volume queries yet; notifying anyway' -f $root)
+        }
+    }
+    try {
+        # Open Explorer tabs (nav pane / This PC) update on WM_DEVICECHANGE, not on SHChangeNotify.
+        Initialize-LoopSegmentsDriveBroadcast
+        [LoopSegmentsDriveBroadcast]::Send($root[0], [bool]$Removed)
+    } catch {
+        Write-Verbose ('[explorer] WM_DEVICECHANGE broadcast failed: {0}' -f $_.Exception.Message)
+    }
     try {
         Initialize-LoopSegmentsShellNotify
         $flags = [LoopSegmentsShellNotify]::SHCNF_PATHW -bor [LoopSegmentsShellNotify]::SHCNF_FLUSHNOWAIT

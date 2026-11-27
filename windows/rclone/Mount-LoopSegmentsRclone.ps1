@@ -564,6 +564,7 @@ function Watch-LoopSegmentsRcloneMount {
     Write-Host 'Ctrl+C also stops rclone and exits.'
     $lastOk = [datetime]::UtcNow
     $wasDown = $false
+    $renotified = $false
     $script:RcloneWatchReturned = $false
 
     try {
@@ -584,6 +585,11 @@ function Watch-LoopSegmentsRcloneMount {
                     $wasDown = $false
                 }
                 $lastOk = [datetime]::UtcNow
+                if (-not $renotified -and (Test-Path -LiteralPath $DriveRoot)) {
+                    # Second nudge once rclone has settled — the one right after mount can race it.
+                    $renotified = $true
+                    try { Update-ExplorerForMappedDrive -DriveRoot $DriveRoot } catch {}
+                }
                 continue
             }
 
