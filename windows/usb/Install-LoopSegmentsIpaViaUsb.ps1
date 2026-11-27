@@ -16,8 +16,8 @@
      answers there). -NoBounce skips the bounce.
      PC: needs an IP on the phone's new /24. Already there (the bounce usually moves it too): stays.
      Otherwise connects to ipaInstallWifiProfile (config, optional) or else each saved Wi-Fi
-     profile, those in range first (Windows' in-range list is often stale), in Windows' priority order. Both stay on that Wi-Fi afterwards: the web
-     companion's start-up network check moves them back to the phone LAN.
+     profile, those in range first (Windows' in-range list is often stale), in Windows' priority order. After a confirmed install, step 6 moves both back to the
+     phone LAN.
      Then serves the IPA once at http://<PC IP>:<Port>/<random>/LoopSegments.ipa (plain TCP
      listener: no admin / URL ACL; PowerShell 7 needs an inbound firewall allow).
   3. Launches Loop Segments over USB with -openURL sidestore://install?url=<that link>
@@ -46,12 +46,17 @@
      (marker %TEMP%\loopsegments-vpn-turned-on.json), switches it off again (quits
      LocalDevVPN's tunnel extension over USB: no app launch, so no Face ID prompt) once the new build is confirmed. Left on when the install is not confirmed,
      so you can still finish it by hand.
+  6. After a confirmed SideStore install (not -NoWifiReorient): runs
+     ..\lan\Invoke-LoopSegmentsCompanionWifiReorientAfterIpa.ps1 -NoWaitEnter, which puts this PC and
+     the phone back on the phone LAN and waits for :8765 (USB-foregrounds Loop Segments if it is still
+     down). Its result does not change this script's exit code. Not after a failed install: a retry
+     needs the phone off the phone LAN.
 
   1b. Before any of 2-4: when SideStore's exported certificate is at -SigningP12 (password in Credential
      Manager as -SigningCredTarget) and zsign is found (zsignExe, else ..\env_setup\zsign\zsign.exe next to
      the repo, else PATH), signs the IPA on this PC with it and the phone's newest profile for the installed bundle id,
      and installs it over USB (..\env_setup\zsign\sidestore_sign.py): no tap, no Wi-Fi moves. Confirmed by the new
-     build as in step 4. Not set up, or it fails: steps 2-5 as usual. -NoSignedInstall skips it.
+     build as in step 4. Not set up, or it fails: steps 2-6 as usual. -NoSignedInstall skips it.
      No LocalDevVPN needed: the phone prep skips it when this is ready, and before steps 2-5 the
      VPN is connected if it is not (Prepare-PhoneForSideStoreViaUsb.ps1 -ForceVpn).
      Setup on any PC: ..\setup\Set-LoopSegmentsSigning.ps1 [-P12 <SideStore export>] (zsign download,
@@ -92,7 +97,9 @@ param(
     [string] $SigningP12 = '',
     # Windows Credential Manager generic credential holding the .p12 password; empty = SideStore-signing
     # (or the older LoopSegments-signing when that is the one this PC has).
-    [string] $SigningCredTarget = ''
+    [string] $SigningCredTarget = '',
+    # After a SideStore install, do not run lan\Invoke-LoopSegmentsCompanionWifiReorientAfterIpa.ps1.
+    [switch] $NoWifiReorient
 )
 
 $ErrorActionPreference = 'Stop'
@@ -119,6 +126,22 @@ function Write-Inst([string] $Text, [string] $Color = 'Gray') {
 function Invoke-Py([string[]] $ArgList) {
     $r = Invoke-LoopSegmentsPythonRuntime -Runtime $script:rt -ArgumentList $ArgList
     return ($r.Lines -join "`n")
+}
+
+function Invoke-WifiReorient {
+    # SideStore moved the phone and this PC off the phone LAN; put both back (companion Wi-Fi setup).
+    $ps1 = Join-Path $WindowsDir 'lan\Invoke-LoopSegmentsCompanionWifiReorientAfterIpa.ps1'
+    if (-not (Test-Path -LiteralPath $ps1)) { Write-Inst "Wi-Fi reorient skipped: no $ps1." Yellow; return }
+    Write-Inst 'Moving the phone and this PC back onto the phone LAN (Wi-Fi reorient)...' Cyan
+    $code = 0
+    try {
+        & $ps1 -NoWaitEnter
+    } catch {
+        $msg = [string]$_.Exception.Message
+        $code = if ($msg -match 'COMPANION_WIFI_REORIENT_EXIT:(\d+)') { [int]$Matches[1] } else { Write-Inst "Wi-Fi reorient: $msg" Yellow; 1 }
+    }
+    if ($code -eq 0) { Write-Inst 'Wi-Fi reorient done: phone LAN page reachable.' Green }
+    else { Write-Inst "Wi-Fi reorient did not finish (exit $code); the companion's start-up check will retry, or run lan\Invoke-LoopSegmentsCompanionWifiReorientAfterIpa.ps1." Yellow }
 }
 
 function Get-InstalledApp {
@@ -640,4 +663,6 @@ Restore-Vpn $installed
 # SideStore is still in front after the install: back to the Home Screen (the VPN-off step already
 # did that when it ran; it does not when LocalDevVPN was on before the deploy).
 if ($installed -and -not $script:WentHome) { [void](Invoke-Py @($InfoPy, 'home')) }
+# Only after a confirmed install: a failed one may be retried, and that needs the phone off the phone LAN.
+if ($installed -and -not $NoWifiReorient) { Invoke-WifiReorient }
 exit $(if ($installed) { 0 } else { 1 })
