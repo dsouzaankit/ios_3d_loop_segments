@@ -57,7 +57,11 @@ final class ExportCoordinator {
         if !continueLANExport {
             _ = ExportParkedMedia.removePark(forFileKey: item.fileKey)
         }
-        ExportRetentionSourceCatalog.save(sourceFileName: item.name, fileKey: item.fileKey)
+        // On resume, the park restore below still needs the *prior* export's catalog (its name and
+        // already-archived root slots) to retire leftover root media correctly — save after it.
+        if !continueLANExport {
+            ExportRetentionSourceCatalog.save(sourceFileName: item.name, fileKey: item.fileKey)
+        }
 
         if continueLANExport {
             ExportPaths.ensureExportDirectories()
@@ -79,6 +83,7 @@ final class ExportCoordinator {
 
         if continueLANExport {
             _ = ExportParkedMedia.restoreToRootIfNeeded(fileKey: item.fileKey, log: logHandler)
+            ExportRetentionSourceCatalog.save(sourceFileName: item.name, fileKey: item.fileKey)
         }
 
         BackgroundTaskKeeper.begin()
