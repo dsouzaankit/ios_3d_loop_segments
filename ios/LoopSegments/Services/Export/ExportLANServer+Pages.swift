@@ -471,13 +471,18 @@ extension ExportLANServer {
                 // No on-disk media yet — filename only (Resume button has seek).
                 play = "<span>\(label)</span>"
             }
+            // Select box for "Queue selected" (unavailable rows can't be queued, same as Move to queued).
+            let keyAttr = htmlEscape(entry.fileKey)
+            let selectBox = entry.isSourceUnavailable
+                ? "<input type=\"checkbox\" class=\"paused-select\" disabled title=\"Unavailable\"> "
+                : "<input type=\"checkbox\" class=\"paused-select\" data-file-key=\"\(keyAttr)\" title=\"Select for Queue selected\"> "
             let resumeControl: String
             if entry.isSourceUnavailable {
                 resumeControl = " <span class=\"muted\">\(htmlEscape(ResumeStore.pCloudSourceUnavailableMessage))</span>"
             } else {
                 resumeControl = htmlResumeExportButton(for: entry)
             }
-            return "<li>\(play)\(resumeControl)</li>"
+            return "<li>\(selectBox)\(play)\(resumeControl)</li>"
         }
     }
 
@@ -603,8 +608,9 @@ extension ExportLANServer {
         return """
         <details id="lan-paused-wrap" class="lan-paused-exports">
           <summary id="lan-paused-heading">Paused exports (\(count))</summary>
-          <p class="muted">Checkpoints from soft-pause / Pause. Unavailable rows (missing from saved pCloud folder) have no Resume — redo search / re-export from companion, or Copy name / Search in Browse on the phone. Move to queued appends available rows onto FIFO as fresh jobs (drops checkpoints / parked media; skips unavailable). Clear removes parked media; live export is kept.</p>
+          <p class="muted">Checkpoints from soft-pause / Pause. Unavailable rows (missing from saved pCloud folder) have no Resume — redo search / re-export from companion, or Copy name / Search in Browse on the phone. Tick rows and Queue selected moves just those; Move to queued appends all available rows onto FIFO as fresh jobs (drops checkpoints / parked media; skips unavailable). Clear removes parked media; live export is kept.</p>
           <p id="lan-paused-actions"\(actionsHidden)>
+            <button type="button" id="lan-paused-queue-selected" disabled>Queue selected (0)</button>
             <button type="button" id="lan-paused-queue-all">Move to queued</button>
             <button type="button" id="lan-paused-clear">Clear paused</button>
           </p>
@@ -662,11 +668,37 @@ extension ExportLANServer {
             var count = (p && typeof p.count === "number") ? p.count : 0;
             if (heading) heading.textContent = "Paused exports (" + count + ")";
             if (actions) actions.style.display = count ? "" : "none";
+            var ticked = pausedSelectedKeys();
             if (p && typeof p.listHTML === "string") {
               ul.innerHTML = p.listHTML;
-              return;
+            } else {
+              ul.innerHTML = '<li class="muted"><em>No paused exports</em></li>';
             }
-            ul.innerHTML = '<li class="muted"><em>No paused exports</em></li>';
+            // Status polls re-render the list: keep the user's ticks.
+            var boxes = ul.querySelectorAll("input.paused-select");
+            for (var i = 0; i < boxes.length; i++) {
+              var k = boxes[i].getAttribute("data-file-key") || "";
+              if (k && ticked.indexOf(k) >= 0) boxes[i].checked = true;
+            }
+            updatePausedSelectedButton();
+          }
+          function pausedSelectedKeys() {
+            var out = [];
+            var ul = document.getElementById("lan-paused-list");
+            if (!ul) return out;
+            var boxes = ul.querySelectorAll("input.paused-select");
+            for (var i = 0; i < boxes.length; i++) {
+              var k = boxes[i].getAttribute("data-file-key") || "";
+              if (boxes[i].checked && k) out.push(k);
+            }
+            return out;
+          }
+          function updatePausedSelectedButton() {
+            var btn = document.getElementById("lan-paused-queue-selected");
+            if (!btn) return;
+            var n = pausedSelectedKeys().length;
+            btn.textContent = "Queue selected (" + n + ")";
+            if (!btn.getAttribute("data-busy")) btn.disabled = n === 0;
           }
           function postQueueAction(body) {
             return fetch("export_queue.json", {
@@ -743,6 +775,42 @@ extension ExportLANServer {
                   })
                   .catch(function () {})
                   .finally(function () { clearPaused.disabled = false; });
+              });
+            }
+            var pausedUl = document.getElementById("lan-paused-list");
+            if (pausedUl && !pausedUl.getAttribute("data-ls-select-wired")) {
+              pausedUl.setAttribute("data-ls-select-wired", "1");
+              pausedUl.addEventListener("change", function (ev) {
+                var t = ev.target;
+                if (t && t.classList && t.classList.contains("paused-select")) updatePausedSelectedButton();
+              });
+            }
+            var queueSelPaused = document.getElementById("lan-paused-queue-selected");
+            if (queueSelPaused && !queueSelPaused.getAttribute("data-ls-wired")) {
+              queueSelPaused.setAttribute("data-ls-wired", "1");
+              queueSelPaused.addEventListener("click", function () {
+                var keys = pausedSelectedKeys();
+                if (!keys.length) return;
+                queueSelPaused.disabled = true;
+                queueSelPaused.setAttribute("data-busy", "1");
+                postPausedAction({ action: "queue_selected", fileKeys: keys })
+                  .then(function (res) {
+                    var ul = document.getElementById("lan-paused-list");
+                    if (ul && res.ok) {
+                      var boxes = ul.querySelectorAll("input.paused-select");
+                      for (var i = 0; i < boxes.length; i++) boxes[i].checked = false;
+                    }
+                    if (res.j && res.j.pausedExports) applyPausedExports(res.j.pausedExports);
+                    if (res.j && res.j.pendingExportQueue) applyPendingQueue(res.j.pendingExportQueue);
+                    if (window.refreshLANPlayback) {
+                      try { window.refreshLANPlayback(); } catch (e) {}
+                    }
+                  })
+                  .catch(function () {})
+                  .finally(function () {
+                    queueSelPaused.removeAttribute("data-busy");
+                    updatePausedSelectedButton();
+                  });
               });
             }
             var queueAllPaused = document.getElementById("lan-paused-queue-all");

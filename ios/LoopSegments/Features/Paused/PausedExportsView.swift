@@ -10,11 +10,39 @@ struct PausedExportsView: View {
 
     @State private var selectedEntry: ResumeEntry?
     @State private var entries: [ResumeEntry] = []
+    /// Select mode: tick rows, then Queue selected (fresh jobs, same as Move to queued but only those rows).
+    @State private var isSelecting = false
+    @State private var selectedKeys: Set<String> = []
+
+    private var selectableKeys: Set<String> {
+        Set(entries.filter { !$0.isSourceUnavailable }.map(\.fileKey))
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                if !entries.isEmpty {
+                if isSelecting {
+                    Section {
+                        Button("Queue \(selectedKeys.count) selected") {
+                            _ = resumeStore.moveAllPausedExportsToPendingQueue(
+                                exceptFileKey: session.activeExportFileKey,
+                                onlyFileKeys: selectedKeys
+                            )
+                            PendingExportQueue.shared.drainIfIdle(session: session)
+                            selectedKeys = []
+                            isSelecting = false
+                            refresh()
+                        }
+                        .disabled(selectedKeys.isEmpty)
+                        let all = selectableKeys
+                        if !all.isEmpty && selectedKeys == all {
+                            Button("Deselect all") { selectedKeys = [] }
+                        } else {
+                            Button("Select all") { selectedKeys = all }
+                                .disabled(all.isEmpty)
+                        }
+                    }
+                } else if !entries.isEmpty {
                     Section {
                         Button("Move to queued") {
                             _ = resumeStore.moveAllPausedExportsToPendingQueue(
@@ -36,14 +64,23 @@ struct PausedExportsView: View {
                     } else {
                         ForEach(entries) { entry in
                             Button {
-                                selectedEntry = entry
+                                if isSelecting {
+                                    toggleSelection(entry)
+                                } else {
+                                    selectedEntry = entry
+                                }
                             } label: {
                                 HStack(alignment: .center) {
+                                    if isSelecting {
+                                        selectionMark(entry: entry)
+                                    }
                                     pausedRow(entry: entry)
                                     Spacer(minLength: 4)
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.tertiary)
+                                    if !isSelecting {
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.tertiary)
+                                    }
                                 }
                                 .contentShape(Rectangle())
                             }
@@ -73,6 +110,7 @@ struct PausedExportsView: View {
                             "While exporting, this list shows up to \(ResumeStore.maxPausedExports - 1); a handoff may briefly show \(ResumeStore.maxPausedExports) then drop the oldest. " +
                             "Handoff parks root media under pcld_ios_media/\(ExportParkedMedia.folderName)/ (LAN-playable); resume restores then sparse-adopts. " +
                             "Each row stores its pCloud folder for a fast one-level resume list. If that folder no longer has the file, the row is unavailable — redo search and re-export using web companion, or Copy name / Search in Browse (stale path is dropped so a move can still match). Swipe to remove. " +
+                            "Select lets you tick rows and Queue selected moves just those (unavailable rows can't be picked). " +
                             "Move to queued appends all paused rows onto the Queued tab as fresh jobs (checkpoints and parked media dropped; releases Pause hold) so they auto-start when idle. " +
                             "Clear paused removes checkpoints (and parked media) but keeps a live export running."
                     )
@@ -80,6 +118,16 @@ struct PausedExportsView: View {
                 }
             }
             .navigationTitle("Paused")
+            .toolbar {
+                if isSelecting || !selectableKeys.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(isSelecting ? "Done" : "Select") {
+                            isSelecting.toggle()
+                            selectedKeys = []
+                        }
+                    }
+                }
+            }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if session.isExportRunning, let item = session.activeExportDisplayItem {
                     NavigationLink {
@@ -132,9 +180,36 @@ struct PausedExportsView: View {
         }
     }
 
+    @ViewBuilder
+    private func selectionMark(entry: ResumeEntry) -> some View {
+        if entry.isSourceUnavailable {
+            Image(systemName: "circle.dashed")
+                .foregroundStyle(.tertiary)
+        } else if selectedKeys.contains(entry.fileKey) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.tint)
+        } else {
+            Image(systemName: "circle")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func toggleSelection(_ entry: ResumeEntry) {
+        guard !entry.isSourceUnavailable else { return }
+        if selectedKeys.contains(entry.fileKey) {
+            selectedKeys.remove(entry.fileKey)
+        } else {
+            selectedKeys.insert(entry.fileKey)
+        }
+    }
+
     private func refresh() {
         let activeKey = session.activeExportFileKey
         entries = resumeStore.interruptedEntries(excludingFileKey: activeKey)
+        selectedKeys.formIntersection(selectableKeys)
+        if isSelecting && selectableKeys.isEmpty {
+            isSelecting = false
+        }
         if let selected = selectedEntry,
            !entries.contains(where: { $0.fileKey == selected.fileKey }) {
             selectedEntry = nil

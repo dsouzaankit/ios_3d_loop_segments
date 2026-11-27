@@ -789,7 +789,7 @@ extension ExportLANServer {
             on: connection,
             requestHeaders: requestHeaders,
             bodyPrefix: bodyPrefix,
-            maxBytes: 4_096
+            maxBytes: 64_000  // queue_selected carries fileKeys (pCloud paths)
         ) { result in
             switch result {
             case .failure(.missingContentLength):
@@ -802,12 +802,12 @@ extension ExportLANServer {
             case .success(let body):
                 guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
                       let action = (object["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-                      action == "clear" || action == "queue_all" else {
+                      action == "clear" || action == "queue_all" || action == "queue_selected" else {
                     sendResponse(
                         connection: connection,
                         status: 400,
                         contentType: "text/plain; charset=utf-8",
-                        body: Data("Expected JSON { \"action\": \"clear\" | \"queue_all\" }".utf8),
+                        body: Data("Expected JSON { \"action\": \"clear\" | \"queue_all\" | \"queue_selected\", \"fileKeys\": [...] }".utf8),
                         done: done
                     )
                     return
@@ -816,11 +816,31 @@ extension ExportLANServer {
                     let exceptKey = ExportPlaybackState.shared.isLANExportActive
                         ? ExportRetentionSourceCatalog.read()?.fileKey
                         : nil
-                    if action == "queue_all" {
-                        let moved = ResumeStore.shared.moveAllPausedExportsToPendingQueue(exceptFileKey: exceptKey)
+                    if action == "queue_all" || action == "queue_selected" {
+                        // queue_selected: only the ticked rows (`fileKeys`); queue_all: every available row.
+                        var onlyKeys: Set<String>?
+                        if action == "queue_selected" {
+                            let keys = (object["fileKeys"] as? [Any] ?? [])
+                                .compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                .filter { !$0.isEmpty }
+                            guard !keys.isEmpty else {
+                                let payload: [String: Any] = [
+                                    "status": "rejected",
+                                    "action": action,
+                                    "message": "fileKeys[] required",
+                                ]
+                                sendJSONPayload(payload, connection: connection, done: done, status: 400)
+                                return
+                            }
+                            onlyKeys = Set(keys)
+                        }
+                        let moved = ResumeStore.shared.moveAllPausedExportsToPendingQueue(
+                            exceptFileKey: exceptKey,
+                            onlyFileKeys: onlyKeys
+                        )
                         let payload: [String: Any] = [
                             "status": "ok",
-                            "action": "queue_all",
+                            "action": action,
                             "moved": moved,
                             "message": moved == 0
                                 ? "No paused exports to move"

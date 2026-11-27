@@ -170,9 +170,11 @@ final class ResumeStore: ObservableObject {
     /// Drops checkpoints: clears in-progress flags / seek, removes `parked/` for those keys.
     /// Does not remove Queued items already present — new rows are appended (oldest paused first).
     @discardableResult
-    func moveAllPausedExportsToPendingQueue(exceptFileKey: String? = nil) -> Int {
+    /// `onlyFileKeys` limits the move to those rows (Paused tab → Select); nil moves every available row.
+    func moveAllPausedExportsToPendingQueue(exceptFileKey: String? = nil, onlyFileKeys: Set<String>? = nil) -> Int {
         let paused = interruptedEntries(excludingFileKey: exceptFileKey)
             .filter { !$0.isSourceUnavailable }
+            .filter { onlyFileKeys?.contains($0.fileKey) ?? true }
         guard !paused.isEmpty else { return 0 }
 
         // Paused list is newest-first; append oldest-first so FIFO drains chronologically.
