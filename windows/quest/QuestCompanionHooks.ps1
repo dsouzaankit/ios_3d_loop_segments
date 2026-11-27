@@ -202,7 +202,7 @@ function Stop-QuestControlPage {
         Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
             Where-Object {
                 $c = $_.CommandLine
-                $c -and (($c -like '*Serve-QuestControlPage.ps1*') -or
+                $c -and (
                     ($c -like '*Watch-LoopSegmentsQuestLanTab.ps1*' -and ($c -like '*-SkyboxPush*' -or $c -like '*-SkyboxUpdate*' -or $c -like '*-SkyboxWebDavSession*' -or ($c -like '*-ClearSkyboxWebDav*' -and $c -like '*-StatusFile*'))))
             } |
             ForEach-Object { $ids.Add([int]$_.ProcessId) }

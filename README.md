@@ -7,7 +7,7 @@ The iPhone app automates **pCloud export** on cellular. Getting files onto the P
 | Automated today | Not automated today |
 |-----------------|---------------------|
 | pCloud → phone `pcld_ios_media/loop/op_00|01` + `pcld_ios_media/_working`; PC via **LAN HTTP** / scripts (see [ios/README.md](ios/README.md)) | Apple Devices USB save; legacy scripts in `windows/archive/` |
-| **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../3d_loop_segments/) (sibling repo) | Legacy Photos/USB PowerShell sync scripts (removed from `windows/`) |
+| **PC:** `Run-SegmentCopy.ps1` in [`3d_loop_segments`](../../3d_loop_segments/) (sibling repo) | Legacy Photos/USB PowerShell sync scripts (removed from `windows/`) |
 
 **Practical production:** run **`Run-SegmentCopy.ps1`** on the PC for unattended DLNA; use the iPhone app when the PC is unavailable.
 
