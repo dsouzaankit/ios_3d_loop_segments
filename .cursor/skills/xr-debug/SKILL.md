@@ -46,6 +46,9 @@ An empty ring after a Quest session can mean the `/xr` debug POST was refused (4
 | `eye-layers` | Dome layer and visibility: VR and AR left 1 / right 2 (AR since build 444), SBS off and flat 0 |
 | `canvas-tex-reset` | Canvas texture released after a size change: `from`, `to`, `presenting` |
 | `xr-enabled-fixed` | `xr.enabled` was false in a live session and was repaired. `ticks` = frames into the session; `n` above 1 = something keeps clearing it |
+| `playback-waiting` / `playback-stalled` / `playback-resumed` | The `<video>` ran out of data / got no network data for ~3 s / played again (`ms` = how long). Each carries `t`, `dur`, `ahead` (seconds buffered past the playhead), `readyState`, `networkState`, `name` |
+| `playback-nudge` / `playback-nudge-ok` | Stall watchdog: no progress for 3 s → `how: pause-play`, 6 s → `how: seek` (same spot, fresh Range request); `-ok` = it moved again (`nudges`, `ms`) |
+| `stall-advance` | Still stuck: 6 s within 8 s of the end, or 20 s anywhere, skipped to the next clip (never on the sparse `_working` file or a one-clip playlist) |
 
 ## Classify
 
@@ -57,6 +60,7 @@ An empty ring after a Quest session can mean the `/xr` debug POST was refused (4
 | First VR after AR black, second fine | Expect `xr-enabled-fixed` at `ticks:1`. Still black with it = a new cause; `xr-probe` (build 407 to 416, git history) logged session, dome and blit state to compare sessions |
 | Black preview or white dome on a plain clip after Chroma | `post-av1-canvas` size jump; expect `canvas-tex-reset` right after it |
 | Wrong codec path | `codec av1:true` on an HEVC file → sniff false positive |
+| Clip freezes mid-play until Pause / Play | `playback-waiting` with `ahead: 0` then `playback-nudge-ok` = the buffer ran dry (Wi-Fi headroom vs. the clip's bitrate). `ahead` well above 0 while stuck = not the network: decoder or render path |
 
 ## Fix rules
 
