@@ -211,7 +211,7 @@ Same as `.\rclone\Mount-LoopSegmentsRclone.ps1` — reads **`loop-segments-windo
 
 Optional args: **`rclone\Mount-PhoneL.cmd -ReadOnly`**, **`-Remove`**, **`-TestOnly`**, **`-Unstick`**, **`-Quick`**, **`-NoLanWatch`**, **`-NoAutoRemount`**, **`-LanDownSeconds`**, **`-LanPollSeconds`**.
 
-**Explorer frozen after LAN dies:** wait for auto-unmount, or run **`rclone\Unstick-PhoneL.cmd`** (kills mount + restarts Explorer). If Explorer is already wedged: Task Manager → File → Run new task → full path to `Unstick-PhoneL.cmd`.
+**Explorer frozen after LAN dies:** wait for auto-unmount (L: comes back by itself once the phone answers), or run **`rclone\Unstick-PhoneL.cmd`** (kills mount + restarts Explorer). If Explorer is already wedged: Task Manager → File → Run new task → full path to `Unstick-PhoneL.cmd`.
 
 ## Multiple iPhones — unified LAN listing
 
