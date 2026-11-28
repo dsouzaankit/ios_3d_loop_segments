@@ -960,6 +960,103 @@
     if (!activePlaylist().length) return;
     loadIndex(index + 1, true);
   });
+  // Seconds buffered past the playhead (0 = the decoder is starved).
+  function bufferedAhead() {
+    try {
+      var t = Number(video.currentTime) || 0;
+      var b = video.buffered;
+      for (var i = 0; i < b.length; i++) {
+        if (t >= b.start(i) - 0.1 && t <= b.end(i)) return Math.round((b.end(i) - t) * 10) / 10;
+      }
+    } catch (e) {}
+    return 0;
+  }
+  function playbackState(extra) {
+    var s = {
+      t: Math.round((Number(video.currentTime) || 0) * 10) / 10,
+      dur: Math.round(mediaDuration() * 10) / 10,
+      ahead: bufferedAhead(),
+      readyState: video.readyState,
+      networkState: video.networkState,
+      name: (activePlaylist()[index] || {}).name
+    };
+    for (var k in (extra || {})) s[k] = extra[k];
+    return s;
+  }
+  // Stall record (xr_debug.json -> scripts/xr_debug.log on the phone). "waiting" = the decoder ran out
+  // of data; "stalled" = the network delivered nothing for ~3 s while loading; "resumed" = playing
+  // again after a wait (ms = how long it took).
+  var waitStartMs = 0;
+  video.addEventListener("waiting", function () {
+    if (!waitStartMs) waitStartMs = Date.now();
+    try { xrLog("playback-waiting", playbackState()); } catch (eL) {}
+  });
+  video.addEventListener("stalled", function () {
+    try { xrLog("playback-stalled", playbackState({ paused: video.paused })); } catch (eL) {}
+  });
+  video.addEventListener("playing", function () {
+    if (!waitStartMs) return;
+    var ms = Date.now() - waitStartMs;
+    waitStartMs = 0;
+    try { xrLog("playback-resumed", playbackState({ ms: ms })); } catch (eL) {}
+  });
+  video.addEventListener("emptied", function () { waitStartMs = 0; });
+  // Safety net (same as 3d_playlist_local's XR page). Mid-clip, Quest Browser can sit on an empty buffer
+  // until the element is paused and played again (that restarts its loader), so after 3 s without
+  // progress the watchdog does that, and after 6 s it seeks to the same spot (a fresh Range request).
+  // A clip that still won't move never fires "ended": a 6 s stall within 8 s of the end counts as the
+  // end, and a 20 s stall anywhere skips to the next clip. Never skipped: the sparse _working file (a
+  // stall there can be a part not downloaded yet) and a one-clip playlist (that would only restart it).
+  (function stallWatchdog() {
+    var lastT = -1;
+    var lastMoveMs = Date.now();
+    var nudges = 0;
+    setInterval(function () {
+      var now = Date.now();
+      var cur = Number(video.currentTime) || 0;
+      if (!wantPlay || video.paused || video.ended || !video.src || seekDragging) {
+        lastT = cur;
+        lastMoveMs = now;
+        nudges = 0;
+        return;
+      }
+      if (Math.abs(cur - lastT) > 0.05) {
+        if (nudges) try { xrLog("playback-nudge-ok", playbackState({ nudges: nudges, ms: now - lastMoveMs })); } catch (eL) {}
+        lastT = cur;
+        lastMoveMs = now;
+        nudges = 0;
+        return;
+      }
+      var playlist = activePlaylist();
+      var item = playlist[index];
+      var dur = mediaDuration();
+      var stalledMs = now - lastMoveMs;
+      var nearEnd = dur > 0 && dur - cur <= 8;
+      var canSkip = playlist.length > 0 && !(item && isSparseWorkingName(item.name))
+        && (nearEnd || playlist.length > 1);
+      if (canSkip && ((nearEnd && stalledMs >= 6000) || stalledMs >= 20000)) {
+        try { xrLog("stall-advance", playbackState({ nearEnd: nearEnd, nudges: nudges })); } catch (eL) {}
+        lastMoveMs = now;
+        nudges = 0;
+        loadIndex(index + 1, true);
+        return;
+      }
+      if (nudges < 2 && stalledMs >= 3000 * (nudges + 1)) {
+        nudges++;
+        var how = nudges === 1 ? "pause-play" : "seek";
+        try { xrLog("playback-nudge", playbackState({ how: how, stalledMs: stalledMs })); } catch (eL) {}
+        try {
+          if (how === "pause-play") {
+            video.pause();
+            var p = video.play();
+            if (p && typeof p.catch === "function") p.catch(function () {});
+          } else {
+            video.currentTime = cur;
+          }
+        } catch (eNudge) {}
+      }
+    }, 1000);
+  })();
   video.addEventListener("error", function () {
     var playlist = activePlaylist();
     var item = playlist[index];
