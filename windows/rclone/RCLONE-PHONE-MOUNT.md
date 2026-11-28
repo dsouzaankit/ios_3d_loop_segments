@@ -75,7 +75,7 @@ They are still reachable from the network: SKYBOX's backend (`airscreen-backend.
 
 | Script | Role |
 |--------|------|
-| **`Mount-LoopSegmentsRclone.ps1`** | Optional Explorer letter — test, mount, `-Remove`, `-Unstick`, `-Quick`, LAN watch |
+| **`Mount-LoopSegmentsRclone.ps1`** | Optional Explorer letter — test, mount, `-Remove`, `-Unstick`, `-Quick`, LAN watch (outage unmount, then remount when the phone is back; `-NoAutoRemount` to exit) |
 | **`Mount-PhoneL.cmd`** | Day-to-day launcher → mount script |
 | **`Serve-LoopSegmentsRcloneDlna.ps1`** | **Quest path** — `rclone serve dlna` over phone WebDAV (`-Remove`, `-TestOnly`, `-Quick`, `-Hidden`, LAN watch). Companion uses `-Hidden` (no console). |
 | **`Serve-PhoneDlna.cmd`** | Day-to-day launcher → DLNA serve script |

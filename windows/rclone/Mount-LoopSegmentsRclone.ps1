@@ -37,8 +37,12 @@
   While mounted, probe phone LAN this often (default 15). Ignored with -NoLanWatch.
 
 .PARAMETER LanDownSeconds
-  If LAN stays unreachable this long, kill rclone and exit this script (default 60).
-  Prevents Explorer hangs on a dead L: mount.
+  If LAN stays unreachable this long, kill rclone (default 60). Prevents Explorer hangs
+  on a dead L: mount. The script then waits for the phone and remounts the same letter
+  (see -NoAutoRemount).
+
+.PARAMETER NoAutoRemount
+  After an outage unmount, exit (code 2) instead of waiting for the phone and remounting.
 
 .PARAMETER NoLanWatch
   Do not poll LAN; keep rclone in the foreground until Ctrl+C (legacy behavior).
@@ -79,6 +83,7 @@ param(
     [ValidateRange(15, 3600)]
     [int] $LanDownSeconds = 60,
     [switch] $NoLanWatch,
+    [switch] $NoAutoRemount,
     [switch] $SkipOffSubnetRouterReboot,
     # Companion child: exit on error without local Enter (parent already continues).
     [switch] $NoWaitEnter
@@ -539,6 +544,35 @@ function Start-LoopSegmentsRcloneMountProcess {
     return $proc
 }
 
+function Wait-LoopSegmentsPhoneLanBack {
+    # Block until the phone's LAN server answers twice (3 s apart, so a flapping AP does not
+    # trigger a remount that dies at once). Re-reads phoneLanHost each round in case the
+    # companion wrote a new IP. Returns the host that answered.
+    param(
+        [Parameter(Mandatory = $true)][string] $HostName,
+        [Parameter(Mandatory = $true)][int] $PortNum,
+        [int] $PollSeconds = 15
+    )
+    $since = [datetime]::UtcNow
+    $lastNote = $since
+    while ($true) {
+        $h = $HostName
+        try {
+            $cfg = Get-LoopSegmentsLANHost -Override $PhoneHost
+            if (-not [string]::IsNullOrWhiteSpace($cfg)) { $h = $cfg }
+        } catch {}
+        if (Test-PhoneLanAlive -HostName $h -PortNum $PortNum) {
+            Start-Sleep -Seconds 3
+            if (Test-PhoneLanAlive -HostName $h -PortNum $PortNum) { return $h }
+        }
+        if (([datetime]::UtcNow - $lastNote).TotalSeconds -ge 300) {
+            $lastNote = [datetime]::UtcNow
+            Write-Host ('[auto-remount] Still waiting for http://{0}:{1}/ ({2:N0} min)...' -f $h, $PortNum, ([datetime]::UtcNow - $since).TotalMinutes)
+        }
+        Start-Sleep -Seconds $PollSeconds
+    }
+}
+
 function Show-RcloneMountLogTail {
     param([string] $LogFile, [int] $Lines = 40)
     if ([string]::IsNullOrWhiteSpace($LogFile) -or -not (Test-Path -LiteralPath $LogFile)) {
@@ -821,19 +855,58 @@ If Koofr rclone mount already works, run: ..\setup\Set-LoopSegmentsWindows.ps1 -
         }
     }
 
-    $code = Watch-LoopSegmentsRcloneMount `
-        -RcloneProcess $rcloneProc `
-        -HostName $hostIp `
-        -PortNum $portNum `
-        -DriveRoot $driveRoot `
-        -PollSeconds $LanPollSeconds `
-        -DownSeconds $LanDownSeconds
+    while ($true) {
+        $code = Watch-LoopSegmentsRcloneMount `
+            -RcloneProcess $rcloneProc `
+            -HostName $hostIp `
+            -PortNum $portNum `
+            -DriveRoot $driveRoot `
+            -PollSeconds $LanPollSeconds `
+            -DownSeconds $LanDownSeconds
+        if ($code -ne 2) { break }
 
-    if ($code -eq 2) {
-        Write-Host '[Mount-LoopSegmentsRclone] Exited after prolonged LAN outage (rclone killed).'
-        Show-RcloneMountLogTail -LogFile $rcloneLog
-        Clear-LoopSegmentsRcloneMountLog
-        exit 2
+        if ($NoAutoRemount) {
+            Write-Host '[Mount-LoopSegmentsRclone] Exited after prolonged LAN outage (rclone killed).'
+            Show-RcloneMountLogTail -LogFile $rcloneLog
+            Clear-LoopSegmentsRcloneMountLog
+            exit 2
+        }
+
+        # Outage unmount: wait for the phone, then mount again in this same console. The log
+        # stays put (rclone appends), so one file covers every remount. Ctrl+C / closing this
+        # window / companion finish (kills this console) still end it.
+        Write-Host ("[auto-remount] {0} dropped after the LAN outage. Waiting for the phone (probe every {1}s; Ctrl+C to give up)..." -f $driveRoot, $LanPollSeconds) -ForegroundColor Yellow
+        $hostIp = Wait-LoopSegmentsPhoneLanBack -HostName $hostIp -PortNum $portNum -PollSeconds $LanPollSeconds
+        $newUrl = "http://${hostIp}:${portNum}/"
+        if ($newUrl -ne $webdavUrl) {
+            Write-Host "[auto-remount] Phone moved to $hostIp - updating rclone remote."
+            Ensure-RcloneRemote -Name $remote -Url $newUrl -User $creds.User -Pass $creds.Password
+            $webdavUrl = $newUrl
+        }
+        # WinFsp releases the letter a moment after rclone dies.
+        $freeBy = [datetime]::UtcNow.AddSeconds(10)
+        while ((Test-Path -LiteralPath $driveRoot) -and [datetime]::UtcNow -lt $freeBy) {
+            Start-Sleep -Milliseconds 500
+        }
+        # A new companion start may have mounted the letter from its own console meanwhile.
+        $other = Find-LoopSegmentsRcloneMountProcess -DriveLetter $driveLetter -RemoteName $remote
+        if ($null -ne $other -and -not $other.HasExited) {
+            Write-Host "[auto-remount] ${driveRoot} already mounted by rclone PID $($other.Id) - leaving it to that console."
+            # Do not clear the log: that console's rclone writes the same Temp file.
+            exit 0
+        }
+        Write-Host '[auto-remount] Phone LAN back - remounting.' -ForegroundColor Green
+        $rcloneProc = Start-LoopSegmentsRcloneMountProcess -MountArgs $mountArgs -LogFile $rcloneLog
+        Write-Host "rclone mount restarted (PID $($rcloneProc.Id)); log: $rcloneLog"
+        try { [LoopSegmentsRcloneLogGuard]::SetRclonePid($rcloneProc.Id) } catch {
+            try { Register-LoopSegmentsRcloneLogConsoleGuard -RclonePid $rcloneProc.Id } catch {}
+        }
+        if (Wait-LoopSegmentsMountDrive -DriveRoot $driveRoot -TimeoutSec 15) {
+            Update-ExplorerForMappedDrive -DriveRoot $driveRoot
+            Write-Host ("[mount] Told Explorer {0} appeared." -f $driveRoot)
+        } else {
+            Write-Warning ("[mount] {0} not visible yet after remount - Explorer This PC may need F5." -f $driveRoot)
+        }
     }
     if ($code -ne 0) {
         Write-Host ('[Mount-LoopSegmentsRclone] rclone mount failed (exit {0}).' -f $code) -ForegroundColor Red
